@@ -1,8 +1,36 @@
-# Twitch Auto Clips v2
+# Viral Clip Agent — Twitch + Kick
 
-Herramienta en Python para detectar automáticamente los mejores momentos de un directo de Twitch a partir del chat (`chat.json`) y recortarlos en vertical `1080x1920`, listos para TikTok, Reels o Shorts.
+Herramienta en Python para detectar automáticamente los mejores momentos de un directo de **Twitch o de Kick** a partir del chat (`chat.json`) y recortarlos en vertical `1080x1920`, listos para TikTok, Reels o Shorts.
 
-**Automático:** `auto_clips.py` hace todo en un solo comando — descarga chat + VOD, detecta, corta y empaqueta cada clip para viral. Ver [Automatización](#automatización-un-solo-comando).
+**Automático:** `auto_clips.py` hace todo en un solo comando — descarga chat, detecta, corta y empaqueta cada clip para viral. Ver [Automatización](#automatización-un-solo-comando). En Twitch baja el VOD; en Kick baja solo el segmento de 60 s de cada pico, nunca el VOD entero.
+
+## Qué cambió en la v2.4 (auditoría Claude Code + Shortia)
+
+**Scoring corregido** (auditoría, bugs 1-6, ver `AUDIT-claude-code.md`):
+- `xd` / `xdd` por fin puntúan como risa.
+- Falsos positivos eliminados: "no puedo creer que no hayas ido", "qué bueno que llegaste", "dale gas", "vamos a ver qué pasa", "god of war" y "crazy cat" ya no puntúan (tokens sueltos ambiguos fuera; solo frases completas y formas alargadas: "vamooos", "dalee", "noooo").
+- Rendimiento: un tokenizado por mensaje + conjuntos en vez de regex por token. Medido en 200k mensajes: score_message 1,28 s, score_windows 1,81 s (antes 9,6 s).
+- Ventana deslizante de 10 s con paso de 5 s y suavizado (0.25/0.5/0.25): un pico entre dos ventanas ya no se parte.
+- Mediana sin sesgo: se calcula sobre TODAS las ventanas, incluidas las vacías; `viral_package.viral_multiple` por fin usa el parámetro `median_score` que antes ignoraba.
+- Usuarios únicos por ventana (`users` en el detalle), mensajes repetidos del mismo usuario solo cuentan una vez, bots conocidos (Nightbot, StreamElements...) no puntúan.
+- Manifiesto incremental: `clips_chat_v2.py` escribe `manifest.json` tras cada clip cortado.
+- Flags ffmpeg para plataformas en el corte: `-pix_fmt yuv420p`, `-movflags +faststart`, audio normalizado con `loudnorm` (-16 LUFS).
+
+**Config del canal — `config.yaml`** (idea de Shortia): juego, streamer, nicho, hashtags ES/EN, parámetros de corte y estilos de subtítulo viven en `config.yaml`, no hardcodeados. `config.py` lo carga (PyYAML si está, si no un parser mínimo propio). Los hashtags ya no están fijos en el código.
+
+**Estilos de subtítulo elegibles** (idea de Shortia: plantillas): `--subtitle-style` en `subtitles.py`, con 3 estilos definidos en `config.yaml`:
+- `tiktok` (por defecto): blanco, negrita, borde negro, abajo.
+- `highlight`: amarillo con caja semitransparente detrás.
+- `karaoke`: palabra por palabra (bloques de 1-2 palabras, amarillo, fuente 56). Aproximación: no es karaoke `\kf` real de ASS, el SRT no lleva tiempos por palabra al quemar; se logra con bloques cortos (max_chars=8, max_duration=1.0 s). Para que el karaoke funcione, el SRT debe generarse con ese estilo (los SRT viejos llevan bloques de 20 caracteres).
+
+```bash
+.venv/bin/python subtitles.py clip.mp4 --subtitle-style highlight
+.venv/bin/python subtitles.py clip.mp4 --subtitle-style karaoke
+```
+
+**Shortia** ([backsoul/shortia](https://github.com/backsoul/shortia), Apache 2.0, Go + SvelteKit, YouTube + Whisper API + DeepSeek, 1 estrella, 3 commits — no clonado, solo ideas):
+- Tomado: plantillas de subtítulo elegibles con estilos, config del canal (juego/streamer/nicho/hashtags), y la idea del editor visual con aprobación (eso es la cola de aprobación, fase siguiente, aún no implementada).
+- NO tomado: su stack (Go, Redis, Docker, SvelteKit), sus APIs pagas (OpenAI Whisper API, DeepSeek), YouTube-only (sin Twitch/Kick ni detección por chat), ni su renderizado en cliente con FFmpeg.wasm. Es un proyecto de 3 commits y 1 estrella, menos probado que openshorts.
 
 ## Qué cambió en la v2
 
@@ -24,8 +52,9 @@ Puntaje por mensaje: 1 punto base, +1 si es risa, +1 si es hype. Un `JAJAJA QUÉ
 ## Requisitos
 
 - Python 3.10+
-- [TwitchDownloaderCLI](https://github.com/lay295/TwitchDownloader) en el PATH
+- [TwitchDownloaderCLI](https://github.com/lay295/TwitchDownloader) en el PATH (solo para Twitch)
 - [FFmpeg](https://ffmpeg.org/) en el PATH (ffprobe opcional, para medir el VOD)
+- Kick no necesita nada extra: usa los APIs de Kick directamente (ver abajo)
 
 Sin dependencias de Python, sin credenciales, sin red — salvo para los
 subtítulos (ver abajo), que usan faster-whisper en un venv.
@@ -89,6 +118,74 @@ gramática rota ("And I was post on discord"). Revisa el SRT antes de
 publicar; el tribunal pidió un diccionario GTA 6 para esto, que aún
 no está implementado.
 
+## Kick — v2.3 (KickDownloaderCLI vendorizado)
+
+`auto_clips.py` acepta URLs de Kick igual que las de Twitch. El
+soporte de Kick vive en el paquete `kick_downloader/`, vendorizado
+de [KickDownloaderCLI](https://github.com/exe2027/kickdownloaderCLI)
+(proyecto aparte, MIT): mismo código y mismos endpoints, sin
+depender del `kick.py` suelto que había antes. Si Kick cambia algo,
+se arregla ahí y se vuelve a vendorizar. Ojo: el escaneo rápido
+`scan_chat_peaks()` está en el `core.py` vendorizado pero todavía
+NO en kickdownloaderCLI v0.1.0 — hay que subirlo también al proyecto
+aparte para que no diverja.
+
+```bash
+python auto_clips.py https://kick.com/locones/videos/01a1e069-8470-7626-8d5e-21ccb729c509
+python auto_clips.py https://kick.com/locones/videos/01a1e069-8470-7626-8d5e-21ccb729c509 --dry-run
+```
+
+Cómo funciona por dentro (todo verificado en vivo el 2026-11-16):
+
+- **Metadatos:** `GET kick.com/api/v1/video/{uuid-legacy}` y
+  `GET kick.com/api/v2/channels/{slug}/videos` (el listado SÍ trae los
+  VODs, con `source` = master.m3u8, `start_time` y `duration` en ms).
+  La URL trae un UUIDv7 (sus primeros 48 bits son la fecha de creación);
+  el API v1 solo acepta el UUIDv4 legacy, así que se resuelve buscando
+  en el listado el VOD cuyo `start_time` esté a ≤5 s de esa fecha.
+- **Chat replay:** Kick no tiene endpoint público documentado, pero la
+  propia web usa uno sin documentar:
+  `GET web.kick.com/api/v1/chat/{channel_id}/history?start_time=...`,
+  que devuelve los mensajes de los 5 s siguientes. Un VOD de 10h27m son
+  ~7.525 ventanas; se descargan en paralelo (8 workers, con reintentos:
+  el endpoint se cae a veces con `IncompleteRead`, no es rate-limit).
+  El chat se guarda en el mismo formato que TwitchDownloader, así que
+  `clips_chat_v2` lo puntúa sin cambios.
+- **Video:** el `source` es un master.m3u8 (HLS, Amazon IVS). Solo se
+  baja el segmento de 60 s de cada pico con ffmpeg
+  (`-ss <inicio> -i <variante-720p> -t 60 -c copy`), nunca el VOD entero.
+- **Por qué no yt-dlp:** su extractor `kick:vod` está roto desde julio
+  de 2026 (cambio de URLs de Kick → 404 / "0 bytes read",
+  issue yt-dlp#17284, versión probada 2026.10.26). La ruta m3u8 directa
+  es la que recomienda la comunidad.
+
+```bash
+# Solo el chat de Kick (sin cortar)
+python -m kick_downloader chatdownload --id "https://kick.com/locones/videos/<uuid>" -o chat.json
+# Solo un segmento de 60 s a partir de un segundo dado
+python -m kick_downloader videodownload --id "https://kick.com/locones/videos/<uuid>" -o clip.mp4 -b 7000s -e 7060s
+# Solo los metadatos del VOD
+python -m kick_downloader info --id "https://kick.com/locones/videos/<uuid>"
+```
+
+Limitaciones reales de Kick (no son bugs del agente):
+
+- El chat de Kick es mucho más ralo que el de Twitch: en el VOD de
+  prueba (Locones, 10h27m) hay ventanas de 5 s con 0-4 mensajes y horas
+  enteras sin chat (de 00:12 a 04:32 UTC, 0 mensajes). Los picos salen
+  igual, pero con puntajes bajos y más ruido que en Twitch.
+- Si el chat viene vacío, `--audio-fallback` busca picos por audio
+  transcrito: muestrea 30 s de audio cada 15 min, lo transcribe con
+  faster-whisper (tiny, en `.venv`) y puntúa la transcripción. Es un
+  muestreo, no una detección continua: los picos son reales pero
+  aproximados.
+- Kick borra los VODs a los 7 días (30 días si el canal es verificado).
+  El VOD de Locones es del 15 nov 2026: hay que usarlo antes de que
+  expire.
+- El API de Kick es inestable: a veces cierra la conexión a mitad de
+  respuesta. `kick_downloader` reintenta (hasta 4 veces) y cae a `curl` si
+  urllib no puede.
+
 ## Uso
 
 ### 1. Descargar chat y VOD
@@ -148,17 +245,26 @@ El nombre de cada clip dice el pico, el puntaje y el desglose, por ejemplo `clip
 ```bash
 python auto_clips.py 1234567890
 python auto_clips.py https://www.twitch.tv/videos/1234567890 --lang es
+python auto_clips.py https://kick.com/locones/videos/01a1e069-8470-7626-8d5e-21ccb729c509
 ```
 
-Hace solo, en orden: descarga chat + VOD con TwitchDownloaderCLI (reutiliza si ya están), detecta los picos con `clips_chat_v2.py`, corta en vertical, empaqueta para viral con `viral_package.py` y deja todo en `runs/<vod-id>/` con `manifest.json`, `manifest.md` y `titles.txt`.
+Hace solo, en orden: descarga el chat, detecta los picos con
+`clips_chat_v2.py`, corta en vertical, empaqueta para viral con
+`viral_package.py` y deja todo en `runs/<vod-id>/` con `manifest.json`,
+`manifest.md` y `titles.txt`. En Twitch descarga chat + VOD con
+TwitchDownloaderCLI (reutiliza si ya están); en Kick descarga el chat
+con `kick.py` y solo el segmento de 60 s de cada pico.
 
 ```bash
 # Solo ver picos, sin bajar el video ni cortar
 python auto_clips.py 1234567890 --dry-run
+python auto_clips.py https://kick.com/locones/videos/<uuid> --dry-run
 # Probar con archivos locales (sin Twitch)
 python auto_clips.py --chat test_chat.json --video test_vod.mp4 --out runs/prueba
-# Borrar el VOD después de cortar, para ahorrar espacio
+# Borrar el VOD después de cortar, para ahorrar espacio (solo Twitch)
 python auto_clips.py 1234567890 --delete-vod
+# En Kick, si el chat viene vacío, buscar picos por audio transcrito
+python auto_clips.py https://kick.com/locones/videos/<uuid> --audio-fallback
 ```
 
 Lo único que queda a mano es subirlos a TikTok / Reels / Shorts: eso no se puede automatizar sin que cada plataforma te pida entrar y confirmar en tu teléfono.
