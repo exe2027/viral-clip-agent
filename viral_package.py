@@ -29,8 +29,28 @@ youtube-agent-skill (github.com/Jakeschincariol/youtube-agent-skill):
 Nada de esto publica. Como en las skills: esto escribe y tú publicas.
 Cada clip termina con la pregunta: ¿lo subo así, o lo cambio?
 
+PARA LAS 4 PLATAFORMAS, NO SOLO YOUTUBE: las reglas de yt-package,
+yt-seo, yt-shorts y yt-retention son las mismas ideas, pero cada
+plataforma las aplica distinto. Un mismo clip lleva 4 paquetes:
+  * YouTube Shorts — título + descripción + tags, miniatura = frame
+    (por API no hay miniatura personalizada fiable), subtítulos SRT
+    aparte además de quemados, métrica: visto vs deslizado.
+  * TikTok — no hay título separado, el título ES el caption;
+    caption corto, 3-5 hashtags, sin miniatura propia por API,
+    subtítulos QUEMADOS obligatorios (no acepta SRT), modo borrador
+    hasta pasar la auditoría, métrica: % finalización y compartidos.
+  * Instagram Reels — caption + hashtags, SÍ admite portada
+    (cover_url), subtítulos quemados, métrica: reproducciones y
+    compartidos por DM. Requiere cuenta Profesional + Página de FB.
+  * Facebook Reels — solo a Página, nunca a perfil; duración 3-90 s
+    (nuestros 60 s caben justo), miniatura = frame, subtítulos
+    quemados, métrica: reproducciones y compartidos.
+El título, el hook y el texto en pantalla son los mismos en las 4;
+lo que cambia es el caption, los hashtags, la portada y el modo de
+subida. Nunca se copia el mismo texto literal en las 4.
+
 Uso:
-    from viral_package import package_clip, viral_multiple
+    from viral_package import package_clip, viral_multiple, package_for_platforms
     package_clip(n=1, peak_ts=90, score=22, risas=0, hype=11,
                  median_score=5.0, lang="both", examples=[...])
 """
@@ -46,6 +66,131 @@ HOOK_FORMULAS = {
     "the-statistic": "The Statistic — un número que no sabías, luego la consecuencia.",
     "contrarian-flip": "Contrarian Flip — lo que todos dicen, y por qué está mal.",
 }
+
+
+# Reglas por plataforma (Agente 5/10 del tribunal). Los límites de
+# subida son orientativos y cambian; lo que no cambia es el formato.
+PLATFORMS = {
+    "youtube_shorts": {
+        "label": "YouTube Shorts",
+        "title_max": 60, "title_mobile_max": 40,
+        "caption_max": None, "hashtags": 0,  # hashtags van en descripción, no en caption
+        "tags_max": 15,
+        "thumbnail": "frame del pico (por API no hay miniatura personalizada fiable)",
+        "subtitles": "SRT aparte (captions.insert) + quemados en el video",
+        "duration": "hasta 60 s (nuestros clips), Shorts admite más",
+        "daily_limit": "~100 subidas/día por proyecto",
+        "publish_mode": "API oficial (videos.insert) — 100% automatizable",
+        "metric": "visto vs deslizado, duración media vista, CTR",
+    },
+    "tiktok": {
+        "label": "TikTok",
+        "title_max": 150,  # el caption es el título: corto, lo que se ve en el feed
+        "title_mobile_max": 150,
+        "caption_max": 150, "hashtags": 5,
+        "tags_max": 0,
+        "thumbnail": "sin miniatura propia por API — manda el primer frame",
+        "subtitles": "QUEMADOS obligatorios (no acepta SRT por API)",
+        "duration": "hasta 10 min, nuestros 60 s bien",
+        "daily_limit": "~15/día por creador",
+        "publish_mode": "borrador por API hasta pasar auditoría (1-4 sem.); Direct Post solo tras auditoría",
+        "metric": "% finalización, compartidos, guardados, replays",
+    },
+    "instagram_reels": {
+        "label": "Instagram Reels",
+        "title_max": None, "title_mobile_max": None,
+        "caption_max": 2200, "hashtags": 10,
+        "tags_max": 0,
+        "thumbnail": "SÍ admite portada (cover_url) — usar el texto de miniatura",
+        "subtitles": "QUEMADOS obligatorios (no acepta SRT por API)",
+        "duration": "hasta 90 s en Reels clásicos, nuestros 60 s bien",
+        "daily_limit": "~50 publicaciones/24 h por cuenta",
+        "publish_mode": "Graph API (contenedor → publicar) — requiere cuenta Profesional + Página de FB",
+        "metric": "reproducciones, % finalización, compartidos por DM, guardados",
+    },
+    "facebook_reels": {
+        "label": "Facebook Reels",
+        "title_max": 60, "title_mobile_max": 40,
+        "caption_max": None, "hashtags": 5,
+        "tags_max": 0,
+        "thumbnail": "frame del pico (sin miniatura personalizada)",
+        "subtitles": "QUEMADOS obligatorios (no acepta SRT por API)",
+        "duration": "3-90 s OBLIGATORIO — nuestros 60 s caben justo",
+        "daily_limit": "30 Reels/24 h por Página",
+        "publish_mode": "Graph API a Página, nunca a perfil personal",
+        "metric": "reproducciones, % finalización, compartidos",
+    },
+}
+
+
+def package_for_platforms(best_title, desc, tags, thumb, lang="both"):
+    """Un paquete por plataforma a partir del paquete base.
+
+    Misma idea, mismo hook y mismo texto en pantalla en las 4;
+    cambia caption, hashtags, portada y modo de subida.
+    """
+    hashtags_es = ["#GTA6", "#GTA6Clips", "#ElClipDeGTA6", "#GTA", "#RockstarGames"]
+    hashtags_en = ["#GTA6", "#GTA6Clips", "#GTA", "#RockstarGames", "#gaming"]
+    hashtags = hashtags_en if lang == "en" else hashtags_es
+    first_line = desc.split("\n")[0]
+    out = {}
+    for key, rules in PLATFORMS.items():
+        if key == "youtube_shorts":
+            caption = f"{best_title}\n\n{desc}\n\n{' '.join(hashtags)}"
+            out[key] = {
+                "platform": rules["label"], "title": best_title,
+                "caption": caption, "hashtags": hashtags,
+                "tags": tags[: rules["tags_max"]],
+                "thumbnail": rules["thumbnail"], "thumbnail_text": thumb,
+                "subtitles": rules["subtitles"],
+                "duration_rule": rules["duration"],
+                "daily_limit": rules["daily_limit"],
+                "publish_mode": rules["publish_mode"],
+                "metric": rules["metric"],
+            }
+        elif key == "tiktok":
+            # TikTok: caption corto = título + hashtags, sin descripción larga.
+            caption = f"{best_title} {' '.join(hashtags[:5])}"
+            if len(caption) > 150:
+                caption = caption[:147] + "..."
+            out[key] = {
+                "platform": rules["label"], "title": None,
+                "caption": caption, "hashtags": hashtags[:5],
+                "tags": [],
+                "thumbnail": rules["thumbnail"], "thumbnail_text": None,
+                "subtitles": rules["subtitles"],
+                "duration_rule": rules["duration"],
+                "daily_limit": rules["daily_limit"],
+                "publish_mode": rules["publish_mode"],
+                "metric": rules["metric"],
+            }
+        elif key == "instagram_reels":
+            caption = f"{first_line}\n\n{' '.join(hashtags[:10])}"
+            out[key] = {
+                "platform": rules["label"], "title": None,
+                "caption": caption, "hashtags": hashtags[:10],
+                "tags": [],
+                "thumbnail": rules["thumbnail"], "thumbnail_text": thumb,
+                "subtitles": rules["subtitles"],
+                "duration_rule": rules["duration"],
+                "daily_limit": rules["daily_limit"],
+                "publish_mode": rules["publish_mode"],
+                "metric": rules["metric"],
+            }
+        else:  # facebook_reels
+            caption = f"{best_title}\n\n{first_line}\n\n{' '.join(hashtags[:5])}"
+            out[key] = {
+                "platform": rules["label"], "title": best_title,
+                "caption": caption, "hashtags": hashtags[:5],
+                "tags": [],
+                "thumbnail": rules["thumbnail"], "thumbnail_text": None,
+                "subtitles": rules["subtitles"],
+                "duration_rule": rules["duration"],
+                "daily_limit": rules["daily_limit"],
+                "publish_mode": rules["publish_mode"],
+                "metric": rules["metric"],
+            }
+    return out
 
 
 def viral_multiple(score: int, all_scores) -> float:
@@ -136,4 +281,6 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "chat_examples": examples,
         # yt-retention: el hook se juega en los primeros 15 s, no al final.
         "retention_note": "Hook en los primeros 15 s: confirma el título, sube la pregunta y muestra el payoff. Si el clip arranca lento, recorta el pre-roll.",
+        # Las 4 plataformas: mismo clip, 4 paquetes distintos.
+        "platforms": package_for_platforms(best["title"], desc, tags, thumb, lang=lang),
     }

@@ -265,6 +265,18 @@ def main() -> int:
                       f"- Tags: {', '.join(v['tags'])}",
                       f"- Búsquedas a ganar: {', '.join(v['search_queries'])}",
                       f"- ¿Lo subo así, o lo cambio?"]
+            plats = v.get("platforms", {}) if v else {}
+            if plats:
+                lines.append("- Por plataforma (misma idea, paquete distinto):")
+                for pk in ("youtube_shorts", "tiktok", "instagram_reels", "facebook_reels"):
+                    pp = plats.get(pk)
+                    if not pp:
+                        continue
+                    cap = pp["caption"].replace("\n", " / ")
+                    lines.append(
+                        f"  - {pp['platform']}: {cap} | Subtítulos: {pp['subtitles']} | "
+                        f"Miniatura: {pp['thumbnail']} | Subida: {pp['publish_mode']} | Métrica: {pp['metric']}"
+                    )
         lines += [""]
     with open(os.path.join(out_dir, "manifest.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

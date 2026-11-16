@@ -103,6 +103,19 @@ python auto_clips.py 1234567890 --delete-vod
 
 Lo único que queda a mano es subirlos a TikTok / Reels / Shorts: eso no se puede automatizar sin que cada plataforma te pida entrar y confirmar en tu teléfono.
 
+## Empaquetado viral — para las 4 plataformas, no solo YouTube
+
+`viral_package.py` combina las skills de [youtube-agent-skill](https://github.com/Jakeschincariol/youtube-agent-skill), pero adaptadas a las 4 plataformas. Misma idea, mismo hook y mismo texto en pantalla; lo que cambia es caption, hashtags, portada y modo de subida. Nunca se copia el mismo texto literal en las 4.
+
+| Plataforma | Título / caption | Miniatura | Subtítulos | Subida |
+|---|---|---|---|---|
+| YouTube Shorts | Título ≤60 car. + descripción + tags ≤15 | Frame del pico (por API no hay miniatura personalizada fiable) | SRT aparte + quemados | API oficial, 100% automatizable |
+| TikTok | Caption corto ≤150 car. = título + 3-5 hashtags | Sin miniatura propia por API | QUEMADOS obligatorios | Borrador por API hasta auditoría (1-4 sem.) |
+| Instagram Reels | Caption + hasta 10 hashtags | SÍ admite portada (cover_url) | QUEMADOS obligatorios | Graph API, requiere cuenta Profesional + Página de FB |
+| Facebook Reels | Título ≤60 car. + caption, 3-90 s obligatorio | Frame del pico | QUEMADOS obligatorios | Graph API a Página, nunca a perfil |
+
+Cada clip en `manifest.md` lleva su paquete por plataforma, con su métrica a mirar: YouTube visto vs deslizado, TikTok % finalización, Reels reproducciones y compartidos.
+
 ## Empaquetado viral (youtube-agent-skill)
 
 `viral_package.py` combina las skills de [youtube-agent-skill](https://github.com/Jakeschincariol/youtube-agent-skill):
