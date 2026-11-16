@@ -82,6 +82,37 @@ class TestDetectGame(unittest.TestCase):
         self.assertEqual(detect_game("Rob Run", ""), "other")
         self.assertEqual(detect_game("Grand Theft Auto V", ""), "other")
 
+    def test_titulo_que_miente_no_es_gta6(self):
+        # Casos reales de IlloJuan (2026-11-16): el título menciona
+        # GTA VI/6 pero el juego es otro. La categoría manda.
+        # VOD 2924180678 "10 DÍAS 📅 DESCARGA DE GTA VI", sin categoría:
+        # no se da por GTA 6 -> None (revisión humana).
+        self.assertIsNone(
+            detect_game(None, "10 DÍAS 📅 DESCARGA DE GTA VI"))
+        self.assertIsNone(
+            detect_game("", "10 DÍAS 📅 DESCARGA DE GTA VI"))
+        # VOD 2901476435 "ÚLTIMO TRÁILER DE GTA 6", categoría
+        # Just Chatting, contenido San Andreas -> other.
+        self.assertEqual(
+            detect_game("Just Chatting", "ÚLTIMO TRÁILER DE GTA 6"),
+            "other")
+        self.assertEqual(
+            detect_game("Grand Theft Auto V", "DESCARGA DE GTA VI"),
+            "other")
+        self.assertEqual(
+            detect_game("Grand Theft Auto: San Andreas",
+                        "ÚLTIMO TRÁILER DE GTA 6"),
+            "other")
+
+    def test_gta6_por_categoria_aunque_el_titulo_no_lo_diga(self):
+        self.assertEqual(
+            detect_game("Grand Theft Auto VI", "jugando al nuevo"), "gta6")
+        self.assertEqual(detect_game("GTA VI", ""), "gta6")
+
+    def test_sin_categoria_nunca_es_gta6_por_el_titulo(self):
+        self.assertIsNone(detect_game(None, "GTA 6 en directo"))
+        self.assertIsNone(detect_game("", "GTA VI"))
+
     def test_sin_datos(self):
         self.assertIsNone(detect_game(None, None))
         self.assertIsNone(detect_game("", ""))

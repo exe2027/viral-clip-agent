@@ -79,12 +79,10 @@ MUSIC_KEYWORDS = ("music", "música", "musica", "dj", "karaoke",
                   "concierto", "concert", "radio", "spotify",
                   "cantando", "singing")
 
-# Patrones para detectar el juego a partir de la categoría/título del VOD.
+# Patrones para detectar el juego a partir de la CATEGORÍA del VOD
+# (la categoría manda; el título no se mira: ver detect_game).
 GTA6_PATTERNS = ("gta 6", "gta vi", "gta6", "grand theft auto vi",
                  "grand theft auto 6")
-GTA_OTHER_PATTERNS = ("gta 5", "gta v", "gta5", "grand theft auto v",
-                      "grand theft auto 5", "gta online", "gta rp",
-                      "gta roleplay")
 
 
 class QueueError(Exception):
@@ -117,15 +115,24 @@ def parse_url(url: str):
 
 
 def detect_game(category: str | None, title: str | None):
-    """'gta6' si el VOD es de GTA 6, 'other' si es de otro juego, None si no se sabe."""
-    text = f"{category or ''} {title or ''}".lower()
-    if any(p in text for p in GTA6_PATTERNS):
+    """'gta6' solo si la CATEGORÍA es GTA VI, 'other' si la categoría
+    es otro juego, None si la categoría es desconocida.
+
+    La CATEGORÍA manda sobre el título: un VOD de GTA V, Just
+    Chatting o San Andreas que menciona "GTA 6"/"GTA VI" en el
+    título (descarga, tráiler...) NO es GTA 6. Sin categoría no se
+    da por GTA 6 por el título solo: None -> revisión humana
+    (el semáforo lo marca como rojo "juego no verificable" y el
+    watcher lo salta como juego_no_gta6, nunca lo encola).
+
+    Casos reales (IlloJuan, 2026-11-16) que antes daban falso
+    positivo: "10 DÍAS DESCARGA DE GTA VI" (sin categoría) y
+    "ÚLTIMO TRÁILER DE GTA 6" (categoría Just Chatting, contenido
+    San Andreas)."""
+    cat = (category or "").strip().lower()
+    if any(p in cat for p in GTA6_PATTERNS):
         return "gta6"
-    if any(p in text for p in GTA_OTHER_PATTERNS):
-        return "other"
-    if "gta" in text:
-        return "other"
-    if (category or "").strip() or (title or "").strip():
+    if cat:
         return "other"
     return None
 

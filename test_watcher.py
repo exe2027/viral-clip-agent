@@ -83,6 +83,22 @@ GTAV_VOD = dict(GTA6_VOD, vod_id="kick-testgta-bbbbbbbb",
                 title="GTA V RP noche de atracos",
                 category="Grand Theft Auto V")
 
+# VODs reales de IlloJuan (Twitch) reportados 2026-11-16: el título
+# menciona GTA VI/6 pero el juego NO es GTA 6. Antes del arreglo,
+# detect_game() casaba el título y el watcher los marcaba
+# "would_enqueue". Con la corrección (la categoría manda) deben salir
+# "skip" con juego_no_gta6.
+ILLOJUAN_DESCARGA = {"platform": "twitch", "vod_id": "2924180678",
+                     "url": "https://www.twitch.tv/videos/2924180678",
+                     "title": "10 DÍAS 📅 DESCARGA DE GTA VI",
+                     "category": "", "start_time": None,
+                     "duration_s": 3600, "views": 0, "live": False}
+ILLOJUAN_TRAILER = {"platform": "twitch", "vod_id": "2901476435",
+                    "url": "https://www.twitch.tv/videos/2901476435",
+                    "title": "ÚLTIMO TRÁILER DE GTA 6",
+                    "category": "Just Chatting", "start_time": None,
+                    "duration_s": 3600, "views": 0, "live": False}
+
 INF_CONCEDIDO = {"usuario": "testgta", "plataforma": "kick", "idioma": "es",
                  "juego": "GTA 6", "estado": "concedido", "canal_original": ""}
 INF_PENDIENTE = dict(INF_CONCEDIDO, estado="pendiente")
@@ -159,6 +175,22 @@ class TestDecide(unittest.TestCase):
     def test_gta5_bloquea_aunque_haya_permiso(self):
         action, reason = decide(GTAV_VOD, INF_CONCEDIDO, self.state,
                                 self.q, self.cfg, False, True)
+        self.assertEqual(action, "skip")
+        self.assertIn("juego_no_gta6", reason)
+
+    def test_illojuan_descarga_gta_vi_sin_categoria_no_se_encola(self):
+        # VOD 2924180678: título "DESCARGA DE GTA VI", sin categoría.
+        # No es GTA 6 por el título solo -> skip, a revisión humana.
+        action, reason = decide(ILLOJUAN_DESCARGA, INF_CONCEDIDO,
+                                self.state, self.q, self.cfg, False, True)
+        self.assertEqual(action, "skip")
+        self.assertIn("juego_no_gta6", reason)
+
+    def test_illojuan_trailer_gta6_just_chatting_no_se_encola(self):
+        # VOD 2901476435: título "ÚLTIMO TRÁILER DE GTA 6", categoría
+        # Just Chatting, contenido San Andreas -> skip.
+        action, reason = decide(ILLOJUAN_TRAILER, INF_CONCEDIDO,
+                                self.state, self.q, self.cfg, False, True)
         self.assertEqual(action, "skip")
         self.assertIn("juego_no_gta6", reason)
 
