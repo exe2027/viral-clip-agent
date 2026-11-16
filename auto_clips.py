@@ -22,6 +22,11 @@ Qué hace solo, sin que tengas que hacer nada a mano:
      (PiP arriba) o solo gameplay (recorte centrado); si el layout
      cambia dentro del clip, se adapta por tramos. La decisión queda
      en el manifiesto por clip. Se puede forzar con --layout.
+     Con --audio-check (bloque 6) mide el RMS por segundo en la ventana
+     del candidato y marca confirmar/sospechar (chat alto + audio plano
+     = sospechar spam, caso Locones); con --precise-cut (bloque 6)
+     afina inicio/fin por frase/silencio dentro del segmento ya
+     descargado (2-3 s antes del pico, fin de frase +1-2 s, tope 60 s).
   3. Empaqueta cada clip para viral con viral_package.py, que combina
      youtube-agent-skill: yt-viral (ranking por múltiplo sobre la mediana),
      yt-shorts (primera línea nueva, texto en pantalla, loop),
@@ -44,13 +49,45 @@ Requisitos: Python 3.10+, FFmpeg en el PATH y TwitchDownloaderCLI
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 from collections import defaultdict
+
+
+def _preload_stdlib_queue():
+    """Carga el `queue` de la stdlib antes que nada (misma idea que
+    subtitles.py:_preload_stdlib_queue).
+
+    El repo tiene un queue.py propio (cola de aprobación, bloque 1 del
+    tribunal) que haría sombra al `queue` de la stdlib: faster-whisper
+    hace `import queue` y se encuentra el queue.py del proyecto (sin
+    SimpleQueue), y la transcripción falla con AttributeError. Cargando
+    la stdlib por ruta explícita queda en sys.modules y ya no se vuelve
+    a resolver por sys.path. Va ANTES de importar clips_chat_v2: su
+    cadena de imports ya carga el queue.py local. Si el `queue` ya
+    cargado es el de la stdlib (tiene SimpleQueue), no se toca.
+    """
+    q = sys.modules.get("queue")
+    if q is not None and hasattr(q, "SimpleQueue"):
+        return
+    try:
+        stdlib_dir = sysconfig.get_paths()["stdlib"]
+        spec = importlib.util.spec_from_file_location(
+            "queue", os.path.join(stdlib_dir, "queue.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["queue"] = module
+        spec.loader.exec_module(module)
+    except Exception:
+        pass
+
+
+_preload_stdlib_queue()
 
 from clips_chat_v2 import (
     cut_vertical_clip,
@@ -78,6 +115,22 @@ except ImportError:
     cut_clip_with_layout = None
     layout_summary = None
     layout_mod = False
+
+try:
+    # Bloque 6: audio como segunda señal + recorte preciso por frase.
+    from audio import audio_verdict
+    audio_mod = True
+except ImportError:
+    audio_verdict = None
+    audio_mod = False
+
+try:
+    from precise_cut import detect_silences, refine_cut
+    precise_mod = True
+except ImportError:
+    detect_silences = None
+    refine_cut = None
+    precise_mod = False
 
 try:
     from config import get_layout_config, load_config
@@ -184,6 +237,14 @@ def main() -> int:
     p.add_argument("--no-viral", action="store_true", help="No genera el empaquetado viral (títulos, miniatura, SEO)")
     p.add_argument("--delete-vod", action="store_true", help="Borra el vod.mp4 después de cortar, para ahorrar espacio (solo Twitch)")
     p.add_argument("--audio-fallback", action="store_true", help="En Kick, si el chat viene vacío, buscar picos por audio transcrito (muestreo)")
+    p.add_argument("--audio-check", action="store_true",
+                   help="Bloque 6: RMS por segundo en la ventana del candidato y veredicto "
+                        "confirmar/sospechar (chat alto + audio plano = sospechar spam); "
+                        "se corta igual, solo se marca en el manifiesto")
+    p.add_argument("--precise-cut", action="store_true",
+                   help="Bloque 6: afinar inicio/fin por frase/silencio dentro del segmento "
+                        "ya descargado (inicio 2-3 s antes del pico, fin en fin de frase "
+                        "+1-2 s, tope 60 s); sin transcripción fiable cae al corte fijo")
     p.add_argument("--workers", type=int, default=12, help="Workers en paralelo para el chat de Kick (default: 12)")
     p.add_argument("--full-chat", action="store_true", help="En Kick, bajar el chat COMPLETO (lento: ~50 min en un VOD de 10h; por defecto escaneo rápido)")
     args = p.parse_args()
@@ -349,6 +410,82 @@ def main() -> int:
                 continue
         else:
             cut_source, cut_start = video_path, clip_start
+        # Bloque 6 (--audio-check / --precise-cut): segunda señal de audio
+        # y recorte preciso por frase, SOLO sobre la ventana ya descargada
+        # (segmento Kick de 60 s, o ventana de 60 s del VOD en Twitch,
+        # extraída a un temporal). Nunca baja más vídeo.
+        cut_dur = clip_dur
+        audio_info = None
+        precise_info = None
+        if args.audio_check or args.precise_cut:
+            window_path, window_start_abs = cut_source, cut_start
+            tmp_window = None
+            if platform == "twitch":
+                tmp_window = os.path.join(
+                    out_dir, f".window_{idx:02d}.mp4")
+                subprocess.run(
+                    ["ffmpeg", "-y", "-v", "error", "-ss", str(cut_start),
+                     "-i", video_path, "-t", str(clip_dur), "-c", "copy",
+                     tmp_window], check=True)
+                window_path = tmp_window
+            peak_rel = peak_ts - window_start_abs
+            transcript = None
+            try:
+                from subtitles import transcribe_audio
+                transcript, _ = transcribe_audio(
+                    window_path,
+                    language=None if args.lang == "both" else args.lang)
+            except Exception as e:
+                print(f"    Audio: no se pudo transcribir ({e}); "
+                      f"se sigue con el corte fijo.", file=sys.stderr)
+            if args.audio_check:
+                if audio_mod:
+                    full = audio_verdict(window_path, chat_score=score,
+                                         peak_rel=peak_rel,
+                                         transcript=transcript,
+                                         lang=None if args.lang == "both"
+                                         else args.lang)
+                    audio_info = {
+                        "decision": full["decision"],
+                        "reason": full["reason"],
+                        "stats": full["stats"],
+                        "words": full["words"],
+                        "transcription_bonus": full["transcription_bonus"],
+                        "transcription_bonus_reason":
+                            full["transcription_bonus_reason"],
+                    }
+                    print(f"    Audio: {full['decision'].upper()} — {full['reason']}")
+                    if full["decision"] == "sospechar":
+                        print("    Audio: candidato sospechoso (posible spam): "
+                              "se corta igual, revisar a mano antes de publicar.")
+                    if full["transcription_bonus"]:
+                        print(f"    Audio: bonus transcripción "
+                              f"+{full['transcription_bonus']:.0%} "
+                              f"-> score {score * (1 + full['transcription_bonus']):.1f}")
+                else:
+                    print("    Audio: falta audio.py, se omite --audio-check.",
+                          file=sys.stderr)
+            if args.precise_cut:
+                if precise_mod:
+                    window_dur = get_video_duration(window_path)
+                    precise_info = refine_cut(
+                        window_dur, peak_rel, transcript=transcript,
+                        silences=detect_silences(window_path))
+                    cut_start = window_start_abs + precise_info["start"]
+                    cut_dur = precise_info["duration"]
+                    fname = (f"clip_{idx:02d}_t{fmt_ts(int(cut_start))}"
+                             f"_s{score}_r{d['risas']}h{d['hype']}"
+                             f"_precise.mp4")
+                    out_file = os.path.join(clips_dir, fname)
+                    print(f"    Corte preciso: {precise_info['start']:.1f}s -> "
+                          f"{precise_info['end']:.1f}s "
+                          f"({precise_info['duration']:.1f}s) "
+                          f"[{precise_info['method']}] — {precise_info['reason']}")
+                else:
+                    print("    Corte preciso: falta precise_cut.py, se omite.",
+                          file=sys.stderr)
+            if tmp_window and os.path.isfile(tmp_window):
+                os.remove(tmp_window)
         # Corte con layout responsive (regla del proyecto): decide por
         # fotogramas muestreados (stack / pip / center, por tramos si
         # cambia dentro del clip). Sin layout.py, recorte centrado.
@@ -357,19 +494,19 @@ def main() -> int:
             if layout_mod:
                 layout_cfg = get_layout_config() if get_layout_config else {}
                 layout_decision = cut_clip_with_layout(
-                    cut_source, cut_start, clip_dur, out_file,
+                    cut_source, cut_start, cut_dur, out_file,
                     crf=args.crf, preset=args.preset, crop=args.crop,
                     layout_mode=args.layout, cfg=layout_cfg)
                 print(f"    Layout: {layout_summary(layout_decision)}")
             else:
-                cut_vertical_clip(cut_source, cut_start, clip_dur, out_file,
+                cut_vertical_clip(cut_source, cut_start, cut_dur, out_file,
                                   crf=args.crf, preset=args.preset, crop=args.crop)
         except (subprocess.CalledProcessError, RuntimeError) as e:
             print(f"[{idx}] Falló el corte: {e}", file=sys.stderr)
             continue
         clip_entry = {
             "n": idx, "file": f"clips/{fname}", "peak": peak_ts,
-            "start": clip_start, "duration": clip_dur, "score": score,
+            "start": cut_start, "duration": cut_dur, "score": score,
             "risas": d["risas"], "hype": d["hype"],
             "title_es": title_es, "desc_es": desc_es,
             "title_en": title_en, "desc_en": desc_en,
@@ -377,6 +514,10 @@ def main() -> int:
             "chat_examples": examples,
             "viral": viral,
         }
+        if audio_info is not None:
+            clip_entry["audio"] = audio_info
+        if precise_info is not None:
+            clip_entry["precise_cut"] = precise_info
         if layout_decision is not None:
             clip_entry["layout"] = {
                 "mode": layout_decision.get("mode"),
