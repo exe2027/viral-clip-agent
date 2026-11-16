@@ -155,12 +155,14 @@ try:
     # derivar lo visible del layout y normalizar el nombre del juego.
     from viral_package import (
         KNOWN_GAMES,
+        degrade_title_to_reaction,
         validate_legacy_title,
         visible_from_layout,
     )
     viral_checks_mod = True
 except ImportError:
     KNOWN_GAMES = {}
+    degrade_title_to_reaction = None
     validate_legacy_title = None
     visible_from_layout = None
     viral_checks_mod = False
@@ -374,22 +376,27 @@ def sample_messages(chat_path: str, window_start: int, window_size: int = 10, li
     return examples
 
 
-def suggest_titles(detail, lang: str):
+def suggest_titles(detail, lang: str, game: str = None):
     """Título sugerido según si el pico fue más de risas o de hype.
 
     Plantillas legacy: NUNCA van al manifiesto sin validar (ver
     honest_title). "QUÉ JUGADA 😱 GTA 6" miente en un clip solo cams
-    (Just Chatting) porque promete gameplay que no se ve.
+    (Just Chatting) porque promete gameplay que no se ve, y miente
+    en cualquier clip que no sea GTA 6 porque el juego va
+    hardcodeado. Por eso el juego se pasa como parámetro y solo se
+    nombra si es el juego real del clip; sin juego conocido no se
+    nombra ningún juego.
     """
     risas, hype = detail["risas"], detail["hype"]
+    label = f" {game}" if game else ""
     if lang == "en":
         if hype >= risas:
-            return "WHAT A PLAY 😱 GTA 6", "Insane moment in GTA 6 — full clip"
-        return "They couldn't believe it 😂 GTA 6", "Chat lost it in GTA 6 — best moment"
+            return f"WHAT A PLAY 😱{label}", f"Insane moment in{label} — full clip" if game else "Insane moment — full clip"
+        return f"They couldn't believe it 😂{label}", f"Chat lost it in{label} — best moment" if game else "Chat lost it — best moment"
     # es / both: título en español, que es el canal principal
     if hype >= risas:
-        return "QUÉ JUGADA 😱 GTA 6", "El mejor momento del directo de GTA 6"
-    return "No se lo creyeron 😂 GTA 6", "El chat se murió de risa en GTA 6"
+        return f"QUÉ JUGADA 😱{label}", f"El mejor momento del directo de{label}" if game else "El mejor momento del directo"
+    return f"No se lo creyeron 😂{label}", f"El chat se murió de risa en{label}" if game else "El chat se murió de risa"
 
 
 # Alias mínimos por si viral_package no expone KNOWN_GAMES.
@@ -473,9 +480,11 @@ def honest_title(title: str, moment_card, layout_decision,
 
     Devuelve (título, degradado, motivo): si pasa, el mismo; si
     miente en un clip solo cams, el degradado a reacción (sin juego
-    ni gameplay); si falla por otra cosa y no hay degradación, el
-    original con el motivo (revisar a mano). Sin viral_package no se
-    puede validar: se devuelve tal cual con aviso.
+    ni gameplay); si falla por otra cosa y no hay degradación, NUNCA
+    se devuelve el título mentiroso tal cual: se usa un título
+    seguro (reacción, o el juego real si se conoce) y se marca
+    revisar a mano. Sin viral_package no se puede validar: se
+    devuelve tal cual con aviso.
     """
     if not viral_checks_mod:
         return title, False, "sin viral_package para validar (se usa tal cual)"
@@ -490,7 +499,23 @@ def honest_title(title: str, moment_card, layout_decision,
         return title, False, reason
     if degraded:
         return degraded, True, reason
-    return title, False, reason + " (sin degradación posible: revisar a mano)"
+    # Sin degradación posible (p. ej. gameplay visible pero juego
+    # equivocado: "GTA 6" en un clip de GTA V): no se publica el
+    # título mentiroso. Título seguro con el juego real, o de
+    # reacción sin juego si no se conoce.
+    safe = None
+    if degrade_title_to_reaction is not None:
+        try:
+            safe = degrade_title_to_reaction(moment_card, lang=lang)
+        except Exception:
+            safe = None
+    if not safe:
+        game = (moment_card or {}).get("game")
+        if lang == "en":
+            safe = f"{game}: chat went wild" if game else "Chat went wild"
+        else:
+            safe = f"{game}: el chat explotó" if game else "El chat explotó"
+    return safe, True, reason + " (título mentiroso reemplazado por uno seguro: revisar a mano)"
 
 
 def main() -> int:
@@ -967,8 +992,8 @@ def main() -> int:
         # Títulos del manifiesto: el viral manda en su idioma (título
         # honesto con check); el otro idioma usa el legacy degradado.
         # suggest_titles() NUNCA va al manifiesto sin validar.
-        title_es_raw, desc_es = suggest_titles(d, "es")
-        title_en_raw, desc_en = suggest_titles(d, "en")
+        title_es_raw, desc_es = suggest_titles(d, "es", game=game)
+        title_en_raw, desc_en = suggest_titles(d, "en", game=game)
         title_es, degraded_es, why_es = honest_title(
             title_es_raw, moment_card, layout_decision, payoff_ts_clip, "es")
         title_en, degraded_en, why_en = honest_title(
