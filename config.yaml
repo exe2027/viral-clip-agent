@@ -102,7 +102,7 @@ subtitle_styles:
 layout:
   mode: "auto"          # auto | stack | pip | center
   sample_every_s: 5     # muestrear un fotograma cada N segundos
-  min_segment_s: 5      # un tramo más corto se fusiona con el vecino
+  min_segment_s: 3      # un tramo más corto se fusiona con el vecino
   pip_width: 480        # ancho de la webcam en PiP (px, sobre 1080)
   pip_corner: "top-right" # top-right | top-left
   pip_margin: 24        # margen de la webcam PiP al borde

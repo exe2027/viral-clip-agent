@@ -16,7 +16,12 @@ Qué hace solo, sin que tengas que hacer nada a mano:
        (kick_downloader, vendorizado de KickDownloaderCLI) y SOLO el
        segmento de 60 s de cada pico (HLS master.m3u8 + ffmpeg),
        nunca el VOD entero.
-  2. Corta los clips en vertical 1080x1920.
+  2. Corta los clips en vertical 1080x1920 con LAYOUT RESPONSIVE
+     (layout.py, regla del proyecto): decide por fotogramas muestreados
+     si son dos webcams lado a lado (se apilan), una webcam + gameplay
+     (PiP arriba) o solo gameplay (recorte centrado); si el layout
+     cambia dentro del clip, se adapta por tramos. La decisión queda
+     en el manifiesto por clip. Se puede forzar con --layout.
   3. Empaqueta cada clip para viral con viral_package.py, que combina
      youtube-agent-skill: yt-viral (ranking por múltiplo sobre la mediana),
      yt-shorts (primera línea nueva, texto en pantalla, loop),
@@ -64,6 +69,21 @@ try:
     from kick_downloader import core as kick_mod
 except ImportError:  # Kick opcional: Twitch funciona sin kick_downloader
     kick_mod = None
+
+try:
+    # Layout responsive (regla del proyecto, ver layout.py).
+    from layout import cut_clip_with_layout, layout_summary
+    layout_mod = True
+except ImportError:
+    cut_clip_with_layout = None
+    layout_summary = None
+    layout_mod = False
+
+try:
+    from config import get_layout_config, load_config
+except ImportError:
+    get_layout_config = None
+    load_config = None
 
 HASHTAGS_ES = "#GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames #gaming"
 HASHTAGS_EN = "#GTA6 #GTA6Clips #GTA #RockstarGames #gaming #clips"
@@ -156,6 +176,8 @@ def main() -> int:
     p.add_argument("--duration", type=int, default=60)
     p.add_argument("--lang", choices=["es", "en", "both"], default="both")
     p.add_argument("--crop", choices=["center", "left", "right"], default="center")
+    p.add_argument("--layout", choices=["auto", "stack", "pip", "center"], default=None,
+                   help="Layout del clip: auto (decide por fotogramas, default), o forzar stack/pip/center")
     p.add_argument("--crf", type=int, default=23)
     p.add_argument("--preset", default="fast")
     p.add_argument("--dry-run", action="store_true", help="Solo descarga el chat y lista picos, sin video ni cortes")
@@ -327,13 +349,25 @@ def main() -> int:
                 continue
         else:
             cut_source, cut_start = video_path, clip_start
+        # Corte con layout responsive (regla del proyecto): decide por
+        # fotogramas muestreados (stack / pip / center, por tramos si
+        # cambia dentro del clip). Sin layout.py, recorte centrado.
+        layout_decision = None
         try:
-            cut_vertical_clip(cut_source, cut_start, clip_dur, out_file,
-                              crf=args.crf, preset=args.preset, crop=args.crop)
-        except subprocess.CalledProcessError as e:
+            if layout_mod:
+                layout_cfg = get_layout_config() if get_layout_config else {}
+                layout_decision = cut_clip_with_layout(
+                    cut_source, cut_start, clip_dur, out_file,
+                    crf=args.crf, preset=args.preset, crop=args.crop,
+                    layout_mode=args.layout, cfg=layout_cfg)
+                print(f"    Layout: {layout_summary(layout_decision)}")
+            else:
+                cut_vertical_clip(cut_source, cut_start, clip_dur, out_file,
+                                  crf=args.crf, preset=args.preset, crop=args.crop)
+        except (subprocess.CalledProcessError, RuntimeError) as e:
             print(f"[{idx}] Falló el corte: {e}", file=sys.stderr)
             continue
-        manifest["clips"].append({
+        clip_entry = {
             "n": idx, "file": f"clips/{fname}", "peak": peak_ts,
             "start": clip_start, "duration": clip_dur, "score": score,
             "risas": d["risas"], "hype": d["hype"],
@@ -342,7 +376,13 @@ def main() -> int:
             "hashtags_es": HASHTAGS_ES, "hashtags_en": HASHTAGS_EN,
             "chat_examples": examples,
             "viral": viral,
-        })
+        }
+        if layout_decision is not None:
+            clip_entry["layout"] = {
+                "mode": layout_decision.get("mode"),
+                "segments": layout_decision.get("segments", []),
+            }
+        manifest["clips"].append(clip_entry)
 
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -352,6 +392,9 @@ def main() -> int:
                   f"- Pico: {fmt_ts(c['peak'])} | {c['score']} pts ({c['risas']} risas, {c['hype']} hype)",
                   f"- ES: {c['title_es']} — {c['desc_es']} {c['hashtags_es']}",
                   f"- EN: {c['title_en']} — {c['desc_en']} {c['hashtags_en']}"]
+        lay = c.get("layout")
+        if lay:
+            lines.append(f"- Layout: {layout_summary({'segments': lay['segments']})}" if layout_summary else f"- Layout: {lay['mode']}")
         v = c.get("viral")
         if v:
             lines += [f"- Viral: {v['viral_multiple']}x la mediana | Fórmula: {v['formula']} ({v['formula_desc']})",

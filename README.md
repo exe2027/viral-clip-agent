@@ -239,6 +239,42 @@ Limitaciones reales de Kick (no son bugs del agente):
   respuesta. `kick_downloader` reintenta (hasta 4 veces) y cae a `curl` si
   urllib no puede.
 
+## Layout responsive — REGLA del proyecto (v2.5)
+
+El recorte vertical **no** es un recorte ciego al centro. Lo demostró el
+clip de Coker (2026-11-16): el directo eran dos webcams lado a lado con
+una franja fina de gameplay arriba y barras negras, y el recorte centrado
+tomaba media cara de cada uno + las barras: "no se ve nada". Desde v2.5,
+cada clip decide su layout por fotogramas muestreados (`layout.py`,
+solo stdlib + ffmpeg, sin dependencias nuevas):
+
+- **Dos webcams lado a lado → se apilan**, una encima de la otra,
+  llenando los 1080x1920 sin barras negras.
+- **Una webcam + gameplay → PiP**: gameplay a pantalla completa con la
+  webcam encima en una esquina superior (nunca abajo: ahí están el
+  minimapa y el HUD de GTA).
+- **Solo gameplay → recorte vertical centrado** normal.
+- **Si el layout cambia dentro del clip, se adapta por tramos**, no un
+  recorte fijo para todo el clip.
+
+Cómo se detecta: franja de contenido apilada (alto ≤ 65% del fotograma)
++ costura vertical fuerte justo en el centro = dos cams; caja con borde
+continuo en una esquina superior = webcam PiP. Calibrado con VODs reales
+(Coker → stack; Locones y NoraExplorer → center; PiP verificado con un
+sintético). La detección de PiP es heurística v1: si no está clara, cae
+a centrado (seguro). Se puede forzar con `facecam_box` en `config.yaml`
+o con `--layout stack|pip|center` (por defecto `auto`, configurable en
+`config.yaml`, sección `layout`).
+
+La decisión queda registrada en el manifiesto por clip (`layout` en
+`manifest.json`, línea `Layout:` en `manifest.md`).
+
+```bash
+# Forzar un layout en un clip
+python auto_clips.py <vod> --layout stack
+python auto_clips.py <vod> --layout pip
+```
+
 ## Uso
 
 ### 1. Descargar chat y VOD
