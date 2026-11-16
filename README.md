@@ -55,6 +55,43 @@ Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65
 
 **Limitación conocida:** `auto_clips.py` pasa los scores (ahora z) a `viral_package.viral_multiple` como `all_scores`; con mediana de z ≤ 0, `viral_multiple` devuelve el propio score, así que el "× la mediana" que imprime `auto_clips.py` en una corrida normal es en realidad el z-score. La detección, el corte y el manifiesto no se ven afectados. Queda para el bloque que toque `viral_package.py`.
 
+## Qué cambió en la v2.6 (tribunal, bloque 6 — audio + recorte preciso)
+
+**Audio como segunda señal (`audio.py`).** El chat es la señal principal, pero un pico de chat con el audio plano suele ser spam o música de fondo. Se mide el RMS por segundo (ffmpeg a WAV 16 kHz mono + numpy, sin librosa) solo en los top 10-15 candidatos, sobre el segmento ya descargado. Regla: chat alto + audio alto/dinámico = **confirmar**; chat alto + audio plano = **sospechar** (se corta igual, se revisa a mano antes de publicar). La transcripción es un bonus de scoring (+20% si hay risa/hype cerca del pico, +10% si hay voz, 0% si no hay nada), nunca un veto. Umbrales calibrados con los 3 VODs conocidos: sospechar si la transcripción tiene 0 palabras en 60 s, o si el audio es plano (std del RMS < 9 dB y ≥45% de segundos estables a ±2 dB de la mediana). OJO: el nivel medio NO discrimina — Locones es incluso más fuerte que Coker en media (-23,1 dBFS frente a -32,5 dBFS); lo que discrimina es la dinámica + la voz.
+
+| Candidato | Chat | RMS medio | std | Rango | Estables | Palabras | Bonus | Veredicto |
+|---|---|---|---|---|---|---|---|---|
+| Locones 03h08m | 24,75 pts | -23,1 dBFS | 7,4 dB | 28,9 dB | 47% | 0 | +0% | **SOSPECHAR** (sin voz, cama constante) |
+| Coker 03h15m | 56,5 pts | -32,5 dBFS | 11,5 dB | 35,3 dB | 15% | 77 | +10% | **CONFIRMAR** |
+| NoraExplorer 7h12m | 78 pts | -42,3 dBFS | 19,8 dB | 86,5 dB | 36% | 152 | +10% | **CONFIRMAR** |
+
+```bash
+.venv/bin/python audio.py runs/kick-coker-01a1dffd/segments/seg_01_t03h14m50s.mp4 --peak 20 --chat-score 56.5 --transcript runs/kick-coker-01a1dffd/clips/clip_01_transcript.json
+```
+
+**100% local y gratis ($0) — decisión del usuario (2026-11-16).** Todo lo de este bloque corre en local, sin keys ni cuentas de pago: transcripción con faster-whisper (modelos `tiny` y `base` de Systran, descarga gratuita de HuggingFace, sin token ni cuenta), VAD incluido en faster-whisper (modelo Silero, también local) y diccionario de risa/hype por reglas en `clips_chat_v2.py`. El escalado tiny→base es solo entre modelos locales, nunca a una API. NO se usa la Whisper API de OpenAI ni ninguna API paga, y NO se usa Gemini: al crear la key Gemini pidió tarjeta, así que no se pone tarjeta ni se crea cuenta de facturación. No se pide ninguna key de pago para este bloque.
+
+**Recorte preciso por frase/silencio (`precise_cut.py`).** El corte fijo (pico -20 s / +40 s) corta frases por la mitad. Ahora el inicio se afina a 2-3 s antes del disparador retrocediendo hasta el inicio de la frase que lo contiene, y el fin hasta el fin de esa frase/risa +1-2 s, con tope de 60 s. Fuentes: timestamps por palabra de faster-whisper (los que ya genera `subtitles.py`, reutilizados con `--transcript` o transcribiendo el segmento con el modelo tiny) + silencios detectados con ffmpeg `silencedetect` (para no empezar dentro de un silencio ni cortar dentro de una palabra). Solo trabaja dentro del segmento ya descargado, nunca baja más vídeo. Sin transcripción fiable (< 3 palabras) cae al corte fijo actual. El corte en sí lo hace `layout.py` (regla del proyecto) o el recorte centrado si no está.
+
+```bash
+.venv/bin/python precise_cut.py runs/kick-coker-01a1dffd/segments/seg_01_t03h14m50s.mp4 \
+    --peak 11710 --segment-start 11690 \
+    --transcript runs/kick-coker-01a1dffd/clips/clip_01_transcript.json \
+    --out runs/kick-coker-01a1dffd/clips/clip_01_precise.mp4
+# Coker: 17,36 s -> 24,98 s (7,62 s, 1080x1920, layout auto), inicio en fin de
+# silencio y fin en fin de frase, sin cortar palabras por la mitad.
+# Locones sin transcripción (--no-transcribe): cae al fijo 0,0 s -> 40,0 s.
+# NoraExplorer 7h12m (segmento desde 25910, pico 25930): 5,28 s -> 25,34 s (20,07 s).
+```
+
+**Integración en `auto_clips.py`** (solo flags, sin tocar la detección ni el corte fijo por defecto):
+- `--audio-check`: RMS + veredicto por candidato (top-N), bonus de transcripción, y `audio` en el manifiesto (`decision`, `reason`, `stats`, `words`, `transcription_bonus`). Un sospechoso se corta igual y queda marcado para revisión manual.
+- `--precise-cut`: afina inicio/fin por clip con `precise_cut.py` (transcribe la ventana de 60 s del candidato: el segmento en Kick, una ventana temporal en Twitch) y guarda `precise_cut` en el manifiesto; el archivo lleva sufijo `_precise`.
+
+```bash
+python auto_clips.py https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9 --top-n 5 --audio-check --precise-cut
+```
+
 ## Qué cambió en la v2
 
 **1. Español, por fin.** La v1 solo entendía risas en inglés (`lol, lmao, kekw, lul, xd`). La v2 suma:
@@ -138,8 +175,9 @@ Limitación conocida: el modelo `tiny` se equivoca en nombres propios
 y en frases rápidas. En la prueba real transcribió "Bezo" varias
 veces (nombre/emote que no reconoce) y algunas frases quedaron con
 gramática rota ("And I was post on discord"). Revisa el SRT antes de
-publicar; el tribunal pidió un diccionario GTA 6 para esto, que aún
-no está implementado.
+publicar; el diccionario GTA 6 que pidió el tribunal para esto está
+implementado en v2.6 (ver abajo): `initial_prompt` + correcciones
+deterministas post-SRT en `config.yaml`.
 
 ## Política de traducción de subtítulos — v2.5
 
@@ -167,8 +205,9 @@ con `config.resolve_subtitle_task()`. Flags:
 
 Pruebas reales (modelo `tiny`):
 - **Rumano -> inglés (Kick, Locones):** el clip del mejor pico
-  (03h08m) no tenía voz que transcribir (solo audio del juego), así
-  que se probó con el segmento del pico de 14m05s del mismo VOD:
+  (03h08m) se probó con el segmento del pico de 14m05s del mismo VOD
+  (corrección v2.6: el clip de 03h08m SÍ tiene ~11 s de voz en
+  rumano al inicio, ver abajo):
   detectado `ro`, `task=translate`, SRT en inglés — "I don't want to
   see / you again, I don't / want / to see you again" (32,2–39,5 s) —
   quemado en `runs/kick-locones-01a1e069/clips/clip_14m05s_subs-en.mp4`
@@ -193,6 +232,107 @@ Limitaciones de la traducción con `tiny`:
   que revisar el SRT: el modelo `tiny` repite frases y se pierde con
   ruido de juego. Un modelo `base`/`small` traduciría mejor, a costa
   de más tiempo de CPU.
+
+## Subtítulos — v2.6: VAD, anti-alucinación, puerta "sin voz", escalado tiny→base, idioma por tramos, diccionario GTA 6
+
+Bloque 5 del tribunal (2026-11-16), en `subtitles.py` + `config.yaml`
+(sección `subtitles`). Nada hardcodeado, todo configurable:
+
+- **VAD + anti-alucinación:** faster-whisper con `vad_filter=True`
+  (Silero VAD, incluido en faster-whisper) y umbrales
+  `no_speech_threshold` 0,6, `compression_ratio_threshold` 2,4,
+  `logprob_threshold` -1,0, `condition_on_previous_text=False`. El
+  ruido de juego sin voz se descarta antes de transcribir; sin
+  contexto previo no se encadenan alucinaciones de un segmento al
+  siguiente.
+- **Puerta "sin voz":** si el clip tiene <5 palabras por cada 60 s o
+  la voz cubre <10% de la duración, NO se genera SRT ni se quema
+  nada: el clip queda marcado como "solo gameplay/música" en el
+  transcript JSON (`no_speech: true`,
+  `audio_note: "solo gameplay/música"`) y el proceso termina con
+  código 0, sin fallar. El clip sigue su camino sin subtítulos.
+  Pendiente de conectar: que `auto_clips.py` / `viral_package.py`
+  lean ese campo y lo reflejen en el manifiesto.
+- **Escalado condicional tiny → base:** SOLO si salta un umbral
+  objetivo — repetición de la misma palabra/frase ≥3 veces,
+  <8 palabras/min con voz, logprob medio < -0,8, idioma con prob.
+  <0,5. Nunca base por defecto: tiny es varias veces más rápido en
+  CPU. El motivo queda en `transcript["escalation_reasons"]` y el
+  modelo final en `transcript["model"]`.
+- **Idioma por tramos:** se detecta en trozos de 30 s
+  (`language_chunk_s`) y se vota por mayoría; el empate lo desempata
+  el idioma mayoritario del chat (`--chat-lang` o
+  `subtitles.chat_language`) y si no el de mayor probabilidad media;
+  sin votos, el fallback de config (idioma del streamer o del
+  canal). Siempre se guardan `source_language`, probabilidad y
+  `task`, más los votos en `language_votes`.
+- **Diccionario GTA 6 (~25 términos, `gta6_terms`):** va como
+  `initial_prompt` a Whisper y como correcciones deterministas
+  post-SRT (`gta6_corrections`: solo se toca lo que está en el mapa,
+  por palabra/frase completa). El número de correcciones aplicadas
+  se informa al generar el SRT.
+- Flags nuevos: `--chat-lang es|en`, `--no-vad`, `--no-escalate`.
+
+**100% local y gratis ($0) — decisión del usuario (2026-11-16).**
+Todo este bloque corre en local, sin keys ni cuentas de pago:
+faster-whisper `tiny`/`base` (modelos de Systran, descarga gratuita
+de HuggingFace, sin token ni cuenta), VAD Silero local y ffmpeg. El
+escalado tiny→base es solo entre modelos locales, nunca a una API.
+NO se usa la Whisper API de OpenAI ni ninguna API paga, y NO se usa
+Gemini: al crear la key Gemini pidió tarjeta, así que no se pone
+tarjeta ni se crea cuenta de facturación. No se pide ninguna key de
+pago para este bloque.
+
+Detalle técnico: el repo tiene un `queue.py` propio (cola de
+aprobación) que haría sombra al módulo `queue` de la stdlib cuando
+faster-whisper descarga el modelo VAD (concurrent.futures hace
+`import queue` y falla con AttributeError). `subtitles.py` carga el
+`queue` de la stdlib por ruta explícita al arrancar para que quede
+en `sys.modules`.
+
+Pruebas reales de aceptación (2026-11-16, `.venv`, modelo tiny con
+escalado a base cuando saltó un umbral; SRT en
+`runs/.../clips/*_v26.srt`, transcript en `*_v26_transcript.json`):
+- **Español con voz (Kick, Coker, clip 03h14m50s):** detectado `es`
+  (prob. 0,77, votos 2/2) → `task=transcribe`, subtítulos en
+  español, sin traducir. Tiny: 100 palabras, 42% de habla, logprob
+  medio -1,06 → escaló por repetición ("no" x4 seguidas) y logprob
+  bajo. Base: 93 palabras, 11 segmentos, 31 bloques SRT, habla 56%,
+  logprob -0,68, idioma re-detectado `es` 0,98. SRT en español, sin
+  alucinaciones graves (algunas palabras sueltas con ruido de
+  juego: "fombra y sovordo", "arrar"). Correcciones GTA 6: 0.
+- **Rumano con poca voz (Kick, Locones, clip 03h08m05s):**
+  corrección a v2.5: el clip SÍ tiene voz, ~11 s de rumano al
+  inicio, y el resto (~48 s) es solo audio del juego. Tiny: `ro`
+  0,44 (voto empatado 1-1, desempate por probabilidad) → escaló por
+  logprob -1,68 e idioma poco fiable. Base: 30 palabras, 1 segmento
+  (0–11,3 s), habla 13%, logprob -1,69, traducción a inglés
+  coherente ("You'll see, if you can see it..."). **0 palabras
+  inventadas en los ~48 s de solo gameplay.** La puerta "sin voz"
+  NO se activó aquí porque sí hay voz (30 palabras ≥ 5, 13% ≥ 10%).
+  Una primera pasada con base dio 47 palabras con el mismo
+  contenido: Whisper varía la redacción en audio ruidoso, pero el
+  contenido coincide.
+- **Inglés (Twitch, peereira7/NoraExplorer, clip 7h12m):**
+  detectado `en` (prob. 0,96, votos 0,99/0,92, sin empate) →
+  `task=transcribe`, 150 palabras, 7 segmentos, 43 bloques SRT,
+  habla 76%, logprob -0,31, sin escalado (ningún umbral saltó).
+  SRT razonable ("It was a good stream... I'll see you guys on the
+  19th"). "Bezo" sigue apareciendo (límite conocido de tiny).
+- **Puerta "sin voz" (prueba directa):** recorte de 30 s del clip
+  de Locones (20–50 s, solo audio del juego, sin voz). Tiny
+  alucinó 16 palabras ("hype" x8 seguidas, logprob -1,03) → escaló
+  a base, que lo redujo a 7 palabras y 7% de habla → puerta
+  activada por cobertura (<10%): `no_speech: true`,
+  `audio_note: "solo gameplay/música"`, **sin SRT, sin quemado,
+  código de salida 0**. El VAD + los umbrales reducen las
+  alucinaciones pero no las eliminan en audio de juego puro; la
+  puerta es la red de seguridad.
+
+Limitación conocida: el escalado se detiene en `base` (no hay
+`small`/`medium` por defecto) y en audio muy ruidoso el logprob
+medio de base sigue bajo (-1,69 en Locones); el resultado se
+guarda igual y se revisa el SRT antes de publicar.
 
 ## Kick — v2.3 (KickDownloaderCLI vendorizado)
 
@@ -288,6 +428,17 @@ sintético). La detección de PiP es heurística v1: si no está clara, cae
 a centrado (seguro). Se puede forzar con `facecam_box` en `config.yaml`
 o con `--layout stack|pip|center` (por defecto `auto`, configurable en
 `config.yaml`, sección `layout`).
+
+**Clasificación 100% local, sin visión por API — decisión del usuario
+(2026-11-16).** La clasificación de layout es local: solo stdlib +
+ffmpeg (muestreo de fotogramas en gris, costura vertical, caja en
+esquina, estabilidad por diferencia de frames) y, si está disponible,
+detección de rostros con OpenCV Haar local. No hay ninguna
+clasificación de frames con Gemini Vision ni con ninguna API paga en
+el pipeline: la opción de visión por API queda APAGADA por defecto
+(`vision_skipped`), sin key, sin tarjeta y sin cuenta de
+facturación. Todo el pipeline funciona 100% gratis: faster-whisper
+tiny local, ffmpeg, Twitch/Kick gratis.
 
 La decisión queda registrada en el manifiesto por clip (`layout` en
 `manifest.json`, línea `Layout:` en `manifest.md`).
@@ -502,6 +653,91 @@ Pruebas: `python3 test_queue.py` (32 tests, BD temporal, sin red).
 | Facebook Reels | Título ≤60 car. + caption, 3-90 s obligatorio | Frame del pico | QUEMADOS obligatorios | Graph API a Página, nunca a perfil |
 
 Cada clip en `manifest.md` lleva su paquete por plataforma, con su métrica a mirar: YouTube visto vs deslizado, TikTok % finalización, Reels reproducciones y compartidos.
+
+## Ficha del momento + títulos reales + anti-clickbait — Bloque 2 (v2.6)
+
+La v2.4 generaba 3 títulos fijos con "GTA 6" hardcodeado y prometía una
+"jugada" que no existía: en Coker (GTA V RP) y en Locones
+(Counter-Strike 2) el título viejo mentía en el juego y en la jugada.
+Desde v2.6 el título sale de la ficha del momento, sin LLM en caliente:
+
+- **`moment_card.py`** — ficha del momento como única fuente de verdad,
+  de la transcripción (SRT si existe) + el chat del pico. Juego real
+  (nunca se infiere del chat ni del canal: lo pasa quien llama, con su
+  fuente en `game_source`), streamer, qué pasa (verbo+objeto, solo si
+  una acción del léxico aparece ≥2 veces en chat/transcripción),
+  frase literal del streamer (SRT, cerca del payoff) y del chat (la
+  más repetida en la ventana del pico, con ≥2 menciones), reacción
+  dominante (risas/hype/volumen), timestamp del payoff. Si no hay
+  evidencia, la ficha lo dice (`evidence: low`, `what: null`).
+- **`viral_package.py`** — `generate_titles(moment_card, lang)` genera
+  10 títulos por clip desde la ficha (juego real, acción evidenciada,
+  frase literal, reacción, múltiplo). `check_title(title, moment_card)
+  -> (bool, motivo)` es BLOQUEANTE: falla si el juego del título no es
+  el juego real, si el sustantivo prometido no aparece en
+  transcripción/chat/ficha, si el payoff no ocurre dentro del clip, o
+  si hay un superlativo sin evidencia (múltiplo/risas) que lo respalde;
+  también falla el lint yt-package (≤60 car., ≤2 palabras en
+  MAYÚSCULAS; >40 car. es solo aviso, se corta en móvil). Anti-
+  repetición: ningún título repetido en el mismo VOD ni el mismo día,
+  registro en `titles_seen.json` (gitignored por `*.json`); solo se
+  anota el título elegido (`best_title`), no los 10 candidatos.
+  "GTA 6" solo si el juego real es GTA 6; tags y hashtags salen del
+  juego real (`game_hashtags_tags`), no de #GTA6 fijo. Sin ficha, el
+  juego es desconocido y ningún título nombra un juego.
+- **`thumbnails.py`** — miniatura real: 3 fotogramas del clip con
+  ffmpeg (payoff −5 s, payoff, payoff +5 s), guardados para elección
+  humana en la aprobación; portada de Instagram = copia del fotograma
+  del payoff (`cover_instagram.jpg`). Sin texto quemado por ahora.
+  Sin payoff conocido usa 25 % / 50 % / 75 % de la duración.
+
+```bash
+# Ficha + títulos + miniaturas de un clip real
+python moment_card.py --clip runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1.mp4 \
+  --chat runs/kick-coker-01a1dffd/chat.json \
+  --srt runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1.srt \
+  --streamer coker --game "GTA V RP" --peak 11710 --start 11690 \
+  --score 56.5 --risas 14 --hype 1 --median 1.0 --out runs/kick-coker-01a1dffd/clips/moment_card.json
+python thumbnails.py runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1.mp4 \
+  --card runs/kick-coker-01a1dffd/clips/moment_card.json \
+  --out-dir runs/kick-coker-01a1dffd/clips/thumbnails --cover
+python -c "
+from viral_package import check_title
+import json; card = json.load(open('runs/kick-coker-01a1dffd/clips/moment_card.json'))
+print(check_title('GTA 6: La jugada que rompió el chat', card))"
+```
+
+Probado con los clips reales (2026-11-16, sin push, nada publicado):
+
+- **Coker** (`clip_01_t03h14m50s_s56.5_r14h1.mp4`, GTA V RP, pico
+  03h15m10s, 56.5 pts, 14 risas, 1 hype, 50 mensajes/10 s, 127
+  usuarios/30 s, múltiple 56.5x): ficha `evidence: medium`,
+  `what: "errar un tiro"` (15 menciones de "erra"), cita del streamer
+  "No, no, no, no, no." (19.2 s del clip, junto al payoff a 20 s) y
+  del chat "ESTANDO ARMADO Y LO ERRA" (x2). 10/10 títulos generados,
+  ninguno dice GTA 6. Mejores 3: `GTA V RP: El chat: "Estando armado
+  y lo erra"` (45 car.), `GTA V RP: Errar un tiro y el chat explotó`
+  (41 car.), `Errar un tiro que nadie se creyó` (32 car.). El título
+  viejo **FALLA** el check: "el título dice 'GTA 6' pero el juego
+  real es 'GTA V RP'; el título promete 'jugada' pero no aparece en
+  transcripción/chat/ficha".
+- **Locones** (`clip_01_t03h08m05s_s24.75_r0h0.mp4`, Counter-Strike 2,
+  pico 03h08m25s, 24.75 pts, 0 risas, 0 hype, 57 mensajes/10 s, 21
+  usuarios/30 s, múltiple 24.75x): ficha `evidence: low` — sin
+  transcripción (segmentos vacíos) y solo 1 mensaje de texto en la
+  ventana del pico, resto spam de emotes rumanos; `what: null` ("sin
+  evidencia: no se sabe qué pasa"). Solo 5 títulos, todos de volumen/
+  reacción, ninguno promete una jugada. Mejores 3: `57 mensajes en 10
+  segundos por esto` (35 car.), `Counter-Strike 2: El chat explotó
+  con esto` (42 car.), `24.75x la mediana: Counter-Strike 2`
+  (35 car.). El título viejo **FALLA** el check: "el título dice
+  'GTA 6' pero el juego real es 'Counter-Strike 2'; el título promete
+  'jugada' pero no aparece en transcripción/chat/ficha; evidencia
+  baja: la ficha no sabe qué pasa, no se puede prometer ['jugada']".
+- Miniaturas: 3 frames 1080x1920 por clip (15/20/25 s, payoff a 20 s)
+  + `cover_instagram.jpg` (copia del frame del payoff), en
+  `runs/<vod>/clips/thumbnails/`. El frame del payoff de Coker muestra
+  las dos webcams lado a lado (layout stack), verificado a vista.
 
 ## Empaquetado viral (youtube-agent-skill)
 
