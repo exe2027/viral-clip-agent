@@ -79,6 +79,22 @@ DEFAULT_CONFIG = {
     # Facecam opcional (auditoría: layout vertical con facecam, fase
     # siguiente). x, y, w, h en píxeles del vídeo original; null = sin facecam.
     "facecam_box": None,
+    # Auto-publicación (bloque 10 del tribunal, 2026-11-16; ver
+    # AUTOPUBLISH.md y counter.py). Umbrales a validar por el usuario.
+    "autopublish": {
+        "threshold": 15,            # clips seguidos sin editar y sin fallos
+        "min_days_per_phase": 3,    # mínimo 3-5 días por fase
+        "min_clips_per_phase": 10,  # mínimo 10 clips por fase
+        "veto_window_minutes": {    # fase 3: ventana de veto por plataforma
+            "youtube": 30,
+            "default": 120,         # TikTok / Instagram / Facebook
+        },
+        # Sin "whitelist" aquí: la lista blanca canónica es
+        # influencers.yaml + allowed_streamers.yaml (la lee
+        # publisher.load_whitelist(); queue.py usa además la clave
+        # "allowlist" de nivel superior en config.yaml).
+        "metrics_green": False,     # true solo con métricas en verde (revisión manual)
+    },
 }
 
 
@@ -272,4 +288,23 @@ def get_layout_config(cfg=None):
     merged.update((cfg or {}).get("layout") or {})
     if (cfg or {}).get("facecam_box") and not merged.get("facecam_box"):
         merged["facecam_box"] = cfg["facecam_box"]
+    return merged
+
+
+def get_autopublish_config(cfg=None):
+    """Config de auto-publicación (counter.py) desde config.yaml.
+
+    Mezcla los defaults de ``autopublish`` con la sección
+    ``autopublish`` de config.yaml. Devuelve un dict con:
+    threshold, min_days_per_phase, min_clips_per_phase,
+    veto_window_minutes {youtube, default}, metrics_green.
+    (La lista blanca NO vive aquí: la canónica es influencers.yaml +
+    allowed_streamers.yaml, leída por publisher.load_whitelist().)
+    """
+    cfg = cfg or load_config()
+    merged = dict(DEFAULT_CONFIG["autopublish"])
+    merged.update((cfg or {}).get("autopublish") or {})
+    veto = dict(DEFAULT_CONFIG["autopublish"]["veto_window_minutes"])
+    veto.update(((cfg or {}).get("autopublish") or {}).get("veto_window_minutes") or {})
+    merged["veto_window_minutes"] = veto
     return merged

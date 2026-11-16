@@ -124,5 +124,8 @@ autopublish:
   veto_window_minutes:
     youtube: 30           # fase 3: ventana de veto en YouTube
     default: 120          # fase 3: ventana de veto en TikTok / Instagram / Facebook
-  whitelist: []           # streamers con permiso explícito; vacío = fase 4 bloqueada
+  # Sin "whitelist" aquí: la lista blanca canónica es influencers.yaml
+  # (solo estado "concedido") + allowed_streamers.yaml, que lee
+  # publisher.load_whitelist(); queue.py usa además "allowlist" aquí
+  # en config.yaml (nivel superior). Vacía en todas = fase 4 bloqueada.
   metrics_green: false    # poner true solo cuando las métricas estén en verde (revisión manual)

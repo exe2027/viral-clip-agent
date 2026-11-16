@@ -414,6 +414,39 @@ para el detalle completo.
   2026-11-16 con el clip de Coker: paquete válido, pero NO publicable
   (Coker sin permiso, YT sin OAuth, auditoría amber).
 
+## Auto-publicación — contador "funciona", 4 fases y circuit breaker (Bloque 10 del tribunal)
+
+`counter.py` decide si se PUEDE publicar; no publica nada. Ver
+`AUTOPUBLISH.md` para el detalle completo.
+
+- **Contador "funciona"** (`state/counter.json`): clips seguidos
+  aprobados sin editar título/caption Y publicados sin fallo
+  técnico. Umbral propuesto (a validar): **15 seguidos, 0
+  rechazados por contenido en los últimos 15**. Se reinicia a cero
+  con un rojo, un rechazo por contenido o un fallo de subida.
+  `python3 counter.py status` / `record <evento>`.
+- **4 fases, cambio MANUAL con confirmación** (`counter.py set-phase
+  N --yes`): 1 manual (19 nov) → 2 semi-auto (el lote se propone;
+  sin respuesta no se publica) → 3 auto con ventana de veto
+  (30 min YT / 2 h resto, configurable) → 4 auto total (solo con
+  semáforo verde + lista blanca + métricas en verde). Cada fase
+  mínimo 3-5 días y 10 clips; avanzar es secuencial salvo `--force`.
+- **Circuit breaker**: auto-pausa con 2 fallos de subida seguidos en
+  una plataforma, copyright/strike, 1 rojo que intentó colarse,
+  idioma conf. < 0,5 en 2 clips seguidos, o 3 clips seguidos muy por
+  debajo de la mediana. Reanudación solo manual
+  (`counter.py resume --yes`).
+- **Kill-switch**: archivo `queue.kill` en la raíz del repo, el mismo
+  que usa `queue.py` (bloque 1). Si existe, nada se publica.
+- **La cola consulta la puerta** antes de publicar:
+  `counter.py gate --platform youtube --clip c1` (exit 0 =
+  permitido) o `gate_publish()` desde Python. La lista blanca
+  canónica es `influencers.yaml` + `allowed_streamers.yaml` (hoy
+  vacías): sin permiso no se publica, y la fase 4 queda bloqueada.
+- **Simulación**: `python3 counter.py simulate` (10 aprobados sin
+  editar → 1 rechazo → contador a cero, más demostración del breaker
+  con 2 fallos seguidos; usa estado temporal, no toca el real).
+
 ## Supervivencia por plataforma
 
 Publicar clips de otros streamers pone en riesgo las cuentas nuevas si se
