@@ -53,7 +53,7 @@ clips:
   min_separation: 60      # separación mínima entre picos
 
 subtitles:
-  default_style: "tiktok" # tiktok | highlight | karaoke
+  default_style: "karaoke" # tiktok | highlight | karaoke (karaoke = viral, palabra por palabra)
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
 
@@ -160,11 +160,15 @@ subtitle_styles:
     max_chars: 20
     max_duration: 2.0
     box: true
-  karaoke:                # palabra por palabra: bloques de 1-2 palabras
-    font_color: "#FFFF00"
+  karaoke:                # palabra por palabra con cambio de color (ASS \k real):
+    # la palabra activa va en amarillo, el resto en blanco; grande,
+    # negrita, borde negro, centrado abajo. Es el estilo por defecto
+    # (2026-11-16, arreglo 5: el tiktok se veía "muy sobrio").
+    font_color: "#FFFFFF"       # palabras pendientes: blanco
+    active_word_color: "#FFFF00" # palabra activa: amarillo
     border_color: "#000000"
-    border_width: 3
-    fontsize: 56
+    border_width: 4
+    fontsize: 64
     bold: true
     margin_v: 140
     max_chars: 8

@@ -42,11 +42,28 @@ Apache 2.0: plantillas de subtítulo elegibles). Tres estilos en
 config.yaml (subtitle_styles), elegibles con --subtitle-style:
   * tiktok: blanco, negrita, borde negro, abajo (el de siempre).
   * highlight: amarillo con caja semitransparente detrás.
-  * karaoke: palabra por palabra (bloques de 1-2 palabras, amarillo,
-    fuente grande). No es karaoke \kf real de ASS: el SRT no lleva
-    tiempos por palabra al quemar, así que se aproxima con bloques
-    cortos (max_chars=8, max_duration=1.0 s).
+  * karaoke: palabra por palabra con cambio de color (ASS real con
+    etiquetas \k): la palabra activa va en active_word_color
+    (amarillo) y el resto en blanco, fuente grande, negrita, borde
+    negro, centrado abajo. El SRT no lleva tiempos por palabra, así
+    que cada bloque se reparte entre sus palabras en proporción a su
+    longitud (ver srt_to_karaoke_ass). Es el estilo por defecto
+    (config.yaml subtitles.default_style, arreglo 5, 2026-11-16:
+    el tiktok se veía "muy sobrio").
 Lo que se tomó de Shortia y lo que NO: ver README, sección Shortia.
+
+Contexto en pantalla — arreglo 4 (2026-11-16):
+en un clip solo cams/reacción, el streamer mira algo fuera de
+cámara y el espectador no sabe QUÉ. El clip lleva un texto breve
+QUEMADO arriba con el contexto sacado de la transcripción
+(p. ej. "reaccionando al tráiler de GTA 3"), solo los primeros
+segundos. NUNCA se mete imagen ni vídeo de lo que mira: solo
+texto. La extracción vive en viral_package.extract_reaction_context
+(medio + tema conocido, o None si no hay contexto claro) y el
+quemado aquí: ``burn_subtitles(..., context_text=...)`` o
+``burn_context_banner(...)`` solo. Sin ``context_text`` el quemado
+de subtítulos es exactamente el de siempre: el banner es opcional
+y no toca el filtro de subtítulos.
 
 Política de traducción — v2.5 (regla del usuario, 2026-11-16):
   * Audio en español -> subtítulos SOLO en español, sin traducir
@@ -97,6 +114,11 @@ Uso:
   .venv/bin/python subtitles.py clip.mp4 --model tiny --lang en --fontsize 48
   .venv/bin/python subtitles.py clip.mp4 --subtitle-style highlight
   .venv/bin/python subtitles.py clip.mp4 --subtitle-style karaoke
+  .venv/bin/python subtitles.py clip.mp4 --srt clip.srt --no-transcribe --burn out.mp4
+    # quema un SRT ya existente sin re-transcribir (pruebas de estilo)
+  .venv/bin/python subtitles.py clip.mp4 --srt clip.srt --no-transcribe --burn out.mp4 --context "reaccionando al tráiler de GTA 3"
+    # lo mismo + banner de contexto arriba los primeros 5 s (arreglo 4)
+  .venv/bin/python subtitles.py --self-test  # pruebas rápidas del banner de contexto
   .venv/bin/python subtitles.py clip.mp4 --subtitle-lang en   # fuerza salida en inglés
   .venv/bin/python subtitles.py clip.mp4 --no-translate        # nunca traducir
   .venv/bin/python subtitles.py clip.mp4 --chat-lang es        # desempate de idioma
@@ -694,10 +716,248 @@ def hex_to_ass_color(hex_color, opacity=1.0):
     return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
 
 
+_SRT_TIME_RE = re.compile(
+    r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)")
+
+
+def parse_srt(srt_path):
+    """Lee un SRT y devuelve [(start, end, text)] en segundos.
+
+    Los bloques se separan por líneas en blanco; cada bloque tiene
+    índice, línea de tiempos y una o más líneas de texto (se unen
+    con espacios: el karaoke trabaja palabra por palabra).
+    """
+    with open(srt_path, encoding="utf-8") as f:
+        content = f.read()
+    blocks = []
+    for chunk in re.split(r"\n\s*\n", content.strip()):
+        lines = [ln.strip() for ln in chunk.strip().splitlines()
+                 if ln.strip()]
+        if len(lines) < 2:
+            continue
+        m = _SRT_TIME_RE.search(lines[1])
+        if not m:
+            continue
+        g = [int(x) for x in m.groups()]
+        start = g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 1000.0
+        end = g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 1000.0
+        text = " ".join(lines[2:])
+        if text:
+            blocks.append((start, end, text))
+    return blocks
+
+
+def _ass_time(seconds):
+    """Segundos -> tiempo ASS H:MM:SS.cc."""
+    seconds = max(0.0, seconds)
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    cs = int(round((seconds - int(seconds)) * 100))
+    if cs == 100:  # redondeo al límite del segundo
+        s += 1
+        cs = 0
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
+                       offset=0.0, max_end=None):
+    """Convierte bloques SRT en un ASS karaoke palabra por palabra.
+
+    Cada bloque se reparte entre sus palabras en proporción a su
+    longitud (palabra + espacio): la etiqueta ``\\k`` de cada palabra
+    dura esos centisegundos. libass pinta lo ya "cantado" con
+    PrimaryColour (palabra activa, active_word_color) y lo que falta
+    con SecondaryColour (resto, font_color). No necesita los tiempos
+    por palabra de Whisper: el SRT ya trae el bloque y el reparto
+    proporcional basta para el efecto viral. ``offset`` desplaza los
+    tiempos (p. ej. al quemar sobre un recorte del clip) y
+    ``max_end`` recorta los bloques que se salen del recorte.
+    """
+    font_color = style.get("font_color", "#FFFFFF")
+    active_color = style.get("active_word_color") or "#FFFF00"
+    border_color = style.get("border_color", "#000000")
+    border_width = style.get("border_width", 3)
+    fontsize = style.get("fontsize", 64)
+    margin_v = style.get("margin_v", 140)
+    bold = -1 if style.get("bold", True) else 0
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 1080\n"
+        "PlayResY: 1920\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Karaoke,{font_name},{fontsize},"
+        f"{hex_to_ass_color(active_color, 1.0)},"
+        f"{hex_to_ass_color(font_color, 1.0)},"
+        f"{hex_to_ass_color(border_color, 1.0)},"
+        f"{hex_to_ass_color('#000000', 0.0)},"
+        f"{bold},0,0,0,100,100,0,0,1,{border_width},0,2,10,10,{margin_v},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+        "MarginV, Effect, Text\n"
+    )
+    lines = [header]
+    for start, end, text in blocks:
+        start -= offset
+        end -= offset
+        if max_end is not None and start >= max_end:
+            continue
+        if end <= 0:
+            continue
+        start = max(0.0, start)
+        if max_end is not None:
+            end = min(end, max_end)
+        if end <= start:
+            continue
+        # Las llaves serían etiquetas de anulación en ASS: se
+        # neutralizan para que el texto se vea tal cual.
+        words = [w.replace("{", "(").replace("}", ")")
+                 for w in text.split()]
+        if not words:
+            continue
+        total_cs = max(len(words), int(round((end - start) * 100)))
+        weights = [len(w) + 1 for w in words]
+        total_w = sum(weights)
+        durs = [max(1, int(round(total_cs * w / total_w)))
+                for w in weights]
+        # Ajuste de redondeo en la última palabra: la suma debe ser
+        # exactamente total_cs para que el bloque no se corte antes.
+        durs[-1] += total_cs - sum(durs)
+        if durs[-1] < 1:
+            durs[-1] = 1
+        karaoke_text = "".join(
+            f"{{\\k{d}}}{w} " for d, w in zip(durs, words)).rstrip()
+        lines.append(
+            f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Karaoke,,"
+            f"0,0,0,,{karaoke_text}\n"
+        )
+    return "".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Arreglo 4 (2026-11-16) — contexto en pantalla para clips de reacción
+# ---------------------------------------------------------------------------
+
+CONTEXT_BANNER_FONTFILE = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+CONTEXT_BANNER_DEFAULT_DURATION = 5.0  # s: solo el arranque del clip
+CONTEXT_BANNER_FONTSIZE = 40
+CONTEXT_BANNER_MARGIN_TOP = 120  # px desde arriba (vertical 1080x1920)
+
+
+def _drawtext_escape(text):
+    """Escapa texto para el filtro drawtext de ffmpeg (: ' \\ %)."""
+    return (str(text).replace("\\", "\\\\").replace(":", "\\:")
+            .replace("'", "\\'").replace("%", "\\%"))
+
+
+def _context_banner_font():
+    """fontfile si existe DejaVu Bold, si no font=DejaVu Sans."""
+    if os.path.isfile(CONTEXT_BANNER_FONTFILE):
+        return f"fontfile={CONTEXT_BANNER_FONTFILE}"
+    return "font='DejaVu Sans'"
+
+
+def context_banner_filter(context_text,
+                          duration_s=CONTEXT_BANNER_DEFAULT_DURATION,
+                          fontsize=CONTEXT_BANNER_FONTSIZE,
+                          margin_top=CONTEXT_BANNER_MARGIN_TOP):
+    """Filtro drawtext del banner de contexto (arreglo 4).
+
+    Texto blanco en negrita con caja semitransparente, centrado
+    arriba (los subtítulos van abajo, no se pisan), solo los
+    primeros ``duration_s`` segundos. Devuelve el fragmento de
+    filtergraph para encadenar tras el filtro de subtítulos.
+    """
+    safe = _drawtext_escape(context_text)
+    return (
+        f"drawtext={_context_banner_font()}:text='{safe}':"
+        f"fontsize={fontsize}:fontcolor=white:borderw=2:bordercolor=black:"
+        f"box=1:boxcolor=black@0.6:boxborderw=16:"
+        f"x=(w-text_w)/2:y={margin_top}:enable='between(t,0,{duration_s})'"
+    )
+
+
+def burn_context_banner(video_path, context_text, output_path,
+                        duration_s=CONTEXT_BANNER_DEFAULT_DURATION):
+    """Quema SOLO el banner de contexto, sin subtítulos.
+
+    Para clips de reacción que no llevan subtítulos (o que ya los
+    llevan quemados): una pasada de ffmpeg solo con drawtext.
+    Sin context_text no hace nada (devuelve False).
+    """
+    if not context_text:
+        return False
+    vf = context_banner_filter(context_text, duration_s=duration_s)
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-vf", vf,
+        "-c:a", "copy",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        output_path,
+    ]
+    print(f"Quemando contexto en pantalla en {output_path}: {context_text!r}")
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        print(f"Error de FFmpeg: {result.stderr.decode()[-2000:]}", file=sys.stderr)
+        raise RuntimeError("FFmpeg falló al quemar el contexto en pantalla")
+    return True
+
+
+def _self_test_context_banner():
+    """Pruebas rápidas del banner de contexto (arreglo 4, sin ffmpeg)."""
+    failures = []
+
+    def check(name, cond, extra=""):
+        print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f" — {extra}" if extra else ""))
+        if not cond:
+            failures.append(name)
+
+    print("== banner de contexto (subtitles.py) ==")
+    f = context_banner_filter("reaccionando al tráiler de GTA 3")
+    check("filtro drawtext con texto, caja y enable 0-5 s",
+          "drawtext=" in f and "reaccionando al tráiler de GTA 3" in f
+          and "box=1" in f and "enable='between(t,0,5.0)'" in f, f[:130])
+    f2 = context_banner_filter("a:b 'c' 100% \\ d", duration_s=8)
+    check("escape de : ' % \\ para drawtext",
+          "a\\:b" in f2 and "100\\%" in f2, f2[:170])
+    try:
+        from viral_package import extract_reaction_context
+        ctx = extract_reaction_context(
+            {"transcript_text": "GT A3. Todo el mundo jugando a jugar legacy "
+                                "y yo viendo un trailer, vale, de 1998."},
+            visible="cams-only")
+        check("extracción desde texto: tráiler de GTA 3",
+              ctx is not None and ctx["text"] == "reaccionando al tráiler de GTA 3",
+              str(ctx))
+        check("sin contexto claro -> None",
+              extract_reaction_context(
+                  {"transcript_text": "no, no, no, mira mira"},
+                  visible="cams-only") is None)
+    except ImportError as e:
+        check("viral_package importable", False, str(e))
+    if failures:
+        print(f"\n{len(failures)} FALLOS:", failures)
+        return 1
+    print("\nSelf-test contexto OK.")
+    return 0
+
+
 def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
                    font_name="DejaVu Sans", font_color="#FFFFFF",
                    border_color="#000000", border_width=3, margin_v=140,
-                   style=None, config=None):
+                   style=None, config=None, offset=0.0,
+                   context_text=None,
+                   context_duration=CONTEXT_BANNER_DEFAULT_DURATION):
     """Quema el SRT en el vídeo con ffmpeg (estilo openshorts, adaptado
     a vertical 1080x1920: PlayRes explícito y fuente grande).
 
@@ -706,6 +966,17 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
     valores mandan sobre los argumentos sueltos. ``box=True``
     (highlight) usa BorderStyle=3: caja semitransparente detrás del
     texto. Flags de plataforma: yuv420p + faststart.
+
+    v2.7 (arreglo 5, 2026-11-16): ``style="karaoke"`` ya no quema el
+    SRT tal cual: genera un ASS con etiquetas ``\\k`` palabra por
+    palabra (ver srt_to_karaoke_ass) y quema ese ASS, sin
+    force_style (el ASS ya lleva el estilo). ``offset`` desplaza los
+    tiempos del SRT (p. ej. al quemar sobre un recorte del clip).
+
+    Arreglo 4 (2026-11-16): ``context_text`` quema además el banner
+    de contexto arriba los primeros ``context_duration`` segundos
+    (ver context_banner_filter), también con karaoke. Sin él, el
+    quemado es exactamente el de siempre.
     """
     if style:
         cfg = config or {}
@@ -723,10 +994,62 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
             margin_v = st.get("margin_v", margin_v)
             box = bool(st.get("box", False))
             bold = bool(st.get("bold", True))
+            active_word_color = st.get("active_word_color")
         else:
-            box, bold = False, True
+            box, bold, active_word_color = False, True, None
     else:
-        box, bold = False, True
+        box, bold, active_word_color = False, True, None
+    if (style or "").lower() == "karaoke":
+        # Karaoke real: SRT -> ASS con \k por palabra. El ASS se
+        # escribe a un temporal y se borra tras quemar.
+        import tempfile
+
+        ass_style = {
+            "font_color": font_color,
+            "active_word_color": active_word_color,
+            "border_color": border_color,
+            "border_width": border_width,
+            "fontsize": fontsize,
+            "margin_v": margin_v,
+            "bold": bold,
+        }
+        duration = get_duration(video_path)
+        ass_text = srt_to_karaoke_ass(
+            parse_srt(srt_path), ass_style, font_name=font_name,
+            offset=offset, max_end=duration)
+        with tempfile.NamedTemporaryFile(
+                suffix=".ass", delete=False,
+                mode="w", encoding="utf-8") as tmp:
+            tmp.write(ass_text)
+            ass_path = tmp.name
+        try:
+            safe_ass_path = ass_path.replace("\\", "/").replace(":", "\\:")
+            vf = f"subtitles='{safe_ass_path}'"
+            if context_text:  # arreglo 4: banner también con karaoke
+                vf += "," + context_banner_filter(
+                    context_text, duration_s=context_duration)
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-vf", vf,
+                "-c:a", "copy",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                output_path,
+            ]
+            print(f"Quemando subtítulos karaoke en {output_path}")
+            result = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                print(f"Error de FFmpeg: {result.stderr.decode()[-2000:]}",
+                      file=sys.stderr)
+                raise RuntimeError("FFmpeg falló al quemar subtítulos")
+            return True
+        finally:
+            try:
+                os.unlink(ass_path)
+            except OSError:
+                pass
     safe_srt_path = srt_path.replace("\\", "/").replace(":", "\\:")
     style_string = (
         f"PlayResX=1080,PlayResY=1920,"
@@ -742,10 +1065,14 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
         f"MarginV={margin_v},"
         f"Bold={1 if bold else 0}"
     )
+    vf = f"subtitles='{safe_srt_path}':force_style='{style_string}'"
+    if context_text:  # arreglo 4: banner de contexto, sin tocar el SRT
+        vf += "," + context_banner_filter(context_text,
+                                         duration_s=context_duration)
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
-        "-vf", f"subtitles='{safe_srt_path}':force_style='{style_string}'",
+        "-vf", vf,
         "-c:a", "copy",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
@@ -776,7 +1103,11 @@ def main() -> int:
         description="Transcribe un clip con faster-whisper (tiny, local) y "
                     "quema subtítulos estilo TikTok en el vídeo vertical."
     )
-    p.add_argument("video", help="Clip de entrada (p. ej. segment_7h12m.mp4)")
+    p.add_argument("video", nargs="?",
+                   help="Clip de entrada (p. ej. segment_7h12m.mp4)")
+    p.add_argument("--self-test", action="store_true",
+                   help="Pruebas rápidas del banner de contexto (arreglo 4, "
+                        "sin ffmpeg ni transcripción) y sale.")
     p.add_argument("--srt", help="Ruta del SRT (default: <video>.srt)")
     p.add_argument("--burn", help="Vídeo de salida con subtítulos quemados")
     p.add_argument("--no-burn", action="store_true",
@@ -808,6 +1139,10 @@ def main() -> int:
     p.add_argument("--subtitle-style", default=None,
                    help="Estilo de subtítulo: tiktok, highlight, karaoke "
                         "(default: config.yaml subtitles.default_style)")
+    p.add_argument("--no-transcribe", action="store_true",
+                   help="No transcribe: quema el SRT dado con --srt tal "
+                        "cual, sin re-transcribir (el SRT debe existir). "
+                        "Para probar un estilo sobre un SRT ya corregido.")
     p.add_argument("--config", default=None,
                    help="Ruta a config.yaml (default: busca en el proyecto)")
     p.add_argument("--offset", type=float, default=0.0,
@@ -820,8 +1155,29 @@ def main() -> int:
                    help="Desactiva el VAD (vad_filter=False)")
     p.add_argument("--no-escalate", action="store_true",
                    help="Desactiva el escalado condicional tiny -> base")
+    # Arreglo 4: banner de contexto en clips de reacción.
+    p.add_argument("--context", default=None,
+                   help="Texto de contexto quemado arriba los primeros segundos "
+                        "(p. ej. 'reaccionando al tráiler de GTA 3'). "
+                        "Sin él no se quema banner.")
+    p.add_argument("--context-from-transcript", default=None,
+                   help="JSON de transcripción (transcript.json): extrae el "
+                        "contexto con viral_package.extract_reaction_context. "
+                        "Si no hay contexto claro, no se quema nada.")
+    p.add_argument("--context-visible", default="cams-only",
+                   choices=["cams-only", "gameplay", "cams+gameplay", "unknown"],
+                   help="Lo visible del clip (default: cams-only): el contexto "
+                        "solo se extrae en clips solo cams.")
+    p.add_argument("--context-duration", type=float,
+                   default=CONTEXT_BANNER_DEFAULT_DURATION,
+                   help="Segundos que dura el banner de contexto (default: 5).")
     args = p.parse_args()
 
+    if args.self_test:
+        return _self_test_context_banner()
+
+    if not args.video:
+        p.error("falta el vídeo de entrada")
     if not os.path.isfile(args.video):
         print(f"Error: no existe el vídeo: {args.video}", file=sys.stderr)
         return 1
@@ -857,6 +1213,50 @@ def main() -> int:
     translate = args.translate
     if translate is None:
         translate = sub_cfg.get("translate", True)
+    # Arreglo 4: texto de contexto quemado (explícito o extraído del
+    # transcript). Si no hay contexto claro, context_text es None y
+    # no se quema nada. Va antes de --no-transcribe: ambas ramas lo usan.
+    context_text = args.context
+    if args.context_from_transcript:
+        try:
+            from viral_package import extract_reaction_context
+            with open(args.context_from_transcript, encoding="utf-8") as fh:
+                transcript_data = json.load(fh)
+            ctx = extract_reaction_context(transcript=transcript_data,
+                                           visible=args.context_visible)
+            context_text = ctx["text"] if ctx else None
+            if context_text:
+                print(f"Contexto extraído: {context_text!r}")
+            else:
+                print("Contexto: sin contexto claro en la transcripción, "
+                      "no se quema nada.")
+        except ImportError:
+            print("Contexto: no se pudo importar viral_package, "
+                  "se omite el banner.", file=sys.stderr)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"Contexto: no se pudo leer {args.context_from_transcript}: "
+                  f"{e}; se omite el banner.", file=sys.stderr)
+    # --no-transcribe (arreglo 5): el CLI re-transcribía siempre y
+    # pisaba el SRT dado con --srt. Con este flag se quema el SRT
+    # existente tal cual, con el estilo por defecto de config.yaml.
+    if args.no_transcribe:
+        if not os.path.isfile(srt_path):
+            print(f"Error: --no-transcribe necesita un SRT existente: "
+                  f"{srt_path}", file=sys.stderr)
+            return 1
+        print(f"Sin transcribir: usando SRT existente {srt_path} "
+              f"(estilo {style_name}, offset {args.offset}s)")
+        if not args.no_burn:
+            out = args.burn or f"{base}_subs.mp4"
+            burn_subtitles(args.video, srt_path, out, fontsize=fontsize,
+                           style=style_name, config=cfg,
+                           offset=args.offset,
+                           context_text=context_text,
+                           context_duration=args.context_duration)
+            print(f"Clip con subtítulos: {out}")
+        else:
+            print("SRT existente, sin quemar (--no-burn).")
+        return 0
     print(f"Política de subtítulos: {policy} | subtitle_lang={subtitle_lang} "
           f"| translate={translate}")
     transcript, info = transcribe_audio(
@@ -889,7 +1289,8 @@ def main() -> int:
 
     if not args.no_burn:
         out = args.burn or f"{base}_subs.mp4"
-        burn_subtitles(args.video, srt_path, out, fontsize=fontsize, style=style_name, config=cfg)
+        burn_subtitles(args.video, srt_path, out, fontsize=fontsize, style=style_name, config=cfg, offset=args.offset,
+                       context_text=context_text, context_duration=args.context_duration)
         print(f"Clip con subtítulos: {out}")
     return 0
 
