@@ -11,7 +11,11 @@ Un solo comando, desde el VOD hasta los clips listos para publicar:
 Qué hace solo, sin que tengas que hacer nada a mano:
   1. Descarga el chat y detecta los mejores momentos con clips_chat_v2.py
      (risas + hype, ES + EN).
-     - Twitch: chat con TwitchDownloaderCLI, VOD entero (vod.mp4).
+     - Twitch: chat con TwitchDownloaderCLI y SOLO el segmento de ~80 s
+       de cada pico (videodownload -b <inicio>s -e <fin>s: pre-roll +
+       clip), nunca el VOD entero (un VOD de 3 h son ~10 GB; el
+       segmento de 80 s, ~30 MB). Con --video local se corta del
+       archivo entero como antes.
      - Kick: chat con el API sin documentar de web.kick.com
        (kick_downloader, vendorizado de KickDownloaderCLI) y SOLO el
        segmento de 60 s de cada pico (HLS master.m3u8 + ffmpeg),
@@ -33,13 +37,42 @@ Qué hace solo, sin que tengas que hacer nada a mano:
      yt-package (título + miniatura como una unidad, ≤60/40 car.) y
      yt-seo (descripción, tags ≤15, 3 búsquedas). Genera el manifiesto
      (manifest.json / manifest.md / titles.txt) por clip.
-  4. Deja todo ordenado en runs/<vod-id>/ : chat.json, clips/, manifiesto
-     (y vod.mp4 solo en Twitch; en Kick quedan los segmentos en segments/).
+  4. Deja todo ordenado en runs/<vod-id>/ : chat.json, segments/ con un
+     segmento por pico, clips/ y manifiesto. Ya no se guarda vod.mp4.
 
-Si el chat o el video ya están descargados, los reutiliza (no vuelve a bajarlos).
+Si el chat o un segmento ya están descargados, se reutilizan (el chat
+solo si es un JSON válido de ese VOD; con --force-chat se vuelve a
+bajar aunque exista).
+
+Títulos honestos: el manifiesto NO se encabeza con las plantillas de
+suggest_titles() ("QUÉ JUGADA 😱 GTA 6" miente en un clip solo cams).
+Después de cortar, se construye la ficha del momento (moment_card.py:
+streamer, juego real del capítulo/categoría, reacción del chat) y el
+paquete viral recibe ficha + juego + streamer + vod_id + layout (de
+ahí sale `visible`: gameplay, cams+gameplay, cams-only o unknown).
+El título del manifiesto es viral["best_title"] en su idioma; el otro
+idioma usa la plantilla degradada con validate_legacy_title (en
+cams-only, a reacción sin juego ni gameplay). La ficha y el motivo de
+cada degradación quedan en manifest.json.
 Con --dry-run solo descarga el chat y lista los picos, sin bajar el video ni cortar.
 En Kick, si el chat viene vacío, --audio-fallback busca picos por audio
 transcrito (muestreo con faster-whisper, ver kick_downloader/core.py).
+
+Cuello de botella del chat de Twitch (diagnóstico, 2026-11-16):
+el chat.json de un VOD de ~3 h pesa ~150 MB (162.474 mensajes en la
+prueba 2930700035) y su descarga tarda ~18 min. El tiempo NO está en
+el parseo local (json.load de 150 MB son segundos) ni en la detección
+de picos, sino en la descarga con TwitchDownloaderCLI chatdownload:
+la API de Twitch sirve los comentarios paginados y el CLI los pide
+página a página, y con -E además baja las imágenes de emotes/badges.
+No hay escaneo rápido de chat en Twitch como el de Kick
+(kick_downloader.scan_chat_peaks): inventarlo sería reescribir el
+protocolo de chat de Twitch. Mitigaciones que SÍ se aplican aquí:
+reutilizar chat.json si ya existe y es válido (no re-descargar en
+cada corrida) y --force-chat para forzar la descarga. Posibles
+mejoras futuras sin probar: quitar -E si no se necesitan las
+imágenes incrustadas, o subir -t/--threads (con riesgo de rate
+limit por IP, según la ayuda del CLI).
 
 Para probar sin Twitch/Kick, usa archivos locales:
     python auto_clips.py --chat test_chat.json --video test_vod.mp4 --out runs/prueba
@@ -54,6 +87,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import sysconfig
@@ -100,6 +134,21 @@ from clips_chat_v2 import (
 from viral_package import package_clip
 
 try:
+    # Títulos honestos (arreglos 3-4): validar/degradar títulos legacy,
+    # derivar lo visible del layout y normalizar el nombre del juego.
+    from viral_package import (
+        KNOWN_GAMES,
+        validate_legacy_title,
+        visible_from_layout,
+    )
+    viral_checks_mod = True
+except ImportError:
+    KNOWN_GAMES = {}
+    validate_legacy_title = None
+    visible_from_layout = None
+    viral_checks_mod = False
+
+try:
     # Kick vendorizado: paquete kick_downloader/ de KickDownloaderCLI
     # (https://github.com/exe2027/kickdownloaderCLI, proyecto aparte, MIT).
     # No depende del kick.py suelto: Twitch funciona sin este paquete.
@@ -131,6 +180,15 @@ except ImportError:
     detect_silences = None
     refine_cut = None
     precise_mod = False
+
+try:
+    # Ficha del momento (bloque 2 del tribunal): evidencia del clip
+    # (chat, streamer, juego, reacción) para títulos honestos.
+    from moment_card import build_moment_card
+    moment_mod = True
+except ImportError:
+    build_moment_card = None
+    moment_mod = False
 
 try:
     from config import get_layout_config, load_config
@@ -166,20 +224,106 @@ def run(cmd, what: str):
     return r
 
 
-def download_chat(vod_id: str, chat_path: str):
-    if os.path.isfile(chat_path):
-        print(f"Chat ya descargado, se reutiliza: {chat_path}")
-        return
-    run(["TwitchDownloaderCLI", "chatdownload", "--id", vod_id,
+TWITCH_CLI_DEFAULT = os.path.expanduser(
+    "~/workspace/tools/twitchdownloader/TwitchDownloaderCLI")
+
+
+def twitch_cli() -> str:
+    """Ruta a TwitchDownloaderCLI: del PATH si está, si no la ruta
+    conocida de este equipo (v1.56.5, NO está en el PATH)."""
+    found = shutil.which("TwitchDownloaderCLI")
+    if found:
+        return found
+    if os.path.isfile(TWITCH_CLI_DEFAULT):
+        return TWITCH_CLI_DEFAULT
+    return "TwitchDownloaderCLI"
+
+
+def twitch_cli_available() -> bool:
+    cli = twitch_cli()
+    return shutil.which(cli) is not None or os.path.isfile(cli)
+
+
+def inspect_chat_json(chat_path: str, vod_id: str = None):
+    """Lee un chat.json y devuelve (válido, duración_s o None).
+
+    Válido = JSON que parsea, con lista 'comments' y, si se pasa
+    vod_id, video.id igual al pedido. Un archivo truncado (descarga
+    cortada) o de otro VOD no es válido: hay que volver a bajarlo.
+    La duración sale de video.length/end cuando viene (sirve para
+    recortar el último clip sin tener el vídeo).
+    """
+    try:
+        if os.path.getsize(chat_path) == 0:
+            return False, None
+        with open(chat_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False, None
+    if not isinstance(data, dict) or not isinstance(data.get("comments"), list):
+        return False, None
+    duration = None
+    vid = data.get("video") or {}
+    if isinstance(vid, dict):
+        if vod_id is not None and vid.get("id") not in (None, str(vod_id)):
+            return False, None
+        for key in ("length", "end"):
+            val = vid.get(key)
+            if isinstance(val, (int, float)) and val > 0:
+                duration = float(val)
+                break
+    return True, duration
+
+
+def download_chat(vod_id: str, chat_path: str, force: bool = False):
+    """Baja el chat con TwitchDownloaderCLI, salvo que ya exista un
+    chat.json válido de ese VOD (ver inspect_chat_json) y no se pase
+    force=True (--force-chat).
+
+    La descarga es el cuello de botella del flujo en Twitch (~18 min
+    para 162.474 mensajes / 151 MB en la prueba 2930700035: la API de
+    Twitch sirve los comentarios paginados y el CLI los pide página a
+    página). Reutilizar el archivo evita pagar ese coste en cada
+    corrida; es la única mejora segura: no existe un escaneo rápido
+    de chat en Twitch como el de Kick.
+    """
+    if not force and os.path.isfile(chat_path):
+        valid, _ = inspect_chat_json(chat_path, vod_id)
+        if valid:
+            print(f"Chat ya descargado, se reutiliza: {chat_path}")
+            return
+        print(f"Chat existente inválido o de otro VOD, se vuelve a bajar: {chat_path}")
+    run([twitch_cli(), "chatdownload", "--id", vod_id,
          "-o", chat_path, "-E"], "descarga del chat")
 
 
-def download_video(vod_id: str, video_path: str):
-    if os.path.isfile(video_path):
-        print(f"VOD ya descargado, se reutiliza: {video_path}")
-        return
-    run(["TwitchDownloaderCLI", "videodownload", "--id", vod_id,
-         "-o", video_path], "descarga del VOD")
+def download_twitch_segment(vod_id: str, start_sec: float, end_sec: float,
+                            out_path: str):
+    """Baja SOLO [start_sec, end_sec] del VOD de Twitch con
+    TwitchDownloaderCLI videodownload -b <inicio>s -e <fin>s, igual que
+    Kick nunca baja el VOD entero: un VOD de 3 h son ~10 GB, el
+    segmento de ~80 s (pre-roll + clip) son ~30 MB.
+
+    Reutiliza el archivo si ya existe y no está vacío. Lanza
+    RuntimeError si falla (el llamador salta ese pico y sigue con el
+    siguiente). El trim es el Exact por defecto del CLI: el segmento
+    sale con la duración pedida (80.002 s en la prueba 2930700035).
+    """
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        print(f"Segmento ya descargado, se reutiliza: {out_path}")
+        return out_path
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    cmd = [twitch_cli(), "videodownload", "--id", str(vod_id),
+           "-b", f"{int(start_sec)}s", "-e", f"{int(end_sec)}s",
+           "-o", out_path]
+    print(f"$ {' '.join(cmd)}")
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if (r.returncode != 0 or not os.path.isfile(out_path)
+            or os.path.getsize(out_path) == 0):
+        raise RuntimeError(
+            f"No se pudo bajar el segmento [{int(start_sec)}s, "
+            f"{int(end_sec)}s]: {r.stderr.strip()[-500:]}")
+    return out_path
 
 
 def sample_messages(chat_path: str, window_start: int, window_size: int = 10, limit: int = 3):
@@ -204,7 +348,12 @@ def sample_messages(chat_path: str, window_start: int, window_size: int = 10, li
 
 
 def suggest_titles(detail, lang: str):
-    """Título sugerido según si el pico fue más de risas o de hype."""
+    """Título sugerido según si el pico fue más de risas o de hype.
+
+    Plantillas legacy: NUNCA van al manifiesto sin validar (ver
+    honest_title). "QUÉ JUGADA 😱 GTA 6" miente en un clip solo cams
+    (Just Chatting) porque promete gameplay que no se ve.
+    """
     risas, hype = detail["risas"], detail["hype"]
     if lang == "en":
         if hype >= risas:
@@ -214,6 +363,107 @@ def suggest_titles(detail, lang: str):
     if hype >= risas:
         return "QUÉ JUGADA 😱 GTA 6", "El mejor momento del directo de GTA 6"
     return "No se lo creyeron 😂 GTA 6", "El chat se murió de risa en GTA 6"
+
+
+# Alias mínimos por si viral_package no expone KNOWN_GAMES.
+_KNOWN_GAMES_FALLBACK = {
+    "gta 6": "GTA 6", "gta vi": "GTA 6",
+    "gta v": "GTA V", "gta 5": "GTA V", "gta online": "GTA V",
+}
+
+
+def normalize_game_name(name):
+    """Nombre de juego del metadato (capítulo Twitch / categoría Kick)
+    -> canónico de viral_package (claves de GAME_ALIASES).
+
+    El check promesa-payoff compara con GAME_ALIASES por nombre
+    exacto: 'Grand Theft Auto V' sin normalizar dejaría fuera todos
+    los alias ('gta v', 'gta 5') y cualquier título que nombrara el
+    juego fallaría el check. Sin coincidencia se devuelve el nombre
+    tal cual (el check lo trata con cautela, pero game_label lo
+    muestra).
+    """
+    if not name:
+        return None
+    low = name.strip().lower()
+    aliases = KNOWN_GAMES or _KNOWN_GAMES_FALLBACK
+    if low in aliases:
+        return aliases[low]
+    if low.startswith("grand theft auto "):
+        short = "gta " + low[len("grand theft auto "):]
+        if short in aliases:
+            return aliases[short]
+    return name.strip()
+
+
+def chat_stream_info(chat_path: str, peak_ts: float):
+    """(streamer, game, game_source) desde el chat.json de Twitch.
+
+    streamer: chat['streamer']['name'] (o login). game: el juego del
+    capítulo donde cae el pico (video.chapters: gameDisplayName),
+    normalizado a canónico (ver normalize_game_name), o video.game si
+    no hay capítulos. 'Just Chatting' NO es un juego: en ese caso
+    game=None (no se nombra ningún juego) y game_source lo dice.
+    Sin metadatos: (None, None, '').
+    """
+    try:
+        with open(chat_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None, None, ""
+    streamer = None
+    st = data.get("streamer") or {}
+    if isinstance(st, dict):
+        streamer = st.get("name") or st.get("login")
+    game = None
+    game_source = ""
+    vid = data.get("video") or {}
+    if isinstance(vid, dict):
+        for ch in vid.get("chapters") or []:
+            if not isinstance(ch, dict):
+                continue
+            try:
+                start = (ch.get("startMilliseconds") or 0) / 1000.0
+                length = (ch.get("lengthMilliseconds") or 0) / 1000.0
+            except (TypeError, ValueError):
+                continue
+            if start <= peak_ts < start + length:
+                game = ch.get("gameDisplayName") or ch.get("description")
+                game_source = f"capítulo de Twitch: {game}"
+                break
+        if game is None:
+            game = vid.get("game")
+            if game:
+                game_source = "video.game del chat.json"
+    if isinstance(game, str) and game.strip().lower() == "just chatting":
+        return streamer, None, "capítulo Just Chatting (sin juego)"
+    return streamer, normalize_game_name(game), game_source
+
+
+def honest_title(title: str, moment_card, layout_decision,
+                 payoff_ts_clip: float, lang: str):
+    """Título legacy pasado por el check promesa-payoff.
+
+    Devuelve (título, degradado, motivo): si pasa, el mismo; si
+    miente en un clip solo cams, el degradado a reacción (sin juego
+    ni gameplay); si falla por otra cosa y no hay degradación, el
+    original con el motivo (revisar a mano). Sin viral_package no se
+    puede validar: se devuelve tal cual con aviso.
+    """
+    if not viral_checks_mod:
+        return title, False, "sin viral_package para validar (se usa tal cual)"
+    visible = None
+    if visible_from_layout is not None and layout_decision is not None:
+        visible = visible_from_layout(
+            layout_decision, payoff_ts_clip=payoff_ts_clip).get("visible")
+    ok, reason, degraded = validate_legacy_title(
+        title, moment_card=moment_card, visible=visible,
+        layout=layout_decision, lang=lang)
+    if ok:
+        return title, False, reason
+    if degraded:
+        return degraded, True, reason
+    return title, False, reason + " (sin degradación posible: revisar a mano)"
 
 
 def main() -> int:
@@ -235,7 +485,8 @@ def main() -> int:
     p.add_argument("--preset", default="fast")
     p.add_argument("--dry-run", action="store_true", help="Solo descarga el chat y lista picos, sin video ni cortes")
     p.add_argument("--no-viral", action="store_true", help="No genera el empaquetado viral (títulos, miniatura, SEO)")
-    p.add_argument("--delete-vod", action="store_true", help="Borra el vod.mp4 después de cortar, para ahorrar espacio (solo Twitch)")
+    p.add_argument("--delete-vod", action="store_true", help="Sin efecto: ya no se baja el VOD entero (se guardan solo segmentos por pico). Se mantiene el flag para no romper llamadas viejas")
+    p.add_argument("--force-chat", action="store_true", help="Forzar la descarga del chat aunque ya exista un chat.json válido (por defecto se reutiliza: la descarga tarda ~18 min en un VOD de 3 h)")
     p.add_argument("--audio-fallback", action="store_true", help="En Kick, si el chat viene vacío, buscar picos por audio transcrito (muestreo)")
     p.add_argument("--audio-check", action="store_true",
                    help="Bloque 6: RMS por segundo en la ventana del candidato y veredicto "
@@ -278,12 +529,15 @@ def main() -> int:
     os.makedirs(clips_dir, exist_ok=True)
 
     chat_path = args.chat or os.path.join(out_dir, "chat.json")
-    video_path = args.video or (os.path.join(out_dir, "vod.mp4") if vod_id and platform == "twitch" else None)
+    # Sin --video ya no hay vod.mp4: Twitch corta de un segmento por
+    # pico (ver el bucle). video_path solo vive con --video local.
+    video_path = args.video
 
     # TwitchDownloaderCLI solo hace falta para Twitch. Kick usa su API + ffmpeg.
     needs_download = bool(vod_id and (not args.chat or (not args.video and not args.dry_run)))
-    if needs_download and platform == "twitch" and shutil.which("TwitchDownloaderCLI") is None:
-        print("Error: TwitchDownloaderCLI no está en el PATH.", file=sys.stderr)
+    if needs_download and platform == "twitch" and not twitch_cli_available():
+        print("Error: TwitchDownloaderCLI no está en el PATH ni en "
+              "~/workspace/tools/twitchdownloader/.", file=sys.stderr)
         return 1
     if shutil.which("ffmpeg") is None and not args.dry_run:
         print("Error: FFmpeg no está en el PATH.", file=sys.stderr)
@@ -313,7 +567,7 @@ def main() -> int:
                     out_raw_ndjson=os.path.join(out_dir, "chat_kick_raw.ndjson"),
                     workers=args.workers)
         else:
-            download_chat(vod_id, chat_path)
+            download_chat(vod_id, chat_path, force=args.force_chat)
     if not os.path.isfile(chat_path):
         print(f"Error: no existe el chat: {chat_path}", file=sys.stderr)
         return 1
@@ -354,13 +608,21 @@ def main() -> int:
 
     if platform == "twitch":
         if args.video:
+            # VOD local: se corta del archivo entero como antes.
             video_path = args.video
-        elif vod_id:
-            download_video(vod_id, video_path)
-        if not video_path or not os.path.isfile(video_path):
-            print(f"Error: no existe el video: {video_path}", file=sys.stderr)
-            return 1
-        duration = get_video_duration(video_path)
+            if not os.path.isfile(video_path):
+                print(f"Error: no existe el video: {video_path}", file=sys.stderr)
+                return 1
+            duration = get_video_duration(video_path)
+        else:
+            # Sin --video ya NO se baja el VOD entero: cada pico baja
+            # solo su segmento de ~80 s (pre-roll + clip) en el bucle,
+            # como Kick. La duración, si hace falta para recortar el
+            # último clip, sale del chat.json (video.length); si no
+            # viene, no se recorta y manda el fin del segmento.
+            _, duration = inspect_chat_json(chat_path, vod_id)
+            segments_dir = os.path.join(out_dir, "segments")
+            os.makedirs(segments_dir, exist_ok=True)
     else:
         # Kick: no se baja el VOD entero; cada pico baja solo su segmento.
         duration = kick_meta["duration_s"] if kick_meta else None
@@ -368,6 +630,10 @@ def main() -> int:
         os.makedirs(segments_dir, exist_ok=True)
     if duration:
         print(f"VOD: {fmt_ts(int(duration))} ({duration:.0f}s)")
+
+    # Mediana de los picos: la ficha del momento y el paquete viral la
+    # usan para el múltiplo viral (x veces la mediana).
+    median_score = statistics.median(scores.values()) if scores else None
 
     # 3. Cortar + 4. Titular y manifiesto
     manifest = {"vod_id": vod_id, "platform": platform,
@@ -384,43 +650,55 @@ def main() -> int:
         d = detail[peak_ts]
         fname = f"clip_{idx:02d}_t{fmt_ts(clip_start)}_s{score}_r{d['risas']}h{d['hype']}.mp4"
         out_file = os.path.join(clips_dir, fname)
-        title_es, desc_es = suggest_titles(d, "es")
-        title_en, desc_en = suggest_titles(d, "en")
         examples = sample_messages(chat_path, peak_ts, window_size=args.window)
         if audio_peaks:
             examples = [tx for ts, _, tx in audio_peaks if ts == peak_ts][:1]
-        viral = None if args.no_viral else package_clip(
-            idx, peak_ts, score, d["risas"], d["hype"],
-            median_score=None, all_scores=list(scores.values()),
-            lang=args.lang, examples=examples,
-        )
         print(f"[{idx}/{len(peaks)}] {fmt_ts(peak_ts)} ({score} pts) -> {fname}")
-        print(f"    Título ES: {title_es} | EN: {title_en}")
-        if viral:
-            print(f"    Viral: {viral['viral_multiple']}x la mediana | {viral['best_title']} | Miniatura: {viral['thumbnail_text']}")
-        # Fuente del corte: Twitch corta del VOD entero; Kick baja solo
-        # el segmento de 60 s de este pico (nunca el VOD entero).
+        # Fuente del corte: Twitch y Kick bajan solo el segmento de este
+        # pico (pre-roll + clip, ~80 s), nunca el VOD entero. Con
+        # --video local, Twitch corta del archivo entero como antes.
+        # cut_start es relativo a la FUENTE (0 dentro del segmento,
+        # absoluto en el VOD entero); source_is_segment lo distingue
+        # para el bloque 6 y el corte preciso.
+        source_is_segment = False
         if platform == "kick":
             seg_path = os.path.join(segments_dir, f"seg_{idx:02d}_t{fmt_ts(clip_start)}.mp4")
             try:
                 kick_mod.download_segment(kick_meta["source"], clip_start, clip_dur, seg_path)
                 cut_source, cut_start = seg_path, 0
+                source_is_segment = True
             except Exception as e:
                 print(f"[{idx}] Falló la descarga del segmento Kick: {e}", file=sys.stderr)
                 continue
-        else:
+        elif args.video:
             cut_source, cut_start = video_path, clip_start
+        else:
+            seg_path = os.path.join(segments_dir, f"seg_{idx:02d}_t{fmt_ts(clip_start)}.mp4")
+            try:
+                download_twitch_segment(vod_id, clip_start, clip_start + clip_dur, seg_path)
+                cut_source, cut_start = seg_path, 0
+                source_is_segment = True
+            except Exception as e:
+                print(f"[{idx}] Falló la descarga del segmento Twitch: {e}", file=sys.stderr)
+                continue
         # Bloque 6 (--audio-check / --precise-cut): segunda señal de audio
         # y recorte preciso por frase, SOLO sobre la ventana ya descargada
-        # (segmento Kick de 60 s, o ventana de 60 s del VOD en Twitch,
-        # extraída a un temporal). Nunca baja más vídeo.
+        # (el segmento del pico, que empieza en clip_start y deja el pico
+        # a pre_roll dentro; con --video local, la ventana de 60 s del
+        # VOD, extraída a un temporal). Nunca baja más vídeo.
         cut_dur = clip_dur
         audio_info = None
         precise_info = None
         if args.audio_check or args.precise_cut:
-            window_path, window_start_abs = cut_source, cut_start
+            window_path = cut_source
+            # El pico dentro de la ventana: pre_roll si la ventana es el
+            # segmento (empieza en clip_start), o pico - cut_start si es
+            # el VOD entero. Antes, en Kick, window_start_abs era 0 y
+            # peak_rel salía el timestamp absoluto (p. ej. 11400 s),
+            # fuera de la ventana de 60 s.
+            window_start_abs = clip_start if source_is_segment else cut_start
             tmp_window = None
-            if platform == "twitch":
+            if platform == "twitch" and args.video:
                 tmp_window = os.path.join(
                     out_dir, f".window_{idx:02d}.mp4")
                 subprocess.run(
@@ -471,7 +749,14 @@ def main() -> int:
                     precise_info = refine_cut(
                         window_dur, peak_rel, transcript=transcript,
                         silences=detect_silences(window_path))
-                    cut_start = window_start_abs + precise_info["start"]
+                    # refine_cut devuelve inicio/fin relativos a la
+                    # ventana: dentro del segmento ese es el offset de
+                    # corte; con el VOD entero hay que sumarle el
+                    # inicio absoluto de la ventana.
+                    if source_is_segment:
+                        cut_start = precise_info["start"]
+                    else:
+                        cut_start = window_start_abs + precise_info["start"]
                     cut_dur = precise_info["duration"]
                     fname = (f"clip_{idx:02d}_t{fmt_ts(int(cut_start))}"
                              f"_s{score}_r{d['risas']}h{d['hype']}"
@@ -504,6 +789,87 @@ def main() -> int:
         except (subprocess.CalledProcessError, RuntimeError) as e:
             print(f"[{idx}] Falló el corte: {e}", file=sys.stderr)
             continue
+        # 4. Ficha del momento + paquete viral HONESTO (títulos honestos):
+        # la ficha se construye DESPUÉS del corte (necesita el clip y su
+        # layout) y se pasa a package_clip con game, streamer, vod_id y
+        # layout (de ahí sale `visible`). Antes, package_clip se llamaba
+        # sin ficha ni layout y el manifiesto se encabezaba con
+        # suggest_titles() sin validar.
+        clip_start_abs = clip_start
+        if precise_info is not None:
+            # El corte preciso mueve el inicio dentro de la ventana
+            # (que empieza en clip_start en ambos casos: segmento o
+            # VOD entero con --video).
+            clip_start_abs = clip_start + precise_info["start"]
+        payoff_ts_clip = peak_ts - clip_start_abs
+        streamer, game, game_source = None, None, ""
+        if platform == "kick" and kick_meta:
+            streamer = kick_meta.get("channel")
+            game = kick_meta.get("category")
+            game_source = "categoría de Kick"
+            if isinstance(game, str) and game.strip().lower() == "just chatting":
+                game, game_source = None, "categoría Just Chatting (sin juego)"
+        else:
+            streamer, game, game_source = chat_stream_info(chat_path, peak_ts)
+        game = normalize_game_name(game)
+        moment_card = None
+        if moment_mod:
+            try:
+                moment_card = build_moment_card(
+                    clip_path=out_file, chat_path=chat_path,
+                    streamer=streamer or "", game=game,
+                    game_source=game_source,
+                    language=args.lang if args.lang in ("es", "en") else "es",
+                    peak_ts_vod=peak_ts, clip_start_vod=clip_start_abs,
+                    clip_duration_s=cut_dur, score=score,
+                    risas=d["risas"], hype=d["hype"],
+                    median_score=median_score, vod_id=vod_id)
+            except Exception as e:
+                print(f"    Ficha del momento: falló ({e}); "
+                      f"se sigue sin ficha.", file=sys.stderr)
+        viral = None if args.no_viral else package_clip(
+            idx, peak_ts, score, d["risas"], d["hype"],
+            median_score=median_score, all_scores=list(scores.values()),
+            lang=args.lang, examples=examples, moment_card=moment_card,
+            game=game, streamer=streamer, vod_id=vod_id,
+            layout=layout_decision,
+        )
+        visible = None
+        visible_reason = None
+        if viral:
+            visible = viral.get("visible")
+            visible_reason = viral.get("visible_reason")
+        elif viral_checks_mod and layout_decision is not None:
+            info = visible_from_layout(layout_decision,
+                                       payoff_ts_clip=payoff_ts_clip)
+            visible, visible_reason = info.get("visible"), info.get("reason")
+        # Títulos del manifiesto: el viral manda en su idioma (título
+        # honesto con check); el otro idioma usa el legacy degradado.
+        # suggest_titles() NUNCA va al manifiesto sin validar.
+        title_es_raw, desc_es = suggest_titles(d, "es")
+        title_en_raw, desc_en = suggest_titles(d, "en")
+        title_es, degraded_es, why_es = honest_title(
+            title_es_raw, moment_card, layout_decision, payoff_ts_clip, "es")
+        title_en, degraded_en, why_en = honest_title(
+            title_en_raw, moment_card, layout_decision, payoff_ts_clip, "en")
+        if viral and viral.get("best_title"):
+            if args.lang in ("es", "both"):
+                title_es = viral["best_title"]
+            elif args.lang == "en":
+                title_en = viral["best_title"]
+        print(f"    Título ES: {title_es} | EN: {title_en}")
+        if degraded_es or degraded_en:
+            print(f"    Título legacy degradado (mentía): ES={degraded_es} EN={degraded_en}")
+        if viral:
+            print(f"    Viral: {viral['viral_multiple']}x la mediana | {viral['best_title']} | Miniatura: {viral['thumbnail_text']} | Visible: {viral.get('visible')}")
+            if viral.get("needs_human_review"):
+                print("    Viral: sin título que pase el check — revisar a mano antes de publicar.")
+        legacy_titles = {
+            "es": {"raw": title_es_raw, "final": title_es,
+                   "degraded": degraded_es, "reason": why_es},
+            "en": {"raw": title_en_raw, "final": title_en,
+                   "degraded": degraded_en, "reason": why_en},
+        }
         clip_entry = {
             "n": idx, "file": f"clips/{fname}", "peak": peak_ts,
             "start": cut_start, "duration": cut_dur, "score": score,
@@ -513,6 +879,10 @@ def main() -> int:
             "hashtags_es": HASHTAGS_ES, "hashtags_en": HASHTAGS_EN,
             "chat_examples": examples,
             "viral": viral,
+            "moment_card": moment_card,
+            "visible": visible,
+            "visible_reason": visible_reason,
+            "legacy_titles": legacy_titles,
         }
         if audio_info is not None:
             clip_entry["audio"] = audio_info
@@ -536,6 +906,14 @@ def main() -> int:
         lay = c.get("layout")
         if lay:
             lines.append(f"- Layout: {layout_summary({'segments': lay['segments']})}" if layout_summary else f"- Layout: {lay['mode']}")
+        vis = c.get("visible")
+        if vis:
+            lines.append(f"- Visible: {vis}" + (f" ({c.get('visible_reason')})" if c.get("visible_reason") else ""))
+        leg = c.get("legacy_titles") or {}
+        for lg in ("es", "en"):
+            info = leg.get(lg) or {}
+            if info.get("degraded"):
+                lines.append(f"- Título legacy {lg.upper()} degradado: {info['raw']!r} → {info['final']!r} ({info.get('reason', '')})")
         v = c.get("viral")
         if v:
             lines += [f"- Viral: {v['viral_multiple']}x la mediana | Fórmula: {v['formula']} ({v['formula_desc']})",
