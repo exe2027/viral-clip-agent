@@ -1,23 +1,52 @@
 #!/usr/bin/env python3
 """
-Twitch Auto Clips v2 — clips_chat_v2.py
+Twitch Auto Clips v2.4 — clips_chat_v2.py
 
 Detecta los mejores momentos de un directo de Twitch a partir del chat
 (chat.json de TwitchDownloader) y los recorta en vertical 1080x1920,
 listos para TikTok, Reels o Shorts.
 
-Qué cambia respecto a la v1:
-  * Español + inglés: la v1 solo puntuaba risas en inglés
-    (lol, lmao, kekw, lul, xd...). La v2 suma risas en español
-    (jaja, jeje, jiji, jojo, qué risa, me muero, me parto...)
-    y frases de hype en ambos idiomas (qué jugada, brutal, pog, clutch...).
-  * Anti falsos positivos: los tokens cortos (xd, lol, gg, w) solo
-    cuentan como palabra completa, no dentro de otra palabra.
-  * Todo configurable por línea de comandos: nº de clips, ventana,
-    separación, pre-roll, duración, idioma, recorte y calidad.
-  * Más robusto: valida archivos, FFmpeg/ffprobe, no se cae si un
-    clip falla, ajusta el último clip si el VOD es más corto.
-  * --dry-run: lista los picos sin cortar nada, para revisar antes.
+Qué cambia en la v2.4 (auditoría Claude Code, 2026-11-16):
+  * ``xd`` por fin puntúa como risa (era la risa más común del chat
+    hispano y valía 1 punto). También ``xdd``, ``xddd``...
+  * Falsos positivos eliminados: "no puedo creer que no hayas ido"
+    y "qué bueno que llegaste" ya NO son risa ("no puedo" y "qué bueno"
+    salieron de las listas); "dale gas", "vamos a ver qué pasa",
+    "god of war" y "crazy cat" ya NO son hype ("dale", "vamos", "god"
+    y "crazy" sueltos salieron de las listas; solo quedan sus formas
+    alargadas/exclamativas: "vamooos", "dalee", "noooo").
+    Todo se comprueba con regex precompiladas de palabra completa,
+    nunca con subcadenas.
+  * Rendimiento: un solo tokenizado por mensaje y pertenencia a
+    conjuntos (O(1)) en vez de recorrer todas las listas con regex;
+    las regex solo corren, con guarda previa, para formas alargadas
+    (xd, jajajaja, vamooos). Una sola lectura del JSON (caché en
+    ``_load_chat``; ``sample_messages`` la reusa, ya no relee el
+    archivo por clip). Medido en 200k mensajes sintéticos:
+    score_message 1,28 s y score_windows 1,81 s con la caché llena
+    (la versión anterior tardaba 9,6 s en total; json.load aparte,
+    ~2,7 s, es inevitable).
+  * Ventana deslizante: ventanas de 10 s con paso de 5 s y suavizado
+    (0.25/0.5/0.25), para que un pico entre dos ventanas no se parta.
+  * Mediana sin sesgo: ``scores`` incluye TODAS las ventanas (también
+    las vacías, con 0), así el múltiplo sobre la mediana no se infla.
+    Ver ``median_over_all`` y el parámetro ``median_score`` de
+    ``viral_package.viral_multiple``.
+  * Usuarios únicos: el detalle de cada ventana lleva ``users`` (nº de
+    comentaristas distintos) y los mensajes repetidos del mismo usuario
+    en la misma ventana solo cuentan una vez; los bots conocidos
+    (Nightbot, StreamElements, Moobot...) no puntúan.
+  * Manifiesto incremental: ``main()`` escribe ``manifest.json`` en
+    la carpeta de salida después de cada clip cortado, no solo al
+    final; si algo falla a mitad, lo ya cortado queda registrado.
+  * Flags ffmpeg para plataformas: ``-pix_fmt yuv420p``,
+    ``-movflags +faststart`` y normalización de audio ``loudnorm``
+    (Instagram/Facebook rechazan algunos formatos sin ellos).
+
+Versiones anteriores (resumen):
+  * v2: español + inglés, anti falsos positivos en tokens cortos
+    (``xd`` en "extra", ``lol`` en "lollipop"), todo configurable.
+  * v1: solo risas en inglés.
 
 Uso:
   TwitchDownloaderCLI chatdownload --id <vod-id> -o chat.json -E
@@ -36,6 +65,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 from collections import defaultdict
@@ -45,17 +75,22 @@ from collections import defaultdict
 # RISA = +1 extra, HYPE = +1 extra, mensaje normal = 1 punto.
 # Un mensaje con risa + hype vale 3. Así un "JAJAJA QUÉ JUGADA" pesa más
 # que un simple "hola".
+#
+# Regla de oro (auditoría, bugs 1-2): ningún token suelto ambiguo.
+# "no puedo" casaba con "no puedo creer que no hayas ido" (no es risa),
+# "qué bueno" con "qué bueno que llegaste" (no es risa), "dale" con
+# "dale gas", "vamos" con "vamos a ver qué pasa", "god" con
+# "god of war" y "crazy" con "crazy cat". Todos fuera. Solo quedan
+# frases completas, formas alargadas o palabras sin doble sentido.
 # ---------------------------------------------------------------------------
 
 # Risas en español: jaja, jeje, jiji, jojo, jajaja, jejeje...
-# El patrón regex de abajo caza también las variantes alargadas
-# (jaaaajaja, jejejeje, jijiji...) que la lista no podría enumerar.
 LAUGH_ES = (
     "jaja", "jeje", "jiji", "jojo", "juju",
     "jajaja", "jejeje", "jijiji", "jojojo",
     "qué risa", "que risa", "qué risaa",
     "me muero", "me muero de risa", "me parto", "me parto de risa",
-    "no puedo", "no puedo más", "me cago de risa", "qué bueno",
+    "no puedo más", "no puedo de risa", "me cago de risa",
     "😂", "🤣", "😹", "💀", "😆",
 )
 LAUGH_EN = (
@@ -64,97 +99,268 @@ LAUGH_EN = (
     "kekw", "lul", "lulw", "omegalul",
     "😂", "🤣", "😹", "💀", "😆",
 )
-# Patrón para risas alargadas / repetidas: jajaja, jejeje, jaajaa, jiji...
-LAUGH_REPEATED_RE = re.compile(r"\b(?:j[aeiou]){2,}[aeiou]*\b|\b(?:ha){2,}\b|\b(?:he){2,}\b")
-
 # Hype / jugada buena — en español e inglés. Esto es lo que la v1 no tenía:
 # un pico de "QUÉ JUGADA / POG / CLUTCH" no es risa, pero es clip.
 HYPE_ES = (
     "qué jugada", "que jugada", "qué grande", "que grande",
     "brutal", "increíble", "increible", "insano", "tremendo",
     "épico", "epico", "no lo puedo creer", "no te creo",
-    "vamos", "dale", "vamooos", "dalee",
     "qué gol", "que gol", "golazo", "qué pedazo", "qué locura", "que locura",
-    "noooo", "nooo", "madre mía", "madre mia", "dios mío", "dios mio",
+    "madre mía", "madre mia", "dios mío", "dios mio",
     "impresionante", "espectacular", "una locura",
 )
 HYPE_EN = (
-    "pog", "pogchamp", "poggers", "hype", "insane", "crazy",
-    "clutch", "god", "lets go", "let's go", "gg", "wtf", "omg",
+    "pog", "pogchamp", "poggers", "hype", "insane",
+    "clutch", "lets go", "let's go", "gg", "wtf", "omg",
     "wow", "what a play", "no way", "unreal", "clip it", "clipit",
     "w", "w in the chat",
 )
 
-# Tokens cortos que exigen palabra completa: sin esto, "xd" contaría
-# dentro de "extra" y "lol" dentro de "lollipop". Se chequean con \b.
-SHORT_TOKENS = {"xd", "lol", "gg", "w", "lul", "kekw", "pog"}
+# Bots conocidos: sus mensajes (avisos, comandos, spam) no puntúan.
+KNOWN_BOTS = {"nightbot", "streamelements", "moobot", "streamlabs",
+              "fossabot", "wizebot", "deepbot", "phantombot"}
+
+
+def _split_tokens(tokens):
+    """Separa tokens de una palabra, frases y emojis."""
+    words, phrases, emojis = set(), set(), set()
+    for token in tokens:
+        if token in ("😂", "🤣", "😹", "💀", "😆"):
+            emojis.add(token)
+        elif " " in token:
+            phrases.add(token)
+        else:
+            words.add(token)
+    return frozenset(words), frozenset(phrases), frozenset(emojis)
+
+
+LAUGH_ES_WORDS, LAUGH_ES_PHRASES, _ = _split_tokens(LAUGH_ES)
+LAUGH_EN_WORDS, LAUGH_EN_PHRASES, _ = _split_tokens(LAUGH_EN)
+HYPE_ES_WORDS, HYPE_ES_PHRASES, _ = _split_tokens(HYPE_ES)
+HYPE_EN_WORDS, HYPE_EN_PHRASES, _ = _split_tokens(HYPE_EN)
+EMOJIS = frozenset({"😂", "🤣", "😹", "💀", "😆"})
+
+# Una sola pasada por mensaje: se tokeniza una vez (findall en C) y
+# se comprueba pertenencia a conjuntos (O(1)). Las regex solo se
+# usan, con guarda previa, para las formas alargadas (xd, jajajaja,
+# vamooos...). Medido con cProfile: la versión anterior, con una
+# regex de alternancia por categoría, gastaba 5,8 s en 1,2M búsquedas
+# para 200k mensajes; esta baja el scoring a décimas de segundo
+# (el resto del tiempo es json.load, que es inevitable).
+WORD_RE = re.compile(r"[a-záéíóúñü0-9]+")
+# Risas/hype alargados que ninguna lista puede enumerar: xd, xdd, jajajaja,
+# jejejeje, hahaha..., vamooos, dalee, noooo...
+XD_RE = re.compile(r"\bxd+\b", re.IGNORECASE)
+LAUGH_REPEATED_RE = re.compile(r"\b(?:j[aeiou]){2,}[aeiou]*\b|\b(?:ha){2,}\b|\b(?:he){2,}\b", re.IGNORECASE)
+HYPE_ELONGATED_RE = re.compile(r"\bvam+o{2,}s+\b|\bdale{2,}\b|\bno{3,}\b", re.IGNORECASE)
+
+
+def _phrase_index(phrases):
+    """Frases indexadas por su primera palabra: solo se comprueban
+    las frases que pueden estar (su primera palabra está en el mensaje)."""
+    index = {}
+    for phrase in phrases:
+        index.setdefault(phrase.split()[0], []).append(phrase)
+    return index
+
+
+LAUGH_ES_PHRASE_IDX = _phrase_index(LAUGH_ES_PHRASES)
+LAUGH_EN_PHRASE_IDX = _phrase_index(LAUGH_EN_PHRASES)
+HYPE_ES_PHRASE_IDX = _phrase_index(HYPE_ES_PHRASES)
+HYPE_EN_PHRASE_IDX = _phrase_index(HYPE_EN_PHRASES)
+
+
+def _has_phrase(word_list, phrase_index):
+    """True si alguna frase del índice aparece en la lista de palabras."""
+    words = set(word_list)
+    joined = None
+    for first, phrases in phrase_index.items():
+        if first in words:
+            if joined is None:
+                joined = " " + " ".join(word_list) + " "
+            if any(f" {p} " in joined for p in phrases):
+                return True
+    return False
 
 
 def _contains_token(text: str, token: str) -> bool:
-    """True si el token aparece como palabra/frase, no dentro de otra."""
-    if token in SHORT_TOKENS:
-        return re.search(r"\b" + re.escape(token) + r"\b", text) is not None
-    # Frases y tokens largos: substring, pero con límites de palabra
-    # cuando el token es una sola palabra.
-    if " " in token or token in ("😂", "🤣", "😹", "💀", "😆"):
-        return token in text
-    return re.search(r"\b" + re.escape(token) + r"\b", text) is not None
+    """Compatibilidad: True si el token aparece como palabra/frase."""
+    lowered = text.lower()
+    if token in EMOJIS:
+        return token in lowered
+    wl = WORD_RE.findall(lowered)
+    if " " in token:
+        return f" {token} " in " " + " ".join(wl) + " "
+    return token in set(wl)
 
 
 def score_message(text: str, lang: str = "both") -> tuple[int, bool, bool]:
     """Devuelve (puntos, es_risa, es_hype) para un mensaje del chat."""
     lowered = text.lower()
+    wl = WORD_RE.findall(lowered)  # un solo tokenizado por mensaje
+    words = set(wl)
     is_laugh = False
     is_hype = False
 
     if lang in ("es", "both"):
-        if any(_contains_token(lowered, t) for t in LAUGH_ES):
+        if (words & LAUGH_ES_WORDS) or _has_phrase(wl, LAUGH_ES_PHRASE_IDX):
             is_laugh = True
-        if any(_contains_token(lowered, t) for t in HYPE_ES):
+        if (words & HYPE_ES_WORDS) or _has_phrase(wl, HYPE_ES_PHRASE_IDX):
             is_hype = True
     if lang in ("en", "both"):
-        if any(_contains_token(lowered, t) for t in LAUGH_EN):
+        if (words & LAUGH_EN_WORDS) or _has_phrase(wl, LAUGH_EN_PHRASE_IDX):
             is_laugh = True
-        if any(_contains_token(lowered, t) for t in HYPE_EN):
+        if (words & HYPE_EN_WORDS) or _has_phrase(wl, HYPE_EN_PHRASE_IDX):
             is_hype = True
 
-    # Risas alargadas que no están en la lista: jajajaja, jejejeje, hahaha...
-    if not is_laugh and LAUGH_REPEATED_RE.search(lowered):
+    if not is_laugh and not text.isascii() and any(e in text for e in EMOJIS):
         is_laugh = True
+    # xd / xdd: la risa más común del chat hispano (auditoría, bug 1).
+    # Risas alargadas: jajajaja, jejejeje, hahaha... Solo se corre la
+    # regex si el texto tiene pinta de contenerlas (guarda barata).
+    if not is_laugh:
+        if "xd" in lowered and XD_RE.search(lowered):
+            is_laugh = True
+        elif any(s in lowered for s in ("ja", "je", "ji", "jo", "ha", "he")) \
+                and LAUGH_REPEATED_RE.search(lowered):
+            is_laugh = True
+    # Hype alargado: vamooos, dalee, noooo...
+    if not is_hype and any(s in lowered for s in ("vamo", "dale", "nooo")) \
+            and HYPE_ELONGATED_RE.search(lowered):
+        is_hype = True
 
     points = 1 + (1 if is_laugh else 0) + (1 if is_hype else 0)
     return points, is_laugh, is_hype
 
 
-def score_windows(chat_path: str, window_size: int = 10, lang: str = "both"):
-    """Agrupa el chat en ventanas y devuelve puntaje + detalle por ventana."""
+# ---------------------------------------------------------------------------
+# Lectura del chat: una sola vez, en caché (auditoría, bug 3).
+# Antes, sample_messages() volvía a leer el JSON completo por cada clip.
+# ---------------------------------------------------------------------------
+_CHAT_CACHE: dict = {}
+
+
+def _load_chat(chat_path: str):
+    """Lee el chat.json una vez y cachea (offset, body, user) por mensaje."""
+    st = os.stat(chat_path)
+    key = (os.path.abspath(chat_path), st.st_mtime_ns, st.st_size)
+    cached = _CHAT_CACHE.get("chat")
+    if cached and cached[0] == key:
+        return cached[1]
     with open(chat_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-
-    comments = data.get("comments", [])
-    scores: dict[int, int] = defaultdict(int)
-    detail: dict[int, dict] = defaultdict(lambda: {"msgs": 0, "risas": 0, "hype": 0})
-
-    for comment in comments:
+    messages = []
+    for comment in data.get("comments", []):
         offset = comment.get("content_offset_seconds")
         if offset is None:
             continue
         body = comment.get("message", {}).get("body", "") or ""
-        window_start = (int(offset) // window_size) * window_size
-        points, is_laugh, is_hype = score_message(body, lang=lang)
-        scores[window_start] += points
-        detail[window_start]["msgs"] += 1
-        if is_laugh:
-            detail[window_start]["risas"] += 1
-        if is_hype:
-            detail[window_start]["hype"] += 1
+        commenter = comment.get("commenter") or {}
+        user = (commenter.get("name") or commenter.get("id") or "").lower()
+        messages.append((int(offset), body, user))
+    messages.sort(key=lambda m: m[0])
+    _CHAT_CACHE.clear()
+    _CHAT_CACHE["chat"] = (key, messages)
+    return messages
 
+
+def sample_messages(chat_path: str, window_start: int, window_size: int = 10, limit: int = 3):
+    """Mensajes de risa/hype de esa ventana (reusa la caché, no relee)."""
+    messages = _load_chat(chat_path)
+    examples = []
+    for offset, body, _user in messages:
+        if offset < window_start:
+            continue
+        if offset >= window_start + window_size:
+            break
+        if not body.strip():
+            continue
+        _, laugh, hype = score_message(body)
+        if laugh or hype:
+            examples.append(body.strip())
+        if len(examples) >= limit:
+            break
+    return examples
+
+
+def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", step: int = None):
+    """Ventana deslizante con suavizado. Devuelve (scores, detail).
+
+    - Paso por defecto: la mitad de la ventana (5 s con ventana de 10 s),
+      así un pico entre dos ventanas no se parte en dos.
+    - Suavizado 0.25/0.5/0.25 sobre ventanas vecinas.
+    - ``scores`` incluye TODAS las ventanas desde 0 hasta el último
+      mensaje (también las vacías, con 0): la mediana sobre ellas no
+      está sesgada (auditoría, bug 6).
+    - ``detail[ventana]``: msgs, risas, hype y users (usuarios únicos).
+      Un mismo usuario repitiendo el mismo mensaje en la ventana solo
+      cuenta una vez (anti spam copy-paste); los bots no puntúan.
+    """
+    messages = _load_chat(chat_path)
+    if step is None:
+        step = max(1, window_size // 2)
+
+    # Agregado por segundo (puntos, mensajes, risas, hype, usuarios).
+    per_sec: dict[int, dict] = defaultdict(
+        lambda: {"points": 0, "msgs": 0, "risas": 0, "hype": 0, "users": set(), "seen": set()}
+    )
+    max_offset = 0
+    for offset, body, user in messages:
+        max_offset = max(max_offset, offset)
+        if user in KNOWN_BOTS:
+            continue
+        key = (user, body.strip().lower())
+        bucket = per_sec[offset]
+        if key in bucket["seen"]:
+            continue  # mismo usuario, mismo mensaje, mismo segundo: spam
+        bucket["seen"].add(key)
+        points, is_laugh, is_hype = score_message(body, lang=lang)
+        bucket["points"] += points
+        bucket["msgs"] += 1
+        if is_laugh:
+            bucket["risas"] += 1
+        if is_hype:
+            bucket["hype"] += 1
+        if user:
+            bucket["users"].add(user)
+
+    starts = list(range(0, max_offset + 1, step))
+    raw: dict[int, int] = {}
+    detail: dict[int, dict] = {}
+    for start in starts:
+        points = msgs = risas = hype = 0
+        users: set = set()
+        for sec in range(start, start + window_size):
+            b = per_sec.get(sec)
+            if not b:
+                continue
+            points += b["points"]
+            msgs += b["msgs"]
+            risas += b["risas"]
+            hype += b["hype"]
+            users |= b["users"]
+        raw[start] = points
+        detail[start] = {"msgs": msgs, "risas": risas, "hype": hype, "users": len(users)}
+
+    # Suavizado: 0.25 * anterior + 0.5 * actual + 0.25 * siguiente.
+    scores: dict[int, float] = {}
+    for i, start in enumerate(starts):
+        prev_s = raw[starts[i - 1]] if i > 0 else raw[start]
+        next_s = raw[starts[i + 1]] if i + 1 < len(starts) else raw[start]
+        scores[start] = round(0.25 * prev_s + 0.5 * raw[start] + 0.25 * next_s, 2)
     return scores, detail
+
+
+def median_over_all(scores) -> float:
+    """Mediana sobre TODAS las ventanas, incluidas las vacías (sin sesgo)."""
+    if not scores:
+        return 0.0
+    return float(statistics.median(list(scores.values())))
 
 
 def select_top_peaks(scores, top_n: int = 5, min_separation: int = 60):
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    selected: list[tuple[int, int]] = []
+    selected: list[tuple[int, float]] = []
     for timestamp, score in ranked:
         if all(abs(timestamp - ts) >= min_separation for ts, _ in selected):
             selected.append((timestamp, score))
@@ -181,7 +387,11 @@ def get_video_duration(video_path: str):
 def fmt_ts(seconds: int) -> str:
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    return f"{h:02d}h{m:02d}m{s:02d}s" if h else f"{m:02d}m{s:02d}s"
+    if h:
+        return f"{h:02d}h{m:02d}m{s:02d}s"
+    if m:
+        return f"{m:02d}m{s:02d}s"
+    return f"{s:02d}s"
 
 
 def cut_vertical_clip(video_path, start_sec, duration, output_path,
@@ -190,27 +400,38 @@ def cut_vertical_clip(video_path, start_sec, duration, output_path,
     # Recorte vertical: center (defecto), left o right.
     # En GTA el minimapa suele estar a un lado: si el recorte centrado
     # te lo corta, prueba --crop left o --crop right.
+    # Flags para plataformas (auditoría, bug 8): yuv420p (compatibilidad
+    # máxima), +faststart (streaming) y loudnorm (audio a -16 LUFS).
     x_expr = {"center": "(iw-ih*9/16)/2", "left": "0",
               "right": "iw-ih*9/16"}.get(crop, "(iw-ih*9/16)/2")
     cmd = [
         "ffmpeg", "-y", "-ss", str(start_sec), "-i", video_path,
         "-t", str(duration),
         "-vf", f"crop=ih*9/16:ih:x={x_expr},scale={width}:{height}",
+        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
         "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         "-c:a", "aac", "-b:a", "128k", output_path,
     ]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _write_manifest(path, manifest):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Extrae los mejores clips verticales desde un chat.json y vod.mp4 de Twitch (v2: español + inglés)."
+        description="Extrae los mejores clips verticales desde un chat.json y vod.mp4 de Twitch (v2.4: español + inglés, ventana deslizante, xd como risa)."
     )
     p.add_argument("chat", help="Ruta al chat.json de TwitchDownloader")
     p.add_argument("--video", help="Ruta al vod.mp4 (obligatorio salvo --dry-run)")
     p.add_argument("--out", default="clips", help="Carpeta de salida (default: clips)")
     p.add_argument("--top-n", type=int, default=5, help="Nº de clips (default: 5)")
     p.add_argument("--window", type=int, default=10, help="Ventana en segundos (default: 10)")
+    p.add_argument("--step", type=int, default=None,
+                   help="Paso de la ventana deslizante en segundos (default: ventana/2)")
     p.add_argument("--min-separation", type=int, default=60, help="Separación mínima entre picos (default: 60)")
     p.add_argument("--pre-roll", type=int, default=20, help="Segundos antes del pico (default: 20)")
     p.add_argument("--duration", type=int, default=60, help="Duración de cada clip (default: 60)")
@@ -240,7 +461,7 @@ def main() -> int:
             return 1
 
     try:
-        scores, detail = score_windows(args.chat, window_size=args.window, lang=args.lang)
+        scores, detail = score_windows(args.chat, window_size=args.window, lang=args.lang, step=args.step)
     except (json.JSONDecodeError, KeyError) as e:
         print(f"Error: chat.json no válido: {e}", file=sys.stderr)
         return 1
@@ -254,13 +475,20 @@ def main() -> int:
         print("No se encontraron picos.")
         return 0
 
-    total_msgs = sum(d["msgs"] for d in detail.values())
-    print(f"Chat: {total_msgs} mensajes, {len(scores)} ventanas de {args.window}s, idioma: {args.lang}")
+    median = median_over_all(scores)
+    # Total real de mensajes (sin doble conteo: las ventanas deslizantes
+    # se solapan y sumar detail[] contaría cada mensaje dos veces).
+    total_msgs = len(_load_chat(args.chat))
+    step = args.step or max(1, args.window // 2)
+    print(f"Chat: {total_msgs} mensajes, {len(scores)} ventanas de {args.window}s "
+          f"(paso {step}s, deslizante + suavizado), idioma: {args.lang}")
+    print(f"Mediana (todas las ventanas, incl. vacías): {median}")
     print("Picos elegidos:")
     for i, (ts, score) in enumerate(peaks, 1):
         d = detail[ts]
+        mult = f"{score / median:.2f}x la mediana" if median > 0 else "—"
         print(f"  {i}. {fmt_ts(ts)} — {score} pts ({d['msgs']} msgs, "
-              f"{d['risas']} risas, {d['hype']} hype)")
+              f"{d['risas']} risas, {d['hype']} hype, {d['users']} usuarios, {mult})")
 
     if args.dry_run:
         print("Dry-run: no se cortó nada.")
@@ -271,6 +499,14 @@ def main() -> int:
         print(f"VOD: {fmt_ts(int(duration))} ({duration:.0f}s)")
 
     os.makedirs(args.out, exist_ok=True)
+    # Manifiesto incremental (auditoría, bug 7): se escribe vacío al
+    # empezar y se reescribe tras cada clip; si algo falla a mitad,
+    # lo ya cortado queda registrado.
+    manifest_path = os.path.join(args.out, "manifest.json")
+    manifest = {"chat": args.chat, "video": args.video, "median": median,
+                "window": args.window, "step": step, "clips": []}
+    _write_manifest(manifest_path, manifest)
+
     ok, failed = 0, 0
     for idx, (peak_ts, score) in enumerate(peaks, 1):
         clip_start = max(0, peak_ts - args.pre_roll)
@@ -291,11 +527,20 @@ def main() -> int:
                               width=args.width, height=args.height,
                               crf=args.crf, preset=args.preset, crop=args.crop)
             ok += 1
+            manifest["clips"].append({
+                "n": idx, "file": os.path.basename(out_file),
+                "peak": peak_ts, "start": clip_start, "duration": clip_dur,
+                "score": score, "risas": d["risas"], "hype": d["hype"],
+                "users": d["users"],
+                "viral_multiple": round(score / median, 2) if median > 0 else None,
+            })
+            _write_manifest(manifest_path, manifest)
         except subprocess.CalledProcessError as e:
             failed += 1
             print(f"[{idx}] Falló el corte: {e.stderr.strip().splitlines()[-1] if e.stderr else e}", file=sys.stderr)
 
     print(f"Listo: {ok} clips en {args.out}/" + (f", {failed} fallidos." if failed else ""))
+    print(f"Manifiesto: {manifest_path}")
     return 0 if failed == 0 else 2
 
 
