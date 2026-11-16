@@ -383,6 +383,37 @@ Cada clip en `manifest.md` lleva su paquete por plataforma, con su métrica a mi
 
 Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunta de las skills: ¿lo subo así, o lo cambio?
 
+## Publicación — v2.6 (Bloque 7 del tribunal)
+
+`publisher.py` es el único módulo que publica. Ver `PUBLISHING.md`
+para el detalle completo.
+
+- **YouTube Shorts por API** (Data API v3, `videos.insert`): la única
+  plataforma con publicación directa. OAuth 2.0 (`client_secrets.json`
+  + `token.json`, nunca en git). Cuota ~10.000 unidades/día, ~1.600 por
+  subida → máx. ~6 Shorts/día; plan 3-5/día.
+- **TikTok / Instagram / Facebook: draft-first.** `publish_draft()`
+  genera el paquete listo para subir a mano en `drafts/` (archivo +
+  caption + hashtags + portada). Nunca publicación directa sin
+  auditoría aprobada.
+- **Auditoría** (`python publisher.py audit`): checklist pasa/no-pasa
+  por cuenta. Estado 2026-11-16: YT 🟡 AMBER (falta verificar canal +
+  OAuth), TikTok 🟡 AMBER (falta app aprobada), IG 🔴 RED (cuenta no
+  creada), FB 🔴 RED (Page no creada). Sin fila en verde, draft-first.
+- **Cola** (`publish_queue.json`): `queued → ready_for_review →
+  approved → published / failed`, más `draft` y `quarantined`.
+  Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h, franja
+  18:00-23:59 Chile.
+- **Lista blanca** (`influencers.yaml` canónica + `allowed_streamers.yaml`,
+  hoy VACÍAS): se verifica
+  EN EL MOMENTO de publicar, no solo al detectar. Si el streamer
+  revocó, no se publica.
+- **Rechazos:** formato → 1 reintento; copyright/contenido →
+  cuarentena y revisión humana, nunca reintento ciego.
+- **Dry-run por defecto:** sin `--live` no se sube nada. Prueba
+  2026-11-16 con el clip de Coker: paquete válido, pero NO publicable
+  (Coker sin permiso, YT sin OAuth, auditoría amber).
+
 ## Supervivencia por plataforma
 
 Publicar clips de otros streamers pone en riesgo las cuentas nuevas si se

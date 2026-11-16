@@ -6,3 +6,4 @@ runs/
 __pycache__/
 *.pyc
 .venv/
+drafts/          # paquetes manuales de subida (estado local)

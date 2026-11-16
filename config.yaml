@@ -111,3 +111,18 @@ layout:
 # Si está puesta, manda sobre la detección automática.
 # Ejemplo: facecam_box: [100, 80, 320, 180]
 facecam_box: null
+
+# Auto-publicación (bloque 10 del tribunal, 2026-11-16).
+# Contador "funciona" + 4 fases + circuit breaker (ver AUTOPUBLISH.md
+# y counter.py). NADA se publica solo sin pasar por las fases, y cada
+# cambio de fase es manual, con confirmación. Umbrales a validar por
+# el usuario.
+autopublish:
+  threshold: 15           # clips seguidos aprobados sin editar y publicados sin fallo
+  min_days_per_phase: 3   # mínimo 3-5 días por fase antes de poder avanzar
+  min_clips_per_phase: 10 # mínimo 10 clips por fase antes de poder avanzar
+  veto_window_minutes:
+    youtube: 30           # fase 3: ventana de veto en YouTube
+    default: 120          # fase 3: ventana de veto en TikTok / Instagram / Facebook
+  whitelist: []           # streamers con permiso explícito; vacío = fase 4 bloqueada
+  metrics_green: false    # poner true solo cuando las métricas estén en verde (revisión manual)

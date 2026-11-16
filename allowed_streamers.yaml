@@ -1,0 +1,30 @@
+# NOTA: la lista blanca canónica es influencers.yaml (Bloques 8+9,
+# con estado concedido/denegado/revocado y ficha en PERMISOS.md).
+# Este archivo es un atajo con formato simple; publisher.py lee los
+# dos. Si un streamer está en ambos, manda influencers.yaml.
+#
+# REGLA DEL TRIBUNAL: sin permiso del streamer, no se publica.
+# publisher.py relee este archivo EN EL MOMENTO de publicar: si un
+# streamer revocó el permiso, se saca de aquí y la subida se bloquea
+# aunque el clip ya estuviera aprobado.
+#
+# La evidencia del permiso (captura, mensaje, correo) va en PERMISOS.md.
+# Aquí solo van los nombres con permiso vigente.
+#
+# permission: propia | escrita | verbal
+#   propia   — el VOD es del usuario.
+#   escrita  — permiso por escrito (mensaje/correo guardado en PERMISOS.md).
+#   verbal   — permiso de palabra; pedirlo por escrito antes de publicar
+#              en serie.
+#
+# HOY (2026-11-16): VACÍA. Ningún streamer ha dado permiso todavía.
+# Coker, Locones, peereira7 / NoraExplorer NO están en la lista:
+# sus clips existen como prueba, pero NO se publican hasta tener permiso.
+
+streamers: []
+# Ejemplo (NO activar sin el permiso en mano):
+#   - name: coker
+#     platform: kick
+#     permission: escrita
+#     granted: 2026-11-16
+#     notes: "Permiso por DM de Kick, captura en PERMISOS.md"
