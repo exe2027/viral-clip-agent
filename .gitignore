@@ -1,6 +1,7 @@
 *.mp4
 *.json
 !test_chat.json
+!reel_patterns.json
 clips/
 runs/
 __pycache__/

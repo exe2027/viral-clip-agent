@@ -2,12 +2,10 @@
 """
 config.py — configuración del canal para viral-clip-agent.
 
-Idea tomada de Shortia (backsoul/shortia, Apache 2.0): todo lo que es
-del canal —juego, streamer, nicho, hashtags, estilos de subtítulo,
-facecam— vive en un archivo de config, no hardcodeado en el código.
-La auditoría pedía lo mismo: sacar HASHTAGS_ES/HASHTAGS_EN fijos de
-``auto_clips.py`` y poner ``--game``, ``--streamer`` y ``--niche``
-en un config.yaml.
+Todo lo que es del canal —juego, streamer, nicho, hashtags, estilos
+de subtítulo, facecam— vive en un archivo de config, no hardcodeado
+en el código. Por eso existen --game, --streamer y --niche en
+config.yaml y no HASHTAGS_ES/HASHTAGS_EN fijos en auto_clips.py.
 
 Uso:
     from config import load_config, get_hashtags, get_subtitle_style
@@ -40,7 +38,13 @@ DEFAULT_CONFIG = {
         "crop": "center",
         "crf": 23,
         "preset": "fast",
-        "duration": 60,
+        # Cortes variables (ya no 60 s fijos): objetivo 30 s, rango
+        # 21-40 s, tope duro 60 s. Ver config.yaml.
+        "duration": 30,
+        "target_duration_s": 30,
+        "min_duration_s": 21,
+        "max_duration_s": 40,
+        "precise_cut": True,
         "pre_roll": 20,
         "window": 10,
         "min_separation": 60,
@@ -79,7 +83,7 @@ DEFAULT_CONFIG = {
     # Facecam opcional (auditoría: layout vertical con facecam, fase
     # siguiente). x, y, w, h en píxeles del vídeo original; null = sin facecam.
     "facecam_box": None,
-    # Auto-publicación (bloque 10 del tribunal, 2026-11-16; ver
+    # Auto-publicación (bloque 10 de la revisión interna, 2026-11-16; ver
     # AUTOPUBLISH.md y counter.py). Umbrales a validar por el usuario.
     "autopublish": {
         "threshold": 15,            # clips seguidos sin editar y sin fallos

@@ -783,6 +783,24 @@ Probado con los clips reales (2026-11-16, sin push, nada publicado):
 
 Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunta: ¿lo subo así, o lo cambio?
 
+## Estudio de reels virales — `reel_study.py` (2026-11-16)
+
+Idea del reel de David Madrazo (@davidmadrazo.ia, "content-os"): vigilar reels virales, descomponer hook/estructura/CTA y reescribir con reglas. De eso se toma solo la primera mitad, adaptada: estudiar reels de GTA 6 por URL, clasificar hook (pregunta/número/superlativo/cita/promesa) y CTA (seguir/comentar/compartir/guardar/link), medir engagement relativo al autor y agregar los patrones. No se copia ningún caption ni título: las plantillas son genéricas con huecos (`{what}`, `{game}`) y los títulos sugeridos salen de la ficha del momento y pasan el check promesa-payoff; si no pasan, no se sugieren. Sin voz clonada (el audio es el del directo) y sin publicar solo: lo sugerido va a la aprobación humana.
+
+```bash
+# Estudiar reels por URL (máx. 10 por corrida, pasada manual, no scrapeo)
+python reel_study.py --url https://www.instagram.com/reel/DfpHUNFiKke/ \
+  --url https://www.instagram.com/reel/DcmuKhJAe3I/ \
+  --account-id 17841429035950873 --out reel_patterns.json
+# O desde un JSON con reels (salida de instagram-cli post o lista)
+python reel_study.py --from-json reels.json --out reel_patterns.json
+# auto_clips.py usa reel_patterns.json si existe (o --reel-patterns <ruta>);
+# sin informe sigue sin estudio de reels. El best_title NO cambia.
+python auto_clips.py https://kick.com/coker/videos/<uuid>
+```
+
+Probado 2026-11-16 con 4 reels reales (Rockstar, Bars, Overtime, David Madrazo): hook dominante statement, CTA dominante seguir/none, engagement mediano 7,28% con mucha dispersión entre autores (Rockstar 3,77% con 33M de seguidores; David 318% con 25 mil — el engagement se lee siempre junto a los seguidores, no en absoluto). Muestra pequeña (mínimo orientativo 5): los patrones son orientativos hasta ampliarla. Pruebas: `python3 test_reel_study.py` (20 tests). Un dígito que es solo el nombre del juego ("GTA 6") o parte de un @usuario no cuenta como hook de número.
+
 ## Publicación — v2.6
 
 `publisher.py` es el único módulo que publica. Ver `PUBLISHING.md`
