@@ -1,34 +1,38 @@
 # Influencers — lista de streamers y estado de su permiso
 #
-# LISTA VACÍA: la llena el usuario. Sin permiso concedido, no se publica
-# ningún clip de ese streamer (ver PERMISOS.md).
+# LISTA BLANCA: SOLO IlloJuan (https://www.twitch.tv/illojuan).
+# Es el único que hace contenido de GTA por ahora y el caso de
+# prueba del monitor (watcher.py, 2026-11-16). No hay otros 6:
+# los demás se agregarían después SOLO si hacen GTA y dan permiso.
 #
-# Objetivo realista: 3-5 permisos concedidos antes del 19 nov 2026
-# (lanzamiento de GTA 6).
+# Solo `estado: concedido` cuenta como permiso (ver PERMISOS.md).
+# Hoy IlloJuan está en `pendiente`: el watcher lo MONITOREA
+# (detecta en vivo y VODs nuevos) pero NO encola nada suyo hasta
+# que el permiso esté concedido y con ficha en PERMISOS.md.
+# El monitor NO pide permiso en nombre del usuario: solo lee
+# datos públicos (directos y VODs) y registra lo que ve.
 #
-# Cómo llenarla: copiar el bloque de ejemplo por cada streamer y
-# rellenar los campos. `estado` solo puede ser:
+# `estado` solo puede ser:
 #   pendiente | contactado | concedido | denegado | revocado
 # Un permiso solo cuenta como `concedido` con la ficha completa
 # (texto exacto + captura/enlace) en PERMISOS.md.
 
-influencers: []
-# Ejemplo (NO es un permiso real, solo la estructura):
-# - usuario: "locones"
-#   plataforma: kick
-#   canal_original: "https://kick.com/locones"
-#   juego: "GTA 6"
-#   idioma: es
-#   canal_contacto: "dm instagram"
-#   contacto: "@locones"
-#   fecha_contacto: "2026-11-17"
-#   fecha_permiso: ""
-#   texto_exacto: ""
-#   captura: "runs/permisos/locones-permiso.png"
-#   alcance:
-#     vods: []
-#     plataformas_publicacion: [youtube, tiktok, instagram, facebook]
-#     hasta: "2026-12-31"
-#   revocable: true
-#   estado: pendiente
-#   notas: ""
+influencers:
+  - usuario: "illojuan"
+    plataforma: twitch
+    canal_original: "https://www.twitch.tv/illojuan"
+    juego: "GTA 6"
+    idioma: es
+    canal_contacto: ""
+    contacto: ""
+    fecha_contacto: ""
+    fecha_permiso: ""
+    texto_exacto: ""
+    captura: ""
+    alcance:
+      vods: []
+      plataformas_publicacion: [youtube, tiktok, instagram, facebook]
+      hasta: ""
+    revocable: true
+    estado: pendiente
+    notas: "Primer influencer del monitor (caso de prueba, 2026-11-16). Solo monitoreo/detección por ahora; sin permiso concedido NO se encola nada suyo."

@@ -201,6 +201,21 @@ layout:
 # Ejemplo: facecam_box: [100, 80, 320, 180]
 facecam_box: null
 
+# Watcher / monitor de influencers (ver WATCHER.md).
+# Vigila la lista blanca de influencers.yaml: detecta directos en vivo
+# y VODs nuevos, y los encola en queue.py con todos los frenos.
+# Por defecto --dry-run: no encola nada sin --live explícito.
+watcher:
+  poll_minutes: 15        # intervalo entre pasadas en --loop (y en cron)
+  max_new_vods_per_streamer_per_day: 5
+  state_file: "seen_vods.json"  # VODs vistos/enqueued (gitignored, nunca se sube)
+  twitch:
+    client_id: ""         # o variable TWITCH_CLIENT_ID (Helix, gratis)
+    client_secret: ""     # o variable TWITCH_CLIENT_SECRET
+    # Sin credenciales, Twitch usa la ruta pública GQL (sin key, no
+    # oficial, puede cambiar): sirve para monitorear; Helix es la
+    # vía estable cuando el usuario configure la app en dev.twitch.tv.
+
 # Auto-publicación (bloque 10 del tribunal, 2026-11-16).
 # Contador "funciona" + 4 fases + circuit breaker (ver AUTOPUBLISH.md
 # y counter.py). NADA se publica solo sin pasar por las fases, y cada

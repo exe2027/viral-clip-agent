@@ -641,6 +641,48 @@ python worker.py                # procesar la cola hasta vaciarla
 
 Pruebas: `python3 test_queue.py` (32 tests, BD temporal, sin red).
 
+## Monitor de influencers — `watcher.py` (ver `WATCHER.md`)
+
+Vigila la lista blanca de `influencers.yaml` (**hoy solo IlloJuan**,
+Twitch, español, GTA) y detecta directos en vivo y VODs nuevos, para
+no pegar la URL a mano. El encolado manual por URL queda como opción
+secundaria.
+
+```bash
+python3 watcher.py --once --dry-run     # una pasada, sin encolar (defecto)
+python3 watcher.py --once --live        # una pasada, encola lo que pase los frenos
+python3 watcher.py --loop --live        # bucle cada poll_minutes (config.yaml, 15)
+```
+
+- **En vivo ≠ encolar.** Si varios están en vivo a la vez, la
+  detección es para todos, pero no se sube nada en el momento: los
+  clips se hacen solo cuando termina el directo y sale el VOD, y
+  siempre con aprobación humana. El watcher detecta en vivo y
+  registra; encola **solo VODs terminados**.
+- **Frenos antes de encolar:** kill-switch (`queue.kill`), lista
+  blanca (`estado: concedido` en `influencers.yaml`), solo GTA 6
+  verificado, solo VOD terminado, dedup (`seen_vods.json`,
+  gitignored, + dedup de la cola por VOD + idioma), tope de 5 VODs
+  nuevos por influencer y día, nunca más de 1 job por influencer en
+  `processing` (regla nº 1), y aprobación humana en
+  `ready_for_review`. `--dry-run` es el defecto: sin `--live`
+  explícito no se toca la cola.
+- **Fuentes (gratis, $0):** Kick por API pública sin key (reutiliza
+  `kick_downloader.core`); Twitch por Helix oficial si hay
+  credenciales (`TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET`, app
+  gratis en dev.twitch.tv) o, sin ellas, por la ruta pública GQL que
+  usa la propia web de Twitch (no oficial, puede cambiar; Helix es
+  la vía estable).
+- **Probado 2026-11-16 con IlloJuan:** en vivo (GTA V #7, 60.371
+  espectadores), último VOD terminado 2929822269 (GTA V #6) no
+  encolado por falta de permiso (además es GTA V, no GTA 6);
+  segunda pasada sin propuestas nuevas (dedup); `--live` sin encolar
+  nada (frenos aguantan) y cola sin tocar. Tests offline:
+  `python3 test_watcher.py` (11 tests, sin red).
+- **Fase 2:** cron cada 15 min en producción, Twitch con
+  credenciales Helix, encolado automático continuo (hoy: pasadas
+  manuales).
+
 ## Empaquetado viral — para las 4 plataformas, no solo YouTube
 
 `viral_package.py` combina las skills de [youtube-agent-skill](https://github.com/Jakeschincariol/youtube-agent-skill), pero adaptadas a las 4 plataformas. Misma idea, mismo hook y mismo texto en pantalla; lo que cambia es caption, hashtags, portada y modo de subida. Nunca se copia el mismo texto literal en las 4.
