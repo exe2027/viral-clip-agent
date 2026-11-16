@@ -379,9 +379,8 @@ def download_chat(meta, out_chat_json, out_raw_ndjson=None,
 # resultante cubre SOLO esas regiones: los picos son reales, pero la
 # mediana se calcula solo dentro de las regiones escaneadas.
 #
-# NOTA (vendorizado): esta función viene de viral-clip-agent/kick.py y
-# NO está en kickdownloaderCLI v0.1.0. Hay que añadirla también al
-# proyecto aparte para que el vendorizado no diverja.
+# NOTA: esta función viene de viral-clip-agent/kick.py y ahora vive
+# también en kickdownloaderCLI, para que el vendorizado no diverja.
 # ---------------------------------------------------------------------------
 
 def scan_chat_peaks(meta, out_chat_json, out_raw_ndjson=None,
