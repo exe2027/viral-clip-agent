@@ -709,7 +709,7 @@ Desde v2.6 el título sale de la ficha del momento, sin LLM en caliente:
   el juego real, si el sustantivo prometido no aparece en
   transcripción/chat/ficha, si el payoff no ocurre dentro del clip, o
   si hay un superlativo sin evidencia (múltiplo/risas) que lo respalde;
-  también falla el lint yt-package (≤60 car., ≤2 palabras en
+  también falla el lint de título (≤60 car., ≤2 palabras en
   MAYÚSCULAS; >40 car. es solo aviso, se corta en móvil). Anti-
   repetición: ningún título repetido en el mismo VOD ni el mismo día,
   registro en `titles_seen.json` (gitignored por `*.json`); solo se
