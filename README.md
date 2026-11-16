@@ -27,7 +27,67 @@ Puntaje por mensaje: 1 punto base, +1 si es risa, +1 si es hype. Un `JAJAJA QUÉ
 - [TwitchDownloaderCLI](https://github.com/lay295/TwitchDownloader) en el PATH
 - [FFmpeg](https://ffmpeg.org/) en el PATH (ffprobe opcional, para medir el VOD)
 
-Sin dependencias de Python, sin credenciales, sin red.
+Sin dependencias de Python, sin credenciales, sin red — salvo para los
+subtítulos (ver abajo), que usan faster-whisper en un venv.
+
+### Subtítulos: venv obligatorio
+
+El Python del sistema NO sirve para faster-whisper: instalarlo ahí
+falla por PEP 668 / `typing_extensions` de Debian. Usa el venv del
+proyecto, que ya tiene faster-whisper 1.2.1 instalado:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install faster-whisper
+```
+
+## Subtítulos quemados — v2.2 (de openshorts)
+
+`subtitles.py` adapta el `subtitles.py` de
+[openshorts](https://github.com/faris-sait/openshorts) (MIT): transcribe
+el clip con faster-whisper (modelo `tiny`, idioma automático ES/EN),
+agrupa las palabras en líneas cortas estilo TikTok (máx. 20 caracteres,
+máx. 2 s por bloque) y las quema en el vídeo vertical con ffmpeg
+(blanco, negrita, borde negro, abajo, fuente 48, PlayRes 1080x1920).
+
+```bash
+# Transcribe y quema en un paso
+.venv/bin/python subtitles.py runs/2929669422/clips/clip_7h12m_vertical.mp4
+# Solo el SRT, sin quemar (revisar antes)
+.venv/bin/python subtitles.py clip.mp4 --srt clip.srt --no-burn
+# Forzar idioma o modelo
+.venv/bin/python subtitles.py clip.mp4 --lang es --model tiny
+```
+
+El SRT queda en `<clip>.srt` y el clip con subtítulos en
+`<clip>_subs.mp4`. Sin Gemini ni APIs de pago: todo local.
+
+Qué se copió de openshorts y qué no:
+- Copiado: transcripción con faster-whisper y `word_timestamps`,
+  agrupación de palabras en SRT, quemado con el filtro `subtitles`
+  de ffmpeg y estilo ASS.
+- Cambiado: modelo `tiny` en vez de `base` (más rápido en CPU),
+  idioma automático, sin cv2 (la duración se mide con ffprobe),
+  estilo adaptado a 1080x1920.
+- NO copiado: detección de momentos con Gemini (el agente ya detecta
+  por el chat de Twitch), recorte con seguimiento de cara
+  (MediaPipe + YOLOv8, pesado y pensado para vídeos con una persona
+  hablando a cámara; en gameplay de GTA no hay cara que seguir y lo
+  que importa es el HUD/minimapa, por eso el proyecto mantiene
+  `--crop center/left/right`), publicación automática (Upload-Post),
+  actores UGC ni doblaje con ElevenLabs (de pago).
+- Detalle técnico: faster-whisper 1.2.1 falla con PyAV 19
+  (`metadata_errors` ya no existe en `av.open`), y `av` 14 no tiene
+  wheel para Python 3.12. Por eso `subtitles.py` extrae el audio a
+  WAV 16 kHz con ffmpeg, lo lee con el módulo `wave` de la stdlib y
+  lo pasa a faster-whisper como array numpy, evitando PyAV.
+
+Limitación conocida: el modelo `tiny` se equivoca en nombres propios
+y en frases rápidas. En la prueba real transcribió "Bezo" varias
+veces (nombre/emote que no reconoce) y algunas frases quedaron con
+gramática rota ("And I was post on discord"). Revisa el SRT antes de
+publicar; el tribunal pidió un diccionario GTA 6 para esto, que aún
+no está implementado.
 
 ## Uso
 
@@ -131,6 +191,18 @@ Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunt
 ## Probado
 
 Con `test_chat.json` (incluido, 43 mensajes de ejemplo en ES/EN) y un VOD de prueba de 100 s: detectó el pico de risas en español a los 30 s (32 pts, 16 risas, 1.88x la mediana) y el de hype a los 90 s (22 pts, 11 hype, 1.29x), cortó clips reales de 1080x1920 y generó el manifiesto viral con títulos, miniaturas y tags. Los falsos positivos (`extra`, `lollipop`) puntuaron 1, como mensaje normal.
+
+Con un VOD real (NoraExplorer, 2929669422, 7h13m, 19.033 mensajes):
+chat descargado con TwitchDownloaderCLI 1.56.5, 5 picos (el mejor
+7h12m10s, 78 pts, 13x la mediana de 6), solo se bajó el segmento de
+60 s del pico (no el VOD entero) y se cortó en vertical 1080x1920.
+Con `subtitles.py` se transcribió ese segmento (inglés, probabilidad
+0.98, 152 palabras, 44 bloques de subtítulos) y se quemaron los
+subtítulos en `runs/2929669422/clips/clip_7h12m_subs.mp4`, verificado
+con ffprobe (1080x1920, 60,01 s) y por fotogramas: el texto se ve
+legible abajo del todo. Ojo: ese VOD es de GTA 5, no de GTA 6, y el
+pico es la despedida del directo ("see you guys on the 19th"), no
+una jugada; hay que revisar cada clip antes de publicar.
 
 ## Aviso
 
