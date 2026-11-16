@@ -310,6 +310,24 @@ legible abajo del todo. Ojo: ese VOD es de GTA 5, no de GTA 6, y el
 pico es la despedida del directo ("see you guys on the 19th"), no
 una jugada; hay que revisar cada clip antes de publicar.
 
+Con un VOD real de Kick (Locones, `01a1e069-8470-7626-8d5e-21ccb729c509`,
+10h27m, Counter-Strike 2, 2.166 views, chat en rumano): el chat completo
+habría tardado ~50 min (7.525 ventanas de 5 s) y el usuario lo canceló;
+con el escaneo rápido (`scan_chat_peaks`, 126 muestras cada 5 min +
+chat denso en las 5 regiones con más mensajes) el clip estuvo listo en
+**9 min totales** (escaneo ~2 min, segmento 24 MB, corte vertical ~6 min).
+Picos reales del chat: 08m55s 15,5 pts, 09m55s 17,75, 12m05s 19,0,
+14m05s 22,25 y el mejor **03h08m25s 24,75 pts** (27 mensajes, 24,75x la
+mediana), cortado en `runs/kick-locones-01a1e069/clips/clip_01_t03h08m05s_s24.75_r0h0.mp4`,
+verificado con ffprobe (1080x1920, 60,00 s, 38 MB), con manifiesto viral
+para las 4 plataformas. Ojo, dos cosas: el chat de Kick es rumano y
+casi todo emotes, así que los picos son de **volumen** (0 risas, 0 hype
+en ES/EN salvo 1) y el mejor pico es spam de emotes repetidos
+(`loconeslocowwwwwwwwwww`, `collectiblesGoldenPitbull`), no una jugada:
+el título "QUÉ JUGADA" que pone el empaquetado no corresponde a lo que
+pasa en ese clip y hay que revisarlo antes de publicar. Y el VOD de
+Kick expira a los 7 días (30 si verificado): este es del 15 nov 2026.
+
 ## Aviso
 
 Bajar el VOD de otro streamer y republicarlo puede infringir las normas de Twitch y el copyright del creador / del juego. Úsalo con VODs propios o con permiso.
