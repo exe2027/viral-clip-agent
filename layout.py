@@ -90,6 +90,56 @@ borroso y hoja de contacto (todo en este archivo, sin tocar el resto):
     cuenta de facturación. ``layout.py`` no transcribe nada (eso
     es faster-whisper tiny local en ``subtitles.py``) y no sale a
     la red.
+
+Arreglo 6 (2026-11-16) — el recorte SIGUE la cara dentro del tramo:
+  * Causa raíz del fallo de Coker (~31 s): el recorte era FIJO por
+    tramo por dos motivos. (1) decide_layout tomaba los params de
+    la ÚLTIMA muestra del tramo: split_x=68 en muestra (divisor
+    real 80 = 640 px: a partir de t=12 el gradiente más fuerte era
+    el borde de la cabeza/puerta dentro de la cam izquierda, no el
+    divisor) y ese split fijo se aplicaba a los 60 s. Al sentarse
+    (~31 s) la persona de la izquierda se mueve hacia el divisor y
+    su cara se corta por la derecha del panel superior; un trozo de
+    su cam se cuela en el panel inferior. (En el clip v1 el problema
+    era peor: cada mitad se recortaba a su centro 9:8 y Coker, a la
+    derecha de su cam, quedaba fuera del todo; eso ya estaba
+    arreglado en HEAD: cada mitad se recorta COMPLETA.) (2) El
+    recorte 'center'/'pip' era una expresión fija ((iw-ih*9/16)/2)
+    y _detect_faces_opencv solo se usaba como nota de confirmación
+    en el escaneo, nunca para posicionar el recorte.
+  * Ahora, por tramo: en 'stack' se sigue el DIVISOR (la cara de
+    cada mitad queda dentro porque la mitad se incluye entera):
+    cada muestra ancla el split al borde entre las dos cajas
+    estables del escaneo (79.5 en Coker, o sea el medio: las cajas
+    son las dos mitades por construcción) y se suaviza (mediana de
+    3 + límite de velocidad); además los params del tramo son la
+    MEDIANA de sus muestras, no la última. En 'center' se sigue la
+    CARA con Haar (OpenCV): se muestrea a 640x360 cada 1 s —a
+    160x90 Haar no detecta ninguna cara en este material—, se
+    asocia por centro más cercano con querencia por la cara seguida
+    (idea de SpeakerTracker de OpenShorts) y se suaviza como su
+    SmoothedCameraman ("trípode pesado"): zona muerta (no moverse
+    mientras la cara está cerca del centro del recorte) + velocidad
+    máxima en px/s + sin pasarse del objetivo; sin cara, se mantiene
+    el último centro (hold, no salto al centro). El movimiento se
+    interpola linealmente entre muestras con una expresión ffmpeg en
+    el crop (x en función de t), un solo pase, sin trocear el tramo.
+    En 'pip' no hay seguimiento: la cara va en el PiP (posición
+    fija) y el fondo es gameplay.
+  * Requisitos y límites: el seguimiento de caras necesita OpenCV
+    con CascadeClassifier + el XML de Haar. cv2 5.0 (el que traía el
+    venv) NO tiene CascadeClassifier ni el XML; funciona con
+    opencv-python-headless 4.11 instalado en el .venv. Sin OpenCV,
+    o sin caras detectadas (caras tapadas por las manos, de
+    espaldas), el recorte queda fijo como antes (comportamiento
+    seguro, sin error). Haar es frágil con caras ocluidas o de
+    perfil: en Coker a t=20-31 solo detecta a Coker (la otra cara
+    está tapada por las manos o agachada); el seguimiento mantiene
+    el último centro en esos huecos. No se instaló MediaPipe ni
+    YOLO (prohibido por el proyecto: modelos gigantes; OpenShorts
+    los usa, aquí no). El ancla del divisor asume cams 50/50 lado a
+    lado; un directo con mitades desiguales quedaría con el divisor
+    en el medio (límite conocido).
 """
 
 import os
@@ -121,6 +171,17 @@ DEFAULTS = {
     "blur_radius": 20,         # radio del boxblur del fondo en stack
     "game": "GTA 6",           # juego para el mapa de zonas seguras
     "safe_zones": None,        # override manual: [[x0,y0,x1,y1], ...] en 0..1
+    # Arreglo 6: seguimiento de la cara / del divisor dentro del tramo.
+    "track_enabled": True,     # seguir la cara (center) o el divisor (stack)
+    "track_every_s": 1,        # muestrear la cara cada N s (layout center)
+    "track_w": 640,            # resolución de muestreo para Haar: a 160x90
+    "track_h": 360,            # no detecta ninguna cara en este material
+    "track_min_neighbors": 5,  # vecinos Haar: 5 quita falsos positivos (t=34)
+    "track_min_face": 20,      # lado mínimo de cara en px (a resolución track)
+    "track_match_frac": 0.15,  # radio de asociación entre muestras (ancho)
+    "track_dead_zone_frac": 0.15,  # zona muerta: fracción del ancho de recorte
+    "track_max_speed_frac": 0.03,  # velocidad máx. del centro: fracción del ancho / s
+    "track_split_max_speed_frac": 0.01,  # el divisor casi no se mueve
 }
 
 
@@ -521,40 +582,307 @@ def _classify_cams_from_stability(stable, cfg, frame_bytes=None):
     return n_cams, avatar, boxes, seam, detail
 
 
-def _detect_faces_opencv(gray_bytes, stable_boxes):
-    """Rostros por OpenCV (Haar), SOLO si cv2 está disponible.
+_HAAR_CLF = None  # None = aún no intentado; False = no disponible
 
-    Devuelve la lista de rostros [x, y, w, h] en px de muestra que
-    caen DENTRO de una región estable (las caras del juego quedan
-    fuera por definición: su región no es estable), o None si no
-    hay OpenCV en este entorno. Es un refuerzo opcional: el método
-    principal es la diferencia de frames (sin dependencias).
+
+def _haar_classifier():
+    """CascadeClassifier Haar, cargado una sola vez (o False si no hay).
+
+    cv2 5.0 NO tiene CascadeClassifier ni trae el XML de Haar (es el
+    que traía el .venv); funciona con opencv-python-headless 4.11.
     """
+    global _HAAR_CLF
+    if _HAAR_CLF is None:
+        try:
+            import cv2
+            clf = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            _HAAR_CLF = False if clf.empty() else clf
+        except (ImportError, AttributeError):
+            _HAAR_CLF = False
+    return _HAAR_CLF
+
+
+def _detect_faces_opencv(gray_bytes, stable_boxes=None, w=SAMPLE_W,
+                         h=SAMPLE_H, min_neighbors=4, min_size=(12, 12)):
+    """Rostros por OpenCV (Haar) en un fotograma en gris de w x h.
+
+    Devuelve la lista de rostros [x, y, w, h] en px del fotograma de
+    muestreo, o None si no hay OpenCV utilizable en este entorno.
+    Si se pasa ``stable_boxes``, solo acepta los rostros que caen
+    DENTRO de una región estable (las caras del juego quedan fuera
+    por definición: su región no es estable); sin ese filtro (el
+    seguimiento de caras, Arreglo 6) devuelve todos: una cara que se
+    mueve no vive en una región estable.
+    """
+    clf = _haar_classifier()
+    if clf is False:
+        return None
     try:
-        import cv2
         import numpy as np
     except ImportError:
         return None
-    try:
-        cascade_path = cv2.data.haarcascades + \
-            "haarcascade_frontalface_default.xml"
-        clf = cv2.CascadeClassifier(cascade_path)
-        if clf.empty():
-            return None
-    except AttributeError:
-        return None  # cv2 sin CascadeClassifier (p. ej. opencv 5 headless)
-    img = np.frombuffer(gray_bytes, dtype=np.uint8).reshape(SAMPLE_H, SAMPLE_W)
-    faces = clf.detectMultiScale(img, scaleFactor=1.1, minNeighbors=4,
-                                 minSize=(12, 12))
+    img = np.frombuffer(gray_bytes, dtype=np.uint8).reshape(h, w)
+    faces = clf.detectMultiScale(img, scaleFactor=1.1,
+                                 minNeighbors=min_neighbors,
+                                 minSize=min_size)
     if len(faces) == 0:
         return []
+    all_faces = [[int(x), int(y), int(fw), int(fh)]
+                 for (x, y, fw, fh) in faces]
+    if not stable_boxes:
+        return all_faces
     kept = []
-    for (x, y, w, h) in faces:
-        cx, cy = x + w // 2, y + h // 2
+    for (x, y, fw, fh) in all_faces:
+        cx, cy = x + fw // 2, y + fh // 2
         if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3]
                for b in stable_boxes):
-            kept.append([int(x), int(y), int(w), int(h)])
+            kept.append([x, y, fw, fh])
     return kept
+
+
+def _detect_faces_at(video_path, t, src_w, src_h, cfg):
+    """Rostros en un instante, en px del vídeo original.
+
+    Muestrea en gris a track_w x track_h (640x360 por defecto: a
+    160x90 Haar no detecta ninguna cara en este material) y devuelve
+    [[x, y, w, h], ...] en px originales, [] si no hay caras, o None
+    si no hay detector OpenCV disponible.
+    """
+    tw, th = int(cfg["track_w"]), int(cfg["track_h"])
+    b = _gray_bytes(video_path, t, tw, th)
+    if b is None:
+        return []
+    faces = _detect_faces_opencv(
+        b, None, w=tw, h=th,
+        min_neighbors=int(cfg["track_min_neighbors"]),
+        min_size=(int(cfg["track_min_face"]), int(cfg["track_min_face"])))
+    if faces is None:
+        return None
+    sx, sy = src_w / tw, src_h / th
+    return [[round(x * sx), round(y * sy), round(fw * sx), round(fh * sy)]
+            for (x, y, fw, fh) in faces]
+
+
+def _median(vals):
+    s = sorted(vals)
+    return s[len(s) // 2]
+
+
+def _collapse_knots(knots):
+    """Quita knots intermedios con el mismo valor que el anterior.
+
+    Un tramo quieto solo necesita sus dos extremos; la expresión
+    ffmpeg resultante es mucho más corta.
+    """
+    if len(knots) <= 2:
+        return list(knots)
+    out = [knots[0]]
+    for k in knots[1:-1]:
+        if k[1] != out[-1][1]:
+            out.append(k)
+    out.append(knots[-1])
+    return out
+
+
+def _smooth_centers(samples, crop_w, src_w, cfg):
+    """Suaviza [(t, objetivo_x_o_None)] -> knots [(t, centro_x)].
+
+    Trípode pesado (idea de SmoothedCameraman de OpenShorts): zona
+    muerta alrededor del centro actual (no moverse si el objetivo
+    está dentro), velocidad máxima en px/s hacia el objetivo, sin
+    pasarse de él, y clamp al rango válido del recorte. Sin objetivo
+    (sin cara en esa muestra) se mantiene el último centro.
+    """
+    if not samples:
+        return []
+    lo, hi = crop_w // 2, src_w - crop_w // 2
+    if lo > hi:  # recorte más ancho que el vídeo: centrado fijo
+        return [(samples[0][0], src_w // 2), (samples[-1][0], src_w // 2)]
+    dead = cfg["track_dead_zone_frac"] * crop_w
+    max_speed = cfg["track_max_speed_frac"] * src_w
+    cur = None
+    knots = []
+    prev_t = None
+    for t, target in samples:
+        if cur is None:
+            cur = target if target is not None else src_w // 2
+            cur = min(max(cur, lo), hi)
+            knots.append((float(t), int(round(cur))))
+            prev_t = t
+            continue
+        dt = max(0.0, t - prev_t) if prev_t is not None else 0.0
+        prev_t = t
+        if target is not None and abs(target - cur) > dead:
+            step = max_speed * dt
+            diff = target - cur
+            move = min(abs(diff), step) * (1 if diff > 0 else -1)
+            cur += move
+            if (diff > 0 and cur > target) or (diff < 0 and cur < target):
+                cur = target
+            cur = min(max(cur, lo), hi)
+        knots.append((float(t), int(round(cur))))
+    return _collapse_knots(knots)
+
+
+def _smooth_split(samples, src_w, cfg):
+    """Suaviza [(t, split_x_o_None)] -> knots [(t, split_x)].
+
+    El divisor es una característica fija de la pantalla, así que el
+    suavizado es sobre todo robustez: mediana de 3 muestras (quita
+    lecturas aisladas como el 68 de Coker, que era un borde dentro
+    de la cam) + límite de velocidad muy bajo + clamp cerca del
+    centro. Sin lectura en una muestra, se mantiene el último.
+    """
+    if not samples:
+        return []
+    lo, hi = int(0.35 * src_w), int(0.65 * src_w)
+    max_speed = cfg["track_split_max_speed_frac"] * src_w
+    raw = [v for (_t, v) in samples]
+    med = []
+    for i, v in enumerate(raw):
+        window = [raw[j] for j in (i - 1, i, i + 1)
+                  if 0 <= j < len(raw) and raw[j] is not None]
+        med.append(sorted(window)[len(window) // 2] if window else None)
+    cur = None
+    knots = []
+    prev_t = None
+    for (t, _v), m in zip(samples, med):
+        if cur is None:
+            cur = m if m is not None else src_w // 2
+            cur = min(max(cur, lo), hi)
+            knots.append((float(t), int(round(cur))))
+            prev_t = t
+            continue
+        dt = max(0.0, t - prev_t) if prev_t is not None else 0.0
+        prev_t = t
+        if m is not None:
+            step = max_speed * dt
+            diff = m - cur
+            if diff:
+                move = min(abs(diff), step) * (1 if diff > 0 else -1)
+                cur += move
+                if (diff > 0 and cur > m) or (diff < 0 and cur < m):
+                    cur = m
+                cur = min(max(cur, lo), hi)
+        knots.append((float(t), int(round(cur))))
+    return _collapse_knots(knots)
+
+
+def _track_face_centers(video_path, duration, start_offset, src_w, src_h,
+                        cfg):
+    """Sigue la cara protagonista de un tramo 'center'.
+
+    Muestrea cada track_every_s, detecta rostros con Haar y asocia
+    por centro más cercano con querencia por la cara seguida (si la
+    cara seguida sigue ahí, no se cambia aunque otra sea mayor; idea
+    de SpeakerTracker de OpenShorts). Devuelve {"kind": "center",
+    "knots": [[t, cx], ...]} con t relativo al tramo y cx en px del
+    vídeo original, o None si no hay detector o no se detectó ninguna
+    cara en todo el tramo (entonces el recorte queda fijo, seguro).
+    """
+    step = max(1, int(cfg["track_every_s"]))
+    times = list(range(0, int(duration) + 1, step))
+    if not times or times[-1] < duration:
+        times.append(float(duration))
+    crop_w = int(src_h * 9 / 16)
+    match_r = cfg["track_match_frac"] * src_w
+    samples = []  # (t, target_cx_or_None)
+    cur_cx = None
+    found_any = False
+    for t in times:
+        faces = _detect_faces_at(video_path, start_offset + t,
+                                 src_w, src_h, cfg)
+        if faces is None:
+            return None  # sin detector OpenCV: recorte fijo
+        target = None
+        if faces:
+            found_any = True
+            centers = [(x + fw // 2, fw * fh) for (x, _y, fw, fh) in faces]
+            if cur_cx is not None:
+                near = [(abs(cx - cur_cx), cx) for (cx, _a) in centers
+                        if abs(cx - cur_cx) <= match_r]
+                if near:
+                    target = min(near)[1]
+            if target is None:
+                # Sin cara seguida cerca: la mayor, y si empatan la
+                # más cercana al centro actual del recorte.
+                cur_center = cur_cx if cur_cx is not None else src_w // 2
+                target = max(centers,
+                             key=lambda ca: (ca[1], -abs(ca[0] - cur_center)))[0]
+            cur_cx = target
+        samples.append((float(t), target))
+    if not found_any:
+        return None
+    knots = _smooth_centers(samples, crop_w, src_w, cfg)
+    return {"kind": "center", "knots": [[t, x] for (t, x) in knots]}
+
+
+def _split_knots_from_samples(samples, scan_samples, src_w, cfg):
+    """Knots del divisor para un tramo 'stack'.
+
+    Por muestra: el borde entre las dos cajas estables del escaneo
+    (el divisor real de las dos cams) si hay dos cajas; si no, el
+    split_x de classify_frame. Luego mediana + límite de velocidad.
+    Los tiempos son relativos al clip; el llamador los pasa a
+    relativos al tramo.
+    """
+    by_t = {}
+    if scan_samples:
+        for s in scan_samples:
+            boxes = s.get("boxes") or {}
+            if "left" in boxes and "right" in boxes:
+                by_t[s["t"]] = (boxes["left"][2] + boxes["right"][0]) / 2
+    raw = []
+    for s in samples:
+        split = by_t.get(s["t"])
+        if split is None:
+            p = s.get("params") or {}
+            split = p.get("split_x")
+        raw.append((float(s["t"]),
+                    (float(split) * src_w / SAMPLE_W)
+                    if split is not None else None))
+    return _smooth_split(raw, src_w, cfg)
+
+
+def _track_expr(knots):
+    """Expresión ffmpeg: interpolación lineal entre knots [(t, x)].
+
+    x(t) vale el primer knot antes de t0 y el último después del
+    último knot. Con un solo knot, constante. Números enteros para
+    que la expresión sea corta. Se usa dentro de comillas simples
+    en el filtro crop (las comas de los if() van entrecomilladas).
+    """
+    if not knots:
+        return None
+    if len(knots) == 1:
+        return str(int(round(knots[0][1])))
+    expr = str(int(round(knots[-1][1])))
+    for (t0, x0), (t1, x1) in reversed(list(zip(knots, knots[1:]))):
+        dt = t1 - t0
+        if dt <= 0:
+            continue
+        x0i, x1i = int(round(x0)), int(round(x1))
+        expr = (f"if(lt(t,{t1:g}),"
+                f"{x0i}+({x1i}-{x0i})*(t-{t0:g})/{dt:g},{expr})")
+    expr = f"if(lt(t,{knots[0][0]:g}),{int(round(knots[0][1]))},{expr})"
+    return expr
+
+
+def _interp_knots(knots, t):
+    """Valor interpolado de knots [(t, x)] en el instante t."""
+    if not knots:
+        return None
+    if t <= knots[0][0]:
+        return knots[0][1]
+    if t >= knots[-1][0]:
+        return knots[-1][1]
+    for (t0, x0), (t1, x1) in zip(knots, knots[1:]):
+        if t0 <= t <= t1:
+            if t1 == t0:
+                return x1
+            return x0 + (x1 - x0) * (t - t0) / (t1 - t0)
+    return knots[-1][1]
 
 
 def _scan_frames(video_path, duration, start_offset, cfg):
@@ -785,6 +1113,18 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None):
                     params = {"box": [box[0], box[1], box[2] - box[0] + 1,
                                       box[3] - box[1] + 1]}
                     reason += " | corregido a pip por escaneo"
+            # Arreglo 6: anclar el divisor al borde entre las dos cajas
+            # estables (el divisor real de las dos cams). El split_x de
+            # classify_frame es el gradiente máximo y a veces es un
+            # borde DENTRO de una cam (Coker: 68 en vez de 80).
+            if (layout == "stack" and s["cams"] == 2
+                    and "left" in s.get("boxes", {})
+                    and "right" in s.get("boxes", {})):
+                boundary = (s["boxes"]["left"][2]
+                            + s["boxes"]["right"][0]) / 2
+                params = dict(params)
+                params["split_x"] = boundary
+                reason += f" | divisor anclado a cajas estables x={boundary:.0f}"
             samples.append({"t": s["t"], "layout": layout,
                             "params": params, "reason": reason,
                             "cams": s["cams"], "avatar": s["avatar"]})
@@ -844,10 +1184,12 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None):
         if runs and runs[-1]["layout"] == s["layout"]:
             runs[-1]["end"] = span_end
             runs[-1]["params"] = s["params"]
+            runs[-1]["_params_list"].append(s["params"])
         else:
             runs.append({"layout": s["layout"], "start": span_start,
                          "end": span_end, "params": s["params"],
-                         "reason": s["reason"]})
+                         "reason": s["reason"],
+                         "_params_list": [s["params"]]})
     runs[0]["start"] = 0.0
     runs[-1]["end"] = float(duration)
     merged = _absorb_short_runs(runs, min_seg)
@@ -860,6 +1202,54 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None):
     for r in merged:
         r["start"] = float(r["start"])
         r["end"] = float(r["end"])
+    # Arreglo 6: params del tramo = MEDIANA de sus muestras, no la
+    # última (una lectura ruidosa de split contaminaba todo el
+    # tramo: Coker daba 68 en vez de 80) + seguimiento dentro del
+    # tramo (divisor en stack, cara en center).
+    src_size = None
+    for r in merged:
+        plist = r.pop("_params_list", None)
+        if r["layout"] == "stack" and plist:
+            splits = [p["split_x"] for p in plist if "split_x" in p]
+            bands = [p["band"] for p in plist if "band" in p]
+            if splits or bands:
+                r["params"] = dict(r["params"])
+            if splits:
+                r["params"]["split_x"] = _median(splits)
+            if bands:
+                r["params"]["band"] = [_median([b[i] for b in bands])
+                                       for i in range(4)]
+        if not cfg.get("track_enabled"):
+            continue
+        if r["layout"] not in ("stack", "center"):
+            continue
+        if src_size is None:
+            try:
+                src_size = _probe_size(video_path)
+            except Exception:
+                break
+        src_w, src_h = src_size
+        if r["layout"] == "stack":
+            knots = _split_knots_from_samples(samples, scan_samples,
+                                              src_w, cfg)
+            seg_knots = [(t - r["start"], x) for (t, x) in knots
+                         if r["start"] <= t <= r["end"]]
+            if len({x for _t, x in seg_knots}) > 1:
+                r["params"] = dict(r["params"])
+                r["params"]["track"] = {
+                    "kind": "split",
+                    "knots": [[t, x] for (t, x) in seg_knots]}
+                r["reason"] += (f" | divisor seguido "
+                                f"({len(seg_knots)} knots)")
+        else:  # center
+            track = _track_face_centers(
+                video_path, r["end"] - r["start"],
+                start_offset + r["start"], src_w, src_h, cfg)
+            if track is not None:
+                r["params"] = dict(r["params"])
+                r["params"]["track"] = track
+                r["reason"] += (f" | seguimiento de cara "
+                                f"({len(track['knots'])} knots)")
     out = {"mode": "auto", "segments": merged, "samples": samples}
     if scan_segments_out is not None:
         out["scan_segments"] = scan_segments_out["segments"]
@@ -870,22 +1260,35 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None):
 def _absorb_short_runs(runs, min_seg):
     """Fusiona el tramo más corto (< min_seg) con su vecino más largo."""
     runs = [dict(r) for r in runs]
+
+    def _merge_params(dst, src):
+        # Al absorber un tramo, sus muestras pasan al vecino (para la
+        # mediana de params del Arreglo 6; los tramos de escaneo no
+        # tienen _params_list y no se ven afectados).
+        if "_params_list" in dst or "_params_list" in src:
+            dst["_params_list"] = (dst.get("_params_list", [])
+                                   + src.get("_params_list", []))
+
     while len(runs) > 1:
         short = min(range(len(runs)),
                     key=lambda i: runs[i]["end"] - runs[i]["start"])
         if runs[short]["end"] - runs[short]["start"] >= min_seg:
             break
         if short == 0:
+            _merge_params(runs[1], runs[0])
             runs[1]["start"] = runs[0]["start"]
             runs.pop(0)
         elif short == len(runs) - 1:
+            _merge_params(runs[-2], runs[-1])
             runs[-2]["end"] = runs[-1]["end"]
             runs.pop()
         elif ((runs[short - 1]["end"] - runs[short - 1]["start"])
               >= (runs[short + 1]["end"] - runs[short + 1]["start"])):
+            _merge_params(runs[short - 1], runs[short])
             runs[short - 1]["end"] = runs[short]["end"]
             runs.pop(short)
         else:
+            _merge_params(runs[short + 1], runs[short])
             runs[short + 1]["start"] = runs[short]["start"]
             runs.pop(short)
     return runs
@@ -919,6 +1322,32 @@ def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
     if layout == "stack":
         x0, y0, bw, bh = p.get("band", [0, 0, src_w, src_h])
         split = p.get("split_x", src_w // 2)
+        blur = int(cfg.get("blur_radius", 20))
+        # Arreglo 6: divisor que SIGUE su posición en el tiempo (la
+        # expresión se evalúa por fotograma; t es relativo al tramo:
+        # en el pase único -ss resetea los timestamps y en el
+        # multi-tramo trim+setpts hace lo mismo). Sin track, split
+        # fijo (mediana del tramo, ver decide_layout).
+        track = (params or {}).get("track")
+        if track and track.get("kind") == "split" and track.get("knots"):
+            split_expr = _track_expr([(float(t), float(x))
+                                      for (t, x) in track["knots"]])
+            return (f"[{vin}]split=2[st_l][st_r];"
+                    f"[st_l]crop=w='{split_expr}-{x0}':h={bh}:x={x0}:y={y0},"
+                    f"split=2[st_lb][st_lf];"
+                    f"[st_lb]scale=1080:960:force_original_aspect_ratio=increase,"
+                    f"crop=1080:960,boxblur={blur}:2[st_lbg];"
+                    f"[st_lf]scale=1080:960:force_original_aspect_ratio=decrease,"
+                    f"setsar=1[st_lfg];"
+                    f"[st_lbg][st_lfg]overlay=(W-w)/2:(H-h)/2[st_t];"
+                    f"[st_r]crop=w='{x0 + bw}-{split_expr}':h={bh}:"
+                    f"x='{split_expr}':y={y0},split=2[st_rb][st_rf];"
+                    f"[st_rb]scale=1080:960:force_original_aspect_ratio=increase,"
+                    f"crop=1080:960,boxblur={blur}:2[st_rbg];"
+                    f"[st_rf]scale=1080:960:force_original_aspect_ratio=decrease,"
+                    f"setsar=1[st_rfg];"
+                    f"[st_rbg][st_rfg]overlay=(W-w)/2:(H-h)/2[st_b];"
+                    f"[st_t][st_b]vstack,format=yuv420p[{vout}]")
         # Cada mitad se recorta COMPLETA (ancho entero de la mitad,
         # no un recorte centrado 9:8: así el apilado no corta caras
         # por los lados) y se ajusta por contenido sobre su propio
@@ -926,7 +1355,6 @@ def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
         # panel 1080x960 + boxblur; encima, la mitad nítida ajustada
         # (contain) y centrada. Sin barras negras, sea cual sea el
         # aspecto de la cam.
-        blur = int(cfg.get("blur_radius", 20))
         lw, rw = split - x0, x0 + bw - split
         return (f"[{vin}]split=2[st_l][st_r];"
                 f"[st_l]crop={lw}:{bh}:{x0}:{y0},split=2[st_lb][st_lf];"
@@ -967,7 +1395,16 @@ def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
                 f"[pp_cam]crop={bw}:{bh}:{bx}:{by},scale={pw}:{ph}:flags=lanczos,"
                 f"setsar=1[pp_camv];"
                 f"[pp_bgv][pp_camv]overlay={ox}:{oy},format=yuv420p[{vout}]")
-    # center (defecto seguro)
+    # center (defecto seguro). Arreglo 6: si el tramo trae un track
+    # de cara, el recorte SIGUE su centro (interpolado entre
+    # muestras con la expresión en x; t relativo al tramo).
+    track = (params or {}).get("track")
+    if track and track.get("kind") == "center" and track.get("knots"):
+        cw = (src_h * 9) // 16
+        expr = _track_expr([(float(t), float(x))
+                            for (t, x) in track["knots"]])
+        return (f"[{vin}]crop={cw}:{src_h}:x='{expr}-{cw // 2}',"
+                f"scale={OUT_W}:{OUT_H},format=yuv420p[{vout}]")
     x_expr = {"center": "(iw-ih*9/16)/2", "left": "0",
               "right": "iw-ih*9/16"}.get(crop, "(iw-ih*9/16)/2")
     return (f"[{vin}]crop=ih*9/16:ih:x={x_expr},"
@@ -1083,15 +1520,21 @@ def _segment_at(decision, t):
                                   "reason": "sin decisión"}
 
 
-def _crop_rects_for_frame(src_w, src_h, layout, params, cfg):
+def _crop_rects_for_frame(src_w, src_h, layout, params, cfg, t=None):
     """Rectángulos (etiqueta, x, y, w, h en px del vídeo original) que
     el layout usa en ese instante. Son los mismos recortes que aplica
     segment_filter_graph: la hoja de contacto muestra lo que el clip
-    final incluirá, no una aproximación."""
+    final incluirá, no una aproximación. Con track y t (relativo al
+    tramo), el rectángulo es el del seguimiento en ese instante
+    (Arreglo 6); sin t, el estático de params."""
     p = _scale_to_sample(params, src_w, src_h)
+    track = (params or {}).get("track")
     if layout == "stack":
         x0, y0, bw, bh = p.get("band", [0, 0, src_w, src_h])
         split = p.get("split_x", src_w // 2)
+        if track and track.get("kind") == "split" and t is not None:
+            knots = [(float(a), float(b)) for (a, b) in track["knots"]]
+            split = int(round(_interp_knots(knots, t)))
         return [("cam-izq", x0, y0, split - x0, bh),
                 ("cam-der", split, y0, x0 + bw - split, bh)]
     if layout == "pip":
@@ -1102,7 +1545,11 @@ def _crop_rects_for_frame(src_w, src_h, layout, params, cfg):
             rects.append(("facecam", *p["box"]))
         return rects
     cw = src_h * 9 // 16
-    cx = (src_w - cw) // 2
+    if track and track.get("kind") == "center" and t is not None:
+        knots = [(float(a), float(b)) for (a, b) in track["knots"]]
+        cx = int(round(_interp_knots(knots, t))) - cw // 2
+    else:
+        cx = (src_w - cw) // 2
     return [("recorte", cx, 0, cw, src_h)]
 
 
@@ -1155,7 +1602,8 @@ def contact_sheet(video_path, output_path, decision=None, duration=None,
     for i, t in enumerate(times):
         seg = _segment_at(decision, t)
         rects = _crop_rects_for_frame(src_w, src_h, seg["layout"],
-                                      seg.get("params", {}), cfg)
+                                      seg.get("params", {}), cfg,
+                                      t - seg.get("start", 0.0))
         f = _drawbox_filter(rects, zones, src_w, src_h)
         label = f"t={t:.0f}s {seg['layout']}"
         # La etiqueta se dibuja DESPUÉS de escalar (en coords de la
