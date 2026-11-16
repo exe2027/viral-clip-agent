@@ -53,6 +53,53 @@ v2.6 el título sale de la ficha del momento (``moment_card.py``),
   * Etiqueta de juego veraz: "GTA 6" solo si el juego real es GTA 6.
     Los tags y hashtags salen del juego real, no de #GTA6 fijo.
 
+ARREGLOS 3 y 4 (2026-11-16) — qué se ve + contexto en pantalla:
+la lógica anti-mentira del Bloque 2 ya existía, pero NADIE le decía
+qué se ve en el clip: ``auto_clips.py`` llamaba a ``package_clip``
+sin ficha del momento (y sin juego/streamer/VOD), así que los
+títulos salían de la ficha mínima de respaldo, y el manifiesto
+seguía encabezando con ``suggest_titles()`` ("QUÉ JUGADA 😱 GTA 6"
+hardcodeado, sin validar jamás). El arreglo 3 añade lo que faltaba:
+
+  * ``visible_from_layout(layout_decision, payoff_ts_clip)`` — qué se
+    ve en el tramo del payoff según layout.py: "gameplay" (solo
+    gameplay), "cams+gameplay" (webcam PiP sobre gameplay) o
+    "cams-only" (solo cams/reacción, sin gameplay visible). stack ->
+    cams-only; pip -> cams+gameplay; center + 0 cams -> gameplay;
+    center + 2 cams -> cams-only (Just Chatting con dos personas,
+    como el clip de IlloJuan 2930700035, donde layout.py deja
+    "center" porque no hay costura central). center + 1 cam o sin
+    datos -> "unknown": no se afirma nada.
+  * ``validate_title_final(title, moment_card, visible, layout)`` —
+    validación FINAL antes de publicar: el check promesa-payoff de
+    siempre MÁS las reglas de lo visible. En cams-only el título no
+    puede nombrar ningún juego ni prometer nada de gameplay (jugada,
+    tiro, penal, gol, clutch...): si miente, devuelve
+    ``degraded_title``, un título de reacción ("El chat no paraba
+    de reírse", "No lo podía creer").
+  * ``generate_titles(..., visible=...)`` y ``package_clip(...,
+    visible=..., layout=...)`` ya aceptan lo visible: en cams-only
+    solo salen títulos de reacción (sin prefijo de juego), el
+    ``best_title`` pasa la validación final como red de seguridad,
+    y el paquete expone ``visible``, ``title_validation``,
+    ``title_degraded`` y ``thumbnail_subject`` ("faces" en
+    cams-only: las caras van en la miniatura, no el juego).
+  * ``validate_legacy_title(title, ...)`` — lo mismo para títulos
+    que vienen de fuera (p. ej. ``suggest_titles`` de auto_clips):
+    (ok, motivo, degradado). El cableado del manifiesto (usar
+    ``best_title`` en vez de ``suggest_titles``) vive en
+    auto_clips.py y NO es parte de este arreglo.
+
+El arreglo 4 (contexto en pantalla) es ``extract_reaction_context``:
+si el clip es solo cams y el streamer mira algo fuera de cámara, saca
+de la transcripción (+ ejemplos de chat) QUÉ mira — medio
+(tráiler/documental/vídeo) + tema conocido — y devuelve p. ej.
+"reaccionando al tráiler de GTA 3". Sin pareja medio+tema clara,
+devuelve None y NO se quema nada. Nunca se mete imagen ni vídeo de
+lo que mira: solo texto. El quemado vive en subtitles.py
+(``burn_subtitles(..., context_text=...)``) y el paquete expone
+``reaction_context`` para el manifiesto.
+
 PARA LAS 4 PLATAFORMAS, NO SOLO YOUTUBE: las reglas de yt-package,
 yt-seo, yt-shorts y yt-retention son las mismas ideas, pero cada
 plataforma las aplica distinto. Un mismo clip lleva 4 paquetes:
@@ -525,7 +572,7 @@ def _cap_first(text):
 
 
 def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
-                    vod_id=None, date=None):
+                    vod_id=None, date=None, visible=None):
     """10 títulos por clip desde la ficha (no 2 plantillas fijas).
 
     Solo devuelve títulos que pasan ``check_title`` y el lint, y que
@@ -533,6 +580,13 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
     menos de ``n``, devuelve los que pasan y el llamador lo ve en
     ``len(titles)``: mejor pocos títulos reales que 10 inventados.
     Cada título lleva su check: {"title", "issues", "check_ok", "check_reason"}.
+
+    ``visible`` (arreglo 3): "cams-only" degrada a títulos de
+    reacción — sin prefijo de juego y sin sustantivos de gameplay
+    (ver ``_title_has_gameplay_word``): el clip no muestra gameplay,
+    así que el título no puede prometerlo. Sin ``visible`` (o con
+    "gameplay"/"cams+gameplay"/"unknown") el comportamiento es el de
+    siempre.
     """
     card = moment_card or {}
     game = card.get("game")
@@ -554,7 +608,11 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
         quote_chat = ""
     quote_streamer = (card.get("quote_streamer") or {}).get("text") or ""
     evidence_low = card.get("evidence") == "low"
-    game_prefix = f"{game_label}: " if game else ""
+    # Arreglo 3: en un clip solo cams el título no nombra ningún
+    # juego: no se ve gameplay, así que "GTA V RP: ..." mentiría
+    # igual que "GTA 6: ...". El prefijo solo existe si se ve juego.
+    cams_only = visible == VISIBLE_CAMS_ONLY
+    game_prefix = f"{game_label}: " if game and not cams_only else ""
     seen = seen if seen is not None else load_seen(seen_path)
     vod = vod_id or card.get("vod_id")
     day = date or _today_iso()
@@ -616,6 +674,15 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
                       if not re.search(r"\b(jugada|tiro|penal|gol|partido|clutch|robo)\b",
                                        _norm_title(t))]
 
+    # Arreglo 3: en cams-only no vale ningún candidato que nombre un
+    # juego o prometa gameplay — incluidas las citas del chat que
+    # describen una acción fuera de cámara ("lo erra" es lo que pasó
+    # fuera, no lo que se ve). Solo quedan títulos de reacción.
+    if cams_only:
+        candidates = [t for t in candidates
+                      if not _title_names_game(t)
+                      and not _title_has_gameplay_word(t)]
+
     out, seen_norm = [], set()
     for t in candidates:
         if len(out) >= n:
@@ -634,6 +701,454 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
                     "warnings": detail.get("warnings", []),
                     "check_ok": True, "check_reason": reason})
     return out
+
+
+# ---------------------------------------------------------------------------
+# Arreglos 3 y 4 (2026-11-16) — qué se ve + contexto en pantalla
+# ---------------------------------------------------------------------------
+
+# Qué se ve en el clip (lo decide layout.py o el capítulo del VOD,
+# nunca el título ni el chat). "unknown" = no se sabe: no se afirma
+# nada sobre lo visible, ni gameplay ni cams.
+VISIBLE_GAMEPLAY = "gameplay"            # solo gameplay visible
+VISIBLE_CAMS_GAMEPLAY = "cams+gameplay"  # webcam PiP sobre gameplay
+VISIBLE_CAMS_ONLY = "cams-only"          # solo cams/reacción, sin gameplay
+VISIBLE_UNKNOWN = "unknown"
+
+# Palabras que prometen gameplay: sustantivos de NOUN_EVIDENCE más
+# los verbos de acción del léxico de moment_card (erra, mata...) y
+# "gameplay" mismo. En un clip solo cams, un título con cualquiera
+# de ellas promete algo que no se ve.
+GAMEPLAY_WORDS = (
+    "jugada", "tiro", "disparo", "penal", "gol", "partido", "muerte",
+    "robo", "coche", "clutch", "play", "shot", "goal", "gameplay",
+    "erra", "patea", "dispara", "mata", "muere", "gana", "pierde",
+    "roba", "choca", "cae", "falla",
+)
+
+
+def _title_names_game(title):
+    """True si el título nombra algún juego conocido (o 'GTA' a secas)."""
+    low = _norm_title(title)
+    if "gta" in low:
+        return True
+    return any(alias in low for alias in KNOWN_GAMES)
+
+
+def _title_has_gameplay_word(title):
+    """True si el título promete gameplay (sustantivo o verbo de acción)."""
+    low = _norm_title(title)
+    return any(re.search(r"\b" + re.escape(w) + r"\b", low)
+               for w in GAMEPLAY_WORDS)
+
+
+def _scan_cams_from_reason(reason):
+    """Nº de cams del texto 'escaneo: N cams (...)' de layout.py.
+
+    Es el fallback cuando la decisión de layout no trae
+    ``scan_segments`` ni ``samples`` (p. ej. la guardada en el
+    manifiesto, que solo guarda mode/segments). Devuelve int o None.
+    """
+    m = re.search(r"escaneo:\s*(\d+)\s*cams", reason or "")
+    return int(m.group(1)) if m else None
+
+
+def visible_from_layout(layout_decision, payoff_ts_clip=20.0):
+    """Qué se ve en el tramo del payoff, según layout.py.
+
+    ``layout_decision`` es lo que devuelve ``layout.decide_layout``
+    (o lo guardado en el manifiesto: {"mode", "segments": [...]}).
+    ``payoff_ts_clip`` es el segundo del clip donde cae el momento
+    (20 = pre-roll estándar). Devuelve {"visible", "reason",
+    "layout", "cams"}.
+
+    Reglas (la decisión de layout manda; el escaneo de cams la
+    corrige donde layout.py no se atreve):
+      * stack (dos webcams apiladas) -> cams-only.
+      * pip (webcam sobre gameplay) -> cams+gameplay.
+      * center + 0 cams -> gameplay.
+      * center + 2 cams -> cams-only: dos caras/personas sin
+        gameplay visible (Just Chatting). layout.py deja "center"
+        aquí porque sin costura central no corrige a stack ("puede
+        ser una imagen estática"), pero para el título la
+        consecuencia es la misma: no se ve gameplay.
+      * center + 1 cam, o sin datos de cams -> unknown: una sola
+        región estable a pantalla completa puede ser una webcam
+        sola o una imagen estática; no se afirma nada.
+    """
+    if not layout_decision:
+        return {"visible": VISIBLE_UNKNOWN, "reason": "sin decisión de layout",
+                "layout": None, "cams": None}
+    segments = layout_decision.get("segments") or []
+    seg = None
+    for s in segments:
+        if s.get("start", 0) <= payoff_ts_clip < s.get("end", float("inf")):
+            seg = s
+            break
+    if seg is None and segments:
+        # Sin tramo que cubra el payoff: el tramo más largo.
+        seg = max(segments, key=lambda s: s.get("end", 0) - s.get("start", 0))
+    layout = (seg or {}).get("layout") or layout_decision.get("mode")
+    # Nº de cams en el payoff: scan_segments > samples > texto reason.
+    cams = None
+    for s in layout_decision.get("scan_segments") or []:
+        if s.get("start", 0) <= payoff_ts_clip < s.get("end", float("inf")):
+            cams = s.get("cams")
+            break
+    if cams is None:
+        samples = layout_decision.get("samples") or []
+        if samples:
+            nearest = min(samples, key=lambda s: abs(s.get("t", 0) - payoff_ts_clip))
+            if abs(nearest.get("t", 0) - payoff_ts_clip) <= 5:
+                cams = nearest.get("cams")
+    if cams is None and seg:
+        cams = _scan_cams_from_reason(seg.get("reason", ""))
+    if layout == "stack":
+        return {"visible": VISIBLE_CAMS_ONLY,
+                "reason": "layout stack: dos webcams apiladas, sin gameplay",
+                "layout": layout, "cams": cams}
+    if layout == "pip":
+        return {"visible": VISIBLE_CAMS_GAMEPLAY,
+                "reason": "layout pip: webcam sobre gameplay",
+                "layout": layout, "cams": cams}
+    if layout == "center":
+        if cams is None or cams == 1:
+            return {"visible": VISIBLE_UNKNOWN,
+                    "reason": ("layout center con "
+                               f"{'1 cam' if cams == 1 else 'cams sin medir'}: "
+                               "puede ser webcam sola a pantalla completa o "
+                               "imagen estática; no se afirma gameplay ni cams"),
+                    "layout": layout, "cams": cams}
+        if cams >= 2:
+            return {"visible": VISIBLE_CAMS_ONLY,
+                    "reason": ("layout center + escaneo de 2 cams: dos caras "
+                               "sin gameplay visible (Just Chatting); sin "
+                               "costura central layout.py no lo llama stack, "
+                               "pero para el título es lo mismo: no se ve juego"),
+                    "layout": layout, "cams": cams}
+        return {"visible": VISIBLE_GAMEPLAY,
+                "reason": "layout center sin cams: solo gameplay",
+                "layout": layout, "cams": cams}
+    return {"visible": VISIBLE_UNKNOWN,
+            "reason": f"layout no reconocido: {layout!r}",
+            "layout": layout, "cams": cams}
+
+
+def visible_from_chapter(chapter_game):
+    """Qué se ve según el capítulo de Twitch donde cae el pico.
+
+    "Just Chatting" -> cams-only (el streamer a cámara, sin juego).
+    Cualquier otro capítulo -> None: el capítulo dice el juego, no
+    si se ve gameplay o cams, así que no se afirma nada (eso lo
+    decide el layout). Para el clip de IlloJuan 2930700035 el pico
+    cae en el capítulo Just Chatting (0-93 min).
+    """
+    if (chapter_game or "").strip().lower() == "just chatting":
+        return VISIBLE_CAMS_ONLY
+    return None
+
+
+def degrade_title_to_reaction(moment_card, lang="es"):
+    """Título de reacción para un clip solo cams (arreglo 3).
+
+    Primero intenta ``generate_titles(..., visible="cams-only")``
+    (títulos reales de la ficha, sin juego ni gameplay); si no sale
+    ninguno, cae a una plantilla de reacción según la reacción
+    dominante — nunca a un título con juego. Devuelve str o None
+    (None solo si ni la ficha ni la reacción dan nada).
+    """
+    card = moment_card or {}
+    try:
+        titles = generate_titles(card, lang=lang, n=10,
+                                 visible=VISIBLE_CAMS_ONLY)
+        if titles:
+            # La degradación prefiere un título de reacción plano
+            # ("El chat no paraba de reírse") antes que una cita del
+            # chat ('El chat: "W"'): la cita es honesta, pero como
+            # título de rescate dice poco de qué pasó.
+            plain = [t["title"] for t in titles
+                     if not t["title"].startswith('El chat: "')
+                     and not t["title"].startswith('Chat said it: "')]
+            return plain[0] if plain else titles[0]["title"]
+    except Exception:
+        pass
+    reaction = (card or {}).get("dominant_reaction") or ""
+    if lang == "en":
+        return {"risas": "Chat couldn't stop laughing",
+                "hype": "Chat went crazy for this",
+                "volumen": "Chat exploded over this"}.get(
+                    reaction, "Nobody could believe it")
+    return {"risas": "El chat no paraba de reírse",
+            "hype": "El chat enloqueció con esto",
+            "volumen": "El chat explotó con esto"}.get(
+                reaction, "No lo podía creer")
+
+
+def validate_title_final(title, moment_card=None, visible=None, layout=None,
+                         lang="es"):
+    """Validación FINAL del título antes de publicar (arreglo 3).
+
+    Es el check promesa-payoff (``check_title_detail``) MÁS las
+    reglas de lo visible. En cams-only el título no puede nombrar
+    ningún juego ni prometer gameplay: si lo hace, el título se
+    rechaza y se devuelve ``degraded_title`` (título de reacción).
+    En gameplay/cams+gameplay/unknown solo aplica el check de
+    siempre.
+
+    Devuelve {"ok", "reasons", "warnings", "title", "visible",
+    "degraded_title"}: ``degraded_title`` es None si el título pasa
+    o si no hay degradación posible (visible != cams-only).
+    """
+    if visible is None and layout is not None:
+        visible = visible_from_layout(layout).get("visible")
+    detail = check_title_detail(title, moment_card)
+    reasons = list(detail["reasons"])
+    warnings = list(detail.get("warnings", []))
+    if visible == VISIBLE_CAMS_ONLY:
+        low = _norm_title(title)
+        found = [a for a in KNOWN_GAMES if a in low]
+        if "gta" in low and not found:
+            reasons.append("clip solo cams: el título dice 'GTA' pero "
+                           "no se ve gameplay de ningún GTA")
+        for alias in found:
+            reasons.append(f"clip solo cams: el título dice "
+                           f"'{KNOWN_GAMES[alias]}' pero no se ve "
+                           f"gameplay (solo caras/reacción)")
+        words = [w for w in GAMEPLAY_WORDS
+                 if re.search(r"\b" + re.escape(w) + r"\b", low)]
+        if words:
+            reasons.append("clip solo cams: el título promete "
+                           f"{words} pero no se ve gameplay")
+    ok = not reasons
+    degraded = None
+    if not ok and visible == VISIBLE_CAMS_ONLY:
+        degraded = degrade_title_to_reaction(moment_card, lang=lang)
+    return {"ok": ok, "reasons": reasons, "warnings": warnings,
+            "title": title, "visible": visible or VISIBLE_UNKNOWN,
+            "degraded_title": degraded}
+
+
+def validate_legacy_title(title, moment_card=None, visible=None, layout=None,
+                          lang="es"):
+    """Valida un título que viene de fuera (arreglo 3).
+
+    Para títulos generados fuera de ``generate_titles`` — p. ej. los
+    de ``suggest_titles`` en auto_clips.py ("QUÉ JUGADA 😱 GTA 6"),
+    que nunca pasaron por el check. Devuelve (ok, motivo,
+    degradado): ``degradado`` es el título de reacción cuando el
+    original miente en un clip solo cams, o None si pasa o no hay
+    degradación. El cableado (usar ``best_title`` o degradar el
+    título de plantilla en el manifiesto) vive en auto_clips.py.
+    """
+    detail = validate_title_final(title, moment_card, visible=visible,
+                                  layout=layout, lang=lang)
+    if detail["ok"]:
+        return True, "pasa: juego veraz, sin promesas de gameplay que no se ve", None
+    return False, "; ".join(detail["reasons"]), detail["degraded_title"]
+
+
+# ---------------------------------------------------------------------------
+# Arreglo 4 — contexto en pantalla para clips de reacción
+# ---------------------------------------------------------------------------
+
+# Medio que el streamer mira fuera de cámara -> etiqueta para el
+# texto quemado. "viendo"/"mira" es medio débil (no dice QUÉ medio):
+# solo vale para "reaccionando a X", sin nombrar medio.
+REACTION_MEDIA_ES = {
+    "tráiler": "tráiler", "trailer": "tráiler",
+    "documental": "documental",
+    "vídeo": "vídeo", "video": "vídeo",
+    "anuncio": "anuncio", "teaser": "teaser",
+    "presentación": "presentación", "presentacion": "presentación",
+    "gameplay": "gameplay",
+}
+REACTION_MEDIA_EN = {
+    "trailer": "trailer", "documentary": "documentary",
+    "video": "video", "announcement": "announcement",
+    "teaser": "teaser", "presentation": "presentation",
+    "gameplay": "gameplay",
+}
+_REACTION_WEAK_MEDIA_ES = ("viendo", "mira", "mira este", "vamos a ver",
+                           "estoy viendo", "ver este")
+_REACTION_WEAK_MEDIA_EN = ("watching", "look at", "check out", "let's watch")
+
+# Temas que se pueden nombrar: (alias normalizados, nombre en pantalla).
+# Solo estos: un tema fuera de la lista no se nombra jamás (no se
+# inventa qué mira). "legacy" solo vale como Hogwarts Legacy cuando
+# viene con "jugar/jugando legacy" (es como lo dice el chat) o con
+# harry potter/hogwarts cerca; "gta" a secas no es tema (falta el
+# número). Whisper a veces escribe "GT A3": se normaliza antes.
+REACTION_TOPICS = [
+    (("gta 3", "gta iii", "gt a3"), "GTA 3"),
+    (("gta vice city", "vice city"), "GTA Vice City"),
+    (("gta san andreas", "san andreas"), "GTA San Andreas"),
+    (("gta v", "gta 5", "gt a v", "gt a 5"), "GTA 5"),
+    (("gta 6", "gta vi", "gt a 6"), "GTA 6"),
+    (("gta online",), "GTA Online"),
+    (("harry potter",), "Harry Potter"),
+    (("hogwarts legacy", "jugar legacy", "jugando legacy",
+      "jugando a legacy", "jugar a legacy"), "Hogwarts Legacy"),
+    (("counter-strike 2", "counter strike 2", "cs2"), "Counter-Strike 2"),
+    (("fortnite",), "Fortnite"),
+    (("minecraft",), "Minecraft"),
+    (("league of legends",), "League of Legends"),
+    (("valorant",), "Valorant"),
+    (("call of duty", "warzone"), "Call of Duty"),
+]
+# Ventana máxima (caracteres) entre el medio y el tema para que
+# cuenten como pareja. La transcripción del clip de IlloJuan tiene
+# "GTA 3" al abrir y "viendo un trailer" ~450 caracteres después.
+REACTION_PAIR_WINDOW = 800
+
+
+def _norm_reaction_text(text):
+    """Normalización para buscar medio+tema: sin tildes, 'GT A3' -> 'GTA 3'."""
+    text = _norm_title(text or "")
+    # Whisper parte "GTA" en "GT A": "gt a3" -> "gta 3", "gt a v" -> "gta v".
+    text = re.sub(r"\bgt\s*a\s*", "gta ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _reaction_text_sources(moment_card=None, transcript=None,
+                           chat_examples=None):
+    """Texto (normalizado) + posiciones de cada ocurrencia de tema/medio.
+
+    Acepta ficha del momento (transcript_text + chat_top), transcript
+    JSON de faster-whisper (segments) o texto plano. Devuelve
+    (text, chat_text): el texto principal y el del chat por separado
+    (el chat solo corrobora, no crea contexto por sí solo).
+    """
+    parts = []
+    if transcript is not None:
+        if isinstance(transcript, dict):
+            segs = transcript.get("segments") or []
+            parts.append(" ".join((s.get("text") or "") for s in segs))
+            if not parts[-1] and transcript.get("text"):
+                parts[-1] = transcript["text"]
+        elif isinstance(transcript, (list, tuple)):
+            parts.append(" ".join((s.get("text") or "") if isinstance(s, dict)
+                                  else str(s) for s in transcript))
+        else:
+            parts.append(str(transcript))
+    if moment_card:
+        if moment_card.get("transcript_text"):
+            parts.append(str(moment_card["transcript_text"]))
+        for m in moment_card.get("chat_top", []) or []:
+            parts.append(str(m.get("text", "")))
+    chat_texts = []
+    if chat_examples:
+        chat_texts = [str(e.get("text", "") if isinstance(e, dict) else e)
+                      for e in chat_examples]
+    if moment_card:
+        for m in moment_card.get("chat_top", []) or []:
+            chat_texts.append(str(m.get("text", "")))
+    text = _norm_reaction_text(" ".join(p for p in parts if p))
+    chat_text = _norm_reaction_text(" ".join(chat_texts))
+    return text, chat_text
+
+
+def extract_reaction_context(moment_card=None, transcript=None,
+                             chat_examples=None, visible=None, lang="es"):
+    """Contexto que mira el streamer, para quemarlo en pantalla.
+
+    Solo para clips solo cams (``visible == "cams-only"``): si se ve
+    gameplay o no se sabe lo visible, devuelve None (en gameplay el
+    contexto ya está en pantalla; en unknown no se afirma nada).
+    Con ``visible=None`` se intenta igual: el llamador es quien
+    decide si el clip es de reacción.
+
+    Busca una pareja (medio, tema) en la transcripción: el medio es
+    tráiler/documental/vídeo/anuncio/teaser/presentación/gameplay
+    (o el verbo débil viendo/mira) y el tema uno de REACTION_TOPICS.
+    Si varios temas cuadran con el mismo medio, gana el que se
+    nombra PRIMERO: el streamer suele abrir nombrando lo que va a
+    ver y los demás temas son el contraste (en el clip de IlloJuan
+    abre con "GTA 3" y luego habla de lo que juega el resto:
+    Legacy, Harry Potter PS1). El chat solo corrobora (desempate).
+
+    Devuelve {"text", "medium", "topic", "lang", "evidence"} o None.
+    Sin pareja clara: None, y NO se quema nada. Nunca mete imágenes
+    ni vídeo de lo que mira: solo este texto.
+    """
+    if visible in (VISIBLE_GAMEPLAY, VISIBLE_CAMS_GAMEPLAY):
+        return None
+    text, chat_text = _reaction_text_sources(moment_card, transcript,
+                                             chat_examples)
+    if not text:
+        return None
+    media = REACTION_MEDIA_ES if lang != "en" else REACTION_MEDIA_EN
+    weak = (_REACTION_WEAK_MEDIA_ES if lang != "en"
+            else _REACTION_WEAK_MEDIA_EN)
+    # Ocurrencias de cada medio (posición, etiqueta, fuerte/débil).
+    media_hits = []
+    for alias, label in media.items():
+        for m in re.finditer(r"\b" + re.escape(alias) + r"\b", text):
+            media_hits.append((m.start(), label, True))
+    for alias in weak:
+        for m in re.finditer(r"\b" + re.escape(alias) + r"\b", text):
+            media_hits.append((m.start(), None, False))
+    if not media_hits:
+        return None
+    # Ocurrencias de cada tema (primera mención, todas las posiciones).
+    topic_hits = {}
+    for aliases, label in REACTION_TOPICS:
+        positions = []
+        for alias in aliases:
+            for m in re.finditer(r"\b" + re.escape(alias) + r"\b", text):
+                positions.append(m.start())
+        if positions:
+            topic_hits[label] = sorted(positions)
+    if not topic_hits:
+        return None
+    # Mejor pareja: medio y tema a <= ventana; gana el tema nombrado
+    # primero (apertura del clip), desempate por cercanía al medio y
+    # por corroboración en el chat.
+    best = None
+    for topic, positions in topic_hits.items():
+        first = positions[0]
+        corroborated = any(
+            alias in chat_text
+            for aliases, label in REACTION_TOPICS if label == topic
+            for alias in aliases)
+        for m_pos, m_label, strong in media_hits:
+            dist = min(abs(p - m_pos) for p in positions)
+            if dist > REACTION_PAIR_WINDOW:
+                continue
+            # Puntuación: manda la primera mención (apertura), luego
+            # medio fuerte (tráiler/documental) sobre verbo débil
+            # (viendo/mira), luego cercanía al medio y corroboración.
+            score = (-first, 1 if strong else 0, -dist,
+                     1 if corroborated else 0)
+            if best is None or score > best[0]:
+                best = (score, topic, m_label, strong, first, dist,
+                        corroborated)
+    if best is None:
+        return None
+    _, topic, medium, strong, first, dist, corroborated = best
+    if lang == "en":
+        if medium == "trailer":
+            out = f"reacting to the {topic} trailer"
+        elif medium == "documentary":
+            out = f"reacting to the {topic} documentary"
+        elif medium == "video":
+            out = f"reacting to the {topic} video"
+        elif medium:
+            out = f"reacting to the {topic} {medium}"
+        else:
+            out = f"reacting to {topic}"
+    else:
+        if medium:
+            out = f"reaccionando al {medium} de {topic}"
+        else:
+            out = f"reaccionando a {topic}"
+    if len(out) > 60:
+        return None
+    evidence = [f"tema '{topic}' mencionado primero en el carácter {first}",
+                f"medio '{medium or 'viendo/mira'}' a {dist} caracteres"]
+    if corroborated:
+        evidence.append("tema corroborado en el chat")
+    return {"text": out, "medium": medium, "topic": topic, "lang": lang,
+            "evidence": evidence}
 
 
 def viral_multiple(score: int, all_scores, median_score=None) -> float:
@@ -732,7 +1247,7 @@ def package_for_platforms(best_title, desc, tags, thumb, lang="both",
 def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  lang="both", examples=None, moment_card=None, game=None,
                  streamer=None, seen_path=None, vod_id=None, date=None,
-                 register=False):
+                 register=False, visible=None, layout=None):
     """Devuelve el paquete viral completo de un clip.
 
     Con ``moment_card`` (recomendado, Bloque 2): los 10 títulos, el
@@ -742,6 +1257,16 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     juego es desconocido y ningún título nombra un juego: el paquete
     queda marcado ``needs_human_review`` si ningún título pasa.
     Con ``register=True`` se anota el ``best_title`` en titles_seen.json.
+
+    Arreglo 3: ``visible`` ("gameplay" | "cams+gameplay" |
+    "cams-only" | "unknown") o ``layout`` (la decisión de layout.py)
+    dicen qué se ve en el clip. En cams-only los títulos degradan
+    a reacción (sin juego ni gameplay) y ``best_title`` pasa la
+    validación final como red de seguridad: si mintiera, se degrada
+    y queda marcado en ``title_degraded``. ``thumbnail_subject`` es
+    "faces" en cams-only (las caras van en la miniatura).
+    Arreglo 4: en cams-only, ``reaction_context`` trae el texto de
+    contexto quemado ("reaccionando al tráiler de GTA 3") o None.
     """
     examples = examples or []
     multiple = viral_multiple(score, all_scores, median_score=median_score)
@@ -781,12 +1306,45 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "quote_chat": None, "quote_streamer": None, "chat_top": [],
         "streamer": streamer or "desconocido", "language": lang,
     }
+    # Arreglo 3: lo visible. Si no se pasa explícito (p. ej. el
+    # llamador ya sabe que el pico cae en un capítulo Just Chatting),
+    # se deriva de la decisión de layout en el tramo del payoff.
+    visible_info = None
+    if visible is None and layout is not None:
+        visible_info = visible_from_layout(
+            layout,
+            payoff_ts_clip=check_card.get("payoff_ts_clip") or 20.0)
+        visible = visible_info["visible"]
+    visible_reason = (visible_info or {}).get("reason") or (
+        f"visible pasado por el llamador: {visible}" if visible else
+        "sin dato de lo visible")
     titles = generate_titles(check_card, lang=lang, n=10,
-                             seen_path=seen_path, vod_id=vod_id, date=date)
+                             seen_path=seen_path, vod_id=vod_id, date=date,
+                             visible=visible)
     best = titles[0]["title"] if titles else None
+    # Arreglo 3, red de seguridad: el mejor título pasa la validación
+    # final contra lo visible. No debería fallar (generate_titles ya
+    # filtró), pero si un candidato se colara, se degrada a reacción
+    # y queda marcado, en vez de publicar un título mentiroso.
+    title_validation = validate_title_final(
+        best, check_card, visible=visible, lang=lang) if best else None
+    title_degraded = False
+    title_degrade_reason = None
+    if title_validation and not title_validation["ok"]:
+        degraded = title_validation["degraded_title"]
+        if degraded and degraded != best:
+            title_degrade_reason = "; ".join(title_validation["reasons"])
+            best = degraded
+            title_degraded = True
+            title_validation = validate_title_final(
+                best, check_card, visible=visible, lang=lang)
     if register and best:
         register_title(best, vod_id=vod_id, date=date, seen_path=seen_path,
                        clip=f"clip_{n:02d}", lang=lang)
+
+    # Arreglo 4: contexto en pantalla solo si el clip es solo cams.
+    reaction_context = extract_reaction_context(
+        check_card, visible=visible, lang=lang)
 
     what = card.get("what") if card else None
     quote_streamer = (card.get("quote_streamer") or {}).get("text") if card else None
@@ -823,6 +1381,14 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                     "Clip completo en vertical, sin contexto necesario.")
         queries = [f"{game_label.lower()} mejores momentos", f"{game_label.lower()} clips graciosos"] if game else ["clips graciosos stream", "reacción del chat clips"]
 
+    # Arreglo 4: en un clip solo cams con contexto, la descripción lo
+    # dice (el contexto va quemado en pantalla; la descripción no lo
+    # promete como si fuera gameplay, solo lo anota).
+    if visible == VISIBLE_CAMS_ONLY and reaction_context:
+        desc += (f"\nContexto en pantalla: {reaction_context['text']}."
+                 if lang != "en" else
+                 f"\nOn-screen context: {reaction_context['text']}.")
+
     # La miniatura no repite el título: si el thumb coincide, se cambia.
     if best and _norm_title(thumb) in _norm_title(best):
         thumb = "MIRA ESTO"
@@ -836,6 +1402,16 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "best_title": best,
         "title_issues": _check_title_lint(best) if best else ["sin título que pase el check promesa-payoff"],
         "needs_human_review": best is None,
+        # Arreglo 3: lo visible y la validación final del título.
+        "visible": visible or VISIBLE_UNKNOWN,
+        "visible_reason": visible_reason,
+        "title_validation": title_validation,
+        "title_degraded": title_degraded,
+        "title_degrade_reason": title_degrade_reason,
+        # Arreglo 3: en cams-only la miniatura lleva las caras, no el juego.
+        "thumbnail_subject": "faces" if visible == VISIBLE_CAMS_ONLY else "gameplay",
+        # Arreglo 4: contexto quemado (dict) o None si no hay uno claro.
+        "reaction_context": reaction_context,
         "moment_card": card or None,
         "game": game,
         "game_label": game_label,
@@ -854,3 +1430,195 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "platforms": package_for_platforms(best, desc, tags, thumb, lang=lang,
                                            hashtags=hashtags, game=game),
     }
+
+
+# ---------------------------------------------------------------------------
+# Self-test (arreglos 3 y 4): python3 viral_package.py [--self-test]
+# Casos reales: Coker (GTA V RP, solo cams), Locones (GTA RP rumano,
+# solo volumen) e IlloJuan 2930700035 (Just Chatting, tráiler GTA 3).
+# ---------------------------------------------------------------------------
+
+def _self_test():
+    import sys
+    here = Path(__file__).parent
+    failures = []
+
+    def check(name, cond, extra=""):
+        print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f" — {extra}" if extra else ""))
+        if not cond:
+            failures.append(name)
+
+    print("== visible_from_layout ==")
+    check("stack -> cams-only",
+          visible_from_layout({"mode": "auto", "segments": [
+              {"start": 0.0, "end": 60.0, "layout": "stack", "params": {},
+               "reason": "dos webcams apiladas"}]})["visible"] == "cams-only")
+    check("pip -> cams+gameplay",
+          visible_from_layout({"mode": "auto", "segments": [
+              {"start": 0.0, "end": 60.0, "layout": "pip", "params": {},
+               "reason": "caja con borde en esquina superior"}]})["visible"] == "cams+gameplay")
+    check("center + 0 cams -> gameplay",
+          visible_from_layout({"mode": "auto", "segments": [
+              {"start": 0.0, "end": 60.0, "layout": "center", "params": {},
+               "reason": "sin franja ni caja | escaneo: 0 cams (celdas estables izq 3% / der 4%)"}]})["visible"] == "gameplay")
+    check("center + 1 cam -> unknown (no se afirma nada)",
+          visible_from_layout({"mode": "auto", "segments": [
+              {"start": 0.0, "end": 60.0, "layout": "center", "params": {},
+               "reason": "escaneo: 1 cams (celdas estables izq 57% / der 40%)"}]})["visible"] == "unknown")
+    check("sin layout -> unknown",
+          visible_from_layout(None)["visible"] == "unknown")
+    # Caso real IlloJuan 2930700035: layout "center" pero escaneo 2 cams.
+    illo_layout = None
+    illo_manifest = here / "runs" / "2930700035" / "manifest.json"
+    if illo_manifest.exists():
+        illo_layout = json.loads(illo_manifest.read_text(encoding="utf-8"))["clips"][0]["layout"]
+    else:
+        illo_layout = {"mode": "auto", "segments": [
+            {"start": 0.0, "end": 60.0, "layout": "center", "params": {},
+             "reason": "sin franja apilada ni caja de webcam; costura máx. 17 en x=43 | escaneo: 2 cams (celdas estables izq 79% / der 90%; SIN costura central (posible imagen estática))"}]}
+    check("IlloJuan 2930700035 (center + 2 cams) -> cams-only",
+          visible_from_layout(illo_layout, payoff_ts_clip=20.0)["visible"] == "cams-only",
+          str(visible_from_layout(illo_layout, payoff_ts_clip=20.0)["reason"])[:60])
+    check("Just Chatting -> cams-only (capítulo)",
+          visible_from_chapter("Just Chatting") == "cams-only")
+    check("capítulo GTA V -> None (no se afirma nada)",
+          visible_from_chapter("Grand Theft Auto V") is None)
+
+    print("== validate_title_final / degrade (Coker, GTA V RP, solo cams) ==")
+    coker_card = None
+    coker_path = here / "runs" / "kick-coker-01a1dffd" / "clips" / "moment_card.json"
+    if coker_path.exists():
+        coker_card = json.loads(coker_path.read_text(encoding="utf-8"))
+    else:
+        coker_card = {"game": "GTA V RP", "game_label": "GTA V RP",
+                      "dominant_reaction": "risas", "risas": 14, "hype": 1,
+                      "viral_multiple": 56.5, "evidence": "medium",
+                      "what": "errar un tiro", "what_key": "erra",
+                      "transcript_text": "No, no, no. Cuando juega bien en el partido",
+                      "payoff_ts_clip": 20.0, "clip_duration_s": 60,
+                      "unique_users_peak_30s": 31, "chat_msgs_peak_10s": 56,
+                      "quote_chat": {"text": "ESTANDO ARMADO Y LO ERRA", "count": 2},
+                      "quote_streamer": {"text": "No, no, no, no, no."},
+                      "chat_top": [{"text": "estando armado y lo erra", "count": 2}],
+                      "evidence_tokens": ["erra", "partido", "juega"]}
+    v = validate_title_final("GTA 6: la jugada que rompió el chat",
+                             coker_card, visible="cams-only")
+    check("Coker: 'GTA 6: la jugada...' rechazado en cams-only",
+          not v["ok"], "; ".join(v["reasons"])[:120])
+    check("Coker: degradado a título de reacción",
+          v["degraded_title"] == "El chat no paraba de reírse", str(v["degraded_title"]))
+    v2 = validate_title_final("GTA V RP: errar un tiro y el chat explotó",
+                              coker_card, visible="gameplay")
+    check("Coker: mismo título PASA si se viera gameplay",
+          v2["ok"], "; ".join(v2["reasons"])[:120])
+    titles = generate_titles(coker_card, lang="es", n=10, visible="cams-only")
+    check("Coker: generate_titles cams-only no nombra juego ni gameplay",
+          all(not _title_names_game(t["title"]) and not _title_has_gameplay_word(t["title"])
+              for t in titles) and len(titles) > 0,
+          f"{len(titles)} títulos: {[t['title'] for t in titles][:3]}")
+    ok, why, deg = validate_legacy_title("QUÉ JUGADA 😱 GTA 6", coker_card,
+                                         visible="cams-only")
+    check("Coker: título legacy 'QUÉ JUGADA 😱 GTA 6' rechazado + degradado",
+          not ok and deg == "El chat no paraba de reírse", f"{why[:80]} -> {deg}")
+
+    print("== Locones (GTA RP rumano, solo volumen, cams-only) ==")
+    locones_card = {"game": "GTA V RP", "game_label": "GTA V RP",
+                    "dominant_reaction": "volumen", "risas": 0, "hype": 0,
+                    "viral_multiple": 24.75, "evidence": "low",
+                    "what": None, "what_key": None, "transcript_text": "",
+                    "payoff_ts_clip": 20.0, "clip_duration_s": 60,
+                    "unique_users_peak_30s": 20, "chat_msgs_peak_10s": 25,
+                    "quote_chat": None, "quote_streamer": None,
+                    "chat_top": [], "evidence_tokens": []}
+    v3 = validate_title_final("GTA 6: La jugada que rompió el chat",
+                              locones_card, visible="cams-only")
+    check("Locones: 'GTA 6: La jugada que rompió el chat' rechazado",
+          not v3["ok"], "; ".join(v3["reasons"])[:120])
+    check("Locones: degradado a reacción de volumen (honesto, sin juego)",
+          v3["degraded_title"] in ("El chat explotó con esto",
+                                   "25 mensajes en 10 segundos por esto")
+          and validate_title_final(v3["degraded_title"], locones_card,
+                                   visible="cams-only")["ok"],
+          str(v3["degraded_title"]))
+    check("Locones: sin transcripción no hay contexto",
+          extract_reaction_context(locones_card, visible="cams-only") is None)
+
+    print("== IlloJuan 2930700035 (Just Chatting, cams-only) ==")
+    illo_transcript = here / "runs" / "2930700035" / "clips" / "clip_01_t26m05s_s19.22_r4h47_transcript.json"
+    illo_card = {"game": "Grand Theft Auto V", "game_label": "Grand Theft Auto V",
+                 "dominant_reaction": "hype", "risas": 4, "hype": 47,
+                 "viral_multiple": 2.8, "evidence": "medium",
+                 "what": None, "what_key": None,
+                 "payoff_ts_clip": 20.0, "clip_duration_s": 60,
+                 "unique_users_peak_30s": 108, "chat_msgs_peak_10s": 47,
+                 "quote_chat": {"text": "W", "count": 81},
+                 "quote_streamer": {"text": "viendo un trailer, vale, de 1998"},
+                 "chat_top": [{"text": "w", "count": 81}],
+                 "evidence_tokens": ["trailer", "gta", "legacy"]}
+    if illo_transcript.exists():
+        illo_card["transcript_text"] = " ".join(
+            s.get("text", "") for s in
+            json.loads(illo_transcript.read_text(encoding="utf-8")).get("segments", []))
+    else:
+        illo_card["transcript_text"] = ("GT A3. ¿Sabes lo que te digo? O acordáis cuando salió o jugar "
+                                        "legacy y todo el puto mundo estaba jugando a jugar legacy y a mi ese día "
+                                        "se me metió en los cojones jugada Harry Potter y la piedra filosofal de "
+                                        "PlayStation 1, pues esto va a ser un poco lo mismo. Todo el mundo ya "
+                                        "metido en el mundo abierto y yo viendo un trailer, vale, de 1998.")
+    v4 = validate_title_final("QUÉ JUGADA 😱 GTA 6", illo_card, visible="cams-only")
+    check("IlloJuan: 'QUÉ JUGADA 😱 GTA 6' rechazado en cams-only",
+          not v4["ok"], "; ".join(v4["reasons"])[:120])
+    check("IlloJuan: degradado a reacción de hype",
+          v4["degraded_title"] == "El chat enloqueció con esto", str(v4["degraded_title"]))
+    ctx = extract_reaction_context(illo_card, visible="cams-only")
+    check("IlloJuan: contexto = reaccionando al tráiler de GTA 3",
+          ctx is not None and ctx["text"] == "reaccionando al tráiler de GTA 3",
+          str(ctx))
+    check("IlloJuan: con gameplay visible NO hay contexto (gated)",
+          extract_reaction_context(illo_card, visible="gameplay") is None)
+    ctx_en = extract_reaction_context(illo_card, visible="cams-only", lang="en")
+    check("IlloJuan EN: reacting to the GTA 3 trailer",
+          ctx_en is not None and ctx_en["text"] == "reacting to the GTA 3 trailer",
+          str(ctx_en))
+    pkg = package_clip(1, 1575, 19.22, 4, 47, None, [1, 2, 3], lang="es",
+                       moment_card=illo_card, visible="cams-only")
+    check("package_clip IlloJuan: best_title es reacción, sin juego",
+          pkg["best_title"] and not _title_names_game(pkg["best_title"])
+          and not _title_has_gameplay_word(pkg["best_title"]),
+          str(pkg["best_title"]))
+    check("package_clip IlloJuan: visible + thumbnail faces + contexto",
+          pkg["visible"] == "cams-only"
+          and pkg["thumbnail_subject"] == "faces"
+          and pkg["reaction_context"] is not None
+          and pkg["reaction_context"]["text"] == "reaccionando al tráiler de GTA 3",
+          f"visible={pkg['visible']} thumb={pkg['thumbnail_subject']} ctx={pkg['reaction_context']}")
+
+    print("== extract_reaction_context: negativos y sintéticos ==")
+    check("Coker: sin medio+tema no hay contexto",
+          extract_reaction_context(coker_card, visible="cams-only") is None)
+    check("sin transcripción no hay contexto",
+          extract_reaction_context({"transcript_text": ""}, visible="cams-only") is None)
+    check("solo tema sin medio no hay contexto",
+          extract_reaction_context({"transcript_text": "estamos hablando de GTA 6 y de todo un poco"},
+                                   visible="cams-only") is None)
+    doc = extract_reaction_context(
+        {"transcript_text": "vamos a ver este documental sobre GTA San Andreas que es una locura"},
+        visible="cams-only")
+    check("sintético documental GTA San Andreas",
+          doc is not None and doc["text"] == "reaccionando al documental de GTA San Andreas",
+          str(doc))
+    en = extract_reaction_context(
+        {"transcript_text": "we are watching the GTA 6 trailer right now, this is insane"},
+        visible="cams-only", lang="en")
+    check("sintético EN trailer GTA 6",
+          en is not None and en["text"] == "reacting to the GTA 6 trailer", str(en))
+
+    if failures:
+        print(f"\n{len(failures)} FALLOS:", failures)
+        return 1
+    print("\nSelf-test OK: títulos honestos + contexto en pantalla.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_self_test())
