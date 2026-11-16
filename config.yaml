@@ -56,6 +56,77 @@ subtitles:
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
 
+  # VAD + anti-alucinación — v2.6 (bloque 5 del tribunal):
+  # faster-whisper con vad_filter y umbrales que cortan las
+  # alucinaciones en ruido de juego (música, efectos, sin voz).
+  vad: true                   # vad_filter=True en faster-whisper
+  no_speech_threshold: 0.6    # segmento con prob. no-speech mayor -> se descarta
+  compression_ratio_threshold: 2.4  # texto demasiado repetitivo -> se descarta
+  logprob_threshold: -1.0     # segmento con logprob menor -> se descarta
+  # Puerta "sin voz": si el clip tiene menos palabras que el mínimo
+  # (por cada 60 s) o la voz cubre menos del 10% de la duración, NO
+  # se genera SRT ni se quema nada: el clip queda marcado como
+  # "solo gameplay/música" en el transcript y sigue su camino.
+  no_speech_min_words: 5      # palabras mínimas por cada 60 s de clip
+  no_speech_min_ratio: 0.10   # cobertura mínima de habla (0,10 = 10%)
+  # Escalado condicional tiny -> base (SOLO si salta un umbral
+  # objetivo; nunca base por defecto: tiny es varias veces más rápido).
+  escalate: true
+  escalate_min_words_per_min: 8   # <8 palabras/min con voz -> base
+  escalate_logprob: -0.8      # logprob medio por debajo -> base
+  escalate_lang_prob: 0.5     # idioma con prob. menor -> base
+  escalate_max_repeats: 3     # misma palabra/frase >=3 veces -> base
+  # Idioma por tramos: se detecta en trozos de 30 s y se vota por
+  # mayoría; el empate lo desempata el idioma mayoritario del chat.
+  language_chunk_s: 30
+  # Fallback de idioma (si el voto empata o no hay voz clara):
+  # 1º idioma del streamer, 2º idioma del canal (channel.language).
+  streamer_language: ""       # es | en | ... (vacío = usa el del canal)
+  chat_language: ""           # idioma mayoritario del chat, para desempatar
+  # Diccionario GTA 6 (~25 términos): va como initial_prompt a
+  # Whisper y como correcciones deterministas post-SRT (abajo).
+  gta6_terms:
+    - "GTA 6"
+    - "Grand Theft Auto VI"
+    - "Lucia"
+    - "Jason"
+    - "Leonida"
+    - "Vice City"
+    - "Rockstar Games"
+    - "qué jugada"
+    - "qué locura"
+    - "clutch"
+    - "no puede ser"
+    - "qué acaba de pasar"
+    - "vamos"
+    - "brutal"
+    - "insano"
+    - "qué risa"
+    - "GG"
+    - "W"
+    - "pog"
+    - "clip"
+    - "chat"
+    - "hype"
+    - "gameplay"
+    - "misión"
+    - "atraco"
+  # Correcciones deterministas post-SRT: solo lo que está en este
+  # mapa se toca, por palabra/frase completa, sin inventar nada.
+  gta6_corrections:
+    leonida: "Leonida"
+    leonidas: "Leonida"
+    vice city: "Vice City"
+    vicecity: "Vice City"
+    gta 6: "GTA 6"
+    gta vi: "GTA 6"
+    gta 5: "GTA 5"
+    grand theft auto: "Grand Theft Auto"
+    rockstar: "Rockstar"
+    lucia: "Lucia"
+    lucía: "Lucia"
+    jason: "Jason"
+
 # Política de traducción de subtítulos (regla del usuario, 2026-11-16):
 #   * audio en español -> subtítulos SOLO en español, sin traducir.
 #   * audio en CUALQUIER otro idioma (rumano, inglés, etc.) ->

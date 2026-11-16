@@ -64,6 +64,32 @@ Requisitos: el venv del proyecto (.venv/) con faster-whisper, y
 FFmpeg en el PATH. El Python del sistema NO sirve: instalar
 faster-whisper ahí falla por PEP 668 / typing_extensions de Debian.
 
+VAD + anti-alucinación + puerta "sin voz" + escalado — v2.6
+(bloque 5 del tribunal, 2026-11-16):
+  * faster-whisper con vad_filter=True (Silero VAD, onnxruntime)
+    y umbrales anti-alucinación: no_speech_threshold 0,6,
+    compression_ratio_threshold 2,4, logprob_threshold -1,0,
+    condition_on_previous_text=False (sin contexto previo no se
+    encadenan alucinaciones).
+  * Puerta "sin voz": si el clip tiene <5 palabras por cada 60 s o
+    la voz cubre <10% de la duración, NO se genera SRT ni se quema
+    nada: el clip queda marcado "solo gameplay/música" en el
+    transcript JSON (no_speech=true) y el proceso termina con
+    código 0, sin fallar. El clip sigue su camino sin subtítulos.
+  * Escalado condicional tiny -> base: SOLO si salta un umbral
+    objetivo (repetición >=3 veces, <8 palabras/min con voz,
+    logprob medio bajo, idioma con prob. <0,5). Nunca base por
+    defecto: tiny es varias veces más rápido en CPU.
+  * Idioma por tramos: se detecta en trozos de 30 s y se vota por
+    mayoría; el empate lo desempata el idioma mayoritario del chat
+    (--chat-lang) y si no el fallback de config.yaml (idioma del
+    streamer o del canal). Siempre se guardan source_language,
+    probabilidad y task en el transcript.
+  * Diccionario GTA 6 (~25 términos, config.yaml): va como
+    initial_prompt a Whisper y como correcciones deterministas
+    post-SRT (gta6_corrections): solo se toca lo que está en el
+    mapa, por palabra/frase completa.
+
 Uso:
   .venv/bin/python subtitles.py runs/2929669422/segment_7h12m.mp4
   .venv/bin/python subtitles.py clip.mp4 --srt clip.srt --burn clip_subs.mp4
@@ -73,22 +99,296 @@ Uso:
   .venv/bin/python subtitles.py clip.mp4 --subtitle-style karaoke
   .venv/bin/python subtitles.py clip.mp4 --subtitle-lang en   # fuerza salida en inglés
   .venv/bin/python subtitles.py clip.mp4 --no-translate        # nunca traducir
+  .venv/bin/python subtitles.py clip.mp4 --chat-lang es        # desempate de idioma
+  .venv/bin/python subtitles.py clip.mp4 --no-vad --no-escalate
 """
 
 import argparse
+import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
+import sysconfig
+
+
+def _preload_stdlib_queue():
+    """Carga el `queue` de la stdlib antes que nada.
+
+    El repo tiene un queue.py propio (cola de aprobación) que haría
+    sombra al módulo `queue` de la stdlib: al descargar el modelo
+    VAD de HuggingFace, concurrent.futures hace `import queue` y se
+    encuentra con el queue.py del proyecto (sin SimpleQueue), y la
+    descarga falla con AttributeError. Cargando el `queue` de la
+    stdlib por ruta explícita queda en sys.modules y ya no se
+    vuelve a resolver por sys.path.
+    """
+    if "queue" in sys.modules:
+        return
+    try:
+        stdlib_dir = sysconfig.get_paths()["stdlib"]
+        spec = importlib.util.spec_from_file_location(
+            "queue", os.path.join(stdlib_dir, "queue.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["queue"] = module
+        spec.loader.exec_module(module)
+    except Exception:
+        pass
+
+
+_preload_stdlib_queue()
 
 DEFAULT_MODEL = "tiny"
 DEFAULT_MAX_CHARS = 20
 DEFAULT_MAX_DURATION = 2.0
 DEFAULT_FONTSIZE = 48
 
+# VAD + anti-alucinación (v2.6, bloque 5 del tribunal). Valores por
+# defecto = config.yaml (sección subtitles); la config manda.
+DEFAULT_NO_SPEECH_THRESHOLD = 0.6
+DEFAULT_COMPRESSION_RATIO_THRESHOLD = 2.4
+DEFAULT_LOGPROB_THRESHOLD = -1.0
+DEFAULT_NO_SPEECH_MIN_WORDS = 5    # por cada 60 s de clip
+DEFAULT_NO_SPEECH_MIN_RATIO = 0.10  # cobertura mínima de habla
+DEFAULT_ESCALATE_WPM = 8
+DEFAULT_ESCALATE_LOGPROB = -0.8
+DEFAULT_ESCALATE_LANG_PROB = 0.5
+DEFAULT_ESCALATE_MAX_REPEATS = 3
+DEFAULT_LANGUAGE_CHUNK_S = 30
+SAMPLE_RATE = 16000
+
+
+def detect_language_chunks(model, audio, chunk_s=DEFAULT_LANGUAGE_CHUNK_S):
+    """Detecta el idioma por tramos de chunk_s segundos.
+
+    Devuelve votos [{"start", "end", "language", "probability"}].
+    Un solo detect_language() sobre 60 s de audio ruidoso de juego
+    es poco fiable (en v2.5 dio 'en' con prob. 0,13 en audio
+    rumano); votar por tramos estabiliza la decisión.
+    """
+    chunk_len = int(chunk_s * SAMPLE_RATE)
+    votes = []
+    for i in range(0, len(audio), chunk_len):
+        chunk = audio[i:i + chunk_len]
+        if len(chunk) < SAMPLE_RATE:  # <1 s: no vota
+            continue
+        lang, prob, _ = model.detect_language(chunk)
+        votes.append({
+            "start": round(i / SAMPLE_RATE, 1),
+            "end": round(min(len(audio), i + chunk_len) / SAMPLE_RATE, 1),
+            "language": lang,
+            "probability": round(float(prob), 2),
+        })
+    return votes
+
+
+def majority_language(votes, fallback="es", chat_lang=None):
+    """Idioma por voto mayoritario entre los tramos.
+
+    Empate: desempata el idioma mayoritario del chat (si está entre
+    los empatados); si no, gana el idioma empatado con mayor
+    probabilidad media. Sin votos, se usa el fallback de config
+    (idioma del streamer o del canal). Devuelve (language,
+    probability, tie_break), donde tie_break es None, "chat",
+    "probability" o "fallback". La probabilidad es la media de los
+    tramos ganadores.
+    """
+    if not votes:
+        return fallback, 0.0, "fallback"
+    counts = {}
+    for v in votes:
+        counts.setdefault(v["language"], []).append(v["probability"])
+    best_count = max(len(p) for p in counts.values())
+    tied = [lang for lang, p in counts.items() if len(p) == best_count]
+    tie_break = None
+    if len(tied) > 1:
+        if chat_lang and chat_lang in tied:
+            winner, tie_break = chat_lang, "chat"
+        else:
+            # Desempata por probabilidad media: gana el idioma con
+            # los tramos más seguros (p. ej. ro 0,94 frente a te
+            # 0,33 en un clip casi sin voz), no por orden alfabético.
+            winner = max(
+                tied, key=lambda lang: sum(counts[lang]) / len(counts[lang]))
+            tie_break = "probability"
+    else:
+        winner = tied[0]
+    probs = counts[winner]
+    return winner, round(sum(probs) / len(probs), 2), tie_break
+
+
+def build_initial_prompt(terms):
+    """initial_prompt para faster-whisper con el diccionario GTA 6.
+
+    Whisper usa el prompt como contexto: los nombres propios del
+    juego (Lucia, Leonida, Vice City) salen bien escritos en vez
+    de aproximaciones ("Leonila", "vice city" en minúscula...).
+    """
+    terms = [t for t in (terms or []) if t]
+    if not terms:
+        return None
+    return "Clip de GTA 6: " + ", ".join(terms) + "."
+
+
+def apply_gta6_corrections(text, corrections):
+    """Correcciones deterministas post-SRT (diccionario GTA 6).
+
+    Reemplazo por palabra/frase completa, insensible a mayúsculas
+    (re.IGNORECASE + \\b). Devuelve (texto_corregido, n_cambios).
+    Solo toca lo que está en el mapa de config.yaml: si Whisper
+    escribió "leonida" en minúscula, queda "Leonida"; si escribió
+    otra cosa, no se inventa nada.
+    """
+    if not corrections or not text:
+        return text, 0
+    n = 0
+    for wrong, right in corrections.items():
+        pattern = re.compile(r"\b" + re.escape(str(wrong)) + r"\b",
+                             re.IGNORECASE)
+        text, k = pattern.subn(str(right), text)
+        n += k
+    return text, n
+
+
+def speech_stats(transcript, duration):
+    """Palabras y cobertura de habla de una transcripción.
+
+    Devuelve (word_count, speech_seconds, speech_ratio), donde
+    speech_ratio es la fracción de la duración cubierta por
+    palabras (0,0–1,0). Con VAD activo, el ruido de juego no
+    cuenta como habla.
+    """
+    words = [w for s in transcript.get("segments", [])
+             for w in s.get("words", [])]
+    speech_s = sum(max(0.0, w["end"] - w["start"]) for w in words)
+    ratio = (speech_s / duration) if duration else 0.0
+    return len(words), speech_s, ratio
+
+
+def check_escalation(transcript, duration, lang_prob, sub_cfg):
+    """¿La pasada tiny es sospechosa? Devuelve lista de motivos.
+
+    Umbrales objetivos (config.yaml, sección subtitles):
+      * repetición: la misma palabra >= N veces seguidas, o el mismo
+        texto de segmento >= N veces (bucle típico de alucinación).
+      * pocas palabras/min con voz: < N palabras por minuto (y hay
+        voz: word_count > 0; el silencio total lo coge la puerta
+        "sin voz", no el escalado).
+      * logprob medio bajo: media de avg_logprob de los segmentos.
+      * idioma con probabilidad baja (< 0,5).
+    Si la lista no está vacía, transcribe_audio repite con base.
+    Escalar no descarta nada: solo re-transcribe con un modelo
+    mejor y se queda con ese resultado.
+    """
+    from collections import Counter
+
+    sub_cfg = sub_cfg or {}
+    reasons = []
+    words = [w["word"].strip().lower().strip(".,!?¡¿\"'")
+             for s in transcript.get("segments", [])
+             for w in s.get("words", [])]
+    max_repeats = sub_cfg.get("escalate_max_repeats",
+                              DEFAULT_ESCALATE_MAX_REPEATS)
+    run, run_word, worst = 1, None, 0
+    prev = None
+    for w in words:
+        if w and w == prev:
+            run += 1
+            if run > worst:
+                worst, run_word = run, w
+        else:
+            run = 1
+        prev = w
+    if worst >= max_repeats:
+        reasons.append(f"repetición: '{run_word}' x{worst} seguidas")
+    seg_texts = [s.get("text", "").strip().lower()
+                 for s in transcript.get("segments", [])
+                 if s.get("text", "").strip()]
+    for text, count in Counter(seg_texts).most_common(1):
+        if count >= max_repeats:
+            reasons.append(f"segmento repetido x{count}: '{text[:40]}'")
+    word_count, _, _ = speech_stats(transcript, duration)
+    wpm = word_count / (duration / 60.0) if duration else 0.0
+    min_wpm = sub_cfg.get("escalate_min_words_per_min",
+                          DEFAULT_ESCALATE_WPM)
+    if 0 < word_count and wpm < min_wpm:
+        reasons.append(f"pocas palabras/min: {wpm:.1f} (< {min_wpm})")
+    logprobs = [s["avg_logprob"] for s in transcript.get("segments", [])
+                if "avg_logprob" in s]
+    if logprobs:
+        mean_lp = sum(logprobs) / len(logprobs)
+        if mean_lp < sub_cfg.get("escalate_logprob",
+                                 DEFAULT_ESCALATE_LOGPROB):
+            reasons.append(f"logprob medio bajo: {mean_lp:.2f}")
+    if word_count > 0 and lang_prob < sub_cfg.get(
+            "escalate_lang_prob", DEFAULT_ESCALATE_LANG_PROB):
+        reasons.append(f"idioma poco fiable: prob. {lang_prob:.2f}")
+    return reasons
+
+
+def _transcribe_with_model(model, audio, detected, task, sub_cfg, vad=True):
+    """Una pasada de transcripción con VAD + anti-alucinación.
+
+    Parámetros faster-whisper (v2.6):
+      * vad_filter=True: Silero VAD descarta el ruido de juego sin
+        voz antes de transcribir (requiere onnxruntime en el venv).
+      * no_speech_threshold / compression_ratio_threshold /
+        logprob_threshold: segmentos sospechosos se descartan en
+        vez de inventar palabras.
+      * condition_on_previous_text=False: sin contexto previo no se
+        encadenan alucinaciones de un segmento al siguiente.
+      * initial_prompt: diccionario GTA 6 de config.yaml.
+    Devuelve el transcript (dict) con segmentos, palabras,
+    avg_logprob por segmento y correcciones GTA 6 aplicadas al
+    texto de cada segmento.
+    """
+    sub_cfg = sub_cfg or {}
+    initial_prompt = build_initial_prompt(sub_cfg.get("gta6_terms"))
+    kwargs = dict(
+        language=detected, task=task, word_timestamps=True,
+        condition_on_previous_text=False,
+        no_speech_threshold=float(sub_cfg.get(
+            "no_speech_threshold", DEFAULT_NO_SPEECH_THRESHOLD)),
+        compression_ratio_threshold=float(sub_cfg.get(
+            "compression_ratio_threshold",
+            DEFAULT_COMPRESSION_RATIO_THRESHOLD)),
+        log_prob_threshold=float(sub_cfg.get(
+            "logprob_threshold", DEFAULT_LOGPROB_THRESHOLD)),
+        initial_prompt=initial_prompt,
+    )
+    if vad:
+        kwargs["vad_filter"] = True
+        kwargs["vad_parameters"] = dict(min_silence_duration_ms=500)
+    segments, info = model.transcribe(audio, **kwargs)
+    corrections = sub_cfg.get("gta6_corrections") or {}
+    transcript = {"segments": [], "language": info.language}
+    n_corrections = 0
+    for segment in segments:
+        text, k = apply_gta6_corrections(segment.text.strip(), corrections)
+        n_corrections += k
+        seg_data = {
+            "start": segment.start,
+            "end": segment.end,
+            "text": text,
+            "avg_logprob": round(float(segment.avg_logprob), 3),
+            "words": [],
+        }
+        if segment.words:
+            for word in segment.words:
+                seg_data["words"].append(
+                    {"word": word.word.strip(),
+                     "start": word.start, "end": word.end}
+                )
+        transcript["segments"].append(seg_data)
+    transcript["corrections_applied"] = n_corrections
+    return transcript
+
 
 def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
-                     subtitle_lang="auto", translate=None, policy=None):
+                     subtitle_lang="auto", translate=None, policy=None,
+                     sub_cfg=None, cfg=None, chat_lang=None,
+                     vad=True, escalate=True):
     """Transcribe (o traduce) con faster-whisper. Devuelve (transcript, info).
 
     transcript tiene el mismo formato que openshorts: {"segments": [...],
@@ -100,6 +400,25 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
     task="translate" a inglés. Se detecta el idioma con
     model.detect_language() (salvo que se fuerce con --lang) y se
     decide con config.resolve_subtitle_task().
+
+    Novedades v2.6 (bloque 5 del tribunal):
+      * Idioma por tramos: detect_language() en trozos de 30 s y
+        voto por mayoría; empate -> idioma del chat (--chat-lang o
+        config subtitles.chat_language), si no fallback de config
+        (subtitles.streamer_language o channel.language). Se guardan
+        los votos en transcript["language_votes"].
+      * VAD + anti-alucinación en cada pasada (ver
+        _transcribe_with_model).
+      * Escalado condicional tiny -> base: si la pasada tiny dispara
+        un umbral objetivo (ver check_escalation), se repite con
+        base y se guarda el motivo en
+        transcript["escalation_reasons"]. Nunca base por defecto.
+      * Puerta "sin voz": si el resultado final tiene <5 palabras
+        por cada 60 s o la voz cubre <10% de la duración,
+        transcript["no_speech"]=True y
+        transcript["audio_note"]="solo gameplay/música": main() no
+        genera SRT ni quema nada y termina con código 0.
+      * Siempre se guardan source_language, probabilidad y task.
 
     Nota: no se pasa el vídeo (ni un archivo de audio) directamente a
     faster-whisper, porque su decodificación con PyAV falla con av 19
@@ -115,13 +434,23 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
     import numpy as np
     from faster_whisper import WhisperModel
 
+    sub_cfg = dict(sub_cfg or {})
+    cfg = cfg or {}
     try:
         from config import get_subtitle_policy, resolve_subtitle_task
-        policy = policy or get_subtitle_policy({})
+        policy = policy or get_subtitle_policy(cfg)
     except Exception:
         resolve_subtitle_task = None
         policy = policy or {"es": "transcribe-only",
                             "others": "translate-to-en"}
+
+    # Fallback de idioma: streamer > canal (channel.language) > "es".
+    channel_lang = ((cfg.get("channel") or {}).get("language")
+                    or sub_cfg.get("fallback_language") or "es")
+    fallback_lang = sub_cfg.get("streamer_language") or channel_lang
+    chat_lang = chat_lang or sub_cfg.get("chat_language") or None
+    vad = bool(sub_cfg.get("vad", True)) if vad else False
+    escalate = bool(sub_cfg.get("escalate", True)) if escalate else False
 
     print(f"Transcribiendo audio de: {video_path} (modelo {model_name})")
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -135,11 +464,17 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
         with wave.open(wav_path, "rb") as wf:
             frames = wf.readframes(wf.getnframes())
         audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        duration = len(audio) / SAMPLE_RATE
         model = WhisperModel(model_name, device="cpu", compute_type="int8")
         if language:
             detected, lang_prob = language, 1.0
+            votes, tie_break = [], None
         else:
-            detected, lang_prob, _ = model.detect_language(audio)
+            chunk_s = int(sub_cfg.get("language_chunk_s",
+                                      DEFAULT_LANGUAGE_CHUNK_S))
+            votes = detect_language_chunks(model, audio, chunk_s=chunk_s)
+            detected, lang_prob, tie_break = majority_language(
+                votes, fallback=fallback_lang, chat_lang=chat_lang)
         if resolve_subtitle_task is not None:
             task, sub_lang = resolve_subtitle_task(
                 detected, subtitle_lang=subtitle_lang,
@@ -157,31 +492,118 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
         else:
             print(f"Idioma detectado: {detected} (prob. {lang_prob:.2f}) "
                   f"-> solo transcribe, sin traducir (task=transcribe)")
-        segments, info = model.transcribe(
-            audio, language=detected, task=task, word_timestamps=True
-        )
-        transcript = {"segments": [], "language": info.language,
-                      "source_language": detected,
-                      "source_language_probability": round(float(lang_prob), 2),
-                      "task": task, "subtitle_language": sub_lang}
-        for segment in segments:
-            seg_data = {
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text,
-                "words": [],
-            }
-            if segment.words:
-                for word in segment.words:
-                    seg_data["words"].append(
-                        {"word": word.word.strip(), "start": word.start, "end": word.end}
-                    )
-            transcript["segments"].append(seg_data)
+        if tie_break:
+            print(f"Idioma por voto empatado: desempate por {tie_break} "
+                  f"-> {detected}")
+        transcript = _transcribe_with_model(
+            model, audio, detected, task, sub_cfg, vad=vad)
+        transcript.update({
+            "source_language": detected,
+            "source_language_probability": round(float(lang_prob), 2),
+            "language_votes": votes,
+            "language_tie_break": tie_break,
+            "task": task,
+            "subtitle_language": sub_lang,
+            "model": model_name,
+            "vad": vad,
+        })
+        word_count, speech_s, ratio = speech_stats(transcript, duration)
+        transcript["word_count"] = word_count
+        transcript["speech_seconds"] = round(speech_s, 1)
+        transcript["speech_ratio"] = round(ratio, 3)
+        transcript["words_per_min"] = round(
+            word_count / (duration / 60.0), 1) if duration else 0.0
+        logprobs = [s["avg_logprob"] for s in transcript["segments"]
+                    if "avg_logprob" in s]
+        transcript["avg_logprob"] = round(
+            sum(logprobs) / len(logprobs), 3) if logprobs else None
         print(
-            f"Transcripción completa. Idioma fuente: {detected} "
-            f"(probabilidad {lang_prob:.2f}) | tarea: {task} | "
-            f"subtítulos en: {sub_lang}"
+            f"Transcripción completa ({model_name}). Idioma fuente: "
+            f"{detected} (probabilidad {lang_prob:.2f}) | tarea: {task} | "
+            f"subtítulos en: {sub_lang} | palabras: {word_count} "
+            f"({transcript['words_per_min']}/min) | habla: "
+            f"{speech_s:.1f}s de {duration:.0f}s "
+            f"({ratio * 100:.0f}%) | logprob medio: "
+            f"{transcript['avg_logprob']}"
         )
+        # Escalado condicional tiny -> base (v2.6): solo si salta un
+        # umbral objetivo y el modelo actual es tiny. La puerta
+        # "sin voz" se evalúa DESPUÉS, sobre el resultado final.
+        escalation_reasons = []
+        if escalate and model_name == "tiny":
+            escalation_reasons = check_escalation(
+                transcript, duration, lang_prob, sub_cfg)
+        if escalation_reasons:
+            print(f"Escalado tiny -> base: {'; '.join(escalation_reasons)}")
+            base_model = WhisperModel("base", device="cpu",
+                                      compute_type="int8")
+            if not language:
+                votes = detect_language_chunks(
+                    base_model, audio,
+                    chunk_s=int(sub_cfg.get(
+                        "language_chunk_s", DEFAULT_LANGUAGE_CHUNK_S)))
+                detected, lang_prob, tie_break = majority_language(
+                    votes, fallback=fallback_lang, chat_lang=chat_lang)
+                if resolve_subtitle_task is not None:
+                    task, sub_lang = resolve_subtitle_task(
+                        detected, subtitle_lang=subtitle_lang,
+                        translate=translate, policy=policy)
+            base_transcript = _transcribe_with_model(
+                base_model, audio, detected, task, sub_cfg, vad=vad)
+            base_transcript.update({
+                "source_language": detected,
+                "source_language_probability": round(float(lang_prob), 2),
+                "language_votes": votes,
+                "language_tie_break": tie_break,
+                "task": task,
+                "subtitle_language": sub_lang,
+                "model": "base",
+                "escalated_from": "tiny",
+                "escalation_reasons": escalation_reasons,
+                "vad": vad,
+            })
+            word_count, speech_s, ratio = speech_stats(
+                base_transcript, duration)
+            base_transcript["word_count"] = word_count
+            base_transcript["speech_seconds"] = round(speech_s, 1)
+            base_transcript["speech_ratio"] = round(ratio, 3)
+            base_transcript["words_per_min"] = round(
+                word_count / (duration / 60.0), 1) if duration else 0.0
+            logprobs = [s["avg_logprob"]
+                        for s in base_transcript["segments"]
+                        if "avg_logprob" in s]
+            base_transcript["avg_logprob"] = round(
+                sum(logprobs) / len(logprobs), 3) if logprobs else None
+            print(
+                f"Transcripción con base. Palabras: {word_count} "
+                f"({base_transcript['words_per_min']}/min) | habla: "
+                f"{speech_s:.1f}s ({ratio * 100:.0f}%) | logprob medio: "
+                f"{base_transcript['avg_logprob']}"
+            )
+            transcript, info_lang = base_transcript, detected
+        else:
+            info_lang = detected
+        # Puerta "sin voz" (v2.6): <5 palabras por cada 60 s o habla
+        # <10% de la duración -> no hay voz que subtitular. No es un
+        # error: el clip sigue como "solo gameplay/música".
+        min_words = max(3, round(sub_cfg.get(
+            "no_speech_min_words", DEFAULT_NO_SPEECH_MIN_WORDS)
+            * duration / 60.0))
+        min_ratio = float(sub_cfg.get(
+            "no_speech_min_ratio", DEFAULT_NO_SPEECH_MIN_RATIO))
+        word_count = transcript["word_count"]
+        ratio = transcript["speech_ratio"]
+        if word_count < min_words or ratio < min_ratio:
+            transcript["no_speech"] = True
+            transcript["audio_note"] = "solo gameplay/música"
+            print(f"SIN VOZ: {word_count} palabras "
+                  f"(mín. {min_words}) | habla {ratio * 100:.0f}% "
+                  f"(mín. {min_ratio * 100:.0f}%) -> sin SRT, sin quemar; "
+                  f"clip marcado como solo gameplay/música.")
+        else:
+            transcript["no_speech"] = False
+            transcript["audio_note"] = "con voz"
+        info = type("Info", (), {"language": info_lang})()
         return transcript, info
     finally:
         try:
@@ -202,18 +624,26 @@ def format_srt_block(index, start, end, text):
 
 
 def generate_srt(transcript, clip_start, clip_end, output_path,
-                 max_chars=DEFAULT_MAX_CHARS, max_duration=DEFAULT_MAX_DURATION):
-    """Genera un SRT agrupando palabras en líneas cortas (openshorts)."""
+                 max_chars=DEFAULT_MAX_CHARS, max_duration=DEFAULT_MAX_DURATION,
+                 corrections=None):
+    """Genera un SRT agrupando palabras en líneas cortas (openshorts).
+
+    v2.6: aplica las correcciones del diccionario GTA 6
+    (``corrections``) al texto de cada bloque. Devuelve
+    (generado, n_correcciones): generado es False si no hay
+    palabras que subtitular.
+    """
     words = []
     for segment in transcript.get("segments", []):
         for word_info in segment.get("words", []):
             if word_info["end"] > clip_start and word_info["start"] < clip_end:
                 words.append(word_info)
     if not words:
-        return False
+        return False, 0
 
     srt_content = ""
     index = 1
+    n_corrections = 0
     current_block = []
     block_start = None
     for word in words:
@@ -231,6 +661,8 @@ def generate_srt(transcript, clip_start, clip_end, output_path,
                 # un bloque de duración 0 no se ve al quemar.
                 block_end = max(block_end, block_start + 0.3)
                 text = " ".join(w["word"] for w in current_block).strip()
+                text, k = apply_gta6_corrections(text, corrections)
+                n_corrections += k
                 srt_content += format_srt_block(index, block_start, block_end, text)
                 index += 1
                 current_block = [word]
@@ -241,11 +673,13 @@ def generate_srt(transcript, clip_start, clip_end, output_path,
         block_end = current_block[-1]["end"] - clip_start
         block_end = max(block_end, block_start + 0.3)
         text = " ".join(w["word"] for w in current_block).strip()
+        text, k = apply_gta6_corrections(text, corrections)
+        n_corrections += k
         srt_content += format_srt_block(index, block_start, block_end, text)
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(srt_content)
-    return True
+    return True, n_corrections
 
 
 def hex_to_ass_color(hex_color, opacity=1.0):
@@ -378,6 +812,14 @@ def main() -> int:
                    help="Ruta a config.yaml (default: busca en el proyecto)")
     p.add_argument("--offset", type=float, default=0.0,
                    help="Desplazamiento del SRT respecto al vídeo (s)")
+    p.add_argument("--chat-lang", default=None,
+                   help="Idioma mayoritario del chat (es, en...): "
+                        "desempata el voto de idioma por tramos "
+                        "(default: config.yaml subtitles.chat_language)")
+    p.add_argument("--no-vad", action="store_true",
+                   help="Desactiva el VAD (vad_filter=False)")
+    p.add_argument("--no-escalate", action="store_true",
+                   help="Desactiva el escalado condicional tiny -> base")
     args = p.parse_args()
 
     if not os.path.isfile(args.video):
@@ -419,18 +861,31 @@ def main() -> int:
           f"| translate={translate}")
     transcript, info = transcribe_audio(
         args.video, args.model, args.lang,
-        subtitle_lang=subtitle_lang, translate=translate, policy=policy)
+        subtitle_lang=subtitle_lang, translate=translate, policy=policy,
+        sub_cfg=sub_cfg, cfg=cfg, chat_lang=args.chat_lang,
+        vad=not args.no_vad, escalate=not args.no_escalate)
     if args.transcript:
         with open(args.transcript, "w", encoding="utf-8") as f:
             json.dump(transcript, f, ensure_ascii=False, indent=2)
 
+    # Puerta "sin voz" (v2.6): no hay SRT ni quemado, y NO es un
+    # error: el clip queda marcado como "solo gameplay/música" en
+    # el transcript y sigue su camino sin subtítulos.
+    if transcript.get("no_speech"):
+        print(f"Clip sin voz ({transcript.get('audio_note')}): "
+              f"sin SRT ni quemado. Código 0.")
+        return 0
+
     duration = get_duration(args.video)
     clip_end = duration if duration else 1e9
-    if not generate_srt(transcript, args.offset, clip_end, srt_path,
-                        max_chars=max_chars, max_duration=max_duration):
+    ok, n_corrections = generate_srt(
+        transcript, args.offset, clip_end, srt_path,
+        max_chars=max_chars, max_duration=max_duration,
+        corrections=sub_cfg.get("gta6_corrections"))
+    if not ok:
         print("Sin palabras transcritas: no se generó SRT.", file=sys.stderr)
         return 1
-    print(f"SRT: {srt_path}")
+    print(f"SRT: {srt_path} (correcciones GTA 6 aplicadas: {n_corrections})")
 
     if not args.no_burn:
         out = args.burn or f"{base}_subs.mp4"
