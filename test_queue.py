@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""Pruebas de la cola FIFO + worker + semáforo (bloque 1 del tribunal).
+
+No toca la cola real (usa una BD temporal) ni descarga nada: los
+manifiestos y clips son ficticios en un tmpdir.
+
+Uso: python3 test_queue.py
+"""
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import queue as qmod  # noqa: E402
+from queue import (  # noqa: E402
+    Queue, QueueError, check_semaphore, classify_error, detect_game,
+    kill_switch_active, parse_url,
+)
+from worker import _validate_manifest  # noqa: E402
+
+
+def _manifest(tmpdir, clips):
+    """Escribe un manifiesto ficticio con clips y crea sus archivos."""
+    os.makedirs(os.path.join(tmpdir, "clips"), exist_ok=True)
+    entries = []
+    for n, with_layout in clips:
+        rel = f"clips/clip_{n:02d}.mp4"
+        open(os.path.join(tmpdir, rel), "wb").close()
+        entry = {"n": n, "file": rel}
+        if with_layout:
+            entry["layout"] = {"mode": "auto",
+                               "segments": [{"start": 0, "end": 60,
+                                             "layout": "center"}]}
+        entries.append(entry)
+    path = os.path.join(tmpdir, "manifest.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"vod_id": "x", "clips": entries}, f)
+    return path
+
+
+def _job(**over):
+    job = {
+        "streamer": "coker",
+        "allowlist_bypass": 0,
+        "vod_category": "Grand Theft Auto VI",
+        "vod_title": "GTA 6 directo",
+        "vod_start_time": "2026-11-20T20:00:00+00:00",
+        "manifest_path": None,
+        "subtitles_failed": 0,
+    }
+    job.update(over)
+    return job
+
+
+class TestParseUrl(unittest.TestCase):
+    def test_kick(self):
+        self.assertEqual(
+            parse_url("https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9"),
+            ("kick", "kick-coker-01a1dffd", "coker"))
+
+    def test_twitch_url(self):
+        self.assertEqual(parse_url("https://www.twitch.tv/videos/2929669422"),
+                         ("twitch", "2929669422", None))
+
+    def test_twitch_id(self):
+        self.assertEqual(parse_url("2929669422"), ("twitch", "2929669422", None))
+
+    def test_invalida(self):
+        with self.assertRaises(QueueError):
+            parse_url("https://youtube.com/watch?v=abc")
+
+
+class TestDetectGame(unittest.TestCase):
+    def test_gta6(self):
+        self.assertEqual(detect_game("Grand Theft Auto VI", ""), "gta6")
+        self.assertEqual(detect_game("GTA 6", "directo"), "gta6")
+
+    def test_otro(self):
+        self.assertEqual(detect_game("Rob Run", ""), "other")
+        self.assertEqual(detect_game("Grand Theft Auto V", ""), "other")
+
+    def test_sin_datos(self):
+        self.assertIsNone(detect_game(None, None))
+        self.assertIsNone(detect_game("", ""))
+
+
+class TestQueue(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.q = Queue(os.path.join(self.tmp.name, "test.db"))
+
+    def tearDown(self):
+        self.q.close()
+        self.tmp.cleanup()
+
+    def test_add_rechaza_sin_allowlist(self):
+        with self.assertRaises(QueueError) as cm:
+            self.q.add("https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+                       lang="es", allowlist=set())
+        self.assertIn("lista blanca", str(cm.exception))
+
+    def test_add_con_allowlist(self):
+        job_id = self.q.add(
+            "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+            lang="es", allowlist={"coker"})
+        job = self.q.get_job(job_id)
+        self.assertEqual(job["state"], "queued")
+        self.assertEqual(job["vod_id"], "kick-coker-01a1dffd")
+        self.assertEqual(job["streamer"], "coker")
+        self.assertEqual(job["allowlist_bypass"], 0)
+
+    def test_add_force_marca_bypass(self):
+        job_id = self.q.add(
+            "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+            lang="es", force=True, allowlist=set())
+        self.assertEqual(self.q.get_job(job_id)["allowlist_bypass"], 1)
+
+    def test_dedup_activo(self):
+        url = "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9"
+        self.q.add(url, lang="es", allowlist={"coker"})
+        with self.assertRaises(QueueError) as cm:
+            self.q.add(url, lang="es", allowlist={"coker"})
+        self.assertIn("Ya hay un job activo", str(cm.exception))
+        # Otro idioma sí se puede encolar (dedup es vod_id + idioma).
+        self.q.add(url, lang="en", allowlist={"coker"})
+
+    def test_dedup_no_bloquea_tras_rechazo(self):
+        url = "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9"
+        job_id = self.q.add(url, lang="es", allowlist={"coker"})
+        self.q.set_state(job_id, "ready_for_review",
+                         manifest_path="/no/existe.json")
+        self.q.set_state(job_id, "rejected")
+        self.q.add(url, lang="es", allowlist={"coker"})  # no levanta
+
+    def test_disco_lleno_rechaza(self):
+        with self.assertRaises(QueueError) as cm:
+            self.q.add("https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+                       lang="es", allowlist={"coker"}, min_free_gb=10 ** 9)
+        self.assertIn("Disco", str(cm.exception))
+
+    def test_requeue_stale_processing(self):
+        job_id = self.q.add(
+            "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+            lang="es", allowlist={"coker"})
+        self.q.set_state(job_id, "processing")
+        self.assertEqual(self.q.requeue_stale_processing(), 1)
+        job = self.q.get_job(job_id)
+        self.assertEqual(job["state"], "queued")
+        self.assertEqual(job["attempts"], 0)  # no gasta intento
+        self.assertEqual(self.q.requeue_stale_processing(), 0)
+
+    def test_fifo(self):
+        a = self.q.add("https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+                       lang="es", allowlist={"coker"})
+        b = self.q.add("https://kick.com/locones/videos/01a1e069-8470-7626-8d5e-21ccb729c509",
+                       lang="es", allowlist={"locones"})
+        self.assertEqual(self.q.next_queued()["id"], a)
+        self.q.set_state(a, "processing")
+        self.assertEqual(self.q.next_queued()["id"], b)
+
+    def test_approve_y_reject(self):
+        job_id = self.q.add(
+            "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+            lang="es", allowlist={"coker"})
+        with self.assertRaises(QueueError):
+            self.q.approve(job_id)  # no está en ready_for_review
+        mpath = _manifest(self.tmp.name, [(1, True)])
+        self.q.set_state(job_id, "ready_for_review", manifest_path=mpath,
+                         vod_category="Grand Theft Auto VI",
+                         vod_title="GTA 6 directo",
+                         vod_start_time="2026-11-20T20:00:00+00:00")
+        reds = self.q.approve(job_id, allowlist={"coker"})
+        self.assertEqual(reds, [])
+        self.assertEqual(self.q.get_job(job_id)["state"], "approved")
+
+    def test_reject(self):
+        job_id = self.q.add(
+            "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+            lang="es", allowlist={"coker"})
+        self.q.set_state(job_id, "ready_for_review",
+                         manifest_path=_manifest(self.tmp.name, [(1, True)]))
+        self.q.reject(job_id, reason="no es el momento")
+        self.assertEqual(self.q.get_job(job_id)["state"], "rejected")
+
+
+class TestSemaphore(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _check(self, **over):
+        mpath = _manifest(self.tmp.name, [(1, True)])
+        return check_semaphore(_job(manifest_path=mpath, **over),
+                               allowlist={"coker"})
+
+    def test_sin_rojos(self):
+        self.assertEqual(self._check(), [])
+
+    def test_coker_como_esta(self):
+        # El VOD real de Coker: categoría Rob Run, 15 nov 2026, sin
+        # permiso (allowlist vacía) -> 3 rojos.
+        reds = check_semaphore(
+            _job(manifest_path=_manifest(self.tmp.name, [(1, True)]),
+                 vod_category="Rob Run",
+                 vod_title="⚠️ SALVANDO EL DOMINGO ⚠️ ROB RUN ⚠️",
+                 vod_start_time="2026-11-15T16:14:59+00:00",
+                 allowlist_bypass=1),
+            allowlist=set())
+        self.assertEqual(len(reds), 3)
+        self.assertTrue(any("streamer sin permiso" in r for r in reds))
+        self.assertTrue(any("≠ GTA 6" in r for r in reds))
+        self.assertTrue(any("anterior al lanzamiento" in r for r in reds))
+
+    def test_juego_no_verificable(self):
+        reds = self._check(vod_category=None, vod_title=None)
+        self.assertTrue(any("juego no verificable" in r for r in reds))
+
+    def test_fecha_no_verificable(self):
+        reds = self._check(vod_start_time=None)
+        self.assertTrue(any("fecha del VOD no verificable" in r for r in reds))
+
+    def test_musica(self):
+        reds = self._check(vod_title="DJ set GTA 6 music")
+        self.assertTrue(any("música con copyright" in r for r in reds))
+
+    def test_sin_manifiesto(self):
+        reds = check_semaphore(_job(manifest_path=None), allowlist={"coker"})
+        self.assertTrue(any("sin manifiesto" in r for r in reds))
+
+    def test_manifiesto_vacio(self):
+        mpath = _manifest(self.tmp.name, [])
+        reds = check_semaphore(_job(manifest_path=mpath), allowlist={"coker"})
+        self.assertTrue(any("sin clips generados" in r for r in reds))
+
+    def test_clip_sin_layout(self):
+        mpath = _manifest(self.tmp.name, [(1, False)])
+        reds = check_semaphore(_job(manifest_path=mpath), allowlist={"coker"})
+        self.assertTrue(any("sin decisión de layout" in r for r in reds))
+
+    def test_clip_falta_archivo(self):
+        mpath = _manifest(self.tmp.name, [(1, True)])
+        os.remove(os.path.join(self.tmp.name, "clips", "clip_01.mp4"))
+        reds = check_semaphore(_job(manifest_path=mpath), allowlist={"coker"})
+        self.assertTrue(any("falta el archivo" in r for r in reds))
+
+    def test_subtitulos_fallidos(self):
+        reds = self._check(subtitles_failed=1)
+        self.assertTrue(any("subtítulos fallidos" in r for r in reds))
+
+    def test_approve_bloquea_con_rojos(self):
+        tmp = tempfile.TemporaryDirectory()
+        q = Queue(os.path.join(tmp.name, "t.db"))
+        try:
+            job_id = q.add(
+                "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+                lang="es", force=True, allowlist=set())
+            mpath = _manifest(tmp.name, [(1, True)])
+            q.set_state(job_id, "ready_for_review", manifest_path=mpath,
+                        vod_category="Rob Run",
+                        vod_title="ROB RUN",
+                        vod_start_time="2026-11-15T16:14:59+00:00")
+            with self.assertRaises(QueueError) as cm:
+                q.approve(job_id, allowlist=set())
+            self.assertIn("rojo(s)", str(cm.exception))
+            self.assertEqual(q.get_job(job_id)["state"], "ready_for_review")
+            # Con --force-confirm sí pasa, y queda registrado.
+            reds = q.approve(job_id, force_confirm=True, allowlist=set())
+            self.assertEqual(len(reds), 3)
+            self.assertEqual(q.get_job(job_id)["state"], "approved")
+        finally:
+            q.close()
+            tmp.cleanup()
+
+
+class TestClassifyError(unittest.TestCase):
+    def test_transitorio(self):
+        self.assertEqual(classify_error("Connection reset by peer"), "transient")
+        self.assertEqual(classify_error("HTTP 503 Service Unavailable"), "transient")
+        self.assertEqual(classify_error("timed out after 30s"), "transient")
+
+    def test_permanente(self):
+        self.assertEqual(classify_error("No encontré el VOD en Kick"), "permanent")
+        self.assertEqual(classify_error("sin clips generados"), "permanent")
+        self.assertEqual(classify_error("algo raro sin pista"), "permanent")
+
+
+class TestKillSwitch(unittest.TestCase):
+    def test_archivo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "queue.kill")
+            self.assertFalse(kill_switch_active(path))
+            open(path, "w").close()
+            self.assertTrue(kill_switch_active(path))
+
+
+class TestValidateManifest(unittest.TestCase):
+    def test_ok_y_vacio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mpath = _manifest(tmp, [(1, True)])
+            manifest, problems = _validate_manifest(tmp)
+            self.assertEqual(problems, [])
+            self.assertEqual(len(manifest["clips"]), 1)
+            manifest, problems = _validate_manifest(os.path.join(tmp, "nope"))
+            self.assertTrue(any("sin manifiesto" in p for p in problems))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

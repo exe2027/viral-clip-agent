@@ -10,6 +10,14 @@
 # (ver AUDIT-claude-code.md). No están aquí: cambian con frecuencia y
 # pertenecen a limits.yaml, no a la config del canal.
 
+# Lista blanca de streamers con permiso (tribunal, bloque 1, 2026-11-16):
+# solo estos canales se pueden encolar en queue.py. VACÍA = nadie
+# tiene permiso todavía: sin ficha no se encola. Para dar permiso a
+# un streamer, agrega su canal (slug de Kick/Twitch, en minúsculas):
+# allowlist:
+#   - coker
+allowlist:
+
 channel:
   name: "El Clip de GTA 6"
   handle: "@elclipdegta6"

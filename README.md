@@ -387,6 +387,50 @@ python auto_clips.py https://kick.com/locones/videos/<uuid> --audio-fallback
 
 Lo único que queda a mano es subirlos a TikTok / Reels / Shorts: eso no se puede automatizar sin que cada plataforma te pida entrar y confirmar en tu teléfono.
 
+## Cola FIFO + worker + aprobación (bloque 1 del tribunal)
+
+`queue.py` + `worker.py`: un VOD entra en la cola, un solo worker lo
+procesa con `auto_clips.py` y el clip queda en `ready_for_review`
+hasta que un humano lo aprueba o lo rechaza. **Nada se publica desde
+aquí.**
+
+```bash
+python queue.py add https://kick.com/coker/videos/<uuid> --lang es
+python queue.py list            # ver la cola
+python queue.py approve 3       # aprobar un job en ready_for_review
+python queue.py reject 3        # rechazarlo
+python queue.py status          # resumen + disco + kill-switch
+python worker.py --once         # procesar un job y salir
+python worker.py                # procesar la cola hasta vaciarla
+```
+
+- **Persistente:** la cola vive en SQLite (`queue.db`, gitignored),
+  nunca solo en memoria. Estados: `queued → processing →
+  ready_for_review → approved/rejected → published/failed/dead`.
+- **Entrada:** solo streamers en la lista blanca de `config.yaml`
+  (`allowlist`, hoy vacía: sin ficha no se encola), dedup por
+  VOD + idioma, y no se encola si quedan menos de 2 GB libres.
+  `--force` en `add` salta solo la lista blanca (pruebas locales) y
+  deja el job marcado.
+- **1 solo worker:** `worker.lock` (fcntl) impide un segundo worker.
+  Si un worker muere con un job en `processing`, el siguiente lo
+  devuelve a `queued` sin gastar intento.
+- **Reintentos:** máx 3 y solo para fallos transitorios (red/descarga);
+  lo permanente va a `failed`, y tras 3 intentos a `dead`.
+- **Semáforo:** `approve` se niega si hay rojos, salvo
+  `--force-confirm` explícito (queda registrado). Rojo si: el streamer
+  no tiene permiso, el juego no es GTA 6, el VOD es anterior al
+  19 nov 2026, el título/categoría hace sospechar música con
+  copyright, o el manifiesto viene sin clips, con archivos que
+  faltan o sin decisión de layout.
+- **Kill-switch:** si existe el archivo `queue.kill`, el worker no
+  arranca o se pausa inmediatamente (incluso a mitad de un job, que
+  vuelve a `queued`). Se reanuda borrando el archivo.
+- Antes de correr `auto_clips.py`, el worker respalda
+  `manifest.json/.md` y `titles.txt` a `*.bak` si ya existen.
+
+Pruebas: `python3 test_queue.py` (32 tests, BD temporal, sin red).
+
 ## Empaquetado viral — para las 4 plataformas, no solo YouTube
 
 `viral_package.py` combina las skills de [youtube-agent-skill](https://github.com/Jakeschincariol/youtube-agent-skill), pero adaptadas a las 4 plataformas. Misma idea, mismo hook y mismo texto en pantalla; lo que cambia es caption, hashtags, portada y modo de subida. Nunca se copia el mismo texto literal en las 4.
