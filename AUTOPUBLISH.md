@@ -90,15 +90,14 @@ Reglas de `set_phase()`:
   lista blanca no vacía + `metrics_green: true` (salvo `--force`).
 - Todo cambio queda en `state.phase.history` con fecha y motivo.
 
-La lista blanca son los streamers con permiso explícito para usar
-sus VODs. **Vacía = fase 4 bloqueada.** La fuente canónica es
-**`influencers.yaml`** (solo estado `concedido` con ficha en
-`PERMISOS.md`) **+ `allowed_streamers.yaml`**, leídas por
+La lista blanca son los streamers de la lista que sube el usuario.
+**Vacía = fase 4 bloqueada.** La fuente canónica es
+**`influencers.yaml`** (REGLA 2026-11-16: estar en la lista =
+permiso ya dado, sin ficha) **+ `allowed_streamers.yaml`**, leídas por
 `publisher.load_whitelist()` (bloque 7); `queue.py` (bloque 1) usa
 además la clave `allowlist` de nivel superior en `config.yaml`.
-`phase4_ready()` consulta esas fuentes en ese orden. Hoy están
-vacías a propósito: sin permiso no se publica (veredicto del
-tribunal). `metrics_green` es una declaración manual: poner `true`
+`phase4_ready()` consulta esas fuentes en ese orden. Hoy está
+IlloJuan. `metrics_green` es una declaración manual: poner `true`
 solo tras revisar las métricas de los últimos clips.
 
 ## 3. Circuit breaker
@@ -151,10 +150,10 @@ processing → queued (reintento transitorio) / failed / dead
 ```
 
 El semáforo de `queue.py` (`check_semaphore`) marca en rojo un job
-sin permiso, con juego ≠ GTA 6, VOD anterior al 19 nov 2026, música
+con juego ≠ GTA 6, VOD anterior al 19 nov 2026, música
 con copyright sospechada, o manifiesto/layout/subtítulos
 incompletos; con rojos no se aprueba sin `--force-confirm`
-explícito. **Si un job con rojos llega a publicarse con
+explícito. (2026-11-16: el permiso YA NO es un rojo.) **Si un job con rojos llega a publicarse con
 `--force-confirm`, eso es "un rojo que intentó colarse": el
 publicador debe registrar `counter.py record red_flag` y el breaker
 se dispara.**

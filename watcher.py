@@ -20,9 +20,11 @@ revisa en la siguiente pasada, cuando ya esté terminado.
 FRENOS (antes de encolar un VOD; si falla uno, no se encola y se
 registra el motivo):
   1. Kill-switch: si existe ``queue.kill``, no se encola NADA.
-  2. Lista blanca: solo influencers con ``estado: concedido`` en
-     ``influencers.yaml`` (la canónica). Sin permiso concedido no se
-     encola, aunque el VOD sea de GTA 6.
+  2. Lista blanca: solo influencers de ``influencers.yaml`` (la
+     canónica). REGLA 2026-11-16: estar en la lista que sube el
+     usuario YA es permiso; solo `denegado`/`revocado` excluyen.
+     Un influencer fuera de la lista no se encola, aunque el VOD
+     sea de GTA 6.
   3. Solo GTA 6 verificado: la categoría/juego del VOD (o del directo)
      tiene que ser GTA 6. GTA V / GTA V RP / otro juego NO se encola.
   4. Solo VOD terminado: duración > 0 y directo ya cerrado. Un VOD en
@@ -68,8 +70,7 @@ también se guarda lo visto (con outcome ``would_enqueue`` o
 proponer lo mismo; en ``--live`` un VOD marcado ``would_enqueue`` se
 re-evalúa y se encola de verdad (el dry-run nunca "gasta" un VOD).
 Un VOD marcado ``skipped:juego_no_gta6`` no se re-evalúa (el juego
-de un VOD terminado no cambia); un ``skipped:sin_permiso`` sí se
-re-evalúa en cada pasada (el permiso puede concederse después).
+de un VOD terminado no cambia).
 
 Sin push, sin publicar, sin contactar streamers: esto solo LEE datos
 públicos y encola en la cola local.
@@ -118,7 +119,9 @@ DEFAULT_MAX_NEW_PER_DAY = 5
 DEFAULT_STATE_FILE = os.path.join(HERE, "seen_vods.json")
 
 # Motivos de salto que se re-evalúan en cada pasada (pueden cambiar).
-RETRYABLE_SKIPS = ("sin_permiso", "kill_switch", "tope_diario",
+# (2026-11-16: "sin_permiso" ya no existe como motivo: estar en la
+# lista = permiso ya dado.)
+RETRYABLE_SKIPS = ("kill_switch", "tope_diario",
                    "en_processing", "vod_en_curso", "ya_en_cola",
                    "error_red")
 # Motivo definitivo: el juego de un VOD terminado no cambia.
@@ -506,8 +509,10 @@ def decide(vod, influencer, state, queue, cfg, kill_switch, dry_run):
 
     if kill_switch:
         return "skip", "kill_switch"
-    if influencer["estado"] != "concedido":
-        return "skip", f"sin_permiso (estado: {influencer['estado']})"
+    # 2026-11-16: estar en la lista = permiso ya dado. Solo
+    # `denegado` / `revocado` excluyen.
+    if influencer["estado"] in ("denegado", "revocado"):
+        return "skip", f"fuera_de_lista (estado: {influencer['estado']})"
     game = detect_game(vod.get("category"), vod.get("title"))
     if game != "gta6":
         return "skip", (f"juego_no_gta6 (categoría: "
@@ -564,7 +569,9 @@ def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
     tw_mode = None
     summary = {"live": 0, "new_vods": 0, "would_enqueue": 0,
                "enqueued": 0, "skipped": 0, "seen": 0, "errors": 0}
-    conceded = {i["usuario"] for i in influencers if i["estado"] == "concedido"}
+    # 2026-11-16: en la lista = permiso ya dado; solo denegado/revocado excluyen.
+    conceded = {i["usuario"] for i in influencers
+                if i["estado"] not in ("denegado", "revocado")}
 
     def log(msg):
         if verbose:

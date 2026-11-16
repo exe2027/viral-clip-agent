@@ -132,18 +132,17 @@ La cola persiste en `publish_queue.json`. Flujo:
 ## Lista blanca — verificación AL PUBLICAR
 
 `influencers.yaml` (Bloques 8+9, fuente canónica) es la lista de
-streamers con permiso vigente: solo vale el estado `concedido` con
-ficha completa en `PERMISOS.md`. `allowed_streamers.yaml` es un atajo
+streamers que subió el usuario. REGLA DEL USUARIO (2026-11-16):
+estar en la lista YA es permiso — no hay ficha que registrar ni
+contacto previo. `allowed_streamers.yaml` es un atajo
 con el mismo fin (formato simple `streamers: [{name, ...}]`) y también
 se lee. `check_whitelist()` relee ambas **en cada publicación**: si
-el streamer revocó el permiso entre la detección y la subida, la
+el streamer ya no está en la lista entre la detección y la subida, la
 subida se bloquea aunque el clip ya estuviera aprobado.
 
-- **Hoy (2026-11-16): la lista está VACÍA.** Nadie ha dado permiso.
+- **Hoy (2026-11-16): la lista tiene a IlloJuan (concedido).**
   Coker, Locones y peereira7/NoraExplorer tienen clips de prueba,
-  pero NO se publican hasta tener permiso.
-- La evidencia del permiso (captura, mensaje, correo) va en
-  `PERMISOS.md`; aquí solo van los nombres con permiso vigente.
+  pero NO se publican: no están en la lista.
 - Sin streamer identificado en el manifiesto → bloqueado.
 
 ## Rechazos y cuarentena — `handle_rejection()`
@@ -202,13 +201,14 @@ TODO es draft-first y nada se puede publicar por API.
 
 Draft TikTok del mismo clip: generado en
 `drafts/clip_01_t03h14m50s_s56.5_r14h1_v2_tiktok/` con advertencia
-de lista blanca — el paquete existe, pero **no se sube** hasta tener
-el permiso de Coker.
+de lista blanca — el paquete existe, pero **no se sube**: Coker no
+está en la lista blanca.
 
 ## Lo que falta para publicar de verdad
 
-1. Permiso de Coker (o del streamer que sea) → `influencers.yaml`
-   (estado `concedido`) + evidencia en `PERMISOS.md`.
+1. Que el streamer esté en la lista blanca que sube el usuario
+   (`influencers.yaml` / `allowlist` en `config.yaml`): estar en
+   la lista = permiso ya dado (2026-11-16). IlloJuan ya está.
 2. YouTube: verificar el canal + OAuth (`client_secrets.json`, `token.json`).
 3. TikTok: crear y aprobar la app en TikTok for Developers (1-4 sem.).
 4. Instagram: crear @elclipdegta6 (reintentar códigos) → Profesional →

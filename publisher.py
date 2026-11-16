@@ -12,7 +12,9 @@ Reglas del tribunal (Bloque 7) que implementa este módulo:
     a mano y NUNCA se publica directo sin auditoría aprobada.
   * Sin fila en verde en la auditoría, esa cuenta queda en draft-first.
   * La lista blanca se verifica EN EL MOMENTO de publicar, no solo al
-    detectar: si el streamer revocó el permiso, no se publica.
+    detectar: si el streamer ya no está en la lista, no se publica.
+    (2026-11-16: estar en la lista que sube el usuario = permiso ya
+    dado; no hay ficha de permiso que registrar.)
   * Rechazos: error de formato -> 1 reintento; copyright/contenido ->
     cuarentena y revisión humana, nunca reintento ciego.
   * Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h, franja
@@ -32,11 +34,11 @@ Integración con el resto del repo (solo lee, no edita):
     (terminal, para copyright/contenido) y "draft" (paquete listo
     para subir manual, sin publicar).
   * influencers.yaml (Bloques 8+9) + allowed_streamers.yaml — lista
-    blanca de streamers con permiso. La canónica es influencers.yaml
-    (solo estado "concedido" con ficha en PERMISOS.md vale).
-    VACÍA hasta que el usuario agregue nombres. Se relee en cada
-    publicación: un permiso revocado bloquea la subida aunque el
-    clip ya estuviera aprobado.
+    blanca de streamers. La canónica es influencers.yaml. REGLA DEL
+    USUARIO (2026-11-16): estar en la lista que sube el usuario YA
+    es permiso, sin ficha ni contacto previo. Se relee en cada
+    publicación: si el streamer ya no está en la lista, la subida
+    se bloquea aunque el clip ya estuviera aprobado.
   * accounts.yaml — estado conocido de cada cuenta (para la
     auditoría). Si no existe, audit_accounts() usa los valores
     por defecto, que son el estado real conocido a 2026-11-16.
@@ -71,8 +73,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 QUEUE_STATE_FILE = os.path.join(BASE_DIR, "publish_queue.json")
 ACCOUNTS_FILE = os.path.join(BASE_DIR, "accounts.yaml")
 # Lista blanca: la fuente canónica es influencers.yaml (Bloques 8+9:
-# ficha completa por streamer, estado pendiente/contactado/concedido/
-# denegado/revocado; solo "concedido" con ficha en PERMISOS.md vale).
+# estado pendiente/contactado/concedido/denegado/revocado; REGLA
+# 2026-11-16: estar en la lista que sube el usuario = permiso ya
+# dado, solo denegado/revocado excluyen).
 # allowed_streamers.yaml es un atajo con el mismo formato simple;
 # se lee también, por si el usuario agrega ahí un nombre.
 WHITELIST_FILE = os.path.join(BASE_DIR, "influencers.yaml")
@@ -246,8 +249,10 @@ def _parse_whitelist_file(path):
             out[name] = entry
     for entry in data.get("influencers") or []:
         name = (entry.get("usuario") or "").strip().lower()
-        # Solo "concedido" con ficha en PERMISOS.md vale como permiso.
-        if name and (entry.get("estado") or "").strip().lower() == "concedido":
+        # 2026-11-16: estar en la lista = permiso ya dado. Solo
+        # `denegado` / `revocado` excluyen (el usuario lo sacó).
+        if name and (entry.get("estado") or "").strip().lower() not in (
+                "denegado", "revocado"):
             out[name] = entry
     return out
 
@@ -256,7 +261,7 @@ def load_whitelist(path=None):
     """Lista blanca vigente, releída fresca en cada llamada.
 
     Fuente canónica: influencers.yaml (Bloques 8+9). Se suma
-    allowed_streamers.yaml como atajo. Vacía = nadie tiene permiso.
+    allowed_streamers.yaml como atajo. Vacía = lista vacía.
     """
     if path:
         return _parse_whitelist_file(path)
@@ -270,7 +275,7 @@ def check_whitelist(streamer):
     """True solo si el streamer está en la lista blanca AHORA.
 
     Se llama en el momento de publicar, no al detectar: si el
-    streamer revocó el permiso entre la detección y la subida,
+    streamer ya no está en la lista entre la detección y la subida,
     esto lo bloquea. Sin streamer identificado -> bloqueado.
     """
     if not streamer:
@@ -760,7 +765,7 @@ class DraftFirstPublisher:
         self.queue.set_state(item, "draft", f"paquete manual en {out_dir}")
         return {"ok": True, "draft_dir": out_dir, "bundle": bundle,
                 "warning": None if ok_wl else
-                f"BLOQUEADO: {wl_msg} — no subir hasta tener permiso"}
+                f"BLOQUEADO: {wl_msg} — no subir hasta que el usuario lo agregue a la lista"}
 
     def _manual_steps(self):
         if self.platform == "tiktok":

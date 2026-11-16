@@ -1,30 +1,20 @@
-# NOTA: la lista blanca canónica es influencers.yaml (Bloques 8+9,
-# con estado concedido/denegado/revocado y ficha en PERMISOS.md).
+# NOTA: la lista blanca canónica es influencers.yaml (Bloques 8+9).
 # Este archivo es un atajo con formato simple; publisher.py lee los
 # dos. Si un streamer está en ambos, manda influencers.yaml.
 #
-# REGLA DEL TRIBUNAL: sin permiso del streamer, no se publica.
-# publisher.py relee este archivo EN EL MOMENTO de publicar: si un
-# streamer revocó el permiso, se saca de aquí y la subida se bloquea
-# aunque el clip ya estuviera aprobado.
+# REGLA DEL USUARIO (2026-11-16): estar en la lista que sube el
+# usuario YA es permiso. No hay ficha de permiso que registrar ni
+# contacto previo que pedir. PERMISOS.md fue eliminado por decisión
+# del usuario. Si un streamer ya no está en la lista, la subida se
+# bloquea aunque el clip ya estuviera aprobado.
 #
-# La evidencia del permiso (captura, mensaje, correo) va en PERMISOS.md.
-# Aquí solo van los nombres con permiso vigente.
-#
-# permission: propia | escrita | verbal
-#   propia   — el VOD es del usuario.
-#   escrita  — permiso por escrito (mensaje/correo guardado en PERMISOS.md).
-#   verbal   — permiso de palabra; pedirlo por escrito antes de publicar
-#              en serie.
-#
-# HOY (2026-11-16): VACÍA. Ningún streamer ha dado permiso todavía.
-# Coker, Locones, peereira7 / NoraExplorer NO están en la lista:
-# sus clips existen como prueba, pero NO se publican hasta tener permiso.
+# permission: lista | propia
+#   lista  — en la lista que subió el usuario (= permiso ya dado).
+#   propia — el VOD es del usuario.
 
-streamers: []
-# Ejemplo (NO activar sin el permiso en mano):
-#   - name: coker
-#     platform: kick
-#     permission: escrita
-#     granted: 2026-11-16
-#     notes: "Permiso por DM de Kick, captura en PERMISOS.md"
+streamers:
+  - name: illojuan
+    platform: twitch
+    permission: lista
+    granted: 2026-11-16
+    notes: "Permiso ya dado por el usuario (2026-11-16): estar en la lista = permiso."

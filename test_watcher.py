@@ -86,6 +86,9 @@ GTAV_VOD = dict(GTA6_VOD, vod_id="kick-testgta-bbbbbbbb",
 INF_CONCEDIDO = {"usuario": "testgta", "plataforma": "kick", "idioma": "es",
                  "juego": "GTA 6", "estado": "concedido", "canal_original": ""}
 INF_PENDIENTE = dict(INF_CONCEDIDO, estado="pendiente")
+# 2026-11-16: estar en la lista = permiso ya dado; solo denegado/revocado excluyen.
+INF_DENEGADO = dict(INF_CONCEDIDO, estado="denegado")
+INF_REVOCADO = dict(INF_CONCEDIDO, estado="revocado")
 
 
 class TestTwitchGQL(unittest.TestCase):
@@ -134,11 +137,24 @@ class TestDecide(unittest.TestCase):
     def tearDown(self):
         self.q.close()
 
-    def test_sin_permiso_bloquea_aunque_sea_gta6(self):
+    def test_pendiente_ya_no_bloquea_en_lista(self):
+        # 2026-11-16: estar en la lista = permiso ya dado; "pendiente"
+        # ya no bloquea. En dry-run se propone (would_enqueue).
         action, reason = decide(GTA6_VOD, INF_PENDIENTE, self.state,
                                 self.q, self.cfg, False, True)
+        self.assertEqual(action, "would_enqueue")
+
+    def test_denegado_bloquea_aunque_sea_gta6(self):
+        action, reason = decide(GTA6_VOD, INF_DENEGADO, self.state,
+                                self.q, self.cfg, False, True)
         self.assertEqual(action, "skip")
-        self.assertIn("sin_permiso", reason)
+        self.assertIn("fuera_de_lista", reason)
+
+    def test_revocado_bloquea_aunque_sea_gta6(self):
+        action, reason = decide(GTA6_VOD, INF_REVOCADO, self.state,
+                                self.q, self.cfg, False, True)
+        self.assertEqual(action, "skip")
+        self.assertIn("fuera_de_lista", reason)
 
     def test_gta5_bloquea_aunque_haya_permiso(self):
         action, reason = decide(GTAV_VOD, INF_CONCEDIDO, self.state,

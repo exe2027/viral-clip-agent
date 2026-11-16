@@ -1,21 +1,20 @@
-# Influencers — lista de streamers y estado de su permiso
+# Influencers — lista de streamers del usuario
+#
+# REGLA DEL USUARIO (2026-11-16): todo influencer que el usuario
+# sube a esta lista es porque YA dio permiso. Estar en la lista =
+# permiso ya dado. NO hay que pedir permiso, NO hay ficha de permiso
+# que registrar, NO hay contacto previo. PERMISOS.md fue eliminado
+# por decisión del usuario.
 #
 # LISTA BLANCA: SOLO IlloJuan (https://www.twitch.tv/illojuan).
-# Es el único que hace contenido de GTA por ahora y el caso de
-# prueba del monitor (watcher.py, 2026-11-16). No hay otros 6:
-# los demás se agregarían después SOLO si hacen GTA y dan permiso.
-#
-# Solo `estado: concedido` cuenta como permiso (ver PERMISOS.md).
-# Hoy IlloJuan está en `pendiente`: el watcher lo MONITOREA
-# (detecta en vivo y VODs nuevos) pero NO encola nada suyo hasta
-# que el permiso esté concedido y con ficha en PERMISOS.md.
-# El monitor NO pide permiso en nombre del usuario: solo lee
-# datos públicos (directos y VODs) y registra lo que ve.
+# Es el único que hace contenido de GTA por ahora. Los demás se
+# agregarían después SOLO si hacen GTA (y el usuario los sube,
+# lo que ya implica permiso).
 #
 # `estado` solo puede ser:
 #   pendiente | contactado | concedido | denegado | revocado
-# Un permiso solo cuenta como `concedido` con la ficha completa
-# (texto exacto + captura/enlace) en PERMISOS.md.
+# Solo `denegado` / `revocado` excluyen al streamer de la cola y
+# de la publicación (el usuario lo sacó de la lista).
 
 influencers:
   - usuario: "illojuan"
@@ -26,13 +25,13 @@ influencers:
     canal_contacto: ""
     contacto: ""
     fecha_contacto: ""
-    fecha_permiso: ""
-    texto_exacto: ""
+    fecha_permiso: "2026-11-16"
+    texto_exacto: "Permiso ya dado (decisión del usuario, 2026-11-16: todo influencer que sube a la lista es porque ya dio permiso)."
     captura: ""
     alcance:
       vods: []
       plataformas_publicacion: [youtube, tiktok, instagram, facebook]
       hasta: ""
     revocable: true
-    estado: pendiente
-    notas: "Primer influencer del monitor (caso de prueba, 2026-11-16). Solo monitoreo/detección por ahora; sin permiso concedido NO se encola nada suyo."
+    estado: concedido
+    notas: "Primer influencer del monitor. Permiso ya dado por el usuario (2026-11-16)."

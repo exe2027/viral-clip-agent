@@ -202,8 +202,9 @@ class TestSemaphore(unittest.TestCase):
         self.assertEqual(self._check(), [])
 
     def test_coker_como_esta(self):
-        # El VOD real de Coker: categoría Rob Run, 15 nov 2026, sin
-        # permiso (allowlist vacía) -> 3 rojos.
+        # El VOD real de Coker: categoría Rob Run, 15 nov 2026 ->
+        # 2 rojos (juego ≠ GTA 6 y VOD anterior al lanzamiento).
+        # 2026-11-16: el permiso YA NO es un rojo del semáforo.
         reds = check_semaphore(
             _job(manifest_path=_manifest(self.tmp.name, [(1, True)]),
                  vod_category="Rob Run",
@@ -211,8 +212,8 @@ class TestSemaphore(unittest.TestCase):
                  vod_start_time="2026-11-15T16:14:59+00:00",
                  allowlist_bypass=1),
             allowlist=set())
-        self.assertEqual(len(reds), 3)
-        self.assertTrue(any("streamer sin permiso" in r for r in reds))
+        self.assertEqual(len(reds), 2)
+        self.assertFalse(any("permiso" in r for r in reds))
         self.assertTrue(any("≠ GTA 6" in r for r in reds))
         self.assertTrue(any("anterior al lanzamiento" in r for r in reds))
 
@@ -269,8 +270,10 @@ class TestSemaphore(unittest.TestCase):
             self.assertIn("rojo(s)", str(cm.exception))
             self.assertEqual(q.get_job(job_id)["state"], "ready_for_review")
             # Con --force-confirm sí pasa, y queda registrado.
+            # 2026-11-16: el permiso ya no es rojo; quedan 2
+            # (juego ≠ GTA 6 y VOD anterior al lanzamiento).
             reds = q.approve(job_id, force_confirm=True, allowlist=set())
-            self.assertEqual(len(reds), 3)
+            self.assertEqual(len(reds), 2)
             self.assertEqual(q.get_job(job_id)["state"], "approved")
         finally:
             q.close()

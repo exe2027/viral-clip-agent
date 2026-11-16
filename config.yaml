@@ -10,13 +10,14 @@
 # (ver AUDIT-claude-code.md). No están aquí: cambian con frecuencia y
 # pertenecen a limits.yaml, no a la config del canal.
 
-# Lista blanca de streamers con permiso (tribunal, bloque 1, 2026-11-16):
-# solo estos canales se pueden encolar en queue.py. VACÍA = nadie
-# tiene permiso todavía: sin ficha no se encola. Para dar permiso a
-# un streamer, agrega su canal (slug de Kick/Twitch, en minúsculas):
-# allowlist:
-#   - coker
+# Lista blanca de streamers (tribunal, bloque 1, 2026-11-16):
+# solo estos canales se pueden encolar en queue.py. REGLA DEL
+# USUARIO (2026-11-16): estar en esta lista = permiso ya dado por
+# el hecho de que el usuario lo subió; no hay ficha de permiso.
+# Para agregar un streamer, agrega su canal (slug de Twitch/Kick,
+# en minúsculas):
 allowlist:
+  - illojuan
 
 channel:
   name: "El Clip de GTA 6"
@@ -229,7 +230,8 @@ autopublish:
     youtube: 30           # fase 3: ventana de veto en YouTube
     default: 120          # fase 3: ventana de veto en TikTok / Instagram / Facebook
   # Sin "whitelist" aquí: la lista blanca canónica es influencers.yaml
-  # (solo estado "concedido") + allowed_streamers.yaml, que lee
-  # publisher.load_whitelist(); queue.py usa además "allowlist" aquí
-  # en config.yaml (nivel superior). Vacía en todas = fase 4 bloqueada.
+  # + allowed_streamers.yaml, que lee publisher.load_whitelist();
+  # queue.py usa además "allowlist" aquí en config.yaml (nivel
+  # superior). REGLA 2026-11-16: estar en la lista = permiso ya
+  # dado. Vacía en todas = fase 4 bloqueada.
   metrics_green: false    # poner true solo cuando las métricas estén en verde (revisión manual)

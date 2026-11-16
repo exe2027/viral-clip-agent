@@ -24,7 +24,7 @@ consultar a este módulo antes de cada publicación (ver
 Interfaz con la cola (``queue.py``, bloque 1 — ya existe):
   estados: queued → processing → ready_for_review → approved →
   published / failed (además: rejected, dead). El semáforo de
-  queue.py marca en rojo los jobs sin permiso, con juego ≠ GTA 6,
+  queue.py marca en rojo los jobs con juego ≠ GTA 6,
   VOD anterior al 19 nov 2026, música con copyright sospechada, o
   manifiesto/layout/subtítulos incompletos.
   * tras la revisión humana:  ``record approved_clean`` /
@@ -414,14 +414,15 @@ def phase_can_advance(state, cfg=None):
 
 
 def whitelist_nonempty(cfg=None):
-    """¿Hay al menos un streamer con permiso vigente?
+    """¿Hay al menos un streamer en la lista blanca?
 
     Fuente canónica: ``publisher.load_whitelist()`` (bloque 7), que
-    lee influencers.yaml (solo estado "concedido") +
-    allowed_streamers.yaml. Si publisher.py no se puede importar,
-    se cae a ``queue.load_allowlist()`` (bloque 1, ``allowlist`` en
-    config.yaml) y por último a las claves de config. Vacío en todas
-    las fuentes = nadie tiene permiso = fase 4 bloqueada.
+    lee influencers.yaml + allowed_streamers.yaml. Si publisher.py
+    no se puede importar, se cae a ``queue.load_allowlist()``
+    (bloque 1, ``allowlist`` en config.yaml) y por último a las
+    claves de config. Vacío en todas las fuentes = lista vacía =
+    fase 4 bloqueada. (2026-11-16: estar en la lista = permiso
+    ya dado, no hay ficha de permiso.)
     """
     try:
         from publisher import load_whitelist
@@ -459,7 +460,7 @@ def phase4_ready(state, cfg=None):
     ok, reasons = meets_threshold(state, cfg)
     reasons = list(reasons)
     if not whitelist_nonempty(cfg):
-        reasons.append("lista blanca vacía (sin streamers con permiso: "
+        reasons.append("lista blanca vacía (sin streamers en la lista: "
                        "influencers.yaml / allowed_streamers.yaml)")
     if not cfg.get("metrics_green", False):
         reasons.append("métricas no marcadas en verde (autopublish.metrics_green)")

@@ -618,7 +618,8 @@ python worker.py                # procesar la cola hasta vaciarla
   nunca solo en memoria. Estados: `queued → processing →
   ready_for_review → approved/rejected → published/failed/dead`.
 - **Entrada:** solo streamers en la lista blanca de `config.yaml`
-  (`allowlist`, hoy vacía: sin ficha no se encola), dedup por
+  (`allowlist`: IlloJuan; REGLA 2026-11-16: estar en la lista que
+  sube el usuario = permiso ya dado, sin ficha), dedup por
   VOD + idioma, y no se encola si quedan menos de 2 GB libres.
   `--force` en `add` salta solo la lista blanca (pruebas locales) y
   deja el job marcado.
@@ -628,11 +629,12 @@ python worker.py                # procesar la cola hasta vaciarla
 - **Reintentos:** máx 3 y solo para fallos transitorios (red/descarga);
   lo permanente va a `failed`, y tras 3 intentos a `dead`.
 - **Semáforo:** `approve` se niega si hay rojos, salvo
-  `--force-confirm` explícito (queda registrado). Rojo si: el streamer
-  no tiene permiso, el juego no es GTA 6, el VOD es anterior al
-  19 nov 2026, el título/categoría hace sospechar música con
-  copyright, o el manifiesto viene sin clips, con archivos que
-  faltan o sin decisión de layout.
+  `--force-confirm` explícito (queda registrado). Rojo si: el juego
+  no es GTA 6, el VOD es anterior al 19 nov 2026, el título/categoría
+  hace sospechar música con copyright, o el manifiesto viene sin
+  clips, con archivos que faltan o sin decisión de layout.
+  (2026-11-16: el permiso YA NO es un rojo — estar en la lista
+  blanca que sube el usuario = permiso ya dado.)
 - **Kill-switch:** si existe el archivo `queue.kill`, el worker no
   arranca o se pausa inmediatamente (incluso a mitad de un job, que
   vuelve a `queued`). Se reanuda borrando el archivo.
@@ -660,8 +662,9 @@ python3 watcher.py --loop --live        # bucle cada poll_minutes (config.yaml, 
   siempre con aprobación humana. El watcher detecta en vivo y
   registra; encola **solo VODs terminados**.
 - **Frenos antes de encolar:** kill-switch (`queue.kill`), lista
-  blanca (`estado: concedido` en `influencers.yaml`), solo GTA 6
-  verificado, solo VOD terminado, dedup (`seen_vods.json`,
+  blanca (influencers en `influencers.yaml`; REGLA 2026-11-16:
+  estar en la lista que sube el usuario = permiso ya dado), solo
+  GTA 6 verificado, solo VOD terminado, dedup (`seen_vods.json`,
   gitignored, + dedup de la cola por VOD + idioma), tope de 5 VODs
   nuevos por influencer y día, nunca más de 1 job por influencer en
   `processing` (regla nº 1), y aprobación humana en
@@ -675,7 +678,7 @@ python3 watcher.py --loop --live        # bucle cada poll_minutes (config.yaml, 
   la vía estable).
 - **Probado 2026-11-16 con IlloJuan:** en vivo (GTA V #7, 60.371
   espectadores), último VOD terminado 2929822269 (GTA V #6) no
-  encolado por falta de permiso (además es GTA V, no GTA 6);
+  encolado (es GTA V, no GTA 6);
   segunda pasada sin propuestas nuevas (dedup); `--live` sin encolar
   nada (frenos aguantan) y cola sin tocar. Tests offline:
   `python3 test_watcher.py` (11 tests, sin red).
@@ -815,14 +818,14 @@ para el detalle completo.
   Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h, franja
   18:00-23:59 Chile.
 - **Lista blanca** (`influencers.yaml` canónica + `allowed_streamers.yaml`,
-  hoy VACÍAS): se verifica
+  IlloJuan concedido): se verifica
   EN EL MOMENTO de publicar, no solo al detectar. Si el streamer
-  revocó, no se publica.
+  ya no está en la lista, no se publica.
 - **Rechazos:** formato → 1 reintento; copyright/contenido →
   cuarentena y revisión humana, nunca reintento ciego.
 - **Dry-run por defecto:** sin `--live` no se sube nada. Prueba
   2026-11-16 con el clip de Coker: paquete válido, pero NO publicable
-  (Coker sin permiso, YT sin OAuth, auditoría amber).
+  (Coker no está en la lista blanca, YT sin OAuth, auditoría amber).
 
 ## Auto-publicación — contador "funciona", 4 fases y circuit breaker (Bloque 10 del tribunal)
 
@@ -851,8 +854,8 @@ para el detalle completo.
 - **La cola consulta la puerta** antes de publicar:
   `counter.py gate --platform youtube --clip c1` (exit 0 =
   permitido) o `gate_publish()` desde Python. La lista blanca
-  canónica es `influencers.yaml` + `allowed_streamers.yaml` (hoy
-  vacías): sin permiso no se publica, y la fase 4 queda bloqueada.
+  canónica es `influencers.yaml` + `allowed_streamers.yaml`
+  (IlloJuan): si la lista está vacía, la fase 4 queda bloqueada.
 - **Simulación**: `python3 counter.py simulate` (10 aprobados sin
   editar → 1 rechazo → contador a cero, más demostración del breaker
   con 2 fallos seguidos; usa estado temporal, no toca el real).
@@ -905,10 +908,10 @@ se sigue el protocolo de recuperación, no se insiste.
 1. **Pausar 24-48 h**: no publicar nada en esa plataforma, no borrar en masa.
 2. **Revisar Estado / Calidad de la cuenta** (YouTube Studio → Estado del canal, TikTok → Estado de la cuenta, IG → Estado de la cuenta, FB → Calidad de la Page) y leer qué marcó la plataforma.
 3. **Solo el clip problemático a privado o eliminar**; nunca borrar todo el catálogo de golpe.
-4. **Apelar solo con el permiso en mano**: si la reclamación es por reutilización o copyright, la ficha de permiso (`PERMISOS.md`) es la evidencia. Sin permiso, no apelar: esperar.
+4. **Apelar solo con la lista blanca como respaldo**: si la reclamación es por reutilización o copyright, estar en la lista que subió el usuario es la evidencia de permiso. Si el streamer ya no está en la lista, no apelar: esperar.
 5. **Volver con 1/día y más transformado**: nuevo título, nueva edición (otro corte, otro layout, otro texto en pantalla), nuevos hashtags. Si vuelve a caer, parar esa plataforma una semana.
 
-Sin permiso del streamer, no se publica: ver `PERMISOS.md`.
+REGLA 2026-11-16: estar en la lista blanca que sube el usuario = permiso ya dado; no hay ficha de permiso (PERMISOS.md eliminado).
 
 ## Probado
 
@@ -946,4 +949,4 @@ Kick expira a los 7 días (30 si verificado): este es del 15 nov 2026.
 
 ## Aviso
 
-Bajar el VOD de otro streamer y republicarlo puede infringir las normas de Twitch y el copyright del creador / del juego. Úsalo con VODs propios o con permiso.
+Bajar el VOD de otro streamer y republicarlo puede infringir las normas de Twitch y el copyright del creador / del juego. Úsalo solo con streamers de la lista blanca que sube el usuario (estar en la lista = permiso ya dado).

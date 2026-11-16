@@ -19,17 +19,21 @@ Estados:
 
 Reglas de entrada (se verifican en ``add``):
   * El streamer tiene que estar en la lista blanca de ``config.yaml``
-    (``allowlist``). Hoy está vacía: sin ficha no se encola. Con
-    ``--force`` se encola igual para pruebas locales, pero queda
-    marcado (``allowlist_bypass``) y el semáforo lo pone en rojo.
+    (``allowlist``). REGLA DEL USUARIO (2026-11-16): estar en la lista
+    que sube el usuario YA es permiso — no hay ficha de permiso ni
+    contacto previo que registrar. Con ``--force`` se encola igual
+    para pruebas locales y queda marcado (``allowlist_bypass``), pero
+    eso ya no es un rojo del semáforo.
   * Dedup por vod_id + idioma: no hay dos jobs activos del mismo VOD
     en el mismo idioma.
   * Disco: si quedan menos de 2 GB libres, no se encola nada.
 
 Semáforo (``check_semaphore``): un job en ``ready_for_review`` pasa
 a rojo —no aprobable sin ``--force-confirm`` explícito— si:
-  * el streamer no tiene permiso (no está en la lista blanca),
   * el juego detectado no es GTA 6 (o no se puede verificar),
+  (NOTA 2026-11-16: el permiso YA NO es un rojo. Estar en la lista
+  blanca que sube el usuario = permiso ya dado; no hay ficha que
+  registrar ni contacto que pedir.)
   * el VOD es anterior al lanzamiento de GTA 6 (19 nov 2026),
   * el título o la categoría hacen sospechar música con copyright,
   * el manifiesto no trae clips, falta un archivo o un clip no trae
@@ -137,9 +141,11 @@ def kill_switch_active(path: str = KILL_SWITCH_PATH) -> bool:
 
 
 def load_allowlist(config_path: str | None = None):
-    """Streamers con permiso, desde ``allowlist`` en config.yaml.
+    """Streamers de la lista blanca, desde ``allowlist`` en config.yaml.
 
-    Vacía (o ausente) = nadie tiene permiso todavía. Se compara en
+    REGLA DEL USUARIO (2026-11-16): estar en esta lista = permiso ya
+    dado por el hecho de que el usuario lo subió. No hay ficha de
+    permiso. Vacía (o ausente) = lista vacía. Se compara en
     minúsculas y sin espacios.
     """
     try:
@@ -256,8 +262,8 @@ class Queue:
         """Encola un VOD. Valida lista blanca, dedup y disco.
 
         ``force=True`` salta SOLO la lista blanca (pruebas locales) y
-        deja el job marcado: el semáforo lo pondrá en rojo y no se
-        podrá aprobar sin --force-confirm.
+        deja el job marcado (``allowlist_bypass``), sin bloquear el
+        semáforo: el permiso no es un rojo desde 2026-11-16.
         """
         platform, vod_id, slug = parse_url(url)
         streamer = (streamer or slug or "").strip().lower() or None
@@ -270,8 +276,10 @@ class Queue:
                     "no lo dice). Pasa --streamer <canal> o usa una URL de Kick.")
             if streamer not in allowlist:
                 raise QueueError(
-                    f"Streamer sin permiso: '{streamer}' no está en la lista "
-                    "blanca de config.yaml (allowlist). Sin ficha no se encola.")
+                    f"Streamer fuera de la lista blanca: '{streamer}' no está "
+                    "en la allowlist de config.yaml. Solo se encolan los "
+                    "streamers que subió el usuario (estar en la lista = "
+                    "permiso ya dado).")
         bypass = 1 if force else 0
 
         existing = self.conn.execute(
@@ -396,16 +404,10 @@ def check_semaphore(job: dict, allowlist: set | None = None,
     allowlist = load_allowlist() if allowlist is None else allowlist
     streamer = (job.get("streamer") or "").lower()
 
-    # 1. Streamer sin permiso (o encolado con bypass de la lista blanca).
-    if job.get("allowlist_bypass"):
-        reds.append(
-            f"streamer sin permiso: '{streamer or '?'}' se encoló con "
-            "--force (bypass de la lista blanca) y no está en allowlist")
-    elif streamer and streamer not in allowlist:
-        reds.append(
-            f"streamer sin permiso: '{streamer}' no está en la lista "
-            "blanca de config.yaml (allowlist)")
-
+    # 1. (ELIMINADO 2026-11-16 por decisión del usuario: el permiso
+    # NO es un rojo del semáforo. Estar en la lista blanca que sube el
+    # usuario = permiso ya dado. `allowlist_bypass` solo marca que el
+    # job se encoló con --force para pruebas locales.)
     # 2. Juego detectado distinto de GTA 6 (o no verificable).
     game = detect_game(job.get("vod_category"), job.get("vod_title"))
     if game is None:

@@ -8,8 +8,8 @@ secundaria.
 **Hoy la lista blanca es SOLO IlloJuan** (https://www.twitch.tv/illojuan,
 Twitch, español, GTA). Es el único que hace contenido de GTA por
 ahora y el caso de prueba del monitor. No hay otros 6: los demás se
-agregarían después SOLO si hacen GTA y dan permiso (ver
-[Lista blanca](#lista-blanca)).
+agregarían después SOLO si hacen GTA (el usuario los sube a la
+lista, y eso ya es permiso — ver [Lista blanca](#lista-blanca)).
 
 ## Lo que hace y lo que NO hace
 
@@ -34,21 +34,19 @@ NO hace:
   un VOD en curso, sin publicar, queda como opción futura, no
   implementada.)
 - **No pide permiso en nombre del usuario.** Solo lee datos públicos
-  (directos y VODs). El permiso se consigue aparte y se registra en
-  `PERMISOS.md`.
+  (directos y VODs). REGLA 2026-11-16: estar en la lista que sube
+  el usuario YA es permiso; no hay ficha que registrar.
 - **No contacta streamers ni usa cuentas del usuario.** Kick y
   Twitch se leen sin login.
 
 ## Lista blanca
 
-La canónica es `influencers.yaml`. Solo `estado: concedido` cuenta
-como permiso; hoy IlloJuan está en `pendiente`, así que el watcher
-lo monitorea pero **no encola nada suyo**. Cuando el permiso esté
-concedido (con ficha en `PERMISOS.md`), hay que ponerlo en
-`concedido` en `influencers.yaml` **y** agregar el slug a `allowlist`
-en `config.yaml`: `queue.py` usa esa lista para encolar y el
-semáforo la usa para aprobar. Sin ese segundo paso, el job quedaría
-en rojo en la aprobación.
+La canónica es `influencers.yaml`. REGLA DEL USUARIO (2026-11-16):
+estar en la lista que sube el usuario YA es permiso. Hoy IlloJuan
+está en `concedido`, así que el watcher lo monitorea y **encola
+sus VODs de GTA 6**. Solo `denegado` / `revocado` excluyen.
+`queue.py` usa además `allowlist` en `config.yaml` para encolar:
+IlloJuan ya está en ambas.
 
 ## Frenos (todos, antes de encolar)
 
@@ -56,7 +54,8 @@ Si falla uno, el VOD no se encola y el motivo queda registrado en
 `seen_vods.json` y en la salida:
 
 1. **Kill-switch:** si existe `queue.kill`, no se encola NADA.
-2. **Lista blanca:** solo `estado: concedido` en `influencers.yaml`.
+2. **Lista blanca:** influencer en `influencers.yaml` (solo
+   `denegado` / `revocado` excluyen).
 3. **Solo GTA 6 verificado:** la categoría/juego del VOD (o del
    directo) tiene que ser GTA 6. GTA V, GTA V RP u otro juego NO se
    encola. (Se usa `queue.detect_game`: `gta6` pasa; `other` o sin
@@ -158,9 +157,7 @@ python3 watcher.py --once --dry-run --state /tmp/seen-test.json  # estado aparte
   segunda pasada no vuelva a proponer lo mismo; pero un VOD marcado
   `would_enqueue` **no queda gastado**: en `--live` se re-evalúa y se
   encola de verdad. Un VOD `skipped:juego_no_gta6` no se re-evalúa
-  (el juego de un VOD terminado no cambia); un
-  `skipped:sin_permiso` sí se re-evalúa en cada pasada (el permiso
-  puede concederse después).
+  (el juego de un VOD terminado no cambia).
 - Códigos de salida: `0` = pasada OK; `2` = algún influencer falló
   al consultarse (red/API); `1` = error de configuración.
 - `--loop` duerme `poll_minutes` entre pasadas (defecto 15, en
@@ -188,7 +185,7 @@ watcher:
       "start_time": "2026-11-15T18:25:21+00:00", "duration_s": 26750,
       "url": "https://www.twitch.tv/videos/2929822269",
       "first_seen": "...", "last_seen": "...", "live": false,
-      "outcome": "skipped:sin_permiso", "job_id": 12 } },
+      "outcome": "skipped:juego_no_gta6", "job_id": 12 } },
   "live": { "<streamer>": { "stream_id": "...", "title": "...",
       "game": "...", "viewers": 60371, "started_at": "...",
       "last_seen": "..." } },
@@ -197,7 +194,7 @@ watcher:
 ```
 
 `outcome` vale: `pending`, `would_enqueue`, `enqueued`,
-`skipped:<motivo>` (`sin_permiso`, `juego_no_gta6`, `kill_switch`,
+`skipped:<motivo>` (`juego_no_gta6`, `kill_switch`,
 `tope_diario`, `en_processing`, `vod_en_curso`, `ya_en_cola`).
 Borrar el archivo es seguro: solo se pierde la memoria de lo visto
 (la siguiente pasada volvería a revisar los últimos 20 VODs; la cola
@@ -222,11 +219,10 @@ sin credenciales):**
 - **Último VOD terminado (2929822269):** `3 DÍAS 📅 ÚLTIMOS MOMENTOS
   DICIENDO HAIGA 🥀 SECUNDARIAS DAY 🎉 - Grand Theft Auto V #6`,
   2026-11-15 18:25 UTC, 7h25m, categoría Just Chatting. **No se
-  encola: sin permiso concedido (estado: pendiente)** — y aunque lo
-  tuviera, tampoco pasaría el freno de juego (GTA V, no GTA 6).
+  encola: es GTA V, no GTA 6** (el freno de juego).
 - **Total:** 20 VODs revisados (19 terminados + 1 en curso), 0
   encolados, 0 que se encolarían, 20 descartados (todos por
-  `sin_permiso`), 0 errores. Los VODs revisados van del GTA V #1
+  `juego_no_gta6`), 0 errores. Los VODs revisados van del GTA V #1
   (2026-11-08) al #7 (hoy), más San Andreas, CoD y DayZ: ninguno es
   GTA 6, como era de esperar antes del lanzamiento del 19 nov.
 
@@ -240,8 +236,8 @@ antes). Los frenos aguantan también con `--live`.
 
 **Tests offline:** `python3 test_watcher.py` — 11 tests, sin red
 (fixtures de las respuestas reales de illojuan y coker): GQL
-(live + VOD en curso), Kick (live + VODs), frenos (sin permiso, GTA
-V con permiso, kill-switch, tope diario, 1 job en processing),
+(live + VOD en curso), Kick (live + VODs), frenos (fuera de lista,
+GTA V en lista, kill-switch, tope diario, 1 job en processing),
 dedup, encolado end-to-end en BD temporal y dry-run sin tocar la
 cola. `python3 test_queue.py` sigue en 32/32.
 
@@ -270,28 +266,23 @@ lo registra como en curso.
   ```cron
   */15 * * * * cd /home/hatch/workspace/gta6-clips/viral-clip-agent && python3 watcher.py --once --live >> runs/watcher.log 2>&1
   ```
-  Con `--live` solo cuando el usuario lo autorice: mientras IlloJuan
-  siga en `pendiente`, el cron no encolaría nada igualmente (el freno
-  de permiso lo bloquea), pero no se activa sin su sí.
+  Con `--live` solo cuando el usuario lo autorice.
 - **Twitch con credenciales Helix** (cuando el usuario las configure;
   hoy funciona por GQL público, pero Helix es la vía estable).
 - **Encolado automático continuo** (hoy: pasadas manuales en dry-run;
-  el primer VOD de GTA 6 con permiso concedido se encolaría solo con
+  el primer VOD de GTA 6 de IlloJuan se encolaría solo con
   el cron activo).
 - **Pre-análisis de VOD en curso** (opción futura, sin publicar):
   hoy el watcher solo registra el directo en curso.
 
 ## Pendientes para el usuario
 
-1. **Permiso de IlloJuan:** contactarlo y registrar el permiso en
-   `PERMISOS.md`; después poner `estado: concedido` en
-   `influencers.yaml` **y** agregar `illojuan` a `allowlist` en
-   `config.yaml`. Hasta entonces el monitor solo observa. (El monitor
-   no pide permiso en su nombre.)
+1. **Activar el cron** (fase 2) cuando quiera monitoreo continuo
+   cada 15 min con `--live`. (IlloJuan ya está concedido en la
+   lista: estar en la lista = permiso ya dado, 2026-11-16. No hay
+   que contactarlo ni registrar ficha.)
 2. **Credenciales Twitch (opcional):** crear la app gratis en
    dev.twitch.tv y pasar `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET`
    (ver arriba). Sin ellas, Twitch sigue por GQL público.
-3. **Activar el cron** (fase 2) cuando quiera monitoreo continuo
-   cada 15 min con `--live`.
-4. **Otros streamers:** solo si hacen GTA y dan permiso; se agregan
-   a `influencers.yaml` con su ficha en `PERMISOS.md`.
+3. **Otros streamers:** solo si hacen GTA; el usuario los agrega
+   a `influencers.yaml` (subirlos a la lista ya es permiso).
