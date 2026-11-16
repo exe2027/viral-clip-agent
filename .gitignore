@@ -1,0 +1,8 @@
+*.mp4
+*.json
+!test_chat.json
+clips/
+runs/
+__pycache__/
+*.pyc
+.venv/
