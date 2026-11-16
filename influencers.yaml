@@ -1,0 +1,37 @@
+# Influencers — lista de streamers del usuario
+#
+# REGLA DEL USUARIO (2026-11-16): todo influencer que el usuario
+# sube a esta lista es porque YA dio permiso. Estar en la lista =
+# permiso ya dado. NO hay que pedir permiso, NO hay ficha de permiso
+# que registrar, NO hay contacto previo. PERMISOS.md fue eliminado
+# por decisión del usuario.
+#
+# LISTA BLANCA: SOLO IlloJuan (https://www.twitch.tv/illojuan).
+# Es el único que hace contenido de GTA por ahora. Los demás se
+# agregarían después SOLO si hacen GTA (y el usuario los sube,
+# lo que ya implica permiso).
+#
+# `estado` solo puede ser:
+#   pendiente | contactado | concedido | denegado | revocado
+# Solo `denegado` / `revocado` excluyen al streamer de la cola y
+# de la publicación (el usuario lo sacó de la lista).
+
+influencers:
+  - usuario: "illojuan"
+    plataforma: twitch
+    canal_original: "https://www.twitch.tv/illojuan"
+    juego: "GTA 6"
+    idioma: es
+    canal_contacto: ""
+    contacto: ""
+    fecha_contacto: ""
+    fecha_permiso: "2026-11-16"
+    texto_exacto: "Permiso ya dado (decisión del usuario, 2026-11-16: todo influencer que sube a la lista es porque ya dio permiso)."
+    captura: ""
+    alcance:
+      vods: []
+      plataformas_publicacion: [youtube, tiktok, instagram, facebook]
+      hasta: ""
+    revocable: true
+    estado: concedido
+    notas: "Primer influencer del monitor. Permiso ya dado por el usuario (2026-11-16)."

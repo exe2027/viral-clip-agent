@@ -1,0 +1,33 @@
+# accounts.yaml — estado conocido de las cuentas (auditoría)
+#
+# Lo que audit_accounts() lee para el checklist pasa/no-pasa.
+# Actualizar aquí cuando cambie algo real (OAuth configurado, cuenta
+# creada, app aprobada...). Si este archivo no existe, publisher.py
+# usa los valores por defecto, que son este mismo estado.
+#
+# Estado real a 2026-11-16:
+#   YT ES @elclipdegta6: canal creado, SIN OAuth, SIN verificar.
+#   TikTok ES @elclipdegta6____bits: cuenta creada, SIN app aprobada.
+#   IG @elclipdegta6: NO creada (Instagram rechazó los códigos).
+#   FB Page El Clip de GTA 6: NO creada.
+
+youtube_shorts:
+  channel_created: true
+  channel_verified: false
+  oauth_configured: false
+  strikes: 0
+
+tiktok:
+  account_created: true
+  app_approved: false
+  scopes: []
+
+instagram_reels:
+  account_created: false
+  professional: false
+  facebook_page_linked: false
+
+facebook_reels:
+  page_created: false
+  role: null
+  token: false

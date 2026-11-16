@@ -1,0 +1,20 @@
+# NOTA: la lista blanca canónica es influencers.yaml (Bloques 8+9).
+# Este archivo es un atajo con formato simple; publisher.py lee los
+# dos. Si un streamer está en ambos, manda influencers.yaml.
+#
+# REGLA DEL USUARIO (2026-11-16): estar en la lista que sube el
+# usuario YA es permiso. No hay ficha de permiso que registrar ni
+# contacto previo que pedir. PERMISOS.md fue eliminado por decisión
+# del usuario. Si un streamer ya no está en la lista, la subida se
+# bloquea aunque el clip ya estuviera aprobado.
+#
+# permission: lista | propia
+#   lista  — en la lista que subió el usuario (= permiso ya dado).
+#   propia — el VOD es del usuario.
+
+streamers:
+  - name: illojuan
+    platform: twitch
+    permission: lista
+    granted: 2026-11-16
+    notes: "Permiso ya dado por el usuario (2026-11-16): estar en la lista = permiso."

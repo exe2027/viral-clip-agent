@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""
+thumbnails.py — miniatura REAL: fotogramas del clip, sin texto quemado.
+
+Bloque 2 del tribunal (viral-clip-agent). Nada de miniaturas
+generadas ni de texto inventado: se extraen 3 fotogramas del propio
+clip con ffmpeg, en distintos timestamps alrededor del payoff
+(``payoff_ts_clip`` de la ficha del momento, ``moment_card.py``):
+
+  * antes del payoff  (payoff - 5 s)
+  * el payoff         (payoff)
+  * después del payoff (payoff + 5 s)
+
+Los 3 quedan guardados para elección humana en la aprobación; la
+aprobación elige uno, el código no elige por el humano. La portada
+de Instagram es una copia del fotograma del payoff
+(``cover_instagram.jpg``), 1080x1920, sin texto quemado por ahora.
+
+Sin payoff conocido se usan 25 % / 50 % / 75 % de la duración, y la
+ficha lo marca (evidence low): los frames siguen siendo reales, pero
+nadie sabe cuál es el momento.
+
+Uso como librería:
+
+    from thumbnails import extract_thumbnail_frames, instagram_cover
+    frames = extract_thumbnail_frames(
+        "runs/.../clip.mp4", payoff_ts_clip=20.0,
+        out_dir="runs/.../clips/thumbnails")
+    # frames = [{"path": ..., "ts_clip": 15.0, "role": "antes del payoff"}, ...]
+    cover = instagram_cover(frames, "runs/.../clips/thumbnails/cover_instagram.jpg")
+
+Uso como CLI:
+
+    python thumbnails.py runs/.../clip.mp4 --payoff 20 --out-dir runs/.../thumbnails
+    python thumbnails.py runs/.../clip.mp4 --card runs/.../moment_card.json
+"""
+
+import argparse
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+# Desplazamientos alrededor del payoff (s). 5 s es suficiente para que
+# los 3 frames se vean distintos y a la vez sigan siendo "el momento".
+PAYOFF_OFFSETS = (-5, 0, +5)
+ROLES = ("antes del payoff", "payoff", "después del payoff")
+DEFAULT_FRAMES = (0.25, 0.50, 0.75)  # sin payoff: cuartos del clip
+
+
+def get_duration(clip_path):
+    """Duración en s con ffprobe; None si no se puede medir."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(clip_path)],
+            capture_output=True, text=True, timeout=30)
+        return float(r.stdout.strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def _extract_frame(clip_path, ts, out_path):
+    """Un fotograma con ffmpeg (sin re-codificar el video)."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-ss", f"{ts:.2f}",
+         "-i", str(clip_path), "-frames:v", "1", "-q:v", "2",
+         str(out_path)],
+        capture_output=True, text=True, timeout=120)
+    if r.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        raise RuntimeError(f"ffmpeg no pudo extraer el fotograma a {ts:.1f} s: "
+                           f"{r.stderr.strip()[-300:]}")
+    return out_path
+
+
+def extract_thumbnail_frames(clip_path, payoff_ts_clip=None, out_dir=None,
+                             offsets=PAYOFF_OFFSETS):
+    """Extrae 3 fotogramas candidatos del clip.
+
+    Devuelve [{"path", "ts_clip", "ts_vod"(si se pasa), "role"}].
+    No elige: los 3 se guardan para que un humano elija en aprobación.
+    """
+    clip_path = Path(clip_path)
+    if not clip_path.exists():
+        raise FileNotFoundError(f"clip no encontrado: {clip_path}")
+    duration = get_duration(clip_path)
+    out_dir = Path(out_dir) if out_dir else clip_path.parent / "thumbnails"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if payoff_ts_clip is not None:
+        payoff = float(payoff_ts_clip)
+        times = [payoff + o for o in offsets]
+        roles = list(ROLES)
+    else:
+        if duration:
+            times = [duration * f for f in DEFAULT_FRAMES]
+        else:
+            times = [15.0, 30.0, 45.0]  # clip de 60 s sin duración medible
+        roles = ["25% del clip", "50% del clip", "75% del clip"]
+
+    frames = []
+    for i, (ts, role) in enumerate(zip(times, roles), start=1):
+        # Dentro del clip, con 0,5 s de margen en cada extremo.
+        ts = max(0.5, ts)
+        if duration:
+            ts = min(ts, max(0.5, duration - 0.5))
+        name = f"thumb_{i:02d}_{role.replace(' ', '_')}_{ts:.1f}s.jpg"
+        path = _extract_frame(clip_path, ts, out_dir / name)
+        frames.append({"path": str(path), "ts_clip": round(ts, 1),
+                       "role": role, "has_text": False})
+    return frames
+
+
+def instagram_cover(frames, out_path=None):
+    """Portada de Instagram: copia del fotograma del payoff.
+
+    ``frames`` es la lista de extract_thumbnail_frames. Sin frame de
+    payoff (no había payoff conocido) usa el del 50 % y lo dice.
+    """
+    if not frames:
+        raise ValueError("sin fotogramas: primero extract_thumbnail_frames()")
+    payoff = next((f for f in frames if f["role"] == "payoff"), None)
+    chosen = payoff or frames[len(frames) // 2]
+    out_path = Path(out_path) if out_path else Path(chosen["path"]).parent / "cover_instagram.jpg"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(chosen["path"], out_path)
+    return {"path": str(out_path), "source_ts_clip": chosen["ts_clip"],
+            "source_role": chosen["role"],
+            "note": ("copia del fotograma del payoff, sin texto quemado"
+                     if chosen["role"] == "payoff"
+                     else "SIN payoff conocido: portada = frame del 50% del clip")}
+
+
+def thumbnail_candidates_for_clip(clip_path, moment_card=None, out_dir=None):
+    """Atajo: saca los frames desde la ficha del momento (payoff real)."""
+    payoff = None
+    if moment_card:
+        payoff = moment_card.get("payoff_ts_clip")
+    return extract_thumbnail_frames(clip_path, payoff_ts_clip=payoff, out_dir=out_dir)
+
+
+def main():
+    p = argparse.ArgumentParser(description="Miniatura real: 3 fotogramas del clip alrededor del payoff.")
+    p.add_argument("clip", help="Clip .mp4")
+    p.add_argument("--payoff", type=float, default=None, help="Payoff en s dentro del clip")
+    p.add_argument("--card", help="moment_card.json (usa su payoff_ts_clip)")
+    p.add_argument("--out-dir", default=None)
+    p.add_argument("--cover", action="store_true", help="Además, generar cover_instagram.jpg")
+    args = p.parse_args()
+
+    payoff = args.payoff
+    if args.card:
+        card = json.loads(Path(args.card).read_text(encoding="utf-8"))
+        payoff = card.get("payoff_ts_clip")
+        print(f"Payoff de la ficha: {payoff} s (evidence: {card.get('evidence')})")
+    frames = extract_thumbnail_frames(args.clip, payoff_ts_clip=payoff,
+                                      out_dir=args.out_dir)
+    for f in frames:
+        print(f"  {f['role']}: {f['ts_clip']} s -> {f['path']}")
+    if args.cover:
+        cover = instagram_cover(frames, (Path(args.out_dir) / "cover_instagram.jpg")
+                                if args.out_dir else None)
+        print(f"  Portada IG: {cover['path']} ({cover['note']})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

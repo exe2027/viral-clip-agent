@@ -4,9 +4,9 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 
 **Automático:** `auto_clips.py` hace todo en un solo comando — descarga chat, detecta, corta y empaqueta cada clip para viral. Ver [Automatización](#automatización-un-solo-comando). En Twitch baja el VOD; en Kick baja solo el segmento de 60 s de cada pico, nunca el VOD entero.
 
-## Qué cambió en la v2.4 (auditoría Claude Code + Shortia)
+## Qué cambió en la v2.4
 
-**Scoring corregido** (auditoría, bugs 1-6, ver `AUDIT-claude-code.md`):
+**Scoring corregido:**
 - `xd` / `xdd` por fin puntúan como risa.
 - Falsos positivos eliminados: "no puedo creer que no hayas ido", "qué bueno que llegaste", "dale gas", "vamos a ver qué pasa", "god of war" y "crazy cat" ya no puntúan (tokens sueltos ambiguos fuera; solo frases completas y formas alargadas: "vamooos", "dalee", "noooo").
 - Rendimiento: un tokenizado por mensaje + conjuntos en vez de regex por token. Medido en 200k mensajes: score_message 1,28 s, score_windows 1,81 s (antes 9,6 s).
@@ -16,9 +16,9 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 - Manifiesto incremental: `clips_chat_v2.py` escribe `manifest.json` tras cada clip cortado.
 - Flags ffmpeg para plataformas en el corte: `-pix_fmt yuv420p`, `-movflags +faststart`, audio normalizado con `loudnorm` (-16 LUFS).
 
-**Config del canal — `config.yaml`** (idea de Shortia): juego, streamer, nicho, hashtags ES/EN, parámetros de corte y estilos de subtítulo viven en `config.yaml`, no hardcodeados. `config.py` lo carga (PyYAML si está, si no un parser mínimo propio). Los hashtags ya no están fijos en el código.
+**Config del canal — `config.yaml`:** juego, streamer, nicho, hashtags ES/EN, parámetros de corte y estilos de subtítulo viven en `config.yaml`, no hardcodeados. `config.py` lo carga (PyYAML si está, si no un parser mínimo propio). Los hashtags ya no están fijos en el código.
 
-**Estilos de subtítulo elegibles** (idea de Shortia: plantillas): `--subtitle-style` en `subtitles.py`, con 3 estilos definidos en `config.yaml`:
+**Estilos de subtítulo elegibles:** `--subtitle-style` en `subtitles.py`, con 3 estilos definidos en `config.yaml`:
 - `tiktok` (por defecto): blanco, negrita, borde negro, abajo.
 - `highlight`: amarillo con caja semitransparente detrás.
 - `karaoke`: palabra por palabra (bloques de 1-2 palabras, amarillo, fuente 56). Aproximación: no es karaoke `\kf` real de ASS, el SRT no lleva tiempos por palabra al quemar; se logra con bloques cortos (max_chars=8, max_duration=1.0 s). Para que el karaoke funcione, el SRT debe generarse con ese estilo (los SRT viejos llevan bloques de 20 caracteres).
@@ -28,9 +28,65 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 .venv/bin/python subtitles.py clip.mp4 --subtitle-style karaoke
 ```
 
-**Shortia** ([backsoul/shortia](https://github.com/backsoul/shortia), Apache 2.0, Go + SvelteKit, YouTube + Whisper API + DeepSeek, 1 estrella, 3 commits — no clonado, solo ideas):
-- Tomado: plantillas de subtítulo elegibles con estilos, config del canal (juego/streamer/nicho/hashtags), y la idea del editor visual con aprobación (eso es la cola de aprobación, fase siguiente, aún no implementada).
-- NO tomado: su stack (Go, Redis, Docker, SvelteKit), sus APIs pagas (OpenAI Whisper API, DeepSeek), YouTube-only (sin Twitch/Kick ni detección por chat), ni su renderizado en cliente con FFmpeg.wasm. Es un proyecto de 3 commits y 1 estrella, menos probado que openshorts.
+## Qué cambió en la v2.5 (detección)
+
+**Baseline local + z-score.** Cada ventana ya no se compara con todo el VOD sino con su vecindad local (±12 min, `--local-half-min`). Score final = z-score local + 0.5 × pendiente de subida (media de los 60 s previos, cap 2) + magnitud (puntos ajustados / 10). La desviación tiene suelo 1.0 para que en tramos muertos un soplo no dé z=50; con VOD muy corto (<5 vecinos) se usa la media/desviación global. El z-score solo premiaba ráfagas pequeñas en tramos muertos (una ventana de 29 pts en una zona callada superaba al pico real de 67 pts); el término de magnitud mantiene el tamaño absoluto en el ranking. `--local-baseline` es el comportamiento por defecto (`--no-local-baseline` lo apaga y puntúa por puntos ajustados).
+
+**Anti-spam v2.** Por ventana se calculan 3 ratios, que quedan en el detalle y en el manifiesto (`emote_ratio`, `rep_ratio`, `lex_diversity`, `penalty_factor`, `motivo_penalizacion`):
+- **emote-only**: mensajes que son solo emotes (`[emote:id:nombre]`, solo emojis, o un solo token de nombre de emote conocido: KEKW, LUL, OMEGALUL, Kappa, ...). >60% → puntaje ×0.25, motivo `emote_spam`.
+- **repetición**: 1 − cuerpos distintos / mensajes, sobre TODOS los mensajes aunque haya muchos usuarios únicos. >40% → ×0.5, motivo `repetition_spam`. Ambas → ×0.125.
+- **diversidad léxica**: palabras distintas / palabras totales en los mensajes con texto. Se registra, no penaliza sola.
+
+Un mismo emote repetido por 14 personas (KEKW×14) también es baja diversidad, pero con ~29% no llega al umbral del 40% y no se penaliza. `--no-anti-spam` apaga el anti-spam. La puntuación vieja (v2.4, puntos suavizados sin baseline ni anti-spam) se reproduce con `score_windows(..., local_baseline=False, anti_spam=False)` o con `--no-local-baseline --no-anti-spam`.
+
+**Prueba de aceptación (2026-11-16, 3 chats reales, top-5 por puntaje):**
+
+| VOD | Pico | Viejo (v2.4) | Nuevo (v2.5) | Veredicto |
+|---|---|---|---|---|
+| Locones (Kick, 2.517 msgs) | 03h08m25s | #1, 24.75 pts | fuera del top-5 (rank #39, z 3.84, raw 24.75 → adj 3.09, emote 96%, rep 52%, `emote_spam` + `repetition_spam`) | ✅ baja claramente |
+| Coker (Kick, 8.269 msgs) | 03h15m10s | #1, 56.50 pts | #3, z 9.02 (raw 56.50, sin penalizar: emote 26%, rep 29%) | ✅ se mantiene arriba |
+| Nora (Twitch 2929669422, 19.033 msgs) | 07h12m10s | #1, 67.75 pts | #3, z 12.59 (raw 67.75, sin penalizar: emote 26%, rep 31%) | ✅ se mantiene arriba |
+
+Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65), 01h47m55s (8.05), 01h45m50s (6.71) — VOD poco denso, los picos nuevos son ráfagas pequeñas; Coker 33m30s (9.53), 17m45s (9.15), 03h15m10s (9.02), 01h24m25s (8.92), 19m05s (8.33); Nora 06h04m55s (13.39), 01h37m35s (13.10), 07h12m10s (12.59), 03h53m40s (11.21), 06h47m45s (10.51).
+
+**Limitación conocida:** `auto_clips.py` pasa los scores (ahora z) a `viral_package.viral_multiple` como `all_scores`; con mediana de z ≤ 0, `viral_multiple` devuelve el propio score, así que el "× la mediana" que imprime `auto_clips.py` en una corrida normal es en realidad el z-score. La detección, el corte y el manifiesto no se ven afectados. Queda para el bloque que toque `viral_package.py`.
+
+## Qué cambió en la v2.6 (audio + recorte preciso)
+
+**Audio como segunda señal (`audio.py`).** El chat es la señal principal, pero un pico de chat con el audio plano suele ser spam o música de fondo. Se mide el RMS por segundo (ffmpeg a WAV 16 kHz mono + numpy, sin librosa) solo en los top 10-15 candidatos, sobre el segmento ya descargado. Regla: chat alto + audio alto/dinámico = **confirmar**; chat alto + audio plano = **sospechar** (se corta igual, se revisa a mano antes de publicar). La transcripción es un bonus de scoring (+20% si hay risa/hype cerca del pico, +10% si hay voz, 0% si no hay nada), nunca un veto. Umbrales calibrados con los 3 VODs conocidos: sospechar si la transcripción tiene 0 palabras en 60 s, o si el audio es plano (std del RMS < 9 dB y ≥45% de segundos estables a ±2 dB de la mediana). OJO: el nivel medio NO discrimina — Locones es incluso más fuerte que Coker en media (-23,1 dBFS frente a -32,5 dBFS); lo que discrimina es la dinámica + la voz.
+
+| Candidato | Chat | RMS medio | std | Rango | Estables | Palabras | Bonus | Veredicto |
+|---|---|---|---|---|---|---|---|---|
+| Locones 03h08m | 24,75 pts | -23,1 dBFS | 7,4 dB | 28,9 dB | 47% | 0 | +0% | **SOSPECHAR** (sin voz, cama constante) |
+| Coker 03h15m | 56,5 pts | -32,5 dBFS | 11,5 dB | 35,3 dB | 15% | 77 | +10% | **CONFIRMAR** |
+| NoraExplorer 7h12m | 78 pts | -42,3 dBFS | 19,8 dB | 86,5 dB | 36% | 152 | +10% | **CONFIRMAR** |
+
+```bash
+.venv/bin/python audio.py runs/kick-coker-01a1dffd/segments/seg_01_t03h14m50s.mp4 --peak 20 --chat-score 56.5 --transcript runs/kick-coker-01a1dffd/clips/clip_01_transcript.json
+```
+
+**100% local y gratis ($0) — decisión del usuario (2026-11-16).** Todo lo de este bloque corre en local, sin keys ni cuentas de pago: transcripción con faster-whisper (modelos `tiny` y `base` de Systran, descarga gratuita de HuggingFace, sin token ni cuenta), VAD incluido en faster-whisper (modelo Silero, también local) y diccionario de risa/hype por reglas en `clips_chat_v2.py`. El escalado tiny→base es solo entre modelos locales, nunca a una API. NO se usa la Whisper API de OpenAI ni ninguna API paga, y NO se usa Gemini: al crear la key Gemini pidió tarjeta, así que no se pone tarjeta ni se crea cuenta de facturación. No se pide ninguna key de pago para este bloque.
+
+**Recorte preciso por frase/silencio (`precise_cut.py`).** El corte fijo (pico -20 s / +40 s) corta frases por la mitad. Ahora el inicio se afina a 2-3 s antes del disparador retrocediendo hasta el inicio de la frase que lo contiene, y el fin hasta el fin de esa frase/risa +1-2 s, con tope de 60 s. Fuentes: timestamps por palabra de faster-whisper (los que ya genera `subtitles.py`, reutilizados con `--transcript` o transcribiendo el segmento con el modelo tiny) + silencios detectados con ffmpeg `silencedetect` (para no empezar dentro de un silencio ni cortar dentro de una palabra). Solo trabaja dentro del segmento ya descargado, nunca baja más vídeo. Sin transcripción fiable (< 3 palabras) cae al corte fijo actual. El corte en sí lo hace `layout.py` (regla del proyecto) o el recorte centrado si no está.
+
+```bash
+.venv/bin/python precise_cut.py runs/kick-coker-01a1dffd/segments/seg_01_t03h14m50s.mp4 \
+    --peak 11710 --segment-start 11690 \
+    --transcript runs/kick-coker-01a1dffd/clips/clip_01_transcript.json \
+    --out runs/kick-coker-01a1dffd/clips/clip_01_precise.mp4
+# Coker: 17,36 s -> 24,98 s (7,62 s, 1080x1920, layout auto), inicio en fin de
+# silencio y fin en fin de frase, sin cortar palabras por la mitad.
+# Locones sin transcripción (--no-transcribe): cae al fijo 0,0 s -> 40,0 s.
+# NoraExplorer 7h12m (segmento desde 25910, pico 25930): 5,28 s -> 25,34 s (20,07 s).
+```
+
+**Integración en `auto_clips.py`** (solo flags, sin tocar la detección ni el corte fijo por defecto):
+- `--audio-check`: RMS + veredicto por candidato (top-N), bonus de transcripción, y `audio` en el manifiesto (`decision`, `reason`, `stats`, `words`, `transcription_bonus`). Un sospechoso se corta igual y queda marcado para revisión manual.
+- `--precise-cut`: afina inicio/fin por clip con `precise_cut.py` (transcribe la ventana de 60 s del candidato: el segmento en Kick, una ventana temporal en Twitch) y guarda `precise_cut` en el manifiesto; el archivo lleva sufijo `_precise`.
+
+```bash
+python auto_clips.py https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9 --top-n 5 --audio-check --precise-cut
+```
 
 ## Qué cambió en la v2
 
@@ -52,7 +108,7 @@ Puntaje por mensaje: 1 punto base, +1 si es risa, +1 si es hype. Un `JAJAJA QUÉ
 ## Requisitos
 
 - Python 3.10+
-- [TwitchDownloaderCLI](https://github.com/lay295/TwitchDownloader) en el PATH (solo para Twitch)
+- TwitchDownloaderCLI en el PATH (solo para Twitch)
 - [FFmpeg](https://ffmpeg.org/) en el PATH (ffprobe opcional, para medir el VOD)
 - Kick no necesita nada extra: usa los APIs de Kick directamente (ver abajo)
 
@@ -70,11 +126,9 @@ python3 -m venv .venv
 .venv/bin/pip install faster-whisper
 ```
 
-## Subtítulos quemados — v2.2 (de openshorts)
+## Subtítulos quemados — v2.2
 
-`subtitles.py` adapta el `subtitles.py` de
-[openshorts](https://github.com/faris-sait/openshorts) (MIT): transcribe
-el clip con faster-whisper (modelo `tiny`, idioma automático ES/EN),
+`subtitles.py` transcribe el clip con faster-whisper (modelo `tiny`, idioma automático ES/EN),
 agrupa las palabras en líneas cortas estilo TikTok (máx. 20 caracteres,
 máx. 2 s por bloque) y las quema en el vídeo vertical con ffmpeg
 (blanco, negrita, borde negro, abajo, fuente 48, PlayRes 1080x1920).
@@ -91,20 +145,14 @@ máx. 2 s por bloque) y las quema en el vídeo vertical con ffmpeg
 El SRT queda en `<clip>.srt` y el clip con subtítulos en
 `<clip>_subs.mp4`. Sin Gemini ni APIs de pago: todo local.
 
-Qué se copió de openshorts y qué no:
-- Copiado: transcripción con faster-whisper y `word_timestamps`,
+Qué hace y qué no hace:
+- Hace: transcripción con faster-whisper y `word_timestamps`,
   agrupación de palabras en SRT, quemado con el filtro `subtitles`
   de ffmpeg y estilo ASS.
-- Cambiado: modelo `tiny` en vez de `base` (más rápido en CPU),
+- Modelo `tiny` en vez de `base` (más rápido en CPU),
   idioma automático, sin cv2 (la duración se mide con ffprobe),
   estilo adaptado a 1080x1920.
-- NO copiado: detección de momentos con Gemini (el agente ya detecta
-  por el chat de Twitch), recorte con seguimiento de cara
-  (MediaPipe + YOLOv8, pesado y pensado para vídeos con una persona
-  hablando a cámara; en gameplay de GTA no hay cara que seguir y lo
-  que importa es el HUD/minimapa, por eso el proyecto mantiene
-  `--crop center/left/right`), publicación automática (Upload-Post),
-  actores UGC ni doblaje con ElevenLabs (de pago).
+- NO hace: detección de momentos por transcripción con Gemini (la detección es por el chat), recorte con seguimiento de cara (pesado y pensado para vídeos con una persona hablando a cámara; en gameplay de GTA no hay cara que seguir y lo que importa es el HUD/minimapa, por eso se mantiene `--crop center/left/right`), publicación automática, actores UGC ni doblaje (de pago).
 - Detalle técnico: faster-whisper 1.2.1 falla con PyAV 19
   (`metadata_errors` ya no existe en `av.open`), y `av` 14 no tiene
   wheel para Python 3.12. Por eso `subtitles.py` extrae el audio a
@@ -115,8 +163,163 @@ Limitación conocida: el modelo `tiny` se equivoca en nombres propios
 y en frases rápidas. En la prueba real transcribió "Bezo" varias
 veces (nombre/emote que no reconoce) y algunas frases quedaron con
 gramática rota ("And I was post on discord"). Revisa el SRT antes de
-publicar; el tribunal pidió un diccionario GTA 6 para esto, que aún
-no está implementado.
+publicar; el diccionario GTA 6 está implementado en v2.6 (ver abajo): `initial_prompt` + correcciones
+deterministas post-SRT en `config.yaml`.
+
+## Política de traducción de subtítulos — v2.5
+
+Regla del usuario (2026-11-16), en `config.yaml` (`subtitle_policy`):
+- **Audio en español -> subtítulos SOLO en español, sin traducir**
+  (`task="transcribe"`, `language="es"`). El español nunca se traduce,
+  ni con `--subtitle-lang en` ni con `--translate`.
+- **Audio en cualquier otro idioma -> subtítulos traducidos al inglés**
+  (`task="translate"`, lo único que Whisper traduce).
+
+`subtitles.py` detecta el idioma con `model.detect_language()` y decide
+con `config.resolve_subtitle_task()`. Flags:
+`--subtitle-lang auto|es|en` (default: `auto`, aplica la política;
+`es` fuerza español, `en` fuerza inglés) y `--translate` / `--no-translate`
+(fuerza o bloquea la traducción; por defecto manda la config).
+
+```bash
+# Rumano -> inglés (auto, por la política)
+.venv/bin/python subtitles.py clip.mp4
+# Español -> solo español, aunque se pida inglés (la regla dura gana)
+.venv/bin/python subtitles.py clip.mp4 --subtitle-lang en
+# Nunca traducir, transcribe en el idioma original
+.venv/bin/python subtitles.py clip.mp4 --no-translate
+```
+
+Pruebas reales (modelo `tiny`):
+- **Rumano -> inglés (Kick, Locones):** el clip del mejor pico
+  (03h08m) se probó con el segmento del pico de 14m05s del mismo VOD
+  (corrección v2.6: el clip de 03h08m SÍ tiene ~11 s de voz en
+  rumano al inicio, ver abajo):
+  detectado `ro`, `task=translate`, SRT en inglés — "I don't want to
+  see / you again, I don't / want / to see you again" (32,2–39,5 s) —
+  quemado en `runs/kick-locones-01a1e069/clips/clip_14m05s_subs-en.mp4`
+  (1080x1920, 60 s, verificado por fotograma). Solo hay ~7 s de voz
+  en esos 60 s; el resto es audio del juego.
+- **Español no se traduce (Kick, Coker):** detectado `es` (prob. 0,62),
+  `task=transcribe`, subtítulos en español ("¿Me / te... / No,").
+- **Inglés (Twitch, 2929669422):** detectado `en`, `task=transcribe`,
+  subtítulos en inglés (ya estaba en inglés, no hay nada que traducir).
+- Prueba unitaria de la decisión: `python3 test_subtitle_policy.py`
+  (11/11 casos: es/ro/en/fr/de/pt, con y sin flags).
+
+Limitaciones de la traducción con `tiny`:
+- La detección de idioma en audio ruidoso de juego es poco fiable:
+  en el segmento de 14m05s el auto-detect dijo `en` (prob. 0,13) y
+  transcribió basura en inglés ("Oh my, you're no more of a patroth,
+  why?"); forzando `--lang ro` la traducción salió bien. Si el idioma
+  detectado sale con probabilidad baja (< 0,5), pasa `--lang` a mano.
+- `task="translate"` a veces da palabras con `end == start`; el SRT
+  les da una duración mínima de 0,3 s para que se vean al quemar.
+- La traducción es usable para subtítulos cortos de clips, pero hay
+  que revisar el SRT: el modelo `tiny` repite frases y se pierde con
+  ruido de juego. Un modelo `base`/`small` traduciría mejor, a costa
+  de más tiempo de CPU.
+
+## Subtítulos — v2.6: VAD, anti-alucinación, puerta "sin voz", escalado tiny→base, idioma por tramos, diccionario GTA 6
+
+En `subtitles.py` + `config.yaml`
+(sección `subtitles`). Nada hardcodeado, todo configurable:
+
+- **VAD + anti-alucinación:** faster-whisper con `vad_filter=True`
+  (Silero VAD, incluido en faster-whisper) y umbrales
+  `no_speech_threshold` 0,6, `compression_ratio_threshold` 2,4,
+  `logprob_threshold` -1,0, `condition_on_previous_text=False`. El
+  ruido de juego sin voz se descarta antes de transcribir; sin
+  contexto previo no se encadenan alucinaciones de un segmento al
+  siguiente.
+- **Puerta "sin voz":** si el clip tiene <5 palabras por cada 60 s o
+  la voz cubre <10% de la duración, NO se genera SRT ni se quema
+  nada: el clip queda marcado como "solo gameplay/música" en el
+  transcript JSON (`no_speech: true`,
+  `audio_note: "solo gameplay/música"`) y el proceso termina con
+  código 0, sin fallar. El clip sigue su camino sin subtítulos.
+  Pendiente de conectar: que `auto_clips.py` / `viral_package.py`
+  lean ese campo y lo reflejen en el manifiesto.
+- **Escalado condicional tiny → base:** SOLO si salta un umbral
+  objetivo — repetición de la misma palabra/frase ≥3 veces,
+  <8 palabras/min con voz, logprob medio < -0,8, idioma con prob.
+  <0,5. Nunca base por defecto: tiny es varias veces más rápido en
+  CPU. El motivo queda en `transcript["escalation_reasons"]` y el
+  modelo final en `transcript["model"]`.
+- **Idioma por tramos:** se detecta en trozos de 30 s
+  (`language_chunk_s`) y se vota por mayoría; el empate lo desempata
+  el idioma mayoritario del chat (`--chat-lang` o
+  `subtitles.chat_language`) y si no el de mayor probabilidad media;
+  sin votos, el fallback de config (idioma del streamer o del
+  canal). Siempre se guardan `source_language`, probabilidad y
+  `task`, más los votos en `language_votes`.
+- **Diccionario GTA 6 (~25 términos, `gta6_terms`):** va como
+  `initial_prompt` a Whisper y como correcciones deterministas
+  post-SRT (`gta6_corrections`: solo se toca lo que está en el mapa,
+  por palabra/frase completa). El número de correcciones aplicadas
+  se informa al generar el SRT.
+- Flags nuevos: `--chat-lang es|en`, `--no-vad`, `--no-escalate`.
+
+**100% local y gratis ($0) — decisión del usuario (2026-11-16).**
+Todo este bloque corre en local, sin keys ni cuentas de pago:
+faster-whisper `tiny`/`base` (modelos de Systran, descarga gratuita
+de HuggingFace, sin token ni cuenta), VAD Silero local y ffmpeg. El
+escalado tiny→base es solo entre modelos locales, nunca a una API.
+NO se usa la Whisper API de OpenAI ni ninguna API paga, y NO se usa
+Gemini: al crear la key Gemini pidió tarjeta, así que no se pone
+tarjeta ni se crea cuenta de facturación. No se pide ninguna key de
+pago para este bloque.
+
+Detalle técnico: el repo tiene un `queue.py` propio (cola de
+aprobación) que haría sombra al módulo `queue` de la stdlib cuando
+faster-whisper descarga el modelo VAD (concurrent.futures hace
+`import queue` y falla con AttributeError). `subtitles.py` carga el
+`queue` de la stdlib por ruta explícita al arrancar para que quede
+en `sys.modules`.
+
+Pruebas reales de aceptación (2026-11-16, `.venv`, modelo tiny con
+escalado a base cuando saltó un umbral; SRT en
+`runs/.../clips/*_v26.srt`, transcript en `*_v26_transcript.json`):
+- **Español con voz (Kick, Coker, clip 03h14m50s):** detectado `es`
+  (prob. 0,77, votos 2/2) → `task=transcribe`, subtítulos en
+  español, sin traducir. Tiny: 100 palabras, 42% de habla, logprob
+  medio -1,06 → escaló por repetición ("no" x4 seguidas) y logprob
+  bajo. Base: 93 palabras, 11 segmentos, 31 bloques SRT, habla 56%,
+  logprob -0,68, idioma re-detectado `es` 0,98. SRT en español, sin
+  alucinaciones graves (algunas palabras sueltas con ruido de
+  juego: "fombra y sovordo", "arrar"). Correcciones GTA 6: 0.
+- **Rumano con poca voz (Kick, Locones, clip 03h08m05s):**
+  corrección a v2.5: el clip SÍ tiene voz, ~11 s de rumano al
+  inicio, y el resto (~48 s) es solo audio del juego. Tiny: `ro`
+  0,44 (voto empatado 1-1, desempate por probabilidad) → escaló por
+  logprob -1,68 e idioma poco fiable. Base: 30 palabras, 1 segmento
+  (0–11,3 s), habla 13%, logprob -1,69, traducción a inglés
+  coherente ("You'll see, if you can see it..."). **0 palabras
+  inventadas en los ~48 s de solo gameplay.** La puerta "sin voz"
+  NO se activó aquí porque sí hay voz (30 palabras ≥ 5, 13% ≥ 10%).
+  Una primera pasada con base dio 47 palabras con el mismo
+  contenido: Whisper varía la redacción en audio ruidoso, pero el
+  contenido coincide.
+- **Inglés (Twitch, peereira7/NoraExplorer, clip 7h12m):**
+  detectado `en` (prob. 0,96, votos 0,99/0,92, sin empate) →
+  `task=transcribe`, 150 palabras, 7 segmentos, 43 bloques SRT,
+  habla 76%, logprob -0,31, sin escalado (ningún umbral saltó).
+  SRT razonable ("It was a good stream... I'll see you guys on the
+  19th"). "Bezo" sigue apareciendo (límite conocido de tiny).
+- **Puerta "sin voz" (prueba directa):** recorte de 30 s del clip
+  de Locones (20–50 s, solo audio del juego, sin voz). Tiny
+  alucinó 16 palabras ("hype" x8 seguidas, logprob -1,03) → escaló
+  a base, que lo redujo a 7 palabras y 7% de habla → puerta
+  activada por cobertura (<10%): `no_speech: true`,
+  `audio_note: "solo gameplay/música"`, **sin SRT, sin quemado,
+  código de salida 0**. El VAD + los umbrales reducen las
+  alucinaciones pero no las eliminan en audio de juego puro; la
+  puerta es la red de seguridad.
+
+Limitación conocida: el escalado se detiene en `base` (no hay
+`small`/`medium` por defecto) y en audio muy ruidoso el logprob
+medio de base sigue bajo (-1,69 en Locones); el resultado se
+guarda igual y se revisa el SRT antes de publicar.
 
 ## Kick — v2.3 (KickDownloaderCLI vendorizado)
 
@@ -186,6 +389,112 @@ Limitaciones reales de Kick (no son bugs del agente):
   respuesta. `kick_downloader` reintenta (hasta 4 veces) y cae a `curl` si
   urllib no puede.
 
+## Layout responsive — REGLA del proyecto (v2.5)
+
+El recorte vertical **no** es un recorte ciego al centro. Lo demostró el
+clip de Coker (2026-11-16): el directo eran dos webcams lado a lado con
+una franja fina de gameplay arriba y barras negras, y el recorte centrado
+tomaba media cara de cada uno + las barras: "no se ve nada". Desde v2.5,
+cada clip decide su layout por fotogramas muestreados (`layout.py`,
+solo stdlib + ffmpeg, sin dependencias nuevas):
+
+- **Dos webcams lado a lado → se apilan**, una encima de la otra,
+  llenando los 1080x1920 sin barras negras.
+- **Una webcam + gameplay → PiP**: gameplay a pantalla completa con la
+  webcam encima en una esquina superior (nunca abajo: ahí están el
+  minimapa y el HUD de GTA).
+- **Solo gameplay → recorte vertical centrado** normal.
+- **Si el layout cambia dentro del clip, se adapta por tramos**, no un
+  recorte fijo para todo el clip.
+
+Cómo se detecta: franja de contenido apilada (alto ≤ 65% del fotograma)
++ costura vertical fuerte justo en el centro = dos cams; caja con borde
+continuo en una esquina superior = webcam PiP. Calibrado con VODs reales
+(Coker → stack; Locones y NoraExplorer → center; PiP verificado con un
+sintético). La detección de PiP es heurística v1: si no está clara, cae
+a centrado (seguro). Se puede forzar con `facecam_box` en `config.yaml`
+o con `--layout stack|pip|center` (por defecto `auto`, configurable en
+`config.yaml`, sección `layout`).
+
+**Clasificación 100% local, sin visión por API — decisión del usuario
+(2026-11-16).** La clasificación de layout es local: solo stdlib +
+ffmpeg (muestreo de fotogramas en gris, costura vertical, caja en
+esquina, estabilidad por diferencia de frames) y, si está disponible,
+detección de rostros con OpenCV Haar local. No hay ninguna
+clasificación de frames con Gemini Vision ni con ninguna API paga en
+el pipeline: la opción de visión por API queda APAGADA por defecto
+(`vision_skipped`), sin key, sin tarjeta y sin cuenta de
+facturación. Todo el pipeline funciona 100% gratis: faster-whisper
+tiny local, ffmpeg, Twitch/Kick gratis.
+
+La decisión queda registrada en el manifiesto por clip (`layout` en
+`manifest.json`, línea `Layout:` en `manifest.md`).
+
+```bash
+# Forzar un layout en un clip
+python auto_clips.py <vod> --layout stack
+python auto_clips.py <vod> --layout pip
+```
+
+### Escaneo por tramo, zonas seguras, fondo borroso, hoja de contacto
+
+- **Escaneo por tramo** (`scan_segments` en `layout.py`): además de
+  clasificar cada fotograma, muestrea 1 fotograma cada 2 s y compara
+  fotogramas consecutivos por celdas de 10x10 px. Una webcam es una
+  región *estable* (su fondo no cambia mientras el gameplay cambia en
+  todas partes), así que cada tramo se clasifica en 0/1/2 cams y se
+  marca si la cam es un avatar circular (esquinas inestables, centro
+  estable). La detección se restringe a regiones estables para no
+  confundir caras del juego con webcams. Ojo: una imagen estática
+  (menú de pausa, carga) también es estable en ambas mitades; el
+  discriminador es la costura vertical fuerte justo en el centro
+  (el divisor entre las dos cams). Sin costura, el escaneo lo
+  reporta con la advertencia y `decide_layout` no lo usa para
+  corregir a stack (Locones 0-7 s: 67-72% estables sin costura).
+  Si hay OpenCV disponible,
+  los rostros detectados solo cuentan si caen dentro de una región
+  estable; sin OpenCV (caso actual) la diferencia de frames es el
+  método principal. `decide_layout` usa el escaneo para confirmar o
+  corregir la clasificación: 2 cams persistentes sin franja apilada
+  → stack; 1 cam persistente sin caja → PiP con la caja estable.
+- **Zonas seguras por juego**: GTA V tiene el minimapa
+  abajo-izquierda y el HUD de salud abajo-derecha; el PiP nunca va
+  abajo ni tapa esas zonas (si la esquina pedida solapa una zona, se
+  prueba la otra superior). GTA 6 no tiene mapa confirmado el día 1:
+  el fallback asume la misma convención Rockstar, la completa con
+  esquinas persistentes detectadas por el escaneo (un HUD es
+  persistente por definición) y se puede fijar a mano con
+  `safe_zones` en `config.yaml` (manda sobre todo). El mapa
+  definitivo de GTA 6 se fija después de los primeros clips reales.
+- **Fondo borroso al apilar**: cada mitad se recorta completa (antes
+  se recortaba al centro 9:8 de cada mitad, lo que podía cortar caras
+  por los lados) y se ajusta por contenido sobre su propio frame
+  difuminado (`boxblur`, radio configurable `blur_radius`), en vez de
+  barras negras.
+- **Hoja de contacto** (`contact_sheet` en `layout.py`): 9 fotogramas
+  del clip en una imagen 3x3, cada uno con el rectángulo de recorte
+  que el layout usará en ese instante (verde) y las zonas seguras
+  (rojo). Para aprobar un clip, mirar 1 imagen basta.
+- **100% local, $0 (decisión del usuario, 2026-11-16):** este bloque
+  no usa ninguna API paga ni pide ninguna key: solo Python stdlib +
+  ffmpeg local (y OpenCV opcional si está instalado, también local
+  y sin red). Nada de Gemini, OpenAI, DeepSeek ni ElevenLabs: Gemini
+  pidió tarjeta al crear la key, así que no se pone tarjeta ni se
+  crea cuenta de facturación. La transcripción con faster-whisper
+  tiny (modelo local) vive en `subtitles.py`, no aquí; `layout.py`
+  no transcribe nada y no sale a la red.
+
+```bash
+# Escaneo por tramo + hoja de contacto de un segmento
+python -c "
+from layout import scan_segments, decide_layout, contact_sheet
+seg = 'runs/kick-coker-01a1dffd/segments/seg_01_t03h14m50s.mp4'
+print(scan_segments(seg, 60))
+d = decide_layout(seg, 60)
+contact_sheet(seg, 'contacto-coker.jpg', decision=d)
+"
+```
+
 ## Uso
 
 ### 1. Descargar chat y VOD
@@ -230,13 +539,19 @@ python clips_chat_v2.py chat.json --video vod.mp4 --window 5 --min-separation 90
 | `--crf` | 23 | Calidad x264 (menor = mejor) |
 | `--preset` | fast | Preset x264 |
 | `--dry-run` | — | Solo lista picos, sin cortar |
+| `--local-baseline` | on | Baseline local ±12 min con z-score + subida (default: activado) |
+| `--no-local-baseline` | — | Apaga el baseline local: puntúa por puntos ajustados |
+| `--no-anti-spam` | — | Apaga el anti-spam v2 |
+| `--local-half-min` | 12 | Media vecindad local en minutos a cada lado |
 
 ## Cómo funciona
 
-1. Agrupa los mensajes en ventanas de 10 s (configurable).
+1. Agrupa los mensajes en ventanas de 10 s (configurable), con paso de 5 s y suavizado (0.25/0.5/0.25).
 2. Puntúa cada mensaje: 1 base, +1 risa, +1 hype.
-3. Elige las ventanas con mayor puntaje, con al menos 60 s de separación.
-4. Empieza cada corte 20 s antes del pico y exporta 60 s en `1080x1920` con recorte vertical.
+3. Anti-spam v2: penaliza la ventana si es mayormente emotes (>60% → ×0.25) o mensajes repetidos (>40% → ×0.5), y registra el motivo.
+4. Baseline local: cada ventana se puntúa con z-score contra su vecindad de ±12 min + pendiente de subida + magnitud (ver v2.5 arriba).
+5. Elige las ventanas con mayor puntaje, con al menos 60 s de separación.
+6. Empieza cada corte 20 s antes del pico y exporta 60 s en `1080x1920` con recorte vertical.
 
 El nombre de cada clip dice el pico, el puntaje y el desglose, por ejemplo `clip_01_t00m25s_s32_r16h0.mp4` = pico a los 25 s, 32 puntos, 16 risas, 0 hype.
 
@@ -269,9 +584,98 @@ python auto_clips.py https://kick.com/locones/videos/<uuid> --audio-fallback
 
 Lo único que queda a mano es subirlos a TikTok / Reels / Shorts: eso no se puede automatizar sin que cada plataforma te pida entrar y confirmar en tu teléfono.
 
+## Cola FIFO + worker + aprobación
+
+`queue.py` + `worker.py`: un VOD entra en la cola, un solo worker lo
+procesa con `auto_clips.py` y el clip queda en `ready_for_review`
+hasta que un humano lo aprueba o lo rechaza. **Nada se publica desde
+aquí.**
+
+```bash
+python queue.py add https://kick.com/coker/videos/<uuid> --lang es
+python queue.py list            # ver la cola
+python queue.py approve 3       # aprobar un job en ready_for_review
+python queue.py reject 3        # rechazarlo
+python queue.py status          # resumen + disco + kill-switch
+python worker.py --once         # procesar un job y salir
+python worker.py                # procesar la cola hasta vaciarla
+```
+
+- **Persistente:** la cola vive en SQLite (`queue.db`, gitignored),
+  nunca solo en memoria. Estados: `queued → processing →
+  ready_for_review → approved/rejected → published/failed/dead`.
+- **Entrada:** solo streamers en la lista blanca de `config.yaml`
+  (`allowlist`: IlloJuan; REGLA 2026-11-16: estar en la lista que
+  sube el usuario = permiso ya dado, sin ficha), dedup por
+  VOD + idioma, y no se encola si quedan menos de 2 GB libres.
+  `--force` en `add` salta solo la lista blanca (pruebas locales) y
+  deja el job marcado.
+- **1 solo worker:** `worker.lock` (fcntl) impide un segundo worker.
+  Si un worker muere con un job en `processing`, el siguiente lo
+  devuelve a `queued` sin gastar intento.
+- **Reintentos:** máx 3 y solo para fallos transitorios (red/descarga);
+  lo permanente va a `failed`, y tras 3 intentos a `dead`.
+- **Semáforo:** `approve` se niega si hay rojos, salvo
+  `--force-confirm` explícito (queda registrado). Rojo si: el juego
+  no es GTA 6, el VOD es anterior al 19 nov 2026, el título/categoría
+  hace sospechar música con copyright, o el manifiesto viene sin
+  clips, con archivos que faltan o sin decisión de layout.
+  (2026-11-16: el permiso YA NO es un rojo — estar en la lista
+  blanca que sube el usuario = permiso ya dado.)
+- **Kill-switch:** si existe el archivo `queue.kill`, el worker no
+  arranca o se pausa inmediatamente (incluso a mitad de un job, que
+  vuelve a `queued`). Se reanuda borrando el archivo.
+- Antes de correr `auto_clips.py`, el worker respalda
+  `manifest.json/.md` y `titles.txt` a `*.bak` si ya existen.
+
+Pruebas: `python3 test_queue.py` (32 tests, BD temporal, sin red).
+
+## Monitor de influencers — `watcher.py` (ver `WATCHER.md`)
+
+Vigila la lista blanca de `influencers.yaml` (**hoy solo IlloJuan**,
+Twitch, español, GTA) y detecta directos en vivo y VODs nuevos, para
+no pegar la URL a mano. El encolado manual por URL queda como opción
+secundaria.
+
+```bash
+python3 watcher.py --once --dry-run     # una pasada, sin encolar (defecto)
+python3 watcher.py --once --live        # una pasada, encola lo que pase los frenos
+python3 watcher.py --loop --live        # bucle cada poll_minutes (config.yaml, 15)
+```
+
+- **En vivo ≠ encolar.** Si varios están en vivo a la vez, la
+  detección es para todos, pero no se sube nada en el momento: los
+  clips se hacen solo cuando termina el directo y sale el VOD, y
+  siempre con aprobación humana. El watcher detecta en vivo y
+  registra; encola **solo VODs terminados**.
+- **Frenos antes de encolar:** kill-switch (`queue.kill`), lista
+  blanca (influencers en `influencers.yaml`; REGLA 2026-11-16:
+  estar en la lista que sube el usuario = permiso ya dado), solo
+  GTA 6 verificado, solo VOD terminado, dedup (`seen_vods.json`,
+  gitignored, + dedup de la cola por VOD + idioma), tope de 5 VODs
+  nuevos por influencer y día, nunca más de 1 job por influencer en
+  `processing` (regla nº 1), y aprobación humana en
+  `ready_for_review`. `--dry-run` es el defecto: sin `--live`
+  explícito no se toca la cola.
+- **Fuentes (gratis, $0):** Kick por API pública sin key (reutiliza
+  `kick_downloader.core`); Twitch por Helix oficial si hay
+  credenciales (`TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET`, app
+  gratis en dev.twitch.tv) o, sin ellas, por la ruta pública GQL que
+  usa la propia web de Twitch (no oficial, puede cambiar; Helix es
+  la vía estable).
+- **Probado 2026-11-16 con IlloJuan:** en vivo (GTA V #7, 60.371
+  espectadores), último VOD terminado 2929822269 (GTA V #6) no
+  encolado (es GTA V, no GTA 6);
+  segunda pasada sin propuestas nuevas (dedup); `--live` sin encolar
+  nada (frenos aguantan) y cola sin tocar. Tests offline:
+  `python3 test_watcher.py` (11 tests, sin red).
+- **Fase 2:** cron cada 15 min en producción, Twitch con
+  credenciales Helix, encolado automático continuo (hoy: pasadas
+  manuales).
+
 ## Empaquetado viral — para las 4 plataformas, no solo YouTube
 
-`viral_package.py` combina las skills de [youtube-agent-skill](https://github.com/Jakeschincariol/youtube-agent-skill), pero adaptadas a las 4 plataformas. Misma idea, mismo hook y mismo texto en pantalla; lo que cambia es caption, hashtags, portada y modo de subida. Nunca se copia el mismo texto literal en las 4.
+`viral_package.py` empaqueta cada clip para las 4 plataformas. Misma idea, mismo hook y mismo texto en pantalla; lo que cambia es caption, hashtags, portada y modo de subida. Nunca se copia el mismo texto literal en las 4.
 
 | Plataforma | Título / caption | Miniatura | Subtítulos | Subida |
 |---|---|---|---|---|
@@ -282,17 +686,218 @@ Lo único que queda a mano es subirlos a TikTok / Reels / Shorts: eso no se pued
 
 Cada clip en `manifest.md` lleva su paquete por plataforma, con su métrica a mirar: YouTube visto vs deslizado, TikTok % finalización, Reels reproducciones y compartidos.
 
-## Empaquetado viral (youtube-agent-skill)
+## Ficha del momento + títulos reales + anti-clickbait — v2.6
 
-`viral_package.py` combina las skills de [youtube-agent-skill](https://github.com/Jakeschincariol/youtube-agent-skill):
+La v2.4 generaba 3 títulos fijos con "GTA 6" hardcodeado y prometía una
+"jugada" que no existía: en Coker (GTA V RP) y en Locones
+(Counter-Strike 2) el título viejo mentía en el juego y en la jugada.
+Desde v2.6 el título sale de la ficha del momento, sin LLM en caliente:
 
-- **yt-viral:** ranking por múltiplo sobre la mediana del propio stream, no por puntaje bruto. Un pico de 32 pts con mediana 17 es 1.88x.
-- **yt-shorts:** cada clip lleva primera línea nueva, texto en pantalla en los primeros 2 s (distinto de lo hablado) y punto de loop, para que sobreviva sin el video alrededor.
-- **yt-package:** título + miniatura como una unidad. Título ≤60 car. (40 en móvil), miniatura ≤3 palabras y sin repetir el título, máx. 2 palabras en MAYÚSCULAS.
-- **yt-seo:** descripción con las 2 primeras líneas como snippet, tags máx. 15 y las 3 búsquedas que el video debería ganar.
-- **yt-retention:** el hook se juega en los primeros 15 s.
+- **`moment_card.py`** — ficha del momento como única fuente de verdad,
+  de la transcripción (SRT si existe) + el chat del pico. Juego real
+  (nunca se infiere del chat ni del canal: lo pasa quien llama, con su
+  fuente en `game_source`), streamer, qué pasa (verbo+objeto, solo si
+  una acción del léxico aparece ≥2 veces en chat/transcripción),
+  frase literal del streamer (SRT, cerca del payoff) y del chat (la
+  más repetida en la ventana del pico, con ≥2 menciones), reacción
+  dominante (risas/hype/volumen), timestamp del payoff. Si no hay
+  evidencia, la ficha lo dice (`evidence: low`, `what: null`).
+- **`viral_package.py`** — `generate_titles(moment_card, lang)` genera
+  10 títulos por clip desde la ficha (juego real, acción evidenciada,
+  frase literal, reacción, múltiplo). `check_title(title, moment_card)
+  -> (bool, motivo)` es BLOQUEANTE: falla si el juego del título no es
+  el juego real, si el sustantivo prometido no aparece en
+  transcripción/chat/ficha, si el payoff no ocurre dentro del clip, o
+  si hay un superlativo sin evidencia (múltiplo/risas) que lo respalde;
+  también falla el lint de título (≤60 car., ≤2 palabras en
+  MAYÚSCULAS; >40 car. es solo aviso, se corta en móvil). Anti-
+  repetición: ningún título repetido en el mismo VOD ni el mismo día,
+  registro en `titles_seen.json` (gitignored por `*.json`); solo se
+  anota el título elegido (`best_title`), no los 10 candidatos.
+  "GTA 6" solo si el juego real es GTA 6; tags y hashtags salen del
+  juego real (`game_hashtags_tags`), no de #GTA6 fijo. Sin ficha, el
+  juego es desconocido y ningún título nombra un juego.
+- **`thumbnails.py`** — miniatura real: 3 fotogramas del clip con
+  ffmpeg (payoff −5 s, payoff, payoff +5 s), guardados para elección
+  humana en la aprobación; portada de Instagram = copia del fotograma
+  del payoff (`cover_instagram.jpg`). Sin texto quemado por ahora.
+  Sin payoff conocido usa 25 % / 50 % / 75 % de la duración.
 
-Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunta de las skills: ¿lo subo así, o lo cambio?
+```bash
+# Ficha + títulos + miniaturas de un clip real
+python moment_card.py --clip runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1.mp4 \
+  --chat runs/kick-coker-01a1dffd/chat.json \
+  --srt runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1.srt \
+  --streamer coker --game "GTA V RP" --peak 11710 --start 11690 \
+  --score 56.5 --risas 14 --hype 1 --median 1.0 --out runs/kick-coker-01a1dffd/clips/moment_card.json
+python thumbnails.py runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1.mp4 \
+  --card runs/kick-coker-01a1dffd/clips/moment_card.json \
+  --out-dir runs/kick-coker-01a1dffd/clips/thumbnails --cover
+python -c "
+from viral_package import check_title
+import json; card = json.load(open('runs/kick-coker-01a1dffd/clips/moment_card.json'))
+print(check_title('GTA 6: La jugada que rompió el chat', card))"
+```
+
+Probado con los clips reales (2026-11-16, sin push, nada publicado):
+
+- **Coker** (`clip_01_t03h14m50s_s56.5_r14h1.mp4`, GTA V RP, pico
+  03h15m10s, 56.5 pts, 14 risas, 1 hype, 50 mensajes/10 s, 127
+  usuarios/30 s, múltiple 56.5x): ficha `evidence: medium`,
+  `what: "errar un tiro"` (15 menciones de "erra"), cita del streamer
+  "No, no, no, no, no." (19.2 s del clip, junto al payoff a 20 s) y
+  del chat "ESTANDO ARMADO Y LO ERRA" (x2). 10/10 títulos generados,
+  ninguno dice GTA 6. Mejores 3: `GTA V RP: El chat: "Estando armado
+  y lo erra"` (45 car.), `GTA V RP: Errar un tiro y el chat explotó`
+  (41 car.), `Errar un tiro que nadie se creyó` (32 car.). El título
+  viejo **FALLA** el check: "el título dice 'GTA 6' pero el juego
+  real es 'GTA V RP'; el título promete 'jugada' pero no aparece en
+  transcripción/chat/ficha".
+- **Locones** (`clip_01_t03h08m05s_s24.75_r0h0.mp4`, Counter-Strike 2,
+  pico 03h08m25s, 24.75 pts, 0 risas, 0 hype, 57 mensajes/10 s, 21
+  usuarios/30 s, múltiple 24.75x): ficha `evidence: low` — sin
+  transcripción (segmentos vacíos) y solo 1 mensaje de texto en la
+  ventana del pico, resto spam de emotes rumanos; `what: null` ("sin
+  evidencia: no se sabe qué pasa"). Solo 5 títulos, todos de volumen/
+  reacción, ninguno promete una jugada. Mejores 3: `57 mensajes en 10
+  segundos por esto` (35 car.), `Counter-Strike 2: El chat explotó
+  con esto` (42 car.), `24.75x la mediana: Counter-Strike 2`
+  (35 car.). El título viejo **FALLA** el check: "el título dice
+  'GTA 6' pero el juego real es 'Counter-Strike 2'; el título promete
+  'jugada' pero no aparece en transcripción/chat/ficha; evidencia
+  baja: la ficha no sabe qué pasa, no se puede prometer ['jugada']".
+- Miniaturas: 3 frames 1080x1920 por clip (15/20/25 s, payoff a 20 s)
+  + `cover_instagram.jpg` (copia del frame del payoff), en
+  `runs/<vod>/clips/thumbnails/`. El frame del payoff de Coker muestra
+  las dos webcams lado a lado (layout stack), verificado a vista.
+
+## Empaquetado viral
+
+`viral_package.py` aplica estas técnicas de empaquetado viral:
+
+- **Ranking viral:** ranking por múltiplo sobre la mediana del propio stream, no por puntaje bruto. Un pico de 32 pts con mediana 17 es 1.88x.
+- **Formato Shorts:** cada clip lleva primera línea nueva, texto en pantalla en los primeros 2 s (distinto de lo hablado) y punto de loop, para que sobreviva sin el video alrededor.
+- **Título + miniatura:** título + miniatura como una unidad. Título ≤60 car. (40 en móvil), miniatura ≤3 palabras y sin repetir el título, máx. 2 palabras en MAYÚSCULAS.
+- **SEO:** descripción con las 2 primeras líneas como snippet, tags máx. 15 y las 3 búsquedas que el video debería ganar.
+- **Retención:** el hook se juega en los primeros 15 s.
+
+Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunta: ¿lo subo así, o lo cambio?
+
+## Publicación — v2.6
+
+`publisher.py` es el único módulo que publica. Ver `PUBLISHING.md`
+para el detalle completo.
+
+- **YouTube Shorts por API** (Data API v3, `videos.insert`): la única
+  plataforma con publicación directa. OAuth 2.0 (`client_secrets.json`
+  + `token.json`, nunca en git). Cuota ~10.000 unidades/día, ~1.600 por
+  subida → máx. ~6 Shorts/día; plan 3-5/día.
+- **TikTok / Instagram / Facebook: draft-first.** `publish_draft()`
+  genera el paquete listo para subir a mano en `drafts/` (archivo +
+  caption + hashtags + portada). Nunca publicación directa sin
+  auditoría aprobada.
+- **Auditoría** (`python publisher.py audit`): checklist pasa/no-pasa
+  por cuenta. Estado 2026-11-16: YT 🟡 AMBER (falta verificar canal +
+  OAuth), TikTok 🟡 AMBER (falta app aprobada), IG 🔴 RED (cuenta no
+  creada), FB 🔴 RED (Page no creada). Sin fila en verde, draft-first.
+- **Cola** (`publish_queue.json`): `queued → ready_for_review →
+  approved → published / failed`, más `draft` y `quarantined`.
+  Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h, franja
+  18:00-23:59 Chile.
+- **Lista blanca** (`influencers.yaml` canónica + `allowed_streamers.yaml`,
+  IlloJuan concedido): se verifica
+  EN EL MOMENTO de publicar, no solo al detectar. Si el streamer
+  ya no está en la lista, no se publica.
+- **Rechazos:** formato → 1 reintento; copyright/contenido →
+  cuarentena y revisión humana, nunca reintento ciego.
+- **Dry-run por defecto:** sin `--live` no se sube nada. Prueba
+  2026-11-16 con el clip de Coker: paquete válido, pero NO publicable
+  (Coker no está en la lista blanca, YT sin OAuth, auditoría amber).
+
+## Auto-publicación — contador "funciona", 4 fases y circuit breaker
+
+`counter.py` decide si se PUEDE publicar; no publica nada. Ver
+`AUTOPUBLISH.md` para el detalle completo.
+
+- **Contador "funciona"** (`state/counter.json`): clips seguidos
+  aprobados sin editar título/caption Y publicados sin fallo
+  técnico. Umbral propuesto (a validar): **15 seguidos, 0
+  rechazados por contenido en los últimos 15**. Se reinicia a cero
+  con un rojo, un rechazo por contenido o un fallo de subida.
+  `python3 counter.py status` / `record <evento>`.
+- **4 fases, cambio MANUAL con confirmación** (`counter.py set-phase
+  N --yes`): 1 manual (19 nov) → 2 semi-auto (el lote se propone;
+  sin respuesta no se publica) → 3 auto con ventana de veto
+  (30 min YT / 2 h resto, configurable) → 4 auto total (solo con
+  semáforo verde + lista blanca + métricas en verde). Cada fase
+  mínimo 3-5 días y 10 clips; avanzar es secuencial salvo `--force`.
+- **Circuit breaker**: auto-pausa con 2 fallos de subida seguidos en
+  una plataforma, copyright/strike, 1 rojo que intentó colarse,
+  idioma conf. < 0,5 en 2 clips seguidos, o 3 clips seguidos muy por
+  debajo de la mediana. Reanudación solo manual
+  (`counter.py resume --yes`).
+- **Kill-switch**: archivo `queue.kill` en la raíz del repo, el mismo
+  que usa `queue.py` (bloque 1). Si existe, nada se publica.
+- **La cola consulta la puerta** antes de publicar:
+  `counter.py gate --platform youtube --clip c1` (exit 0 =
+  permitido) o `gate_publish()` desde Python. La lista blanca
+  canónica es `influencers.yaml` + `allowed_streamers.yaml`
+  (IlloJuan): si la lista está vacía, la fase 4 queda bloqueada.
+- **Simulación**: `python3 counter.py simulate` (10 aprobados sin
+  editar → 1 rechazo → contador a cero, más demostración del breaker
+  con 2 fallos seguidos; usa estado temporal, no toca el real).
+
+## Supervivencia por plataforma
+
+Publicar clips de otros streamers pone en riesgo las cuentas nuevas si se
+hace en bloque o como si fuera un bot. Estas reglas son el checklist de aprobación: se cumplen siempre, y si cae el alcance
+se sigue el protocolo de recuperación, no se insiste.
+
+### Checklist de aprobación (antes de cada publicación)
+
+- **Cuentas nuevas: 1 publicación por día por plataforma**, y no en bloque.
+- **No a la misma hora en las 4 plataformas**: escalona las subidas
+  (por ejemplo YT por la mañana, TikTok al mediodía, IG por la tarde,
+  FB por la noche) para que no parezca una subida coordinada.
+- **Nunca 5+ publicaciones en un día en una cuenta nueva.**
+- **Nunca borrar y resubir el mismo clip** esperando que "esta vez sí"
+  funcione: cada resubida idéntica es una señal de spam.
+- **Nunca el mismo archivo en ES y EN el mismo día**: cada versión lleva
+  edición, título, caption y hashtags distintos (ver `viral_package.py`,
+  `package_for_platforms()`). Si el clip es el mismo, que al menos el
+  empaquetado no lo sea.
+- **Música del juego / del stream, fuera**: mutearla o reemplazarla por
+  la biblioteca de música de cada plataforma. La música con copyright es
+  la vía más rápida a un bloqueo de alcance o a una reclamación.
+- **Sin marca de agua de otra plataforma**: un clip con el logo de TikTok
+  en YouTube (o al revés) se penaliza en distribución.
+- **No repetir título / descripción / hashtags idénticos en todos los
+  clips**: cada clip tiene su propio título, caption y set de hashtags,
+  aunque el formato se repita.
+- **Calentar la cuenta nueva 1-2 días antes de publicar en serie**:
+  ver vídeos, seguir alguna cuenta, completar el perfil, interactuar.
+  Una cuenta que nace y publica 5 clips el mismo día huele a bot.
+- **IG / FB: no publicar el primer Reel el día de crear la cuenta o la
+  Page.** Esperar al día siguiente como mínimo.
+
+### Qué mira cada plataforma
+
+| Plataforma | No-ban | Shadowban | Algoritmo | Engagement |
+|---|---|---|---|---|
+| YouTube Shorts | No resubir el mismo archivo; música con licencia de su biblioteca; sin watermark de otra app | El alcance cae sin aviso si el vídeo se marca como reutilizado/spam | Prueba el Short con una audiencia pequeña y lo empuja según **% visto y finalización** | Retención y finalización; los likes importan menos que verlo entero |
+| TikTok | 1/día en cuenta nueva; caption propio por clip; música de su biblioteca | Caída brusca de vistas a 0-200 sin aviso; revisar Estado de la cuenta | Empuja según **finalización, re-visualizaciones y compartidos** | Compartidos y replays pesan más que likes |
+| IG Reels | No publicar el primer Reel el día de crear la cuenta; portada propia; sin watermark | Reels que dejan de aparecer en Explorar / a no-seguidores | Recomienda a **no-seguidores** según **finalización, guardados y DM** | Guardados y envíos por DM son la señal fuerte |
+| FB Reels | Publicar en Page, nunca en perfil personal; 1/día al inicio | Alcance limitado a seguidores sin explicación | Pesan **compartidos y conversación** (comentarios con respuesta) | Comentarios y compartidos por encima de likes |
+
+### Si cae el alcance
+
+1. **Pausar 24-48 h**: no publicar nada en esa plataforma, no borrar en masa.
+2. **Revisar Estado / Calidad de la cuenta** (YouTube Studio → Estado del canal, TikTok → Estado de la cuenta, IG → Estado de la cuenta, FB → Calidad de la Page) y leer qué marcó la plataforma.
+3. **Solo el clip problemático a privado o eliminar**; nunca borrar todo el catálogo de golpe.
+4. **Apelar solo con la lista blanca como respaldo**: si la reclamación es por reutilización o copyright, estar en la lista que subió el usuario es la evidencia de permiso. Si el streamer ya no está en la lista, no apelar: esperar.
+5. **Volver con 1/día y más transformado**: nuevo título, nueva edición (otro corte, otro layout, otro texto en pantalla), nuevos hashtags. Si vuelve a caer, parar esa plataforma una semana.
+
+REGLA 2026-11-16: estar en la lista blanca que sube el usuario = permiso ya dado; no hay ficha de permiso (PERMISOS.md eliminado).
 
 ## Probado
 
@@ -310,6 +915,24 @@ legible abajo del todo. Ojo: ese VOD es de GTA 5, no de GTA 6, y el
 pico es la despedida del directo ("see you guys on the 19th"), no
 una jugada; hay que revisar cada clip antes de publicar.
 
+Con un VOD real de Kick (Locones, `01a1e069-8470-7626-8d5e-21ccb729c509`,
+10h27m, Counter-Strike 2, 2.166 views, chat en rumano): el chat completo
+habría tardado ~50 min (7.525 ventanas de 5 s) y el usuario lo canceló;
+con el escaneo rápido (`scan_chat_peaks`, 126 muestras cada 5 min +
+chat denso en las 5 regiones con más mensajes) el clip estuvo listo en
+**9 min totales** (escaneo ~2 min, segmento 24 MB, corte vertical ~6 min).
+Picos reales del chat: 08m55s 15,5 pts, 09m55s 17,75, 12m05s 19,0,
+14m05s 22,25 y el mejor **03h08m25s 24,75 pts** (27 mensajes, 24,75x la
+mediana), cortado en `runs/kick-locones-01a1e069/clips/clip_01_t03h08m05s_s24.75_r0h0.mp4`,
+verificado con ffprobe (1080x1920, 60,00 s, 38 MB), con manifiesto viral
+para las 4 plataformas. Ojo, dos cosas: el chat de Kick es rumano y
+casi todo emotes, así que los picos son de **volumen** (0 risas, 0 hype
+en ES/EN salvo 1) y el mejor pico es spam de emotes repetidos
+(`loconeslocowwwwwwwwwww`, `collectiblesGoldenPitbull`), no una jugada:
+el título "QUÉ JUGADA" que pone el empaquetado no corresponde a lo que
+pasa en ese clip y hay que revisarlo antes de publicar. Y el VOD de
+Kick expira a los 7 días (30 si verificado): este es del 15 nov 2026.
+
 ## Aviso
 
-Bajar el VOD de otro streamer y republicarlo puede infringir las normas de Twitch y el copyright del creador / del juego. Úsalo con VODs propios o con permiso.
+Bajar el VOD de otro streamer y republicarlo puede infringir las normas de Twitch y el copyright del creador / del juego. Úsalo solo con streamers de la lista blanca que sube el usuario (estar en la lista = permiso ya dado).

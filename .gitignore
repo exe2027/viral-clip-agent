@@ -6,3 +6,8 @@ runs/
 __pycache__/
 *.pyc
 .venv/
+queue.db
+queue.kill
+seen_vods.json
+worker.lock
+drafts/          # paquetes manuales de subida (estado local)

@@ -10,6 +10,15 @@
 # (ver AUDIT-claude-code.md). No están aquí: cambian con frecuencia y
 # pertenecen a limits.yaml, no a la config del canal.
 
+# Lista blanca de streamers (tribunal, bloque 1, 2026-11-16):
+# solo estos canales se pueden encolar en queue.py. REGLA DEL
+# USUARIO (2026-11-16): estar en esta lista = permiso ya dado por
+# el hecho de que el usuario lo subió; no hay ficha de permiso.
+# Para agregar un streamer, agrega su canal (slug de Twitch/Kick,
+# en minúsculas):
+allowlist:
+  - illojuan
+
 channel:
   name: "El Clip de GTA 6"
   handle: "@elclipdegta6"
@@ -44,7 +53,89 @@ clips:
   min_separation: 60      # separación mínima entre picos
 
 subtitles:
-  default_style: "tiktok" # tiktok | highlight | karaoke
+  default_style: "karaoke" # tiktok | highlight | karaoke (karaoke = viral, palabra por palabra)
+  subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
+  translate: true         # si se traduce a inglés lo que no sea español
+
+  # VAD + anti-alucinación — v2.6 (bloque 5 del tribunal):
+  # faster-whisper con vad_filter y umbrales que cortan las
+  # alucinaciones en ruido de juego (música, efectos, sin voz).
+  vad: true                   # vad_filter=True en faster-whisper
+  no_speech_threshold: 0.6    # segmento con prob. no-speech mayor -> se descarta
+  compression_ratio_threshold: 2.4  # texto demasiado repetitivo -> se descarta
+  logprob_threshold: -1.0     # segmento con logprob menor -> se descarta
+  # Puerta "sin voz": si el clip tiene menos palabras que el mínimo
+  # (por cada 60 s) o la voz cubre menos del 10% de la duración, NO
+  # se genera SRT ni se quema nada: el clip queda marcado como
+  # "solo gameplay/música" en el transcript y sigue su camino.
+  no_speech_min_words: 5      # palabras mínimas por cada 60 s de clip
+  no_speech_min_ratio: 0.10   # cobertura mínima de habla (0,10 = 10%)
+  # Escalado condicional tiny -> base (SOLO si salta un umbral
+  # objetivo; nunca base por defecto: tiny es varias veces más rápido).
+  escalate: true
+  escalate_min_words_per_min: 8   # <8 palabras/min con voz -> base
+  escalate_logprob: -0.8      # logprob medio por debajo -> base
+  escalate_lang_prob: 0.5     # idioma con prob. menor -> base
+  escalate_max_repeats: 3     # misma palabra/frase >=3 veces -> base
+  # Idioma por tramos: se detecta en trozos de 30 s y se vota por
+  # mayoría; el empate lo desempata el idioma mayoritario del chat.
+  language_chunk_s: 30
+  # Fallback de idioma (si el voto empata o no hay voz clara):
+  # 1º idioma del streamer, 2º idioma del canal (channel.language).
+  streamer_language: ""       # es | en | ... (vacío = usa el del canal)
+  chat_language: ""           # idioma mayoritario del chat, para desempatar
+  # Diccionario GTA 6 (~25 términos): va como initial_prompt a
+  # Whisper y como correcciones deterministas post-SRT (abajo).
+  gta6_terms:
+    - "GTA 6"
+    - "Grand Theft Auto VI"
+    - "Lucia"
+    - "Jason"
+    - "Leonida"
+    - "Vice City"
+    - "Rockstar Games"
+    - "qué jugada"
+    - "qué locura"
+    - "clutch"
+    - "no puede ser"
+    - "qué acaba de pasar"
+    - "vamos"
+    - "brutal"
+    - "insano"
+    - "qué risa"
+    - "GG"
+    - "W"
+    - "pog"
+    - "clip"
+    - "chat"
+    - "hype"
+    - "gameplay"
+    - "misión"
+    - "atraco"
+  # Correcciones deterministas post-SRT: solo lo que está en este
+  # mapa se toca, por palabra/frase completa, sin inventar nada.
+  gta6_corrections:
+    leonida: "Leonida"
+    leonidas: "Leonida"
+    vice city: "Vice City"
+    vicecity: "Vice City"
+    gta 6: "GTA 6"
+    gta vi: "GTA 6"
+    gta 5: "GTA 5"
+    grand theft auto: "Grand Theft Auto"
+    rockstar: "Rockstar"
+    lucia: "Lucia"
+    lucía: "Lucia"
+    jason: "Jason"
+
+# Política de traducción de subtítulos (regla del usuario, 2026-11-16):
+#   * audio en español -> subtítulos SOLO en español, sin traducir.
+#   * audio en CUALQUIER otro idioma (rumano, inglés, etc.) ->
+#     traducir los subtítulos al inglés (faster-whisper task="translate").
+# Es decir: transcribe en español si es español; si no, traduce a inglés.
+subtitle_policy:
+  es: "transcribe-only"   # español: transcribe, nunca traducir
+  others: "translate-to-en" # resto de idiomas: traducir a inglés
 
 # Estilos de subtítulo elegibles (idea de Shortia: plantillas con
 # preview). Se eligen con --subtitle-style en subtitles.py.
@@ -69,18 +160,82 @@ subtitle_styles:
     max_chars: 20
     max_duration: 2.0
     box: true
-  karaoke:                # palabra por palabra: bloques de 1-2 palabras
-    font_color: "#FFFF00"
+  karaoke:                # palabra por palabra con cambio de color (ASS \k real):
+    # la palabra activa va en amarillo, el resto en blanco; grande,
+    # negrita, borde negro, centrado abajo. Es el estilo por defecto
+    # (2026-11-16, arreglo 5: el tiktok se veía "muy sobrio").
+    font_color: "#FFFFFF"       # palabras pendientes: blanco
+    active_word_color: "#FFFF00" # palabra activa: amarillo
     border_color: "#000000"
-    border_width: 3
-    fontsize: 56
+    border_width: 4
+    fontsize: 64
     bold: true
     margin_v: 140
     max_chars: 8
     max_duration: 1.0
     box: false
 
-# Facecam opcional para el layout vertical (fase siguiente, aún no
-# implementado): x, y, w, h en píxeles del vídeo original.
+# Layout RESPONSIVE (regla del proyecto, 2026-11-16): el recorte vertical
+# no es un recorte ciego al centro. Cada clip decide su layout por
+# fotogramas muestreados (ver layout.py):
+#   * dos webcams lado a lado -> se apilan, una encima de la otra.
+#   * una webcam + gameplay -> gameplay completo con la webcam en PiP
+#     arriba (nunca abajo: minimapa y HUD de GTA).
+#   * solo gameplay -> recorte vertical centrado normal.
+#   * si el layout cambia dentro del clip, se adapta por tramos.
+layout:
+  mode: "auto"          # auto | stack | pip | center
+  sample_every_s: 5     # muestrear un fotograma cada N segundos
+  min_segment_s: 3      # un tramo más corto se fusiona con el vecino
+  pip_width: 480        # ancho de la webcam en PiP (px, sobre 1080)
+  pip_corner: "top-right" # top-right | top-left
+  pip_margin: 24        # margen de la webcam PiP al borde
+  # Bloque 4: escaneo por tramo + zonas seguras + fondo borroso.
+  scan_enabled: true    # escaneo por diferencia de frames cada 2 s
+  scan_every_s: 2       # 1 fotograma cada N s para el escaneo
+  blur_radius: 20       # radio del boxblur del fondo al apilar cams
+  game: "GTA 6"         # juego para el mapa de zonas seguras
+  # Zonas seguras manuales (fracciones 0..1): mandan sobre el mapa
+  # del juego y sobre lo detectado. GTA 6 día 1 no tiene mapa
+  # confirmado: si el minimapa no está abajo-izquierda, fijarlo aquí.
+  # Ejemplo: safe_zones: [[0.015, 0.70, 0.30, 0.985]]
+  safe_zones: null
+
+# Facecam explícita: x, y, w, h en píxeles del vídeo original.
+# Si está puesta, manda sobre la detección automática.
 # Ejemplo: facecam_box: [100, 80, 320, 180]
 facecam_box: null
+
+# Watcher / monitor de influencers (ver WATCHER.md).
+# Vigila la lista blanca de influencers.yaml: detecta directos en vivo
+# y VODs nuevos, y los encola en queue.py con todos los frenos.
+# Por defecto --dry-run: no encola nada sin --live explícito.
+watcher:
+  poll_minutes: 15        # intervalo entre pasadas en --loop (y en cron)
+  max_new_vods_per_streamer_per_day: 5
+  state_file: "seen_vods.json"  # VODs vistos/enqueued (gitignored, nunca se sube)
+  twitch:
+    client_id: ""         # o variable TWITCH_CLIENT_ID (Helix, gratis)
+    client_secret: ""     # o variable TWITCH_CLIENT_SECRET
+    # Sin credenciales, Twitch usa la ruta pública GQL (sin key, no
+    # oficial, puede cambiar): sirve para monitorear; Helix es la
+    # vía estable cuando el usuario configure la app en dev.twitch.tv.
+
+# Auto-publicación (bloque 10 del tribunal, 2026-11-16).
+# Contador "funciona" + 4 fases + circuit breaker (ver AUTOPUBLISH.md
+# y counter.py). NADA se publica solo sin pasar por las fases, y cada
+# cambio de fase es manual, con confirmación. Umbrales a validar por
+# el usuario.
+autopublish:
+  threshold: 15           # clips seguidos aprobados sin editar y publicados sin fallo
+  min_days_per_phase: 3   # mínimo 3-5 días por fase antes de poder avanzar
+  min_clips_per_phase: 10 # mínimo 10 clips por fase antes de poder avanzar
+  veto_window_minutes:
+    youtube: 30           # fase 3: ventana de veto en YouTube
+    default: 120          # fase 3: ventana de veto en TikTok / Instagram / Facebook
+  # Sin "whitelist" aquí: la lista blanca canónica es influencers.yaml
+  # + allowed_streamers.yaml, que lee publisher.load_whitelist();
+  # queue.py usa además "allowlist" aquí en config.yaml (nivel
+  # superior). REGLA 2026-11-16: estar en la lista = permiso ya
+  # dado. Vacía en todas = fase 4 bloqueada.
+  metrics_green: false    # poner true solo cuando las métricas estén en verde (revisión manual)
