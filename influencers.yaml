@@ -1,0 +1,34 @@
+# Influencers — lista de streamers y estado de su permiso
+#
+# LISTA VACÍA: la llena el usuario. Sin permiso concedido, no se publica
+# ningún clip de ese streamer (ver PERMISOS.md).
+#
+# Objetivo realista: 3-5 permisos concedidos antes del 19 nov 2026
+# (lanzamiento de GTA 6).
+#
+# Cómo llenarla: copiar el bloque de ejemplo por cada streamer y
+# rellenar los campos. `estado` solo puede ser:
+#   pendiente | contactado | concedido | denegado | revocado
+# Un permiso solo cuenta como `concedido` con la ficha completa
+# (texto exacto + captura/enlace) en PERMISOS.md.
+
+influencers: []
+# Ejemplo (NO es un permiso real, solo la estructura):
+# - usuario: "locones"
+#   plataforma: kick
+#   canal_original: "https://kick.com/locones"
+#   juego: "GTA 6"
+#   idioma: es
+#   canal_contacto: "dm instagram"
+#   contacto: "@locones"
+#   fecha_contacto: "2026-11-17"
+#   fecha_permiso: ""
+#   texto_exacto: ""
+#   captura: "runs/permisos/locones-permiso.png"
+#   alcance:
+#     vods: []
+#     plataformas_publicacion: [youtube, tiktok, instagram, facebook]
+#     hasta: "2026-12-31"
+#   revocable: true
+#   estado: pendiente
+#   notas: ""

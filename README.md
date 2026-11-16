@@ -383,6 +383,59 @@ Cada clip en `manifest.md` lleva su paquete por plataforma, con su métrica a mi
 
 Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunta de las skills: ¿lo subo así, o lo cambio?
 
+## Supervivencia por plataforma
+
+Publicar clips de otros streamers pone en riesgo las cuentas nuevas si se
+hace en bloque o como si fuera un bot. Estas reglas son el checklist de
+aprobación que el tribunal pidió: se cumplen siempre, y si cae el alcance
+se sigue el protocolo de recuperación, no se insiste.
+
+### Checklist de aprobación (antes de cada publicación)
+
+- **Cuentas nuevas: 1 publicación por día por plataforma**, y no en bloque.
+- **No a la misma hora en las 4 plataformas**: escalona las subidas
+  (por ejemplo YT por la mañana, TikTok al mediodía, IG por la tarde,
+  FB por la noche) para que no parezca una subida coordinada.
+- **Nunca 5+ publicaciones en un día en una cuenta nueva.**
+- **Nunca borrar y resubir el mismo clip** esperando que "esta vez sí"
+  funcione: cada resubida idéntica es una señal de spam.
+- **Nunca el mismo archivo en ES y EN el mismo día**: cada versión lleva
+  edición, título, caption y hashtags distintos (ver `viral_package.py`,
+  `package_for_platforms()`). Si el clip es el mismo, que al menos el
+  empaquetado no lo sea.
+- **Música del juego / del stream, fuera**: mutearla o reemplazarla por
+  la biblioteca de música de cada plataforma. La música con copyright es
+  la vía más rápida a un bloqueo de alcance o a una reclamación.
+- **Sin marca de agua de otra plataforma**: un clip con el logo de TikTok
+  en YouTube (o al revés) se penaliza en distribución.
+- **No repetir título / descripción / hashtags idénticos en todos los
+  clips**: cada clip tiene su propio título, caption y set de hashtags,
+  aunque el formato se repita.
+- **Calentar la cuenta nueva 1-2 días antes de publicar en serie**:
+  ver vídeos, seguir alguna cuenta, completar el perfil, interactuar.
+  Una cuenta que nace y publica 5 clips el mismo día huele a bot.
+- **IG / FB: no publicar el primer Reel el día de crear la cuenta o la
+  Page.** Esperar al día siguiente como mínimo.
+
+### Qué mira cada plataforma
+
+| Plataforma | No-ban | Shadowban | Algoritmo | Engagement |
+|---|---|---|---|---|
+| YouTube Shorts | No resubir el mismo archivo; música con licencia de su biblioteca; sin watermark de otra app | El alcance cae sin aviso si el vídeo se marca como reutilizado/spam | Prueba el Short con una audiencia pequeña y lo empuja según **% visto y finalización** | Retención y finalización; los likes importan menos que verlo entero |
+| TikTok | 1/día en cuenta nueva; caption propio por clip; música de su biblioteca | Caída brusca de vistas a 0-200 sin aviso; revisar Estado de la cuenta | Empuja según **finalización, re-visualizaciones y compartidos** | Compartidos y replays pesan más que likes |
+| IG Reels | No publicar el primer Reel el día de crear la cuenta; portada propia; sin watermark | Reels que dejan de aparecer en Explorar / a no-seguidores | Recomienda a **no-seguidores** según **finalización, guardados y DM** | Guardados y envíos por DM son la señal fuerte |
+| FB Reels | Publicar en Page, nunca en perfil personal; 1/día al inicio | Alcance limitado a seguidores sin explicación | Pesan **compartidos y conversación** (comentarios con respuesta) | Comentarios y compartidos por encima de likes |
+
+### Si cae el alcance
+
+1. **Pausar 24-48 h**: no publicar nada en esa plataforma, no borrar en masa.
+2. **Revisar Estado / Calidad de la cuenta** (YouTube Studio → Estado del canal, TikTok → Estado de la cuenta, IG → Estado de la cuenta, FB → Calidad de la Page) y leer qué marcó la plataforma.
+3. **Solo el clip problemático a privado o eliminar**; nunca borrar todo el catálogo de golpe.
+4. **Apelar solo con el permiso en mano**: si la reclamación es por reutilización o copyright, la ficha de permiso (`PERMISOS.md`) es la evidencia. Sin permiso, no apelar: esperar.
+5. **Volver con 1/día y más transformado**: nuevo título, nueva edición (otro corte, otro layout, otro texto en pantalla), nuevos hashtags. Si vuelve a caer, parar esa plataforma una semana.
+
+Sin permiso del streamer, no se publica: ver `PERMISOS.md`.
+
 ## Probado
 
 Con `test_chat.json` (incluido, 43 mensajes de ejemplo en ES/EN) y un VOD de prueba de 100 s: detectó el pico de risas en español a los 30 s (32 pts, 16 risas, 1.88x la mediana) y el de hype a los 90 s (22 pts, 11 hype, 1.29x), cortó clips reales de 1080x1920 y generó el manifiesto viral con títulos, miniaturas y tags. Los falsos positivos (`extra`, `lollipop`) puntuaron 1, como mensaje normal.
