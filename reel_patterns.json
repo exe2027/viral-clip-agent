@@ -1,0 +1,185 @@
+{
+  "source": "reel_study.py — patrones de reels virales de GTA, no copia",
+  "sample_n": 4,
+  "patterns": {
+    "sample_n": 4,
+    "hook_types": {
+      "statement": 2,
+      "promise": 1,
+      "superlative": 1
+    },
+    "top_hook_type": "statement",
+    "cta_types": {
+      "none": 2,
+      "follow": 2
+    },
+    "top_cta_type": "none",
+    "top_hashtags": {},
+    "top_hook_words": {
+      "watch": 1,
+      "grand": 1,
+      "theft": 1,
+      "auto": 1,
+      "vi": 1,
+      "extended": 1,
+      "look": 1,
+      "follow": 1,
+      "@bars": 1,
+      "gta": 1
+    },
+    "median_caption_chars": 171.0,
+    "median_engagement_rate": 0.0728,
+    "notes": [
+      "muestra pequeña (4 reels, mínimo orientativo 5): los patrones son orientativos",
+      "engagement muy disperso entre autores: comparar siempre con los seguidores de cada autor, no en absoluto"
+    ]
+  },
+  "reels": [
+    {
+      "url": "https://www.instagram.com/reel/DcmuKhJAe3I/",
+      "username": "rockstargames",
+      "created_at": "2026-08-28 18:08:47",
+      "hook_type": "promise",
+      "hook_text": "Watch Grand Theft Auto VI: An Extended Look.",
+      "cta_type": "none",
+      "cta_text": "",
+      "body_lines": 3,
+      "caption_chars": 160,
+      "caption_words": 22,
+      "hashtags": [],
+      "hashtag_count": 0,
+      "emoji_count": 0,
+      "likes": 1268117,
+      "comments": 4052,
+      "followers": 33768252,
+      "engagement_rate": 0.0377,
+      "outlier_multiple": null,
+      "hook_words": [
+        "watch",
+        "grand",
+        "theft",
+        "auto",
+        "vi",
+        "extended",
+        "look"
+      ]
+    },
+    {
+      "url": "https://www.instagram.com/reel/DfnW9uUy1gE/",
+      "username": "bars",
+      "created_at": "2026-11-11 12:41:05",
+      "hook_type": "statement",
+      "hook_text": "Follow @Bars for GTA 6 updates🤝",
+      "cta_type": "follow",
+      "cta_text": "🎥: @rockstargames & @onlyindade",
+      "body_lines": 3,
+      "caption_chars": 182,
+      "caption_words": 23,
+      "hashtags": [],
+      "hashtag_count": 0,
+      "emoji_count": 5,
+      "likes": 266484,
+      "comments": 2309,
+      "followers": 2490141,
+      "engagement_rate": 0.1079,
+      "outlier_multiple": null,
+      "hook_words": [
+        "follow",
+        "@bars",
+        "gta",
+        "6",
+        "updates"
+      ]
+    },
+    {
+      "url": "https://www.instagram.com/reel/Dcjp5XdgEdh/",
+      "username": "overtime",
+      "created_at": "2026-08-27 13:33:39",
+      "hook_type": "superlative",
+      "hook_text": "Probably the greatest trailer I ever watched 💀 @kaleelnyc @notbilzo @madi2hotty @reemknocksnyc",
+      "cta_type": "none",
+      "cta_text": "",
+      "body_lines": 0,
+      "caption_chars": 94,
+      "caption_words": 10,
+      "hashtags": [],
+      "hashtag_count": 0,
+      "emoji_count": 1,
+      "likes": 7487,
+      "comments": 35,
+      "followers": 10592762,
+      "engagement_rate": 0.0007,
+      "outlier_multiple": null,
+      "hook_words": [
+        "probably",
+        "greatest",
+        "trailer",
+        "i",
+        "ever",
+        "watched",
+        "@kaleelnyc",
+        "@notbilzo",
+        "@madi2hotty",
+        "@reemknocksnyc"
+      ]
+    },
+    {
+      "url": "https://www.instagram.com/reel/DfpHUNFiKke/",
+      "username": "davidmadrazo.ia",
+      "created_at": "2026-11-12 05:05:23",
+      "hook_type": "statement",
+      "hook_text": "Sígueme @davidmadrazo.ia y comenta “MÁQUINA” y te enseño por dentro todo lo que hace mientras duermo.",
+      "cta_type": "follow",
+      "cta_text": "Sígueme @davidmadrazo.ia y comenta “MÁQUINA” y te enseño por dentro todo lo que hace mientras duermo.",
+      "body_lines": 1,
+      "caption_chars": 184,
+      "caption_words": 23,
+      "hashtags": [],
+      "hashtag_count": 0,
+      "emoji_count": 1,
+      "likes": 48720,
+      "comments": 32422,
+      "followers": 25508,
+      "engagement_rate": 3.181,
+      "outlier_multiple": null,
+      "hook_words": [
+        "sigueme",
+        "@davidmadrazo",
+        "ia",
+        "comenta",
+        "maquina",
+        "te",
+        "enseno",
+        "dentro",
+        "lo",
+        "hace",
+        "mientras",
+        "duermo"
+      ]
+    }
+  ],
+  "hook_templates_es": [
+    {
+      "hook_type": "statement",
+      "template": "GTA 6: {what} — el chat reaccionó en vivo",
+      "lang": "es"
+    },
+    {
+      "hook_type": "promise",
+      "template": "Mira por qué el chat explotó con {what}",
+      "lang": "es"
+    }
+  ],
+  "hook_templates_en": [
+    {
+      "hook_type": "statement",
+      "template": "GTA 6: {what} — chat reacted live",
+      "lang": "en"
+    },
+    {
+      "hook_type": "promise",
+      "template": "Watch why chat lost it over {what}",
+      "lang": "en"
+    }
+  ]
+}

@@ -1,16 +1,13 @@
-# config.yaml — configuración del canal (viral-clip-agent v2.4)
+# config.yaml — configuración del canal (viral-clip-agent)
 #
-# Idea de Shortia (backsoul/shortia, Apache 2.0): lo que es del canal
-# vive aquí, no hardcodeado en el código. Cambia el juego, el streamer
-# o los hashtags sin tocar Python. La auditoría pedía lo mismo:
-# sacar HASHTAGS_ES/HASHTAGS_EN fijos y poner --game/--streamer/--niche
-# en un archivo de config.
+# Lo que es del canal vive aquí, no hardcodeado en el código. Cambia
+# el juego, el streamer o los hashtags sin tocar Python.
 #
 # Límites de subida por plataforma: orientativos, revisados 2026-11-16
-# (ver AUDIT-claude-code.md). No están aquí: cambian con frecuencia y
-# pertenecen a limits.yaml, no a la config del canal.
+# (ver el documento de auditoría en el repo). No están aquí: cambian
+# con frecuencia y pertenecen a limits.yaml, no a la config del canal.
 
-# Lista blanca de streamers (tribunal, bloque 1, 2026-11-16):
+# Lista blanca de streamers (revisión interna, bloque 1, 2026-11-16):
 # solo estos canales se pueden encolar en queue.py. REGLA DEL
 # USUARIO (2026-11-16): estar en esta lista = permiso ya dado por
 # el hecho de que el usuario lo subió; no hay ficha de permiso.
@@ -47,7 +44,18 @@ clips:
   crop: "center"          # center | left | right
   crf: 23
   preset: "fast"
-  duration: 60            # segundos por clip
+  # Cortes variables (ya no 60 s fijos): el corte va al payoff +
+  # reacción, 25-35 s por defecto. target es el objetivo, min/max
+  # el rango permitido por plataforma (Shorts 30-40, TikTok 21-34,
+  # Reels 15-30); el default 25-35 cubre la primera tanda. El tope
+  # duro es 60 s como máximo, nunca como default. --duration en CLI
+  # sigue pudiendo forzarlo. El segmento descargado cubre pre-roll
+  # + max_duration_s.
+  duration: 30            # duración del clip en segundos (legado, = target)
+  target_duration_s: 30   # objetivo del corte (default)
+  min_duration_s: 21      # mínimo útil (TikTok: 21 s)
+  max_duration_s: 40      # máximo del corte variable (tope duro: 60 s)
+  precise_cut: true       # afinar inicio/fin por frase/silencio si se puede
   pre_roll: 20            # segundos antes del pico
   window: 10              # ventana de chat en segundos
   min_separation: 60      # separación mínima entre picos
@@ -57,7 +65,7 @@ subtitles:
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
 
-  # VAD + anti-alucinación — v2.6 (bloque 5 del tribunal):
+  # VAD + anti-alucinación — v2.6 (bloque 5 de la revisión interna):
   # faster-whisper con vad_filter y umbrales que cortan las
   # alucinaciones en ruido de juego (música, efectos, sin voz).
   vad: true                   # vad_filter=True en faster-whisper
@@ -137,7 +145,7 @@ subtitle_policy:
   es: "transcribe-only"   # español: transcribe, nunca traducir
   others: "translate-to-en" # resto de idiomas: traducir a inglés
 
-# Estilos de subtítulo elegibles (idea de Shortia: plantillas con
+# Estilos de subtítulo elegibles (plantillas con
 # preview). Se eligen con --subtitle-style en subtitles.py.
 subtitle_styles:
   tiktok:                 # clásico: blanco, negrita, borde negro, abajo
@@ -221,7 +229,19 @@ watcher:
     # oficial, puede cambiar): sirve para monitorear; Helix es la
     # vía estable cuando el usuario configure la app en dev.twitch.tv.
 
-# Auto-publicación (bloque 10 del tribunal, 2026-11-16).
+# Estudio de reels virales (reel_study.py, 2026-11-16, idea del reel
+# de David Madrazo "content-os"): estudiar reels de GTA, sacarles el
+# patrón de hook/CTA y alimentar títulos sugeridos. SOLO patrones,
+# nunca el caption copiado; sin voz clonada y sin publicar solo.
+# El informe vive en reel_patterns.json (versionado, excepción en
+# .gitignore); auto_clips.py lo usa si existe, si no sigue sin él.
+reel_study:
+  enabled: true           # auto_clips.py carga reel_patterns.json si existe
+  report_file: "reel_patterns.json"
+  max_urls_per_run: 10    # estudiar reels es una pasada manual, no un scrapeo
+  min_sample: 5           # menos de 5 reels: muestra pequeña, se avisa
+
+# Auto-publicación (bloque 10 de la revisión interna, 2026-11-16).
 # Contador "funciona" + 4 fases + circuit breaker (ver AUTOPUBLISH.md
 # y counter.py). NADA se publica solo sin pasar por las fases, y cada
 # cambio de fase es manual, con confirmación. Umbrales a validar por

@@ -25,18 +25,25 @@ Qué hace solo, sin que tengas que hacer nada a mano:
      si son dos webcams lado a lado (se apilan), una webcam + gameplay
      (PiP arriba) o solo gameplay (recorte centrado); si el layout
      cambia dentro del clip, se adapta por tramos. La decisión queda
-     en el manifiesto por clip. Se puede forzar con --layout.
-     Con --audio-check (bloque 6) mide el RMS por segundo en la ventana
-     del candidato y marca confirmar/sospechar (chat alto + audio plano
-     = sospechar spam, caso Locones); con --precise-cut (bloque 6)
-     afina inicio/fin por frase/silencio dentro del segmento ya
-     descargado (2-3 s antes del pico, fin de frase +1-2 s, tope 60 s).
+     en el manifiesto por clip. Los cortes son VARIABLES (ya no 60 s
+     fijos): objetivo 30 s, rango 21-40 s, tope duro 60 s
+     (config.yaml, clips.target_duration_s). Con --audio-check
+     (bloque 6) mide el RMS por segundo en la ventana del candidato
+     y marca confirmar/sospechar (chat alto + audio plano = sospechar
+     spam); el recorte preciso por frase/silencio (precise_cut.py)
+     va activado por defecto (config clips.precise_cut) y afina
+     inicio/fin dentro del segmento ya descargado (2-3 s antes del
+     pico, fin de frase +1-2 s, tope max_duration_s).
   3. Empaqueta cada clip para viral con viral_package.py, que combina
-     youtube-agent-skill: yt-viral (ranking por múltiplo sobre la mediana),
-     yt-shorts (primera línea nueva, texto en pantalla, loop),
-     yt-package (título + miniatura como una unidad, ≤60/40 car.) y
-     yt-seo (descripción, tags ≤15, 3 búsquedas). Genera el manifiesto
-     (manifest.json / manifest.md / titles.txt) por clip.
+     el ranking por múltiplo sobre la mediana, la primera línea
+     nueva, el texto en pantalla y el loop, el título + miniatura
+     como una unidad (≤60/40 car.) y el SEO (descripción, tags ≤15,
+     3 búsquedas). Genera el manifiesto (manifest.json / manifest.md
+     / titles.txt) por clip. Cada clip lleva además su score de
+     viralidad 0-100 (viral_score.py: 7 componentes, banda y filtro
+     previo; distinto del score de chat, no se mezclan) y su score
+     SEO por plataforma (seo_score.py: YouTube/TikTok/Instagram/
+     Facebook, con estado ideal/publicable/override/bloqueado).
   4. Deja todo ordenado en runs/<vod-id>/ : chat.json, segments/ con un
      segmento por pico, clips/ y manifiesto. Ya no se guarda vod.mp4.
 
@@ -98,8 +105,8 @@ def _preload_stdlib_queue():
     """Carga el `queue` de la stdlib antes que nada (misma idea que
     subtitles.py:_preload_stdlib_queue).
 
-    El repo tiene un queue.py propio (cola de aprobación, bloque 1 del
-    tribunal) que haría sombra al `queue` de la stdlib: faster-whisper
+    El repo tiene un queue.py propio (cola de aprobación, bloque 1 de
+    la revisión interna) que haría sombra al `queue` de la stdlib: faster-whisper
     hace `import queue` y se encuentra el queue.py del proyecto (sin
     SimpleQueue), y la transcripción falla con AttributeError. Cargando
     la stdlib por ruta explícita queda en sys.modules y ya no se vuelve
@@ -132,6 +139,16 @@ from clips_chat_v2 import (
     select_top_peaks,
 )
 from viral_package import package_clip
+
+try:
+    # Score SEO por plataforma del paquete (seo_score.py).
+    from viral_package import score_package_seo
+    from seo_score import score_all_platforms
+    seo_mod = True
+except ImportError:
+    score_package_seo = None
+    score_all_platforms = None
+    seo_mod = False
 
 try:
     # Títulos honestos (arreglos 3-4): validar/degradar títulos legacy,
@@ -182,7 +199,7 @@ except ImportError:
     precise_mod = False
 
 try:
-    # Ficha del momento (bloque 2 del tribunal): evidencia del clip
+    # Ficha del momento (bloque 2 de la revisión interna): evidencia del clip
     # (chat, streamer, juego, reacción) para títulos honestos.
     from moment_card import build_moment_card
     moment_mod = True
@@ -195,6 +212,16 @@ try:
 except ImportError:
     get_layout_config = None
     load_config = None
+
+try:
+    # Score de viralidad 0-100 + señales MVP (7 componentes, banda,
+    # filtro previo). Distinto del score de chat: no se mezclan.
+    from viral_score import compute_signals, score_clip
+    viral_score_mod = True
+except ImportError:
+    compute_signals = None
+    score_clip = None
+    viral_score_mod = False
 
 HASHTAGS_ES = "#GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames #gaming"
 HASHTAGS_EN = "#GTA6 #GTA6Clips #GTA #RockstarGames #gaming #clips"
@@ -476,7 +503,14 @@ def main() -> int:
     p.add_argument("--window", type=int, default=10)
     p.add_argument("--min-separation", type=int, default=60)
     p.add_argument("--pre-roll", type=int, default=20)
-    p.add_argument("--duration", type=int, default=60)
+    p.add_argument("--duration", type=int, default=None,
+                   help="Duración forzada del clip en segundos (default: "
+                        "config clips.target_duration_s, 30 s; el corte "
+                        "variable usa target/min/max de config.yaml)")
+    p.add_argument("--human-scores", help="JSON con la entrada humana del "
+                   "score de viralidad por clip: {\"1\": {\"hook\": 8, "
+                   "\"claridad\": 9, ...}, \"all\": {...}}; sin él, los "
+                   "componentes humanos quedan estimados y el total es BETA")
     p.add_argument("--lang", choices=["es", "en", "both"], default="both")
     p.add_argument("--crop", choices=["center", "left", "right"], default="center")
     p.add_argument("--layout", choices=["auto", "stack", "pip", "center"], default=None,
@@ -492,12 +526,21 @@ def main() -> int:
                    help="Bloque 6: RMS por segundo en la ventana del candidato y veredicto "
                         "confirmar/sospechar (chat alto + audio plano = sospechar spam); "
                         "se corta igual, solo se marca en el manifiesto")
-    p.add_argument("--precise-cut", action="store_true",
-                   help="Bloque 6: afinar inicio/fin por frase/silencio dentro del segmento "
-                        "ya descargado (inicio 2-3 s antes del pico, fin en fin de frase "
-                        "+1-2 s, tope 60 s); sin transcripción fiable cae al corte fijo")
+    p.add_argument("--precise-cut", dest="precise_cut", action="store_true",
+                   default=None,
+                   help="Afinar inicio/fin por frase/silencio dentro del "
+                        "segmento ya descargado (default: lo que diga "
+                        "config.yaml clips.precise_cut, true)")
+    p.add_argument("--no-precise-cut", dest="precise_cut", action="store_false",
+                   help="Apaga el recorte preciso: corte fijo de target_duration_s")
     p.add_argument("--workers", type=int, default=12, help="Workers en paralelo para el chat de Kick (default: 12)")
     p.add_argument("--full-chat", action="store_true", help="En Kick, bajar el chat COMPLETO (lento: ~50 min en un VOD de 10h; por defecto escaneo rápido)")
+    p.add_argument("--reel-patterns", default=None,
+                   help="Informe JSON de reel_study.py (reel_patterns.json). "
+                        "Si no se pasa, se usa reel_patterns.json junto a "
+                        "auto_clips.py si existe; si no existe, se sigue "
+                        "sin estudio de reels. Solo añade sugerencias "
+                        "validadas al paquete, nunca cambia best_title.")
     args = p.parse_args()
 
     if not args.vod and not args.chat:
@@ -506,6 +549,42 @@ def main() -> int:
     if not args.dry_run and not args.video and not args.vod:
         print("Error: para cortar hace falta el VOD: pasa el ID/URL o --video.", file=sys.stderr)
         return 1
+
+    # Cortes variables (config.yaml, sección clips): objetivo 30 s,
+    # rango 21-40 s, tope duro 60 s. --duration fuerza la duración;
+    # si no, manda target_duration_s. El segmento descargado cubre
+    # pre-roll + max(target, max_duration_s) para que el corte
+    # preciso tenga margen para afinar.
+    cfg = load_config() if load_config else {}
+    clip_cfg = (cfg or {}).get("clips") or {}
+    target_dur = args.duration or int(clip_cfg.get("target_duration_s") or 30)
+    max_dur = args.duration or int(clip_cfg.get("max_duration_s") or 40)
+    min_dur = 1 if args.duration else int(clip_cfg.get("min_duration_s") or 21)
+    use_precise = (args.precise_cut if args.precise_cut is not None
+                   else bool(clip_cfg.get("precise_cut", True)))
+    seg_len = args.pre_roll + max(target_dur, max_dur)
+    human_scores = {}
+    if args.human_scores:
+        with open(args.human_scores, encoding="utf-8") as f:
+            human_scores = json.load(f)
+
+    # Estudio de reels (reel_study.py): opcional, solo añade
+    # sugerencias validadas al paquete viral. Sin informe no se
+    # inventa nada: se sigue sin estudio de reels.
+    reel_patterns = None
+    reel_patterns_path = args.reel_patterns or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "reel_patterns.json")
+    if reel_patterns_path and os.path.isfile(reel_patterns_path):
+        try:
+            with open(reel_patterns_path, encoding="utf-8") as f:
+                reel_patterns = json.load(f)
+            print(f"Estudio de reels: {reel_patterns.get('sample_n', '?')} "
+                  f"reels en {reel_patterns_path}")
+        except Exception as e:
+            print(f"Estudio de reels: no se pudo leer "
+                  f"{reel_patterns_path} ({e}); se sigue sin él.",
+                  file=sys.stderr)
+            reel_patterns = None
 
     platform = detect_platform(args.vod) if args.vod else "twitch"
     kick_meta = None
@@ -603,6 +682,23 @@ def main() -> int:
             print(f"  {i}. {fmt_ts(ts)} — {score} pts ({d['msgs']} msgs, {d['risas']} risas, {d['hype']} hype)")
 
     if args.dry_run:
+        # Score de viralidad en seco (solo componentes automáticos:
+        # chat + audio pendiente; los humanos quedan estimados y el
+        # total es BETA). No descarga vídeo ni corta nada.
+        if viral_score_mod and scores:
+            median = statistics.median(scores.values())
+            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+            rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
+            print(f"Score de viralidad (BETA, sin entrada humana):")
+            for ts, score in peaks:
+                multiple = score / median if median > 0 else None
+                vs = score_clip(detail[ts], multiple, rank=rank_map.get(ts),
+                                human=(human_scores.get("all")
+                                       or human_scores.get(str(ts))))
+                print(f"  {fmt_ts(ts)} — viral {vs['total']}/100 "
+                      f"({vs['band']}) | chat {vs['components']['chat']['value']}/10 "
+                      f"({multiple:.1f}x) | filtro: "
+                      f"{'pasa' if vs['filter_passed'] else 'no pasa'}")
         print("Dry-run: no se descargó el video ni se cortó nada.")
         return 0
 
@@ -634,17 +730,25 @@ def main() -> int:
     # Mediana de los picos: la ficha del momento y el paquete viral la
     # usan para el múltiplo viral (x veces la mediana).
     median_score = statistics.median(scores.values()) if scores else None
+    # Puesto de cada pico en el VOD (1 = el mejor): lo usa el filtro
+    # previo del score de viralidad (solo top-5).
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
 
     # 3. Cortar + 4. Titular y manifiesto
     manifest = {"vod_id": vod_id, "platform": platform,
-                "source_url": args.vod, "lang": args.lang, "clips": []}
+                "source_url": args.vod, "lang": args.lang,
+                "seo_overrides": [], "clips": []}
     if platform == "kick" and kick_meta:
         manifest["kick"] = {"channel": kick_meta["channel"],
                             "title": kick_meta["title"],
                             "chat_source": "web.kick.com/api/v1/chat (sin documentar)"}
     for idx, (peak_ts, score) in enumerate(peaks, 1):
         clip_start = max(0, peak_ts - args.pre_roll)
-        clip_dur = args.duration
+        # Corte variable: objetivo target_dur (30 s); el corte preciso
+        # lo ajusta dentro de [min_dur, max_dur]. El segmento cubre
+        # pre-roll + max(target, max_dur) para tener margen.
+        clip_dur = target_dur
         if duration and clip_start + clip_dur > duration:
             clip_dur = max(1, int(duration - clip_start))
         d = detail[peak_ts]
@@ -664,7 +768,7 @@ def main() -> int:
         if platform == "kick":
             seg_path = os.path.join(segments_dir, f"seg_{idx:02d}_t{fmt_ts(clip_start)}.mp4")
             try:
-                kick_mod.download_segment(kick_meta["source"], clip_start, clip_dur, seg_path)
+                kick_mod.download_segment(kick_meta["source"], clip_start, seg_len, seg_path)
                 cut_source, cut_start = seg_path, 0
                 source_is_segment = True
             except Exception as e:
@@ -675,21 +779,24 @@ def main() -> int:
         else:
             seg_path = os.path.join(segments_dir, f"seg_{idx:02d}_t{fmt_ts(clip_start)}.mp4")
             try:
-                download_twitch_segment(vod_id, clip_start, clip_start + clip_dur, seg_path)
+                download_twitch_segment(vod_id, clip_start, clip_start + seg_len, seg_path)
                 cut_source, cut_start = seg_path, 0
                 source_is_segment = True
             except Exception as e:
                 print(f"[{idx}] Falló la descarga del segmento Twitch: {e}", file=sys.stderr)
                 continue
-        # Bloque 6 (--audio-check / --precise-cut): segunda señal de audio
-        # y recorte preciso por frase, SOLO sobre la ventana ya descargada
-        # (el segmento del pico, que empieza en clip_start y deja el pico
-        # a pre_roll dentro; con --video local, la ventana de 60 s del
-        # VOD, extraída a un temporal). Nunca baja más vídeo.
+        # Bloque 6 (--audio-check / recorte preciso): segunda señal de
+        # audio y recorte preciso por frase, SOLO sobre la ventana ya
+        # descargada (el segmento del pico, que empieza en clip_start
+        # y deja el pico a pre_roll dentro; con --video local, la
+        # ventana de seg_len del VOD, extraída a un temporal). Nunca
+        # baja más vídeo. El recorte preciso va activado por defecto
+        # (config clips.precise_cut); --no-precise-cut lo apaga.
         cut_dur = clip_dur
         audio_info = None
         precise_info = None
-        if args.audio_check or args.precise_cut:
+        transcript = None
+        if args.audio_check or use_precise:
             window_path = cut_source
             # El pico dentro de la ventana: pre_roll si la ventana es el
             # segmento (empieza en clip_start), o pico - cut_start si es
@@ -703,7 +810,7 @@ def main() -> int:
                     out_dir, f".window_{idx:02d}.mp4")
                 subprocess.run(
                     ["ffmpeg", "-y", "-v", "error", "-ss", str(cut_start),
-                     "-i", video_path, "-t", str(clip_dur), "-c", "copy",
+                     "-i", video_path, "-t", str(seg_len), "-c", "copy",
                      tmp_window], check=True)
                 window_path = tmp_window
             peak_rel = peak_ts - window_start_abs
@@ -743,12 +850,26 @@ def main() -> int:
                 else:
                     print("    Audio: falta audio.py, se omite --audio-check.",
                           file=sys.stderr)
-            if args.precise_cut:
+            if use_precise:
                 if precise_mod:
                     window_dur = get_video_duration(window_path)
                     precise_info = refine_cut(
                         window_dur, peak_rel, transcript=transcript,
-                        silences=detect_silences(window_path))
+                        silences=detect_silences(window_path),
+                        max_duration=max_dur, fixed_pre=args.pre_roll,
+                        fixed_dur=target_dur)
+                    # El corte variable vive en [min_dur, max_dur]:
+                    # si la frase afinada queda corta, se amplía el
+                    # fin dentro del segmento (el inicio manda).
+                    if window_dur and precise_info["duration"] < min_dur:
+                        new_end = min(window_dur,
+                                      precise_info["start"] + min_dur)
+                        if new_end - precise_info["start"] > precise_info["duration"]:
+                            precise_info["end"] = round(new_end, 2)
+                            precise_info["duration"] = round(
+                                new_end - precise_info["start"], 2)
+                            precise_info["reason"] += (
+                                f"; ampliado al mínimo de {min_dur}s")
                     # refine_cut devuelve inicio/fin relativos a la
                     # ventana: dentro del segmento ese es el offset de
                     # corte; con el VOD entero hay que sumarle el
@@ -832,7 +953,7 @@ def main() -> int:
             median_score=median_score, all_scores=list(scores.values()),
             lang=args.lang, examples=examples, moment_card=moment_card,
             game=game, streamer=streamer, vod_id=vod_id,
-            layout=layout_decision,
+            layout=layout_decision, reel_patterns=reel_patterns,
         )
         visible = None
         visible_reason = None
@@ -870,6 +991,73 @@ def main() -> int:
             "en": {"raw": title_en_raw, "final": title_en,
                    "degraded": degraded_en, "reason": why_en},
         }
+        # Score de viralidad 0-100 (viral_score.py: 7 componentes,
+        # banda, filtro previo) + señales MVP + score SEO por
+        # plataforma. La viralidad es DISTINTA del score de chat
+        # ("score" arriba): no se mezclan, van las dos al manifiesto.
+        viral_score = None
+        signals = None
+        seo_scores = None
+        if viral_score_mod:
+            multiple = score / median_score if median_score else None
+            human = (human_scores.get("all")
+                     or human_scores.get(str(idx))
+                     or human_scores.get(f"peak_{peak_ts}"))
+            audio_in = None
+            if audio_info is not None:
+                audio_in = {"stats": audio_info.get("stats"),
+                            "words": audio_info.get("words")}
+            viral_score = score_clip(detail[peak_ts], multiple,
+                                     rank=rank_map.get(peak_ts),
+                                     human=human, audio=audio_in)
+            print(f"    Viralidad: {viral_score['total']}/100 "
+                  f"({viral_score['band']})"
+                  + (" [BETA: componentes estimados]" if viral_score["beta"] else "")
+                  + f" | chat {viral_score['components']['chat']['value']}/10"
+                  + ("" if viral_score["filter_passed"]
+                     else " | NO pasa el filtro previo"))
+            # La transcripción es relativa a la ventana (segmento);
+            # el clip empieza precise_info["start"] dentro de ella.
+            # Se desplazan los timestamps al tiempo del clip para
+            # que las señales (hook 0-3 s, coincidencia de picos)
+            # se midan sobre el clip, no sobre la ventana. Sin
+            # corte preciso el clip empieza en la ventana: shift 0.
+            transcript_clip = transcript
+            if transcript is not None and precise_info is not None:
+                shift = precise_info["start"]
+                transcript_clip = {"segments": [
+                    {**seg,
+                     "start": (seg.get("start") or 0) - shift,
+                     "end": (seg.get("end") or 0) - shift,
+                     "words": [{**w,
+                                "start": (w.get("start") or 0) - shift,
+                                "end": (w.get("end") or 0) - shift}
+                               for w in seg.get("words", [])]}
+                    for seg in transcript.get("segments", [])]}
+            try:
+                signals = compute_signals(
+                    detail=detail[peak_ts], peak_ts=peak_ts,
+                    clip_start=clip_start_abs, clip_duration=cut_dur,
+                    transcript=transcript_clip, video_path=out_file,
+                    lang=args.lang if args.lang in ("es", "en") else "es")
+            except Exception as e:
+                print(f"    Señales MVP: falló ({e}); se sigue sin señales.",
+                      file=sys.stderr)
+        if seo_mod and viral is not None:
+            seo_scores = score_package_seo(
+                viral, visible=visible,
+                lang=args.lang if args.lang in ("es", "en") else "es")
+            for plat, r in seo_scores.items():
+                print(f"    SEO {plat}: {r['score']} ({r['status']})"
+                      + ("" if r["can_publish"] else " — no publicable tal cual"))
+        elif seo_mod:
+            # Sin paquete viral: se puntúa el título legacy.
+            seo_scores = score_all_platforms({
+                "title": title_es, "description": desc_es,
+                "tags": [], "thumbnail_text": None,
+                "hashtags": HASHTAGS_ES.split(),
+                "game_verified": bool(game), "visible": visible,
+                "lang": "es"})
         clip_entry = {
             "n": idx, "file": f"clips/{fname}", "peak": peak_ts,
             "start": cut_start, "duration": cut_dur, "score": score,
@@ -879,6 +1067,9 @@ def main() -> int:
             "hashtags_es": HASHTAGS_ES, "hashtags_en": HASHTAGS_EN,
             "chat_examples": examples,
             "viral": viral,
+            "viral_score": viral_score,
+            "signals": signals,
+            "seo_scores": seo_scores,
             "moment_card": moment_card,
             "visible": visible,
             "visible_reason": visible_reason,
@@ -935,6 +1126,18 @@ def main() -> int:
                         f"  - {pp['platform']}: {cap} | Subtítulos: {pp['subtitles']} | "
                         f"Miniatura: {pp['thumbnail']} | Subida: {pp['publish_mode']} | Métrica: {pp['metric']}"
                     )
+        vs = c.get("viral_score")
+        if vs:
+            lines.append(
+                f"- Viralidad: {vs['total']}/100 ({vs['band']})"
+                + (" [BETA: componentes estimados]" if vs.get("beta") else "")
+                + f" | chat {vs['components']['chat']['value']}/10 "
+                f"({vs.get('chat_multiple')}x la mediana) | filtro previo: "
+                f"{'pasa' if vs.get('filter_passed') else 'no pasa'}")
+        ss = c.get("seo_scores") or {}
+        if ss:
+            lines.append("- SEO: " + " | ".join(
+                f"{p}: {r['score']} ({r['status']})" for p, r in ss.items()))
         lines += [""]
     with open(os.path.join(out_dir, "manifest.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

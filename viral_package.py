@@ -2,34 +2,34 @@
 """
 viral_package.py — empaquetado viral para cada clip.
 
-Combina la lógica de Twitch Auto Clips v2 con las skills de
-youtube-agent-skill (github.com/Jakeschincariol/youtube-agent-skill):
+Combina la lógica de Twitch Auto Clips v2 con las reglas de
+empaquetado viral del proyecto:
 
-  * yt-viral  — no rankear por puntaje bruto, sino por MÚLTIPLO sobre la
-    mediana del propio stream. Un pico de 30 pts en un chat callado vale
-    más que uno de 30 en un chat que explota todo el rato.
-    multiple = puntaje_ventana / mediana(puntajes). Solo así el ranking
-    habla del momento, no del tamaño del chat.
-  * yt-shorts — un Short no es "el mejor momento", es un momento que
+  * Múltiplo viral — no rankear por puntaje bruto, sino por MÚLTIPLO
+    sobre la mediana del propio stream. Un pico de 30 pts en un chat
+    callado vale más que uno de 30 en un chat que explota todo el
+    rato. multiple = puntaje_ventana / mediana(puntajes). Solo así
+    el ranking habla del momento, no del tamaño del chat.
+  * Shorts — un Short no es "el mejor momento", es un momento que
     sobrevive SIN el video alrededor: abre con una idea completa,
     tiene un giro y termina en una frase, no en un balbuceo.
     Por eso cada clip lleva: primera línea nueva, texto en pantalla
     en los primeros 2 s (distinto de lo hablado) y punto de loop.
-  * yt-package — título + miniatura son UNA unidad. Reglas que se
+  * Paquete — título + miniatura son UNA unidad. Reglas que se
     verifican aquí: título ≤60 caracteres (40 en móvil), miniatura
     ≤3 palabras y SIN repetir el título, máx. 2 palabras en MAYÚSCULAS,
     y un número/nombre/fecha antes que un adjetivo.
-  * yt-seo — descripción: las 2 primeras líneas son el snippet de
+  * SEO — descripción: las 2 primeras líneas son el snippet de
     búsqueda. Tags: máx. 15, solo para desambiguar. Y la prueba de
     las 3 búsquedas que el video debería ganar.
-  * yt-retention — el leak del hook es en los primeros 15-30 s:
+  * Retención — el leak del hook es en los primeros 15-30 s:
     la primera línea tiene que confirmar el título, subir una
     pregunta que no se pueda cerrar y probar que el payoff existe.
 
-Nada de esto publica. Como en las skills: esto escribe y tú publicas.
+Nada de esto publica. Esto escribe y tú publicas.
 Cada clip termina con la pregunta: ¿lo subo así, o lo cambio?
 
-BLOQUE 2 (tribunal, 2026-11-16) — títulos reales + anti-clickbait:
+BLOQUE 2 (revisión interna, 2026-11-16) — títulos reales + anti-clickbait:
 la v2.4 generaba 3 títulos fijos con "GTA 6" hardcodeado, y el
 título mentía en clips que no eran GTA 6 (Coker es GTA V RP, Locones
 es Counter-Strike 2) y prometía una "jugada" que no existía. Desde
@@ -45,7 +45,7 @@ v2.6 el título sale de la ficha del momento (``moment_card.py``),
     si el sustantivo prometido no aparece en transcripción/chat,
     si el payoff no ocurre dentro del clip, o si hay un superlativo
     sin evidencia (múltiplo/risas) que lo respalde. También falla
-    el lint yt-package (≤60 car., ≤2 palabras en MAYÚSCULAS).
+    el lint de paquete (≤60 car., ≤2 palabras en MAYÚSCULAS).
   * Anti-repetición: ningún título repetido en el mismo VOD ni el
     mismo día. El registro vive en ``titles_seen.json`` (gitignored)
     y solo se anota el título elegido (``best_title``), no los 10
@@ -100,8 +100,8 @@ lo que mira: solo texto. El quemado vive en subtitles.py
 (``burn_subtitles(..., context_text=...)``) y el paquete expone
 ``reaction_context`` para el manifiesto.
 
-PARA LAS 4 PLATAFORMAS, NO SOLO YOUTUBE: las reglas de yt-package,
-yt-seo, yt-shorts y yt-retention son las mismas ideas, pero cada
+PARA LAS 4 PLATAFORMAS, NO SOLO YOUTUBE: las reglas de paquete,
+seo, shorts y retención son las mismas ideas, pero cada
 plataforma las aplica distinto. Un mismo clip lleva 4 paquetes:
   * YouTube Shorts — título + descripción + tags, miniatura = frame
     (por API no hay miniatura personalizada fiable), subtítulos SRT
@@ -139,7 +139,7 @@ import unicodedata
 from datetime import date as _date
 from pathlib import Path
 
-# Fórmulas de hook de yt-script/hooks.json, adaptadas a clips de GTA 6.
+# Fórmulas de hook, adaptadas a clips de GTA 6.
 # Solo las que tienen sentido para un clip de 60 s sin guion previo.
 HOOK_FORMULAS = {
     "the-reveal": "The Reveal — promete algo concreto y lo muestra.",
@@ -150,7 +150,7 @@ HOOK_FORMULAS = {
 }
 
 
-# Reglas por plataforma (Agente 5/10 del tribunal). Los límites de
+# Reglas por plataforma (revisión interna). Los límites de
 # subida son orientativos y cambian; lo que no cambia es el formato.
 PLATFORMS = {
     "youtube_shorts": {
@@ -433,7 +433,7 @@ def check_title_detail(title, moment_card):
     Falla si: sin ficha; juego del título != juego real; sustantivo
     prometido sin evidencia en transcripción/chat; payoff fuera del
     clip o evidencia baja con afirmación concreta; superlativo sin
-    evidencia; o lint yt-package (largo, MAYÚSCULAS).
+    evidencia; o lint de paquete (largo, MAYÚSCULAS).
     """
     reasons = []
     if not title or not str(title).strip():
@@ -446,7 +446,7 @@ def check_title_detail(title, moment_card):
     low = _norm_title(title)
     game = card.get("game")  # None = desconocido, no se asume ninguno
 
-    # 1. Lint yt-package. Bloqueante: >60 car. y >2 palabras en MAYÚSCULAS.
+    # 1. Lint de paquete. Bloqueante: >60 car. y >2 palabras en MAYÚSCULAS.
     # >40 car. es solo aviso ("se corta en móvil", preferible, no bloqueo):
     # con un prefijo de juego como "Counter-Strike 2: " casi todo pasa
     # de 40 y seguiría siendo un título válido de escritorio.
@@ -536,7 +536,7 @@ def check_title(title, moment_card):
 
 
 def _check_title(title: str) -> list[str]:
-    """Lint yt-package (compat: lo usaba la v2.4). Ver check_title para el bloqueo real."""
+    """Lint de paquete (compat: lo usaba la v2.4). Ver check_title para el bloqueo real."""
     return _check_title_lint(title)
 
 
@@ -1152,7 +1152,7 @@ def extract_reaction_context(moment_card=None, transcript=None,
 
 
 def viral_multiple(score: int, all_scores, median_score=None) -> float:
-    """Múltiplo sobre la mediana del stream (yt-viral).
+    """Múltiplo sobre la mediana del stream.
 
     v2.4 (auditoría, bug 6): si se pasa ``median_score`` se usa ese
     valor — el llamador debe calcularlo sobre TODAS las ventanas,
@@ -1247,7 +1247,8 @@ def package_for_platforms(best_title, desc, tags, thumb, lang="both",
 def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  lang="both", examples=None, moment_card=None, game=None,
                  streamer=None, seen_path=None, vod_id=None, date=None,
-                 register=False, visible=None, layout=None):
+                 register=False, visible=None, layout=None,
+                 reel_patterns=None):
     """Devuelve el paquete viral completo de un clip.
 
     Con ``moment_card`` (recomendado, Bloque 2): los 10 títulos, el
@@ -1267,6 +1268,9 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     "faces" en cams-only (las caras van en la miniatura).
     Arreglo 4: en cams-only, ``reaction_context`` trae el texto de
     contexto quemado ("reaccionando al tráiler de GTA 3") o None.
+    Con ``reel_patterns`` (reel_study.py): el paquete añade la clave
+    ``reel_study`` con plantillas y títulos sugeridos desde reels
+    virales, todos validados por el check; ``best_title`` NO cambia.
     """
     examples = examples or []
     multiple = viral_multiple(score, all_scores, median_score=median_score)
@@ -1393,9 +1397,13 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     if best and _norm_title(thumb) in _norm_title(best):
         thumb = "MIRA ESTO"
 
-    return {
+    # Estudio de reels (reel_study.py): solo AÑADE sugerencias
+    # validadas al paquete, nunca cambia best_title ni la descripción.
+    # reel_patterns puede ser el dict de patrones o el informe
+    # completo (con clave "patterns").
+    pkg = {
         "n": n,
-        "viral_multiple": multiple,  # yt-viral: x veces la mediana del stream
+        "viral_multiple": multiple,  # x veces la mediana del stream
         "formula": formula,
         "formula_desc": HOOK_FORMULAS[formula],
         "titles": titles,  # 10 títulos reales, cada uno con su check
@@ -1416,7 +1424,7 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "game": game,
         "game_label": game_label,
         "thumbnail_text": thumb,  # ≤3 palabras, distinto del título
-        "hook_first_line": hook,  # primera línea nueva (yt-shorts)
+        "hook_first_line": hook,  # primera línea nueva
         "onscreen_first_2s": onscreen,  # distinto de lo hablado
         "loop_point": loop,
         "description_first_2_lines": desc,
@@ -1424,12 +1432,64 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "search_queries": queries,
         "self_contained": True,  # el pre-roll de 20 s da el contexto que falta
         "chat_examples": examples,
-        # yt-retention: el hook se juega en los primeros 15 s, no al final.
+        # Retención: el hook se juega en los primeros 15 s, no al final.
         "retention_note": "Hook en los primeros 15 s: confirma el título, sube la pregunta y muestra el payoff. Si el clip arranca lento, recorta el pre-roll.",
         # Las 4 plataformas: mismo clip, 4 paquetes distintos.
         "platforms": package_for_platforms(best, desc, tags, thumb, lang=lang,
                                            hashtags=hashtags, game=game),
     }
+    if reel_patterns:
+        try:
+            from reel_study import enrich_package
+            pats = reel_patterns.get("patterns", reel_patterns) \
+                if isinstance(reel_patterns, dict) else reel_patterns
+            pkg = enrich_package(pkg, pats, moment_card=card or None,
+                                 lang=lang if lang in ("es", "en") else "es")
+        except Exception as e:
+            pkg["reel_study"] = {"error": f"estudio de reels no aplicado: {e}",
+                                 "sample_n": 0}
+    return pkg
+
+
+def score_package_seo(pkg, game_verified=None, visible=None, lang="es"):
+    """Score SEO por plataforma de un paquete de package_clip.
+
+    Mapea los campos del paquete (best_title, description_first_2_lines,
+    tags, thumbnail_text, hashtags por plataforma) a seo_score.py y
+    devuelve {platform: resultado}. ``game_verified``: True si el juego
+    del título es el juego real del clip (None = se deduce del
+    paquete: game conocido y distinto de "desconocido"). Si no hay
+    seo_score.py, devuelve {}.
+    """
+    try:
+        from seo_score import score_all_platforms
+    except ImportError:
+        return {}
+    pkg = pkg or {}
+    game = pkg.get("game")
+    if game_verified is None:
+        game_verified = bool(game) and game != "desconocido"
+    visible = visible if visible is not None else pkg.get("visible")
+    if visible == "unknown":
+        visible = None
+    platforms = pkg.get("platforms") or {}
+    hashtags = []
+    if platforms:
+        yt = platforms.get("youtube_shorts") or {}
+        hashtags = yt.get("hashtags") or []
+    if not hashtags:
+        hashtags = pkg.get("hashtags") or []
+    return score_all_platforms({
+        "title": pkg.get("best_title"),
+        "description": pkg.get("description_first_2_lines"),
+        "tags": pkg.get("tags"),
+        "thumbnail_text": pkg.get("thumbnail_text"),
+        "hashtags": hashtags,
+        "game_verified": game_verified,
+        "visible": visible,
+        "lang": lang,
+        "keyword": "GTA 6" if (game or "GTA 6") in ("GTA 6", "GTA VI") else (game or "GTA 6"),
+    })
 
 
 # ---------------------------------------------------------------------------
