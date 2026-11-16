@@ -193,8 +193,17 @@ def package_for_platforms(best_title, desc, tags, thumb, lang="both"):
     return out
 
 
-def viral_multiple(score: int, all_scores) -> float:
-    """Múltiplo sobre la mediana del stream (yt-viral)."""
+def viral_multiple(score: int, all_scores, median_score=None) -> float:
+    """Múltiplo sobre la mediana del stream (yt-viral).
+
+    v2.4 (auditoría, bug 6): si se pasa ``median_score`` se usa ese
+    valor — el llamador debe calcularlo sobre TODAS las ventanas,
+    incluidas las vacías (ver ``clips_chat_v2.median_over_all``).
+    Antes el parámetro existía pero se ignoraba y la mediana se
+    calculaba solo sobre las ventanas con mensajes, sesgándola.
+    """
+    if median_score is not None and median_score > 0:
+        return round(score / median_score, 2)
     if not all_scores:
         return 0.0
     median = statistics.median(all_scores)
@@ -219,7 +228,7 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  lang="both", examples=None):
     """Devuelve el paquete viral completo de un clip."""
     examples = examples or []
-    multiple = viral_multiple(score, all_scores)
+    multiple = viral_multiple(score, all_scores, median_score=median_score)
     is_hype = hype >= risas
     # Fórmula de hook según el tipo de pico (yt-script/hooks.json)
     formula = "the-superlative" if is_hype else "the-reveal"

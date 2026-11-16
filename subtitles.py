@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 subtitles.py — subtítulos para viral-clip-agent.
 
 Adaptado de openshorts (faris-sait/openshorts, MIT), archivo
@@ -37,6 +37,17 @@ Lo que NO se copió de openshorts (y por qué):
     con ElevenLabs: de pago y fuera del alcance; el agente escribe y
     el usuario publica.
 
+Estilos de subtítulo — v2.4 (idea de Shortia, backsoul/shortia,
+Apache 2.0: plantillas de subtítulo elegibles). Tres estilos en
+config.yaml (subtitle_styles), elegibles con --subtitle-style:
+  * tiktok: blanco, negrita, borde negro, abajo (el de siempre).
+  * highlight: amarillo con caja semitransparente detrás.
+  * karaoke: palabra por palabra (bloques de 1-2 palabras, amarillo,
+    fuente grande). No es karaoke \kf real de ASS: el SRT no lleva
+    tiempos por palabra al quemar, así que se aproxima con bloques
+    cortos (max_chars=8, max_duration=1.0 s).
+Lo que se tomó de Shortia y lo que NO: ver README, sección Shortia.
+
 Requisitos: el venv del proyecto (.venv/) con faster-whisper, y
 FFmpeg en el PATH. El Python del sistema NO sirve: instalar
 faster-whisper ahí falla por PEP 668 / typing_extensions de Debian.
@@ -46,6 +57,8 @@ Uso:
   .venv/bin/python subtitles.py clip.mp4 --srt clip.srt --burn clip_subs.mp4
   .venv/bin/python subtitles.py clip.mp4 --srt clip.srt --no-burn
   .venv/bin/python subtitles.py clip.mp4 --model tiny --lang en --fontsize 48
+  .venv/bin/python subtitles.py clip.mp4 --subtitle-style highlight
+  .venv/bin/python subtitles.py clip.mp4 --subtitle-style karaoke
 """
 
 import argparse
@@ -190,9 +203,37 @@ def hex_to_ass_color(hex_color, opacity=1.0):
 
 def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
                    font_name="DejaVu Sans", font_color="#FFFFFF",
-                   border_color="#000000", border_width=3, margin_v=140):
+                   border_color="#000000", border_width=3, margin_v=140,
+                   style=None, config=None):
     """Quema el SRT en el vídeo con ffmpeg (estilo openshorts, adaptado
-    a vertical 1080x1920: PlayRes explícito y fuente grande)."""
+    a vertical 1080x1920: PlayRes explícito y fuente grande).
+
+    v2.4: ``style`` es el nombre de un estilo de config.yaml
+    (tiktok | highlight | karaoke, ver config.py). Si se pasa, sus
+    valores mandan sobre los argumentos sueltos. ``box=True``
+    (highlight) usa BorderStyle=3: caja semitransparente detrás del
+    texto. Flags de plataforma: yuv420p + faststart.
+    """
+    if style:
+        cfg = config or {}
+        try:
+            from config import get_subtitle_style, load_config
+            cfg = cfg or load_config()
+            st = get_subtitle_style(cfg, style)
+        except Exception:
+            st = {}
+        if st:
+            font_color = st.get("font_color", font_color)
+            border_color = st.get("border_color", border_color)
+            border_width = st.get("border_width", border_width)
+            fontsize = st.get("fontsize", fontsize)
+            margin_v = st.get("margin_v", margin_v)
+            box = bool(st.get("box", False))
+            bold = bool(st.get("bold", True))
+        else:
+            box, bold = False, True
+    else:
+        box, bold = False, True
     safe_srt_path = srt_path.replace("\\", "/").replace(":", "\\:")
     style_string = (
         f"PlayResX=1080,PlayResY=1920,"
@@ -201,12 +242,12 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
         f"Fontsize={fontsize},"
         f"PrimaryColour={hex_to_ass_color(font_color, 1.0)},"
         f"OutlineColour={hex_to_ass_color(border_color, 1.0)},"
-        f"BackColour={hex_to_ass_color('#000000', 0.0)},"
-        f"BorderStyle=1,"
+        f"BackColour={hex_to_ass_color('#000000', 0.5 if box else 0.0)},"
+        f"BorderStyle={3 if box else 1},"
         f"Outline={border_width},"
         f"Shadow=0,"
         f"MarginV={margin_v},"
-        f"Bold=1"
+        f"Bold={1 if bold else 0}"
     )
     cmd = [
         "ffmpeg", "-y",
@@ -214,6 +255,7 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
         "-vf", f"subtitles='{safe_srt_path}':force_style='{style_string}'",
         "-c:a", "copy",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         output_path,
     ]
     print(f"Quemando subtítulos en {output_path}")
@@ -251,9 +293,17 @@ def main() -> int:
                    help="Modelo faster-whisper (default: tiny)")
     p.add_argument("--lang", default=None,
                    help="Idioma: es, en... (default: auto)")
-    p.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS)
-    p.add_argument("--max-duration", type=float, default=DEFAULT_MAX_DURATION)
-    p.add_argument("--fontsize", type=int, default=DEFAULT_FONTSIZE)
+    p.add_argument("--max-chars", type=int, default=None,
+                   help="Máx. caracteres por bloque (default: según estilo)")
+    p.add_argument("--max-duration", type=float, default=None,
+                   help="Máx. duración por bloque en s (default: según estilo)")
+    p.add_argument("--fontsize", type=int, default=None,
+                   help="Tamaño de fuente (default: según estilo)")
+    p.add_argument("--subtitle-style", default=None,
+                   help="Estilo de subtítulo: tiktok, highlight, karaoke "
+                        "(default: config.yaml subtitles.default_style)")
+    p.add_argument("--config", default=None,
+                   help="Ruta a config.yaml (default: busca en el proyecto)")
     p.add_argument("--offset", type=float, default=0.0,
                    help="Desplazamiento del SRT respecto al vídeo (s)")
     args = p.parse_args()
@@ -264,6 +314,22 @@ def main() -> int:
 
     base, _ = os.path.splitext(args.video)
     srt_path = args.srt or f"{base}.srt"
+    # Estilo de subtítulo (v2.4, config.yaml): sus max_chars,
+    # max_duration y fontsize mandan salvo que se pasen por CLI.
+    cfg = {}
+    style_name = args.subtitle_style
+    try:
+        from config import get_subtitle_style, load_config
+        cfg = load_config(args.config)
+        st = get_subtitle_style(cfg, style_name)
+        style_name = st.get("name", "tiktok")
+    except Exception:
+        st = {}
+    max_chars = args.max_chars if args.max_chars is not None else st.get("max_chars", DEFAULT_MAX_CHARS)
+    max_duration = args.max_duration if args.max_duration is not None else st.get("max_duration", DEFAULT_MAX_DURATION)
+    fontsize = args.fontsize if args.fontsize is not None else st.get("fontsize", DEFAULT_FONTSIZE)
+    print(f"Estilo de subtítulo: {style_name} "
+          f"(max_chars={max_chars}, max_duration={max_duration}s, fontsize={fontsize})")
     transcript, info = transcribe_audio(args.video, args.model, args.lang)
     if args.transcript:
         with open(args.transcript, "w", encoding="utf-8") as f:
@@ -272,14 +338,14 @@ def main() -> int:
     duration = get_duration(args.video)
     clip_end = duration if duration else 1e9
     if not generate_srt(transcript, args.offset, clip_end, srt_path,
-                        max_chars=args.max_chars, max_duration=args.max_duration):
+                        max_chars=max_chars, max_duration=max_duration):
         print("Sin palabras transcritas: no se generó SRT.", file=sys.stderr)
         return 1
     print(f"SRT: {srt_path}")
 
     if not args.no_burn:
         out = args.burn or f"{base}_subs.mp4"
-        burn_subtitles(args.video, srt_path, out, fontsize=args.fontsize)
+        burn_subtitles(args.video, srt_path, out, fontsize=fontsize, style=style_name, config=cfg)
         print(f"Clip con subtítulos: {out}")
     return 0
 
