@@ -775,13 +775,13 @@ Probado con los clips reales (2026-11-16, sin push, nada publicado):
 
 `viral_package.py` aplica estas técnicas de empaquetado viral:
 
-- **yt-viral:** ranking por múltiplo sobre la mediana del propio stream, no por puntaje bruto. Un pico de 32 pts con mediana 17 es 1.88x.
-- **yt-shorts:** cada clip lleva primera línea nueva, texto en pantalla en los primeros 2 s (distinto de lo hablado) y punto de loop, para que sobreviva sin el video alrededor.
-- **yt-package:** título + miniatura como una unidad. Título ≤60 car. (40 en móvil), miniatura ≤3 palabras y sin repetir el título, máx. 2 palabras en MAYÚSCULAS.
-- **yt-seo:** descripción con las 2 primeras líneas como snippet, tags máx. 15 y las 3 búsquedas que el video debería ganar.
-- **yt-retention:** el hook se juega en los primeros 15 s.
+- **Ranking viral:** ranking por múltiplo sobre la mediana del propio stream, no por puntaje bruto. Un pico de 32 pts con mediana 17 es 1.88x.
+- **Formato Shorts:** cada clip lleva primera línea nueva, texto en pantalla en los primeros 2 s (distinto de lo hablado) y punto de loop, para que sobreviva sin el video alrededor.
+- **Título + miniatura:** título + miniatura como una unidad. Título ≤60 car. (40 en móvil), miniatura ≤3 palabras y sin repetir el título, máx. 2 palabras en MAYÚSCULAS.
+- **SEO:** descripción con las 2 primeras líneas como snippet, tags máx. 15 y las 3 búsquedas que el video debería ganar.
+- **Retención:** el hook se juega en los primeros 15 s.
 
-Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunta de las skills: ¿lo subo así, o lo cambio?
+Nada publica solo: esto escribe y tú publicas. Cada clip termina con la pregunta: ¿lo subo así, o lo cambio?
 
 ## Publicación — v2.6
 
