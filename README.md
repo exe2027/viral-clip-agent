@@ -298,6 +298,65 @@ python auto_clips.py <vod> --layout stack
 python auto_clips.py <vod> --layout pip
 ```
 
+### Bloque 4 — escaneo por tramo, zonas seguras, fondo borroso, hoja de contacto
+
+- **Escaneo por tramo** (`scan_segments` en `layout.py`): además de
+  clasificar cada fotograma, muestrea 1 fotograma cada 2 s y compara
+  fotogramas consecutivos por celdas de 10x10 px. Una webcam es una
+  región *estable* (su fondo no cambia mientras el gameplay cambia en
+  todas partes), así que cada tramo se clasifica en 0/1/2 cams y se
+  marca si la cam es un avatar circular (esquinas inestables, centro
+  estable). La detección se restringe a regiones estables para no
+  confundir caras del juego con webcams. Ojo: una imagen estática
+  (menú de pausa, carga) también es estable en ambas mitades; el
+  discriminador es la costura vertical fuerte justo en el centro
+  (el divisor entre las dos cams). Sin costura, el escaneo lo
+  reporta con la advertencia y `decide_layout` no lo usa para
+  corregir a stack (Locones 0-7 s: 67-72% estables sin costura).
+  Si hay OpenCV disponible,
+  los rostros detectados solo cuentan si caen dentro de una región
+  estable; sin OpenCV (caso actual) la diferencia de frames es el
+  método principal. `decide_layout` usa el escaneo para confirmar o
+  corregir la clasificación: 2 cams persistentes sin franja apilada
+  → stack; 1 cam persistente sin caja → PiP con la caja estable.
+- **Zonas seguras por juego**: GTA V tiene el minimapa
+  abajo-izquierda y el HUD de salud abajo-derecha; el PiP nunca va
+  abajo ni tapa esas zonas (si la esquina pedida solapa una zona, se
+  prueba la otra superior). GTA 6 no tiene mapa confirmado el día 1:
+  el fallback asume la misma convención Rockstar, la completa con
+  esquinas persistentes detectadas por el escaneo (un HUD es
+  persistente por definición) y se puede fijar a mano con
+  `safe_zones` en `config.yaml` (manda sobre todo). El mapa
+  definitivo de GTA 6 se fija después de los primeros clips reales.
+- **Fondo borroso al apilar**: cada mitad se recorta completa (antes
+  se recortaba al centro 9:8 de cada mitad, lo que podía cortar caras
+  por los lados) y se ajusta por contenido sobre su propio frame
+  difuminado (`boxblur`, radio configurable `blur_radius`), en vez de
+  barras negras.
+- **Hoja de contacto** (`contact_sheet` en `layout.py`): 9 fotogramas
+  del clip en una imagen 3x3, cada uno con el rectángulo de recorte
+  que el layout usará en ese instante (verde) y las zonas seguras
+  (rojo). Para aprobar un clip, mirar 1 imagen basta.
+- **100% local, $0 (decisión del usuario, 2026-11-16):** este bloque
+  no usa ninguna API paga ni pide ninguna key: solo Python stdlib +
+  ffmpeg local (y OpenCV opcional si está instalado, también local
+  y sin red). Nada de Gemini, OpenAI, DeepSeek ni ElevenLabs: Gemini
+  pidió tarjeta al crear la key, así que no se pone tarjeta ni se
+  crea cuenta de facturación. La transcripción con faster-whisper
+  tiny (modelo local) vive en `subtitles.py`, no aquí; `layout.py`
+  no transcribe nada y no sale a la red.
+
+```bash
+# Escaneo por tramo + hoja de contacto de un segmento
+python -c "
+from layout import scan_segments, decide_layout, contact_sheet
+seg = 'runs/kick-coker-01a1dffd/segments/seg_01_t03h14m50s.mp4'
+print(scan_segments(seg, 60))
+d = decide_layout(seg, 60)
+contact_sheet(seg, 'contacto-coker.jpg', decision=d)
+"
+```
+
 ## Uso
 
 ### 1. Descargar chat y VOD

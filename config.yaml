@@ -114,6 +114,16 @@ layout:
   pip_width: 480        # ancho de la webcam en PiP (px, sobre 1080)
   pip_corner: "top-right" # top-right | top-left
   pip_margin: 24        # margen de la webcam PiP al borde
+  # Bloque 4: escaneo por tramo + zonas seguras + fondo borroso.
+  scan_enabled: true    # escaneo por diferencia de frames cada 2 s
+  scan_every_s: 2       # 1 fotograma cada N s para el escaneo
+  blur_radius: 20       # radio del boxblur del fondo al apilar cams
+  game: "GTA 6"         # juego para el mapa de zonas seguras
+  # Zonas seguras manuales (fracciones 0..1): mandan sobre el mapa
+  # del juego y sobre lo detectado. GTA 6 día 1 no tiene mapa
+  # confirmado: si el minimapa no está abajo-izquierda, fijarlo aquí.
+  # Ejemplo: safe_zones: [[0.015, 0.70, 0.30, 0.985]]
+  safe_zones: null
 
 # Facecam explícita: x, y, w, h en píxeles del vídeo original.
 # Si está puesta, manda sobre la detección automática.
