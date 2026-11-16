@@ -118,6 +118,59 @@ gramática rota ("And I was post on discord"). Revisa el SRT antes de
 publicar; el tribunal pidió un diccionario GTA 6 para esto, que aún
 no está implementado.
 
+## Política de traducción de subtítulos — v2.5
+
+Regla del usuario (2026-11-16), en `config.yaml` (`subtitle_policy`):
+- **Audio en español -> subtítulos SOLO en español, sin traducir**
+  (`task="transcribe"`, `language="es"`). El español nunca se traduce,
+  ni con `--subtitle-lang en` ni con `--translate`.
+- **Audio en cualquier otro idioma -> subtítulos traducidos al inglés**
+  (`task="translate"`, lo único que Whisper traduce).
+
+`subtitles.py` detecta el idioma con `model.detect_language()` y decide
+con `config.resolve_subtitle_task()`. Flags:
+`--subtitle-lang auto|es|en` (default: `auto`, aplica la política;
+`es` fuerza español, `en` fuerza inglés) y `--translate` / `--no-translate`
+(fuerza o bloquea la traducción; por defecto manda la config).
+
+```bash
+# Rumano -> inglés (auto, por la política)
+.venv/bin/python subtitles.py clip.mp4
+# Español -> solo español, aunque se pida inglés (la regla dura gana)
+.venv/bin/python subtitles.py clip.mp4 --subtitle-lang en
+# Nunca traducir, transcribe en el idioma original
+.venv/bin/python subtitles.py clip.mp4 --no-translate
+```
+
+Pruebas reales (modelo `tiny`):
+- **Rumano -> inglés (Kick, Locones):** el clip del mejor pico
+  (03h08m) no tenía voz que transcribir (solo audio del juego), así
+  que se probó con el segmento del pico de 14m05s del mismo VOD:
+  detectado `ro`, `task=translate`, SRT en inglés — "I don't want to
+  see / you again, I don't / want / to see you again" (32,2–39,5 s) —
+  quemado en `runs/kick-locones-01a1e069/clips/clip_14m05s_subs-en.mp4`
+  (1080x1920, 60 s, verificado por fotograma). Solo hay ~7 s de voz
+  en esos 60 s; el resto es audio del juego.
+- **Español no se traduce (Kick, Coker):** detectado `es` (prob. 0,62),
+  `task=transcribe`, subtítulos en español ("¿Me / te... / No,").
+- **Inglés (Twitch, 2929669422):** detectado `en`, `task=transcribe`,
+  subtítulos en inglés (ya estaba en inglés, no hay nada que traducir).
+- Prueba unitaria de la decisión: `python3 test_subtitle_policy.py`
+  (11/11 casos: es/ro/en/fr/de/pt, con y sin flags).
+
+Limitaciones de la traducción con `tiny`:
+- La detección de idioma en audio ruidoso de juego es poco fiable:
+  en el segmento de 14m05s el auto-detect dijo `en` (prob. 0,13) y
+  transcribió basura en inglés ("Oh my, you're no more of a patroth,
+  why?"); forzando `--lang ro` la traducción salió bien. Si el idioma
+  detectado sale con probabilidad baja (< 0,5), pasa `--lang` a mano.
+- `task="translate"` a veces da palabras con `end == start`; el SRT
+  les da una duración mínima de 0,3 s para que se vean al quemar.
+- La traducción es usable para subtítulos cortos de clips, pero hay
+  que revisar el SRT: el modelo `tiny` repite frases y se pierde con
+  ruido de juego. Un modelo `base`/`small` traduciría mejor, a costa
+  de más tiempo de CPU.
+
 ## Kick — v2.3 (KickDownloaderCLI vendorizado)
 
 `auto_clips.py` acepta URLs de Kick igual que las de Twitch. El

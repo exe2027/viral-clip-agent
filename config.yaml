@@ -45,6 +45,17 @@ clips:
 
 subtitles:
   default_style: "tiktok" # tiktok | highlight | karaoke
+  subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
+  translate: true         # si se traduce a inglés lo que no sea español
+
+# Política de traducción de subtítulos (regla del usuario, 2026-11-16):
+#   * audio en español -> subtítulos SOLO en español, sin traducir.
+#   * audio en CUALQUIER otro idioma (rumano, inglés, etc.) ->
+#     traducir los subtítulos al inglés (faster-whisper task="translate").
+# Es decir: transcribe en español si es español; si no, traduce a inglés.
+subtitle_policy:
+  es: "transcribe-only"   # español: transcribe, nunca traducir
+  others: "translate-to-en" # resto de idiomas: traducir a inglés
 
 # Estilos de subtítulo elegibles (idea de Shortia: plantillas con
 # preview). Se eligen con --subtitle-style en subtitles.py.
@@ -80,7 +91,23 @@ subtitle_styles:
     max_duration: 1.0
     box: false
 
-# Facecam opcional para el layout vertical (fase siguiente, aún no
-# implementado): x, y, w, h en píxeles del vídeo original.
+# Layout RESPONSIVE (regla del proyecto, 2026-11-16): el recorte vertical
+# no es un recorte ciego al centro. Cada clip decide su layout por
+# fotogramas muestreados (ver layout.py):
+#   * dos webcams lado a lado -> se apilan, una encima de la otra.
+#   * una webcam + gameplay -> gameplay completo con la webcam en PiP
+#     arriba (nunca abajo: minimapa y HUD de GTA).
+#   * solo gameplay -> recorte vertical centrado normal.
+#   * si el layout cambia dentro del clip, se adapta por tramos.
+layout:
+  mode: "auto"          # auto | stack | pip | center
+  sample_every_s: 5     # muestrear un fotograma cada N segundos
+  min_segment_s: 5      # un tramo más corto se fusiona con el vecino
+  pip_width: 480        # ancho de la webcam en PiP (px, sobre 1080)
+  pip_corner: "top-right" # top-right | top-left
+  pip_margin: 24        # margen de la webcam PiP al borde
+
+# Facecam explícita: x, y, w, h en píxeles del vídeo original.
+# Si está puesta, manda sobre la detección automática.
 # Ejemplo: facecam_box: [100, 80, 320, 180]
 facecam_box: null

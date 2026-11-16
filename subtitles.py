@@ -48,6 +48,18 @@ config.yaml (subtitle_styles), elegibles con --subtitle-style:
     cortos (max_chars=8, max_duration=1.0 s).
 Lo que se tomó de Shortia y lo que NO: ver README, sección Shortia.
 
+Política de traducción — v2.5 (regla del usuario, 2026-11-16):
+  * Audio en español -> subtítulos SOLO en español, sin traducir
+    (faster-whisper task="transcribe", language="es").
+  * Audio en CUALQUIER otro idioma (rumano, inglés, etc.) ->
+    subtítulos traducidos al inglés (task="translate", lo único
+    que Whisper traduce).
+  Se detecta el idioma con model.detect_language() y se decide con
+  config.resolve_subtitle_task() según subtitle_policy de
+  config.yaml (es=transcribe-only, others=translate-to-en).
+  --subtitle-lang auto|es|en y --translate/--no-translate permiten
+  anular la política desde la CLI.
+
 Requisitos: el venv del proyecto (.venv/) con faster-whisper, y
 FFmpeg en el PATH. El Python del sistema NO sirve: instalar
 faster-whisper ahí falla por PEP 668 / typing_extensions de Debian.
@@ -59,6 +71,8 @@ Uso:
   .venv/bin/python subtitles.py clip.mp4 --model tiny --lang en --fontsize 48
   .venv/bin/python subtitles.py clip.mp4 --subtitle-style highlight
   .venv/bin/python subtitles.py clip.mp4 --subtitle-style karaoke
+  .venv/bin/python subtitles.py clip.mp4 --subtitle-lang en   # fuerza salida en inglés
+  .venv/bin/python subtitles.py clip.mp4 --no-translate        # nunca traducir
 """
 
 import argparse
@@ -73,11 +87,19 @@ DEFAULT_MAX_DURATION = 2.0
 DEFAULT_FONTSIZE = 48
 
 
-def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None):
-    """Transcribe con faster-whisper. Devuelve (transcript, info).
+def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
+                     subtitle_lang="auto", translate=None, policy=None):
+    """Transcribe (o traduce) con faster-whisper. Devuelve (transcript, info).
 
     transcript tiene el mismo formato que openshorts: {"segments": [...],
-    "language": ...}, cada segmento con "words" [{word, start, end}].
+    "language": ...}, cada segmento con "words" [{word, start, end}],
+    más "source_language", "task" y "subtitle_language" (v2.5).
+
+    Política de traducción (regla del usuario, 2026-11-16):
+    español -> solo transcribe, sin traducir; cualquier otro idioma ->
+    task="translate" a inglés. Se detecta el idioma con
+    model.detect_language() (salvo que se fuerce con --lang) y se
+    decide con config.resolve_subtitle_task().
 
     Nota: no se pasa el vídeo (ni un archivo de audio) directamente a
     faster-whisper, porque su decodificación con PyAV falla con av 19
@@ -93,6 +115,14 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None):
     import numpy as np
     from faster_whisper import WhisperModel
 
+    try:
+        from config import get_subtitle_policy, resolve_subtitle_task
+        policy = policy or get_subtitle_policy({})
+    except Exception:
+        resolve_subtitle_task = None
+        policy = policy or {"es": "transcribe-only",
+                            "others": "translate-to-en"}
+
     print(f"Transcribiendo audio de: {video_path} (modelo {model_name})")
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_path = tmp.name
@@ -106,10 +136,34 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None):
             frames = wf.readframes(wf.getnframes())
         audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
         model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        if language:
+            detected, lang_prob = language, 1.0
+        else:
+            detected, lang_prob, _ = model.detect_language(audio)
+        if resolve_subtitle_task is not None:
+            task, sub_lang = resolve_subtitle_task(
+                detected, subtitle_lang=subtitle_lang,
+                translate=translate, policy=policy)
+        else:  # sin config.py: misma política, hardcodeada
+            if (subtitle_lang or "auto") == "es" or detected == "es":
+                task, sub_lang = "transcribe", "es"
+            elif translate is False:
+                task, sub_lang = "transcribe", detected
+            else:
+                task, sub_lang = "translate", "en"
+        if task == "translate":
+            print(f"Idioma detectado: {detected} (prob. {lang_prob:.2f}) "
+                  f"-> traduciendo subtítulos a inglés (task=translate)")
+        else:
+            print(f"Idioma detectado: {detected} (prob. {lang_prob:.2f}) "
+                  f"-> solo transcribe, sin traducir (task=transcribe)")
         segments, info = model.transcribe(
-            audio, language=language, word_timestamps=True
+            audio, language=detected, task=task, word_timestamps=True
         )
-        transcript = {"segments": [], "language": info.language}
+        transcript = {"segments": [], "language": info.language,
+                      "source_language": detected,
+                      "source_language_probability": round(float(lang_prob), 2),
+                      "task": task, "subtitle_language": sub_lang}
         for segment in segments:
             seg_data = {
                 "start": segment.start,
@@ -124,8 +178,9 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None):
                     )
             transcript["segments"].append(seg_data)
         print(
-            f"Transcripción completa. Idioma: {info.language} "
-            f"(probabilidad {info.language_probability:.2f})"
+            f"Transcripción completa. Idioma fuente: {detected} "
+            f"(probabilidad {lang_prob:.2f}) | tarea: {task} | "
+            f"subtítulos en: {sub_lang}"
         )
         return transcript, info
     finally:
@@ -172,6 +227,9 @@ def generate_srt(transcript, clip_start, clip_end, output_path,
             duration = end - block_start
             if current_text_len + len(word["word"]) > max_chars or duration > max_duration:
                 block_end = current_block[-1]["end"] - clip_start
+                # task="translate" a veces da palabras con end == start:
+                # un bloque de duración 0 no se ve al quemar.
+                block_end = max(block_end, block_start + 0.3)
                 text = " ".join(w["word"] for w in current_block).strip()
                 srt_content += format_srt_block(index, block_start, block_end, text)
                 index += 1
@@ -181,6 +239,7 @@ def generate_srt(transcript, clip_start, clip_end, output_path,
                 current_block.append(word)
     if current_block:
         block_end = current_block[-1]["end"] - clip_start
+        block_end = max(block_end, block_start + 0.3)
         text = " ".join(w["word"] for w in current_block).strip()
         srt_content += format_srt_block(index, block_start, block_end, text)
 
@@ -292,7 +351,20 @@ def main() -> int:
     p.add_argument("--model", default=DEFAULT_MODEL,
                    help="Modelo faster-whisper (default: tiny)")
     p.add_argument("--lang", default=None,
-                   help="Idioma: es, en... (default: auto)")
+                   help="Idioma fuente forzado: es, en... (default: auto)")
+    p.add_argument("--subtitle-lang", default=None, choices=["auto", "es", "en"],
+                   help="Idioma de salida de los subtítulos: auto (aplica "
+                        "la política: es=transcribe, resto=traduce a en), "
+                        "es o en (default: config.yaml subtitles.subtitle_lang)")
+    translate_group = p.add_mutually_exclusive_group()
+    translate_group.add_argument("--translate", dest="translate",
+                                 action="store_true", default=None,
+                                 help="Fuerza traducir a inglés lo que no "
+                                      "sea español")
+    translate_group.add_argument("--no-translate", dest="translate",
+                                 action="store_false", default=None,
+                                 help="Nunca traducir: transcribe siempre "
+                                      "en el idioma original")
     p.add_argument("--max-chars", type=int, default=None,
                    help="Máx. caracteres por bloque (default: según estilo)")
     p.add_argument("--max-duration", type=float, default=None,
@@ -330,7 +402,24 @@ def main() -> int:
     fontsize = args.fontsize if args.fontsize is not None else st.get("fontsize", DEFAULT_FONTSIZE)
     print(f"Estilo de subtítulo: {style_name} "
           f"(max_chars={max_chars}, max_duration={max_duration}s, fontsize={fontsize})")
-    transcript, info = transcribe_audio(args.video, args.model, args.lang)
+    # Política de traducción (v2.5, config.yaml subtitle_policy):
+    # es -> transcribe-only; resto -> translate-to-en. La CLI manda
+    # sobre la config: --subtitle-lang y --translate/--no-translate.
+    try:
+        from config import get_subtitle_policy
+        policy = get_subtitle_policy(cfg)
+    except Exception:
+        policy = {"es": "transcribe-only", "others": "translate-to-en"}
+    sub_cfg = cfg.get("subtitles") or {}
+    subtitle_lang = args.subtitle_lang or sub_cfg.get("subtitle_lang", "auto")
+    translate = args.translate
+    if translate is None:
+        translate = sub_cfg.get("translate", True)
+    print(f"Política de subtítulos: {policy} | subtitle_lang={subtitle_lang} "
+          f"| translate={translate}")
+    transcript, info = transcribe_audio(
+        args.video, args.model, args.lang,
+        subtitle_lang=subtitle_lang, translate=translate, policy=policy)
     if args.transcript:
         with open(args.transcript, "w", encoding="utf-8") as f:
             json.dump(transcript, f, ensure_ascii=False, indent=2)
