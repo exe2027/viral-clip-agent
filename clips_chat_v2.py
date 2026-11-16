@@ -6,6 +6,30 @@ Detecta los mejores momentos de un directo de Twitch a partir del chat
 (chat.json de TwitchDownloader) y los recorta en vertical 1080x1920,
 listos para TikTok, Reels o Shorts.
 
+Qué cambia en la v2.5 (tribunal, bloque 3, 2026-11-16):
+  * Baseline local: cada ventana se compara contra su vecindad
+    (±12 min), no contra todo el VOD. Score = z-score local +
+    pendiente de subida (60 s previos, cap 2). Flag
+    ``--local-baseline``, activado por defecto
+    (``--no-local-baseline`` lo apaga). Un pico en un tramo muerto
+    ya no compite con un pico en un tramo caliente: cada uno se
+    mide contra su propio vecindario.
+  * Anti-spam v2: por ventana, ratio emote-only, ratio repetición
+    (1 - cuerpos distintos / mensajes, sobre TODOS los mensajes) y
+    diversidad léxica (sobre mensajes con texto). Penaliza fuerte:
+    emote-only >60% → ×0.25 (motivo ``emote_spam``), repetición
+    >40% → ×0.5 (motivo ``repetition_spam``); ambas → ×0.125.
+    La repetición se mide sobre todos los mensajes aunque haya
+    muchos usuarios únicos: un mismo emote repetido por 14 personas
+    (KEKW×14) también es baja diversidad, pero con 28% no llega al
+    umbral del 40% y no se penaliza. El motivo queda en ``detail``
+    y en el manifiesto (``motivo_penalizacion``).
+  * Score final = z-score local + 0.5 × pendiente de subida +
+    magnitud (puntos ajustados / 10). El z-score solo premiaba
+    ráfagas pequeñas en tramos muertos (una ventana de 29 pts en
+    una zona callada superaba al pico real de 67 pts); el término
+    de magnitud mantiene el tamaño absoluto en el ranking.
+
 Qué cambia en la v2.4 (auditoría Claude Code, 2026-11-16):
   * ``xd`` por fin puntúa como risa (era la risa más común del chat
     hispano y valía 1 punto). También ``xdd``, ``xddd``...
@@ -62,6 +86,7 @@ Sin dependencias externas, sin credenciales, sin red.
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -119,6 +144,32 @@ HYPE_EN = (
 # Bots conocidos: sus mensajes (avisos, comandos, spam) no puntúan.
 KNOWN_BOTS = {"nightbot", "streamelements", "moobot", "streamlabs",
               "fossabot", "wizebot", "deepbot", "phantombot"}
+
+# Nombres de emote conocidos que aparecen como texto pelado en el chat
+# (KEKW, LUL...). Un mensaje de un solo token de esta lista es
+# emote-only. "JAJAJA", "W" o "GG" tecleados NO están aquí: son texto.
+EMOTE_NAMES = frozenset({"kekw", "lul", "lulw", "omegalul", "kappa", "kapp",
+                         "monkas", "pepega", "pogchamp", "poggers", "sadge",
+                         "feelsbadman", "feelsgoodman", "om", "loo"})
+BRACKET_EMOTE_RE = re.compile(r"(?:\[emote:[^\]]+\]\s*)+")
+
+
+def _is_emote_only(body: str) -> bool:
+    """True si el mensaje es solo emotes, sin texto.
+
+    - Formato Kick/TwitchDownloader: ``[emote:<id>:<nombre>]`` repetido.
+    - Solo emojis o símbolos (sin letras ni dígitos).
+    - Un solo token que es un nombre de emote conocido (KEKW, LUL...).
+    """
+    b = body.strip()
+    if not b:
+        return False
+    if BRACKET_EMOTE_RE.fullmatch(b):
+        return True
+    tokens = WORD_RE.findall(b.lower())
+    if not tokens:
+        return True  # solo emojis / símbolos
+    return len(tokens) == 1 and tokens[0] in EMOTE_NAMES
 
 
 def _split_tokens(tokens):
@@ -283,8 +334,11 @@ def sample_messages(chat_path: str, window_start: int, window_size: int = 10, li
     return examples
 
 
-def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", step: int = None):
-    """Ventana deslizante con suavizado. Devuelve (scores, detail).
+def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", step: int = None,
+                  local_baseline: bool = True, anti_spam: bool = True, local_half_min: int = 12):
+    """Ventana deslizante con suavizado + baseline local + anti-spam v2.
+
+    Devuelve (scores, detail).
 
     - Paso por defecto: la mitad de la ventana (5 s con ventana de 10 s),
       así un pico entre dos ventanas no se parte en dos.
@@ -295,14 +349,38 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
     - ``detail[ventana]``: msgs, risas, hype y users (usuarios únicos).
       Un mismo usuario repitiendo el mismo mensaje en la ventana solo
       cuenta una vez (anti spam copy-paste); los bots no puntúan.
+    - Anti-spam v2 (por ventana): ``emote_ratio`` (mensajes solo
+      emote / total), ``rep_ratio`` (1 - cuerpos distintos / mensajes,
+      sobre todos los mensajes) y ``lex_diversity`` (palabras distintas
+      / palabras totales en los mensajes con texto). Si emote_ratio
+      > 60% el puntaje se multiplica ×0.25 (motivo ``emote_spam``);
+      si rep_ratio > 40%, ×0.5 (motivo ``repetition_spam``). El factor
+      queda en ``penalty_factor`` y el motivo en ``motivo_penalizacion``.
+    - Baseline local (por defecto): cada ventana se compara con su
+      vecindad (±``local_half_min`` minutos), no con todo el VOD.
+      Score final = z-score local + 0.5 × pendiente de subida
+      (media de los 60 s previos, cap 2) + magnitud (puntos
+      ajustados / 10, para que el tamaño absoluto siga pesando:
+      el z-score solo premiaba ráfagas pequeñas en tramos muertos).
+      La desviación tiene suelo 1.0 para que en tramos muertos un
+      soplo no dé z=50. Con VOD muy corto (<5 vecinos) se usa la
+      media/desviación global.
+    - Con ``local_baseline=False`` los scores son los puntos
+      suavizados ajustados por anti-spam; con ``anti_spam=False``
+      además, son los puntos suavizados v2.4 tal cual (compatibilidad
+      y línea base para comparar).
     """
     messages = _load_chat(chat_path)
     if step is None:
         step = max(1, window_size // 2)
 
-    # Agregado por segundo (puntos, mensajes, risas, hype, usuarios).
+    # Agregado por segundo (puntos, mensajes, risas, hype, usuarios,
+    # y estadísticas anti-spam v2: cuerpos distintos para repetición,
+    # palabras de mensajes con texto para diversidad léxica).
     per_sec: dict[int, dict] = defaultdict(
-        lambda: {"points": 0, "msgs": 0, "risas": 0, "hype": 0, "users": set(), "seen": set()}
+        lambda: {"points": 0, "msgs": 0, "risas": 0, "hype": 0, "users": set(), "seen": set(),
+                 "emote_only": 0, "bodies": set(),
+                 "words": set(), "n_words": 0}
     )
     max_offset = 0
     for offset, body, user in messages:
@@ -323,13 +401,26 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
             bucket["hype"] += 1
         if user:
             bucket["users"].add(user)
+        # Anti-spam v2: cuerpos distintos (repetición, todos los
+        # mensajes) y emote-only aparte; las palabras solo de los
+        # mensajes con texto alimentan la diversidad léxica.
+        bucket["bodies"].add(body.strip().lower())
+        if _is_emote_only(body):
+            bucket["emote_only"] += 1
+        else:
+            wl = WORD_RE.findall(body.lower())
+            bucket["words"].update(wl)
+            bucket["n_words"] += len(wl)
 
     starts = list(range(0, max_offset + 1, step))
     raw: dict[int, int] = {}
     detail: dict[int, dict] = {}
     for start in starts:
         points = msgs = risas = hype = 0
+        emote_only = n_words = 0
         users: set = set()
+        bodies: set = set()
+        words: set = set()
         for sec in range(start, start + window_size):
             b = per_sec.get(sec)
             if not b:
@@ -339,15 +430,88 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
             risas += b["risas"]
             hype += b["hype"]
             users |= b["users"]
+            emote_only += b["emote_only"]
+            n_words += b["n_words"]
+            bodies |= b["bodies"]
+            words |= b["words"]
         raw[start] = points
-        detail[start] = {"msgs": msgs, "risas": risas, "hype": hype, "users": len(users)}
+        emote_ratio = emote_only / msgs if msgs else 0.0
+        rep_ratio = (1.0 - len(bodies) / msgs) if msgs >= 3 else 0.0
+        lex_div = len(words) / n_words if n_words else 0.0
+        factor = 1.0
+        motivos: list[str] = []
+        if anti_spam:
+            if emote_ratio > 0.60:
+                factor *= 0.25
+                motivos.append("emote_spam")
+            if rep_ratio > 0.40:
+                factor *= 0.5
+                motivos.append("repetition_spam")
+        detail[start] = {"msgs": msgs, "risas": risas, "hype": hype, "users": len(users),
+                         "emote_ratio": round(emote_ratio, 3),
+                         "rep_ratio": round(rep_ratio, 3),
+                         "lex_diversity": round(lex_div, 3),
+                         "penalty_factor": factor,
+                         "motivo_penalizacion": motivos or None}
 
     # Suavizado: 0.25 * anterior + 0.5 * actual + 0.25 * siguiente.
-    scores: dict[int, float] = {}
+    smoothed: dict[int, float] = {}
     for i, start in enumerate(starts):
         prev_s = raw[starts[i - 1]] if i > 0 else raw[start]
         next_s = raw[starts[i + 1]] if i + 1 < len(starts) else raw[start]
-        scores[start] = round(0.25 * prev_s + 0.5 * raw[start] + 0.25 * next_s, 2)
+        smoothed[start] = round(0.25 * prev_s + 0.5 * raw[start] + 0.25 * next_s, 2)
+
+    # Ajuste anti-spam sobre el puntaje suavizado.
+    adj = {s: round(smoothed[s] * detail[s]["penalty_factor"], 2) for s in starts}
+    for s in starts:
+        detail[s]["raw_score"] = smoothed[s]
+        detail[s]["adj_score"] = adj[s]
+        detail[s]["z_local"] = None
+        detail[s]["rise"] = None
+
+    if not local_baseline:
+        return adj, detail
+
+    # Baseline local: z-score contra la vecindad (±local_half_min),
+    # más pendiente de subida (60 s previos, cap 2). Sumas prefijas
+    # para media/varianza en O(1) por ventana.
+    n = len(starts)
+    adj_list = [adj[s] for s in starts]
+    pref = [0.0]
+    pref2 = [0.0]
+    for v in adj_list:
+        pref.append(pref[-1] + v)
+        pref2.append(pref2[-1] + v * v)
+    total_mean = pref[n] / n if n else 0.0
+    total_var = max(pref2[n] / n - total_mean ** 2, 0.0) if n else 0.0
+    total_std = math.sqrt(total_var)
+    k = max(1, int(local_half_min * 60 / step))
+    m = max(1, int(60 / step))
+    scores: dict[int, float] = {}
+    for i, start in enumerate(starts):
+        lo, hi = max(0, i - k), min(n - 1, i + k)
+        cnt = hi - lo  # nº de vecinos (sin contar la ventana misma)
+        if cnt >= 5:
+            ssum = pref[hi + 1] - pref[lo] - adj_list[i]
+            sq = pref2[hi + 1] - pref2[lo] - adj_list[i] ** 2
+            mean = ssum / cnt
+            var = max(sq / cnt - mean ** 2, 0.0)
+            std = math.sqrt(var)
+        else:  # VOD muy corto: baseline global
+            mean, std = total_mean, total_std
+        std = max(std, 1.0)  # suelo: en tramos muertos no explota z
+        z = (adj_list[i] - mean) / std
+        if i > 0:
+            plo = max(0, i - m)
+            prev_cnt = i - plo
+            prev_mean = (pref[i] - pref[plo]) / prev_cnt if prev_cnt else 0.0
+            rise = min(max((adj_list[i] - prev_mean) / std, 0.0), 2.0)
+        else:
+            rise = 0.0
+        detail[start]["z_local"] = round(z, 2)
+        detail[start]["rise"] = round(rise, 2)
+        # z local + 0.5 × subida + magnitud (adj/10).
+        scores[start] = round(z + 0.5 * rise + adj_list[i] / 10.0, 2)
     return scores, detail
 
 
@@ -423,7 +587,7 @@ def _write_manifest(path, manifest):
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Extrae los mejores clips verticales desde un chat.json y vod.mp4 de Twitch (v2.4: español + inglés, ventana deslizante, xd como risa)."
+        description="Extrae los mejores clips verticales desde un chat.json y vod.mp4 de Twitch (v2.5: baseline local con z-score + anti-spam v2, español + inglés, ventana deslizante, xd como risa)."
     )
     p.add_argument("chat", help="Ruta al chat.json de TwitchDownloader")
     p.add_argument("--video", help="Ruta al vod.mp4 (obligatorio salvo --dry-run)")
@@ -444,6 +608,14 @@ def main() -> int:
     p.add_argument("--crf", type=int, default=23, help="Calidad x264, menor = mejor (default: 23)")
     p.add_argument("--preset", default="fast", help="Preset x264 (default: fast)")
     p.add_argument("--dry-run", action="store_true", help="Solo lista los picos, sin cortar")
+    p.add_argument("--local-baseline", dest="local_baseline", action="store_true", default=True,
+                   help="Baseline local ±12 min con z-score + pendiente de subida (default: activado)")
+    p.add_argument("--no-local-baseline", dest="local_baseline", action="store_false",
+                   help="Apaga el baseline local: puntúa por puntos suavizados ajustados por anti-spam")
+    p.add_argument("--no-anti-spam", dest="anti_spam", action="store_false",
+                   help="Apaga el anti-spam v2 (sin penalización por emote-only ni repetición)")
+    p.add_argument("--local-half-min", type=int, default=12,
+                   help="Media vecindad local en minutos a cada lado (default: 12)")
     args = p.parse_args()
 
     if not os.path.isfile(args.chat):
@@ -461,7 +633,9 @@ def main() -> int:
             return 1
 
     try:
-        scores, detail = score_windows(args.chat, window_size=args.window, lang=args.lang, step=args.step)
+        scores, detail = score_windows(args.chat, window_size=args.window, lang=args.lang, step=args.step,
+                                       local_baseline=args.local_baseline, anti_spam=args.anti_spam,
+                                       local_half_min=args.local_half_min)
     except (json.JSONDecodeError, KeyError) as e:
         print(f"Error: chat.json no válido: {e}", file=sys.stderr)
         return 1
@@ -482,13 +656,21 @@ def main() -> int:
     step = args.step or max(1, args.window // 2)
     print(f"Chat: {total_msgs} mensajes, {len(scores)} ventanas de {args.window}s "
           f"(paso {step}s, deslizante + suavizado), idioma: {args.lang}")
+    mode = (f"baseline local ±{args.local_half_min} min (z-score + subida)" if args.local_baseline
+            else "puntos ajustados (sin baseline local)")
+    print(f"Scoring v2.5: {mode}, anti-spam v2: {'on' if args.anti_spam else 'off'}")
     print(f"Mediana (todas las ventanas, incl. vacías): {median}")
     print("Picos elegidos:")
     for i, (ts, score) in enumerate(peaks, 1):
         d = detail[ts]
         mult = f"{score / median:.2f}x la mediana" if median > 0 else "—"
-        print(f"  {i}. {fmt_ts(ts)} — {score} pts ({d['msgs']} msgs, "
-              f"{d['risas']} risas, {d['hype']} hype, {d['users']} usuarios, {mult})")
+        zinfo = f"z {d['z_local']} (subida {d['rise']}) " if d.get("z_local") is not None else ""
+        pen = ""
+        if d.get("motivo_penalizacion"):
+            pen = (f" [penalizado ×{d['penalty_factor']}: {', '.join(d['motivo_penalizacion'])}"
+                   f" | emote {d['emote_ratio']:.0%} rep {d['rep_ratio']:.0%} lex {d['lex_diversity']:.2f}]")
+        print(f"  {i}. {fmt_ts(ts)} — {score} ({zinfo}raw {d['raw_score']} pts, "
+              f"{d['msgs']} msgs, {d['risas']} risas, {d['hype']} hype, {d['users']} usuarios, {mult}){pen}")
 
     if args.dry_run:
         print("Dry-run: no se cortó nada.")
@@ -504,7 +686,10 @@ def main() -> int:
     # lo ya cortado queda registrado.
     manifest_path = os.path.join(args.out, "manifest.json")
     manifest = {"chat": args.chat, "video": args.video, "median": median,
-                "window": args.window, "step": step, "clips": []}
+                "window": args.window, "step": step,
+                "scoring": "v2.5 local-baseline+z-score+anti-spam-v2",
+                "local_baseline": args.local_baseline, "anti_spam": args.anti_spam,
+                "local_half_min": args.local_half_min, "clips": []}
     _write_manifest(manifest_path, manifest)
 
     ok, failed = 0, 0
@@ -530,8 +715,14 @@ def main() -> int:
             manifest["clips"].append({
                 "n": idx, "file": os.path.basename(out_file),
                 "peak": peak_ts, "start": clip_start, "duration": clip_dur,
-                "score": score, "risas": d["risas"], "hype": d["hype"],
+                "score": score, "raw_score": d["raw_score"], "adj_score": d["adj_score"],
+                "z_local": d["z_local"], "rise": d["rise"],
+                "risas": d["risas"], "hype": d["hype"],
                 "users": d["users"],
+                "emote_ratio": d["emote_ratio"], "rep_ratio": d["rep_ratio"],
+                "lex_diversity": d["lex_diversity"],
+                "penalty_factor": d["penalty_factor"],
+                "motivo_penalizacion": d["motivo_penalizacion"],
                 "viral_multiple": round(score / median, 2) if median > 0 else None,
             })
             _write_manifest(manifest_path, manifest)

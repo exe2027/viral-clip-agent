@@ -32,6 +32,29 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 - Tomado: plantillas de subtítulo elegibles con estilos, config del canal (juego/streamer/nicho/hashtags), y la idea del editor visual con aprobación (eso es la cola de aprobación, fase siguiente, aún no implementada).
 - NO tomado: su stack (Go, Redis, Docker, SvelteKit), sus APIs pagas (OpenAI Whisper API, DeepSeek), YouTube-only (sin Twitch/Kick ni detección por chat), ni su renderizado en cliente con FFmpeg.wasm. Es un proyecto de 3 commits y 1 estrella, menos probado que openshorts.
 
+## Qué cambió en la v2.5 (tribunal, bloque 3 — detección)
+
+**Baseline local + z-score.** Cada ventana ya no se compara con todo el VOD sino con su vecindad local (±12 min, `--local-half-min`). Score final = z-score local + 0.5 × pendiente de subida (media de los 60 s previos, cap 2) + magnitud (puntos ajustados / 10). La desviación tiene suelo 1.0 para que en tramos muertos un soplo no dé z=50; con VOD muy corto (<5 vecinos) se usa la media/desviación global. El z-score solo premiaba ráfagas pequeñas en tramos muertos (una ventana de 29 pts en una zona callada superaba al pico real de 67 pts); el término de magnitud mantiene el tamaño absoluto en el ranking. `--local-baseline` es el comportamiento por defecto (`--no-local-baseline` lo apaga y puntúa por puntos ajustados).
+
+**Anti-spam v2.** Por ventana se calculan 3 ratios, que quedan en el detalle y en el manifiesto (`emote_ratio`, `rep_ratio`, `lex_diversity`, `penalty_factor`, `motivo_penalizacion`):
+- **emote-only**: mensajes que son solo emotes (`[emote:id:nombre]`, solo emojis, o un solo token de nombre de emote conocido: KEKW, LUL, OMEGALUL, Kappa, ...). >60% → puntaje ×0.25, motivo `emote_spam`.
+- **repetición**: 1 − cuerpos distintos / mensajes, sobre TODOS los mensajes aunque haya muchos usuarios únicos. >40% → ×0.5, motivo `repetition_spam`. Ambas → ×0.125.
+- **diversidad léxica**: palabras distintas / palabras totales en los mensajes con texto. Se registra, no penaliza sola.
+
+Un mismo emote repetido por 14 personas (KEKW×14) también es baja diversidad, pero con ~29% no llega al umbral del 40% y no se penaliza. `--no-anti-spam` apaga el anti-spam. La puntuación vieja (v2.4, puntos suavizados sin baseline ni anti-spam) se reproduce con `score_windows(..., local_baseline=False, anti_spam=False)` o con `--no-local-baseline --no-anti-spam`.
+
+**Prueba de aceptación (2026-11-16, 3 chats reales, top-5 por puntaje):**
+
+| VOD | Pico | Viejo (v2.4) | Nuevo (v2.5) | Veredicto |
+|---|---|---|---|---|
+| Locones (Kick, 2.517 msgs) | 03h08m25s | #1, 24.75 pts | fuera del top-5 (rank #39, z 3.84, raw 24.75 → adj 3.09, emote 96%, rep 52%, `emote_spam` + `repetition_spam`) | ✅ baja claramente |
+| Coker (Kick, 8.269 msgs) | 03h15m10s | #1, 56.50 pts | #3, z 9.02 (raw 56.50, sin penalizar: emote 26%, rep 29%) | ✅ se mantiene arriba |
+| Nora (Twitch 2929669422, 19.033 msgs) | 07h12m10s | #1, 67.75 pts | #3, z 12.59 (raw 67.75, sin penalizar: emote 26%, rep 31%) | ✅ se mantiene arriba |
+
+Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65), 01h47m55s (8.05), 01h45m50s (6.71) — VOD poco denso, los picos nuevos son ráfagas pequeñas; Coker 33m30s (9.53), 17m45s (9.15), 03h15m10s (9.02), 01h24m25s (8.92), 19m05s (8.33); Nora 06h04m55s (13.39), 01h37m35s (13.10), 07h12m10s (12.59), 03h53m40s (11.21), 06h47m45s (10.51).
+
+**Limitación conocida:** `auto_clips.py` pasa los scores (ahora z) a `viral_package.viral_multiple` como `all_scores`; con mediana de z ≤ 0, `viral_multiple` devuelve el propio score, así que el "× la mediana" que imprime `auto_clips.py` en una corrida normal es en realidad el z-score. La detección, el corte y el manifiesto no se ven afectados. Queda para el bloque que toque `viral_package.py`.
+
 ## Qué cambió en la v2
 
 **1. Español, por fin.** La v1 solo entendía risas en inglés (`lol, lmao, kekw, lul, xd`). La v2 suma:
@@ -319,13 +342,19 @@ python clips_chat_v2.py chat.json --video vod.mp4 --window 5 --min-separation 90
 | `--crf` | 23 | Calidad x264 (menor = mejor) |
 | `--preset` | fast | Preset x264 |
 | `--dry-run` | — | Solo lista picos, sin cortar |
+| `--local-baseline` | on | Baseline local ±12 min con z-score + subida (default: activado) |
+| `--no-local-baseline` | — | Apaga el baseline local: puntúa por puntos ajustados |
+| `--no-anti-spam` | — | Apaga el anti-spam v2 |
+| `--local-half-min` | 12 | Media vecindad local en minutos a cada lado |
 
 ## Cómo funciona
 
-1. Agrupa los mensajes en ventanas de 10 s (configurable).
+1. Agrupa los mensajes en ventanas de 10 s (configurable), con paso de 5 s y suavizado (0.25/0.5/0.25).
 2. Puntúa cada mensaje: 1 base, +1 risa, +1 hype.
-3. Elige las ventanas con mayor puntaje, con al menos 60 s de separación.
-4. Empieza cada corte 20 s antes del pico y exporta 60 s en `1080x1920` con recorte vertical.
+3. Anti-spam v2: penaliza la ventana si es mayormente emotes (>60% → ×0.25) o mensajes repetidos (>40% → ×0.5), y registra el motivo.
+4. Baseline local: cada ventana se puntúa con z-score contra su vecindad de ±12 min + pendiente de subida + magnitud (ver v2.5 arriba).
+5. Elige las ventanas con mayor puntaje, con al menos 60 s de separación.
+6. Empieza cada corte 20 s antes del pico y exporta 60 s en `1080x1920` con recorte vertical.
 
 El nombre de cada clip dice el pico, el puntaje y el desglose, por ejemplo `clip_01_t00m25s_s32_r16h0.mp4` = pico a los 25 s, 32 puntos, 16 risas, 0 hype.
 
