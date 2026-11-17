@@ -53,7 +53,7 @@ def _recent_errors(limit=10):
 def _dashboard_data():
     from jobqueue import Queue
     from . import breaker as _breaker
-    from .publish import PublishQueue
+    from .publish import PLATFORMS, PublishQueue
     from .service import service_status
     from .status import platform_states
     from .streamers import load_streamers
@@ -68,6 +68,8 @@ def _dashboard_data():
     published = [i for i in items if i["state"] == "published"][-10:]
     retained = [i for i in items if i["state"] == "retained"]
     drafts = [i for i in items if i["state"] == "draft"]
+    # 6B.6: cola de publicación por prioridad, con desglose.
+    scores = {p: pq.scored_items(p) for p in PLATFORMS}
     return {
         "service": service_status(),
         "platforms": platform_states(),
@@ -80,12 +82,25 @@ def _dashboard_data():
         "published": published,
         "retained": retained,
         "drafts": drafts,
+        "scores": scores,
         "errors": _recent_errors(),
     }
 
 
 def _esc(text):
     return html.escape(str(text or ""))
+
+
+def _formula(prio):
+    """Desglose corto de la fórmula de prioridad (6B.6)."""
+    w = prio.get("weights") or {}
+    text = (f"V{prio.get('virality', 0):.0f}^{w.get('viral', 0.5)} × "
+            f"S{prio.get('seo', 0):.0f}^{w.get('seo', 0.3)} × "
+            f"C{prio.get('chat_normalized', 0):.0f}^{w.get('chat', 0.2)}")
+    penalty = prio.get("age_penalty") or 0
+    if penalty:
+        text += f" −{penalty:.0f} edad ({prio.get('age_days', 0)}d)"
+    return text
 
 
 def register_override_for_clip(clip_path, platform, motivo):
@@ -166,6 +181,27 @@ def _render(data):
         f"<tr><td>#{e['job_id']}</td><td>{_esc(e['ts'])}</td>"
         f"<td>{_esc(e['event'])}</td><td>{_esc(e['detail'])}</td></tr>"
         for e in data["errors"])
+    # 6B.6: cola de publicación por plataforma, ordenada por
+    # prioridad, con viralidad, SEO, desglose de la fórmula, estado
+    # y motivo de retención.
+    sections_scores = ""
+    for platform, scored in data["scores"].items():
+        rows = "".join(
+            f"<tr><td>{s['queue_position']}</td>"
+            f"<td>{_esc(s['_item']['clip'])}</td>"
+            f"<td>{s['virality']:.0f}</td>"
+            f"<td>{s['seo']:.0f}</td>"
+            f"<td>{s['priority']['priority']:.1f}</td>"
+            f"<td>{_esc(_formula(s['priority']))}</td>"
+            f"<td>{_esc(s['status'])}</td>"
+            f"<td>{_esc(s.get('left_behind') or s['status_reason'])}</td>"
+            f"</tr>" for s in scored)
+        sections_scores += (
+            f"<h3>{_esc(platform)}</h3>"
+            f"<table border='1'><tr><th>#</th><th>Clip</th>"
+            f"<th>Viralidad</th><th>SEO</th><th>Prioridad</th>"
+            f"<th>Fórmula</th><th>Estado</th><th>Motivo</th></tr>"
+            f"{rows}</table>")
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <title>viral-clip-agent — panel local</title></head><body>
 <h1>🎬 viral-clip-agent (solo localhost)</h1>
@@ -189,6 +225,11 @@ def _render(data):
 <h2>Cola de jobs (últimos 10)</h2>
 <table border="1"><tr><th>Job</th><th>Estado</th><th>Streamer</th>
 <th>URL</th></tr>{rows_queue}</table>
+<h2>Cola de publicación (por prioridad, 6B.6)</h2>
+<p>Orden por prioridad (viralidad^0,5 × SEO^0,3 × chat^0,2, con
+penalización por edad). La cola nunca es FIFO: el SEO cambia por
+plataforma, así que el orden también.</p>
+{sections_scores}
 <h2>Últimos publicados</h2>
 <table border="1"><tr><th>Plataforma</th><th>Clip</th>
 <th>Publicado</th></tr>{rows_pub}</table>

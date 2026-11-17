@@ -161,6 +161,61 @@ class TestPublishDisabledStreamer(unittest.TestCase):
             self.assertIn("desactivado", r["reason"])
 
 
+class TestPanelScores(unittest.TestCase):
+    def test_render_muestra_puntajes_y_desglose(self):
+        # 6B.6: por clip y plataforma: viralidad, SEO, prioridad,
+        # desglose de la fórmula, motivo y posición en la cola.
+        from clipagent.panel import _render
+        data = {
+            "service": {"corriendo": False, "supervisor_pid": None,
+                        "cola": {"queued": 0}},
+            "platforms": {"youtube_shorts": {"state": "conectada",
+                                             "motivo": ""}},
+            "breaker": {"youtube_shorts": (False, None),
+                        "tiktok": (False, None),
+                        "instagram_reels": (False, None),
+                        "facebook_reels": (False, None)},
+            "streamers": [],
+            "queue_counts": {},
+            "jobs": [],
+            "published": [],
+            "retained": [],
+            "drafts": [],
+            "scores": {"youtube_shorts": [{
+                "virality": 78, "seo": 95, "chat_multiple": 13,
+                "queue_position": 1, "status": "publicable",
+                "status_reason": "SEO 95 >= 90",
+                "left_behind": None, "auto_archive": False,
+                "_item": {"clip": "runs/v1/clips/b.mp4"},
+                "priority": {"priority": 85.7, "virality": 78.0,
+                             "seo": 95.0, "chat_normalized": 93.0,
+                             "age_days": 0, "age_penalty": 0,
+                             "weights": {"viral": 0.5, "seo": 0.3,
+                                         "chat": 0.2}}},
+                {"virality": 51, "seo": 84, "chat_multiple": 6.44,
+                 "queue_position": 2, "status": "bloqueado_seo",
+                 "status_reason": "SEO 84 < 90 sin override",
+                 "left_behind": "SEO 84 < 90 sin override",
+                 "auto_archive": False,
+                 "_item": {"clip": "runs/v1/clips/a.mp4"},
+                 "priority": {"priority": 60.8, "virality": 51.0,
+                              "seo": 84.0, "chat_normalized": 58.1,
+                              "age_days": 0, "age_penalty": 0,
+                              "weights": {"viral": 0.5, "seo": 0.3,
+                                          "chat": 0.2}}}],
+                "tiktok": [], "instagram_reels": [],
+                "facebook_reels": []},
+            "errors": [],
+        }
+        body = _render(data)
+        self.assertIn("Cola de publicación", body)
+        self.assertIn("85.7", body)
+        self.assertIn("60.8", body)
+        self.assertIn("V78^0.5", body)
+        self.assertIn("bloqueado_seo", body)
+        self.assertIn("SEO 84 &lt; 90 sin override", body)
+
+
 class TestPanelOverride(unittest.TestCase):
     def test_override_de_usuario_queda_en_el_manifiesto(self):
         import json
