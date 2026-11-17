@@ -7,6 +7,7 @@ runs/
 __pycache__/
 *.pyc
 .venv/
+.env
 queue.db
 queue.kill
 seen_vods.json
