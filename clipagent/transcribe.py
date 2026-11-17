@@ -153,6 +153,105 @@ DEFAULT_ESCALATE_MAX_REPEATS = 3
 DEFAULT_LANGUAGE_CHUNK_S = 30
 SAMPLE_RATE = 16000
 
+# REGLA DE SUBTÍTULOS (decisión del usuario 2026-11-17): los subtítulos
+# NUNCA tapan la cara del influencer / la webcam. Layout split sobre
+# 1080x1920: juego arriba (0-1320 px), cámara abajo (1320-1920 px).
+# Con Alignment=2 (abajo, centrado) MarginV es la distancia desde el
+# borde inferior, así que el texto solo queda dentro del juego si
+# MarginV >= alto de la cámara (600) + hueco (80) = 680. El MarginV
+# viejo (140) dejaba el texto en y~1780, encima de la cara.
+FRAME_W, FRAME_H = 1080, 1920
+SPLIT_GAME_H = 1320   # alto del panel de juego (zona de subtítulos)
+SPLIT_CAM_H = 600     # alto del panel de cámara (nunca tapar)
+SUBTITLE_SAFE_GAP_PX = 80
+SUBTITLE_MIN_MARGIN_V = SPLIT_CAM_H + SUBTITLE_SAFE_GAP_PX  # 680
+
+
+def subtitles_overlap_webcam(margin_v, fontsize=56, frame_h=FRAME_H,
+                             split_game_h=SPLIT_GAME_H):
+    """True si con ese MarginV el texto invadiría la zona de la cámara.
+
+    Alignment=2: el borde inferior del texto queda en frame_h-margin_v.
+    Si ese borde pasa de split_game_h (1320), el texto tapa la webcam.
+    Con MarginV 140 el borde queda en 1780 (dentro de la cámara);
+    con 680 queda en 1240 (dentro del juego, 80 px por encima).
+    """
+    text_bottom = frame_h - margin_v
+    return text_bottom > split_game_h
+
+
+def effective_subtitle_margin_v(margin_v, config=None):
+    """MarginV efectivo: sube (nunca baja) hasta el mínimo seguro.
+
+    Lee clips.split_cam_h y subtitles.subtitle_safe_gap_px de la
+    config si la hay; si no, usa 600 + 80 = 680. Un estilo viejo con
+    MarginV 140 se corrige solo a 680 en burn_subtitles().
+    """
+    minimum = SUBTITLE_MIN_MARGIN_V
+    if config is not None:
+        try:
+            from .config import subtitle_min_margin_v
+            minimum = subtitle_min_margin_v(config)
+        except Exception:
+            pass
+    return max(int(margin_v), int(minimum))
+
+
+def load_user_corrected_transcript(run_dir, clip_stem):
+    """Transcripción corregida por el usuario para un clip, si existe.
+
+    Archivo: <run_dir>/clips/<clip_stem>.transcript_corrected.json
+    (campos: text, segments [{start_*, end_*, text}], corrected_by,
+    corrected_at). Manda sobre Whisper: si el usuario corrigió las
+    palabras, se queman ESAS y nunca las alucinaciones del modelo
+    (ej. 2026-11-17: "saloncóra / salocorda" -> "nooo noooo no
+    cometas esa locura,"). Devuelve el dict o None si no existe.
+    """
+    for base in (run_dir, os.path.join(run_dir, "clips")):
+        path = os.path.join(base, clip_stem + ".transcript_corrected.json")
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    return None
+
+
+def user_corrected_srt(corrected, srt_path, clip_start_offset=0.0):
+    """Escribe un SRT con la transcripción corregida por el usuario.
+
+    Los segmentos del JSON vienen en segundos absolutos del VOD y en
+    coordenadas del clip (start_v3_clip_s / start_old_clip_s); se usan
+    las coordenadas *_clip_s que correspondan al clip que se quema
+    (por defecto las v3 si existen, si no las old_clip). El offset
+    desplaza los tiempos si el SRT se quema sobre otro recorte.
+    """
+    segments = corrected.get("segments") or []
+    lines = []
+    for i, seg in enumerate(segments, 1):
+        start = None
+        end = None
+        for key in ("start_v3_clip_s", "start_old_clip_s", "start_s"):
+            if seg.get(key) is not None:
+                start = float(seg[key])
+                break
+        for key in ("end_v3_clip_s", "end_old_clip_s", "end_s"):
+            if seg.get(key) is not None:
+                end = float(seg[key])
+                break
+        if start is None or end is None:
+            start = float(seg.get("start_vod_s", 0))
+            end = float(seg.get("end_vod_s", start + 1))
+        start += clip_start_offset
+        end += clip_start_offset
+
+        def _fmt(t):
+            ms = int(round(t * 1000))
+            return (f"{ms // 3600000:02d}:{(ms // 60000) % 60:02d}:"
+                    f"{(ms // 1000) % 60:02d},{ms % 1000:03d}")
+        lines.append(f"{i}\n{_fmt(start)} --> {_fmt(end)}\n{seg['text']}\n")
+    with open(srt_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return srt_path
+
 
 def detect_language_chunks(model, audio, chunk_s=DEFAULT_LANGUAGE_CHUNK_S):
     """Detecta el idioma por tramos de chunk_s segundos.
@@ -972,6 +1071,20 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
             box, bold, active_word_color = False, True, None
     else:
         box, bold, active_word_color = False, True, None
+    # REGLA 2026-11-17: el subtítulo nunca tapa la cara del influencer
+    # / la webcam. El MarginV efectivo sube (nunca baja) hasta el
+    # mínimo seguro (cámara 600 + hueco 80 = 680): un estilo viejo con
+    # MarginV 140 se corrige solo. Vale para karaoke (ASS) y para SRT
+    # (force_style), porque el clamp va antes de las dos ramas.
+    try:
+        _margin_cfg = cfg if style else config
+    except NameError:  # sin style no existe cfg: manda config o 680
+        _margin_cfg = config
+    _safe_mv = effective_subtitle_margin_v(margin_v, _margin_cfg)
+    if margin_v < _safe_mv:
+        print(f"MarginV {margin_v} -> {_safe_mv}: el subtítulo no puede "
+              f"tapar la webcam (regla del usuario 2026-11-17)")
+        margin_v = _safe_mv
     if (style or "").lower() == "karaoke":
         # Karaoke real: SRT -> ASS con \k por palabra. El ASS se
         # escribe a un temporal y se borra tras quemar.

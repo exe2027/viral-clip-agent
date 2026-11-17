@@ -52,10 +52,50 @@ import sys
 
 
 DEFAULT_MAX_DURATION = 60
+DEFAULT_MIN_DURATION = 36   # decisión del usuario 2026-11-17: el clip
+# de 21 s publicado en test era "muy poco". 36 s = primer segundo
+# entero por encima del rango prohibido 25-35 (regla de oro: ningún
+# clip de 30 s); el objetivo es 40 s y el tope duro 60 s.
+DEFAULT_TARGET_DURATION = 40
+FORBIDDEN_DURATION_RANGE = (25, 35)  # regla de oro, inclusivo
 DEFAULT_PRE_ROLL = 2.5      # inicio 2-3 s antes del disparador
 DEFAULT_POST_ROLL = 1.5     # fin 1-2 s después del fin de frase/risa
 DEFAULT_FIXED_PRE = 20      # caída: corte fijo actual (pico -20 s)
 DEFAULT_FIXED_DUR = 40      # caída: corte fijo actual (+40 s)
+
+
+def enforce_min_duration(start, end, segment_duration,
+                         min_duration=DEFAULT_MIN_DURATION,
+                         max_duration=DEFAULT_MAX_DURATION):
+    """Alarga (nunca recorta) un corte hasta la duración mínima.
+
+    Si el corte afinado por frase queda corto, se alarga el fin hasta
+    min_duration; si el segmento se acaba, se retrocede el inicio.
+    Un corte de 25-35 s (rango prohibido, regla de oro) también se
+    alarga hasta 36 s. Si el segmento entero es más corto que el
+    mínimo, se devuelve lo que hay y el motivo lo dice: ese clip no
+    debe publicarse (lo retiene policy.py).
+    Devuelve (start, end, nota_o_None).
+    """
+    duration = end - start
+    extended = False
+    if duration < min_duration:
+        end = min(segment_duration, start + min_duration)
+        if end - start < min_duration:
+            start = max(0.0, end - min_duration)
+        extended = True
+    # Tope duro: un corte fijo de 40 s con --max-duration 36 también se
+    # recorta hasta el tope (la config garantiza min <= max, ver
+    # validate.py, así que el tope nunca baja del mínimo).
+    if end - start > max_duration:
+        end = start + max_duration
+    if end - start < min_duration:
+        return start, end, (f"segmento de {segment_duration:.1f} s: no "
+                            f"llega al mínimo de {min_duration} s")
+    if extended:
+        return start, end, (f"alargado a {min_duration} s (mínimo, regla "
+                            f"del usuario 2026-11-17)")
+    return start, end, None
 PHRASE_GAP = 0.5            # hueco entre palabras que separa frases
 SILENCE_NOISE_DB = -40      # umbral de silencio para silencedetect
 SILENCE_MIN_DUR = 0.3       # silencio mínimo que cuenta como hueco
@@ -121,23 +161,32 @@ def _phrase_end(words, anchor_idx):
 def refine_cut(segment_duration, peak_rel, transcript=None, silences=None,
                pre_roll=DEFAULT_PRE_ROLL, post_roll=DEFAULT_POST_ROLL,
                max_duration=DEFAULT_MAX_DURATION,
+               min_duration=DEFAULT_MIN_DURATION,
                fixed_pre=DEFAULT_FIXED_PRE, fixed_dur=DEFAULT_FIXED_DUR):
     """Afinar (inicio, fin) relativos al segmento. peak_rel es el pico
     de chat en segundos dentro del segmento.
 
     Devuelve dict {start, end, duration, method, reason}.
     method: 'phrase' (por palabra+silencio) o 'fixed' (caída).
+
+    REGLA 2026-11-17: ningún corte sale de aquí por debajo del mínimo
+    (36 s) ni dentro del rango prohibido 25-35 s: el corte afinado se
+    ALARGA hasta el mínimo (nunca se recorta el momento), y el tope
+    duro es 60 s.
     """
     words = _words_from_transcript(transcript)
     if len(words) < 3:
         # Sin transcripción fiable: corte fijo actual, recortado al segmento.
         start = max(0.0, peak_rel - fixed_pre)
         end = min(segment_duration, start + fixed_dur)
+        start, end, note = enforce_min_duration(
+            start, end, segment_duration, min_duration, max_duration)
         return {"start": round(start, 2), "end": round(end, 2),
                 "duration": round(end - start, 2), "method": "fixed",
                 "reason": (f"sin transcripción fiable "
                            f"({len(words)} palabras): corte fijo "
-                           f"pico -{fixed_pre}s / +{fixed_dur}s")}
+                           f"pico -{fixed_pre}s / +{fixed_dur}s"
+                           + (f" — {note}" if note else ""))}
 
     # Disparador: primera palabra que empieza en/tras (pico - pre_roll);
     # si no hay, la última palabra antes del pico.
@@ -174,13 +223,17 @@ def refine_cut(segment_duration, peak_rel, transcript=None, silences=None,
     # (el inicio manda: es donde empieza el momento).
     if end - start > max_duration:
         end = start + max_duration
-    if end - start < 5:  # frase degenerada: ampliar al mínimo útil
-        end = min(segment_duration, start + 5)
+    # Mínimo 36 s (regla 2026-11-17): una frase corta no deja un clip
+    # de 5 s ni de 21 s; se alarga el fin (o se retrocede el inicio
+    # si el segmento se acaba) hasta el mínimo.
+    start, end, note = enforce_min_duration(
+        start, end, segment_duration, min_duration, max_duration)
     return {"start": round(start, 2), "end": round(end, 2),
             "duration": round(end - start, 2), "method": "phrase",
             "reason": (f"inicio en frase '{words[anchor_idx]['word']}' "
                        f"({words[anchor_idx]['start']:.1f}s) -{pre_roll}s, "
-                       f"fin en fin de frase +{post_roll}s")}
+                       f"fin en fin de frase +{post_roll}s"
+                       + (f" — {note}" if note else ""))}
 
 
 def get_duration(video_path):
@@ -228,7 +281,14 @@ def main() -> int:
     p.add_argument("--out", help="Clip de salida (mp4 vertical 1080x1920)")
     p.add_argument("--pre-roll", type=float, default=DEFAULT_PRE_ROLL)
     p.add_argument("--post-roll", type=float, default=DEFAULT_POST_ROLL)
-    p.add_argument("--max-duration", type=float, default=DEFAULT_MAX_DURATION)
+    p.add_argument("--max-duration", type=float, default=DEFAULT_MAX_DURATION,
+                   help="Tope duro del corte en segundos (default: 60, "
+                        "decisión del usuario 2026-11-17)")
+    p.add_argument("--min-duration", type=float, default=DEFAULT_MIN_DURATION,
+                   help="Duración mínima del corte en segundos (default: "
+                        "36, decisión del usuario 2026-11-17: el clip de "
+                        "21 s era 'muy poco'; por debajo se alarga, nunca "
+                        "se deja corto)")
     p.add_argument("--lang", default=None, help="Idioma para transcribir (es, en...)")
     p.add_argument("--layout", choices=["auto", "stack", "pip", "center"],
                    default=None, help="Forzar layout (default: auto)")
@@ -260,7 +320,8 @@ def main() -> int:
     cut = refine_cut(segment_duration, peak_rel, transcript=transcript,
                      silences=silences, pre_roll=args.pre_roll,
                      post_roll=args.post_roll,
-                     max_duration=args.max_duration)
+                     max_duration=args.max_duration,
+                     min_duration=args.min_duration)
     result = {"segment": args.segment, "peak_abs": args.peak,
               "segment_start": args.segment_start, "peak_rel": round(peak_rel, 2),
               "segment_duration": round(segment_duration, 2),

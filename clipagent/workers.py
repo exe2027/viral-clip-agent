@@ -88,9 +88,15 @@ def step_compute_requirements():
     return dict(STEP_COMPUTE)
 #: Reintento de un clip retenido por la política (límites, horario).
 RETAINED_RETRY_S = 24 * 3600
-#: Duración por defecto de un clip cortado a partir de un pico.
-CLIP_PRE_S = 20        # empieza 20 s antes del pico
-CLIP_DURATION_S = 60   # 60 s por clip (tope del proyecto)
+#: Duración de un clip cortado a partir de un pico.
+#: REGLAS 2026-11-17 (usuario): 60 s es el TOPE DURO, no la duración;
+#: el objetivo es 40 s (20 s pre-roll + 20 s tras el pico) y el mínimo
+#: es 36 s (primer segundo por encima del rango prohibido 25-35;
+#: el clip de 21 s publicado en test era "muy poco").
+CLIP_PRE_S = 20             # empieza 20 s antes del pico
+CLIP_DURATION_S = 40        # objetivo: 40 s por clip
+CLIP_MIN_DURATION_S = 36    # mínimo: ningún clip por debajo de 36 s
+CLIP_MAX_DURATION_S = 60    # tope duro: ningún clip por encima de 60 s
 
 
 class StepError(Exception):
@@ -569,11 +575,16 @@ def advance_pipeline(store, job, result, cfg=None):
         clips_dir = os.path.join(out_dir, "clips")
         for i, peak in enumerate(peaks, 1):
             start = max(0.0, float(peak["start"]) - CLIP_PRE_S)
+            # Regla 2026-11-17: la duración pedida se sujeta al rango
+            # [36, 60] s (mínimo 36, tope duro 60); un pedido corto se
+            # alarga hasta 36, nunca se deja un clip de 21 s.
+            dur = float(payload.get("duration", CLIP_DURATION_S))
+            dur = max(CLIP_MIN_DURATION_S,
+                      min(CLIP_MAX_DURATION_S, dur))
             out = os.path.join(clips_dir, f"clip_{i:02d}.mp4")
             p = dict(payload)
             p.update({"video": video, "start_sec": start,
-                      "duration": float(payload.get(
-                          "duration", CLIP_DURATION_S)),
+                      "duration": dur,
                       "output": out,
                       "peak_start": peak["start"],
                       "viral_total": peak.get("viral_total"),

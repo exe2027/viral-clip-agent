@@ -66,26 +66,48 @@ clips:
   crop: "center"          # center | left | right
   crf: 23
   preset: "fast"
-  # Cortes variables (ya no 60 s fijos): el corte va al payoff +
-  # reacción, 25-35 s por defecto. target es el objetivo, min/max
-  # el rango permitido por plataforma (Shorts 30-40, TikTok 21-34,
-  # Reels 15-30); el default 25-35 cubre la primera tanda. El tope
-  # duro es 60 s como máximo, nunca como default. --duration en CLI
-  # sigue pudiendo forzarlo. El segmento descargado cubre pre-roll
-  # + max_duration_s.
-  duration: 30            # duración del clip en segundos (legado, = target)
-  target_duration_s: 30   # objetivo del corte (default)
-  min_duration_s: 21      # mínimo útil (TikTok: 21 s)
-  max_duration_s: 40      # máximo del corte variable (tope duro: 60 s)
+  # REGLAS DE DURACIÓN (decisión del usuario 2026-11-17, ver rules: abajo):
+  # el clip publicado de 21 s era "muy poco". El mínimo viejo (21 s)
+  # permitía clips cortos y el objetivo viejo (30 s) caía DENTRO del
+  # rango prohibido por la regla de oro (25-35 s): el default era
+  # imposible de publicar por la propia puerta del panel. Por eso:
+  # mínimo 36 s = primer segundo entero ESTRICTAMENTE por encima del
+  # rango prohibido 25-35 (el 35 es el borde mismo, no vale); objetivo
+  # 40 s = 20 s de pre-roll + 20 s tras el pico (payoff a 20 s dentro
+  # del clip); tope duro 60 s = máximo de un Short de YouTube y tope
+  # del proyecto, nunca el default. refine_cut alarga (nunca recorta)
+  # cualquier corte por debajo del mínimo, y policy.py lo retiene.
+  duration: 40            # duración del clip en segundos (legado, = target)
+  target_duration_s: 40   # objetivo del corte (default)
+  min_duration_s: 36      # mínimo útil: 36 s (por encima de 25-35)
+  max_duration_s: 60      # máximo del corte variable = tope duro 60 s
+  hard_cap_s: 60          # tope duro absoluto, nunca se pasa
+  forbidden_duration_range: [25, 35]  # regla de oro: ningún clip de 25-35 s
   precise_cut: true       # afinar inicio/fin por frase/silencio si se puede
-  pre_roll: 20            # segundos antes del pico
+  pre_roll: 20            # segundos antes del pico (regla: 20 s de contexto)
   window: 10              # ventana de chat en segundos
   min_separation: 60      # separación mínima entre picos
+  # Layout split vertical (regla 2026-11-16): juego arriba, cámara
+  # abajo, sobre 1080x1920 (1320+600=1920). Los subtítulos viven en
+  # la zona de juego, nunca sobre la cámara (ver subtitles abajo).
+  split_game_h: 1320      # alto del panel de juego
+  split_cam_h: 600        # alto del panel de cámara (webcam abajo)
 
 subtitles:
   default_style: "karaoke" # tiktok | highlight | karaoke (karaoke = viral, palabra por palabra)
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
+
+  # ZONA DE SUBTÍTULOS (decisión del usuario 2026-11-17): los
+  # subtítulos NUNCA tapan la cara del influencer / la webcam.
+  # Layout split: juego arriba (0-1320 px), cámara abajo (1320-1920).
+  # Con Alignment=2 (abajo, centrado) MarginV es la distancia desde
+  # el borde inferior: el mínimo que deja el texto DENTRO del juego
+  # es split_cam_h + safe_gap_px = 600 + 80 = 680 (el borde inferior
+  # del texto queda en y=1240, 80 px por encima de la cámara).
+  # burn_subtitles() sube (nunca baja) el MarginV hasta ese mínimo.
+  subtitle_zone: "gameplay"  # gameplay | bottom (bottom = viejo, prohibido en split)
+  subtitle_safe_gap_px: 80    # hueco entre el texto y la cámara
 
   # VAD + anti-alucinación — v2.6 (bloque 5 de la revisión interna):
   # faster-whisper con vad_filter y umbrales que cortan las
@@ -169,6 +191,11 @@ subtitle_policy:
 
 # Estilos de subtítulo elegibles (plantillas con
 # preview). Se eligen con --subtitle-style en subtitles.py.
+# margin_v 680 en los tres (decisión del usuario 2026-11-17):
+# con Alignment=2 el texto queda en la zona de juego (borde
+# inferior en y=1240), nunca sobre la webcam (1320-1920).
+# burn_subtitles() además lo impone como mínimo aunque un estilo
+# viejo traiga otro valor.
 subtitle_styles:
   tiktok:                 # clásico: blanco, negrita, borde negro, abajo
     font_color: "#FFFFFF"
@@ -176,7 +203,7 @@ subtitle_styles:
     border_width: 3
     fontsize: 48
     bold: true
-    margin_v: 140
+    margin_v: 680
     max_chars: 20
     max_duration: 2.0
     box: false
@@ -186,7 +213,7 @@ subtitle_styles:
     border_width: 2
     fontsize: 52
     bold: true
-    margin_v: 140
+    margin_v: 680
     max_chars: 20
     max_duration: 2.0
     box: true
@@ -200,7 +227,7 @@ subtitle_styles:
     border_width: 4
     fontsize: 64
     bold: true
-    margin_v: 140
+    margin_v: 680
     max_chars: 8
     max_duration: 1.0
     box: false
@@ -355,3 +382,34 @@ platform_accounts:
     ig_user_id: ""
   facebook_reels:
     page_id: ""
+
+# REGLAS OBVIAS DEL PROYECTO (decisiones del usuario, 2026-11-16/17).
+# Antes estaban dispersas en docs, panel y varios .py; este bloque es
+# la única lista canónica en config. El código las impone (ver
+# clipagent/config.py RULES, precise_cut.py, transcribe.py y
+# policy.py); si una regla cambia, cambia aquí Y en el código.
+rules:
+  # Duración: ningún clip corto ni de 30 s (decisión 2026-11-17: el
+  # clip de 21 s publicado en test era "muy poco").
+  min_duration_s: 36        # mínimo: 36 s (por encima de 25-35)
+  target_duration_s: 40     # objetivo: 40 s (20 pre-roll + 20 post-pico)
+  hard_cap_s: 60            # tope duro: 60 s (máximo de un Short)
+  forbidden_duration_range: [25, 35]  # regla de oro: ningún clip de 25-35 s
+  pre_roll_s: 20            # 20 s de contexto antes del pico
+  # Layout split vertical (2026-11-16): juego arriba (1320 px),
+  # cámara abajo (600 px), sin superponerse; si el juego no se ve,
+  # la cámara se achica, nunca al revés. Nunca tapar minimapa ni HUD.
+  layout_split: true
+  never_cover_minimap_or_hud: true
+  # Subtítulos (2026-11-17): siempre en la zona de juego, nunca
+  # sobre la cara del influencer / la webcam. MarginV mínimo 680.
+  subtitles_never_over_webcam: true
+  subtitle_zone: "gameplay"
+  # Juego verificado: nunca afirmar en título/descripción un juego
+  # que no está verificado en el clip (ej. decir GTA 6 sobre GTA V).
+  never_claim_unverified_game: true
+  # Subtítulos falsos: si no hay voz inteligible, NO quemar lo que
+  # alucinó Whisper. Usar la transcripción corregida por el usuario
+  # (*.transcript_corrected.json en el run) o no quemar nada.
+  never_burn_hallucinated_subtitles: true
+  user_corrected_transcript_wins: true

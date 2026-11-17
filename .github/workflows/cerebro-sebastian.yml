@@ -1,0 +1,232 @@
+name: Cerebro — Sebastián
+
+# VÍA PRINCIPAL (decisión del usuario 17 nov 2026: "Todo automático").
+# Cloudflare (panel/API/cola) + GitHub Actions como compute principal
+# $0: el cerebro Python (ffmpeg/Whisper) corre aquí, sin VPS ni PC
+# prendida, dentro de los 2.000 min/mes gratis (repo privado). La
+# lentitud no importa: el trabajo es programado (cron 09:00). Solo
+# Cloudflare + manual queda como respaldo degradado (ver
+# docs/plan-cloudflare-solo.md). Plan principal completo:
+# docs/plan-principal.md.
+# Cerebro (viral-clip-agent) del panel de Sebastián. Una instalación por
+# persona (plan §3): este workflow SOLO toca el Environment `sebastian`
+# y su estado; el del colega vive en cerebro-colega.yml. Sin matriz.
+# El agente navegador TikTok NO corre aquí: necesita sesión persistente
+# en disco local, misma IP y un humano para el captcha (corre en el
+# runner autoalojado de su PC).
+#
+# EXPERIENCIA (especificación del usuario): login → configurar cuentas /
+# subtítulos / ajustes → botón Iniciar en el Worker → 100% automatizado,
+# sin pasos manuales después. El usuario NO toca GitHub Actions, ni
+# terminal, ni instala nada después de Iniciar.
+# Cómo se cumple: el botón Iniciar del panel dispara este workflow con
+# un repository_dispatch (el Worker del panel llama a la API de GitHub
+# con un token guardado como secreto del Worker, nunca en el repo).
+# El dispatch deja `started=true` en state/panel-state.json; el cron
+# diario solo trabaja si started=true (si no, termina registrando
+# "panel no iniciado", sin hacer nada). El botón Detener manda
+# panel-stop-sebastian y el cron vuelve a quedar en espera.
+# La instalación (Playwright/Chromium, sesión TikTok) es parte única
+# de "configurar cuentas", ANTES de Iniciar; después no hay terminal.
+
+on:
+  # 09:00 America/Santiago en horario de verano chileno (UTC-3, nov-mar).
+  # En invierno (UTC-4, abr-sep) corre a las 08:00 locales; si se quiere
+  # 09:00 exacto todo el año, cambiar a '0 13 * * *' en abril y volver
+  # a '0 12 * * *' en septiembre.
+  schedule:
+    - cron: "0 12 * * *"
+  repository_dispatch:
+    types: [panel-start-sebastian, panel-stop-sebastian]
+  workflow_dispatch:
+
+concurrency:
+  group: cerebro-sebastian
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  vod-check-and-publish:
+    runs-on: ubuntu-latest
+    environment: sebastian
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+      TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+      CLIP_PUBLIC_BASE_URL: ${{ secrets.CLIP_PUBLIC_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+
+      # TwitchDownloaderCLI (solo Twitch: chat + segmento de vídeo).
+      # Sin él auto_clips falla en VODs de Twitch ("no está en el
+      # PATH"). Versión fijada: la misma del plan (1.56.5). El zip
+      # Linux es autocontenido (no exige instalar .NET). Si este
+      # paso falla, el fallo es visible aquí, no en silencio dentro
+      # del worker.
+      - name: Instalar TwitchDownloaderCLI
+        run: |
+          TDL_VERSION="1.56.5"
+          curl -sSL -o /tmp/twitchdownloader.zip \
+            "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
+          sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
+          TwitchDownloaderCLI --help
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,youtube,whisper]
+
+      - name: Ruff
+        run: ruff check .
+
+      # Puerta rápida antes de procesar: si el cerebro está roto, no
+      # se toca la cola. La suite completa corre en CI (ci.yml).
+      - name: Tests de humo
+        run: pytest -q test_smoke.py test_tiktok_browser.py test_policy.py
+
+      # Estado persistente entre días: el runner es efímero y queue.db /
+      # seen_vods.json / publish_queue.json están gitignored. Se
+      # restauran del artefacto del día anterior y se vuelven a subir
+      # al final. (Migración pendiente a D1, plan §6.4.)
+      - name: Restaurar estado del día anterior
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: cerebro-state-sebastian
+          path: .
+
+      # Puerta Iniciar: sin el botón Iniciar del panel no se procesa
+      # nada. El dispatch panel-start-sebastian pone started=true; el
+      # dispatch panel-stop-sebastian lo quita; el cron solo sigue si
+      # started=true. Nunca un paro silencioso: queda en el log.
+      - name: Puerta Iniciar (botón del panel)
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_TYPE: ${{ github.event.action }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          state_path = "state/panel-state.json"
+          started = False
+          try:
+              with open(state_path) as f:
+                  started = json.load(f).get("started", False)
+          except (OSError, ValueError):
+              started = False
+          event = os.environ.get("EVENT")
+          action = os.environ.get("DISPATCH_TYPE")
+          if event == "repository_dispatch" \
+                  and action == "panel-start-sebastian":
+              started = True
+          if event == "repository_dispatch" \
+                  and action == "panel-stop-sebastian":
+              started = False
+          os.makedirs("state", exist_ok=True)
+          with open(state_path, "w") as f:
+              json.dump({"started": started}, f)
+          print(f"Panel iniciado: {started} "
+                f"(evento={event} acción={action})")
+          if not started:
+              print("Panel no iniciado: esperando el botón Iniciar; "
+                    "sin procesar nada.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"started={'true' if started else 'false'}\n")
+          EOF
+
+      - name: Credenciales YouTube (solo si existen los secretos)
+        if: steps.gate.outputs.started == 'true'
+        env:
+          YT_CLIENT_B64: ${{ secrets.YOUTUBE_CLIENT_SECRETS_JSON_B64 }}
+          YT_TOKEN_B64: ${{ secrets.YOUTUBE_TOKEN_JSON_B64 }}
+        run: |
+          if [ -n "$YT_CLIENT_B64" ]; then
+            echo "$YT_CLIENT_B64" | base64 -d > client_secrets.json
+          fi
+          if [ -n "$YT_TOKEN_B64" ]; then
+            echo "$YT_TOKEN_B64" | base64 -d > token.json
+          fi
+
+      # Revisión diaria de VODs nuevos (09:00 America/Santiago).
+      - name: Revisión de VODs
+        if: steps.gate.outputs.started == 'true'
+        run: python -m clipagent watch --once
+
+      # Cadena completa en una pasada (tras pulsar Iniciar no hay
+      # pasos manuales): el worker monolítico corre auto_clips
+      # (detección de picos por chat → corte 9:16 con ffmpeg →
+      # subtítulos faster-whisper → empaquetado SEO) y encola los
+      # clips; el publish loop publica por API con --live (YouTube
+      # real; TikTok Direct Post, IG contenedor y FB 3 fases cuando
+      # sus credenciales/IDs están configurados; si falta algo, el
+      # ítem cae a draft con el motivo visible, nunca se finge una
+      # publicación). La auditoría después del bucle refleja el
+      # estado ya publicado. El agente navegador TikTok NO corre
+      # aquí (sesión persistente, misma IP y captcha humano:
+      # runner autoalojado en su PC): sus clips quedan en draft
+      # hasta que los publica el agente o se suben a mano.
+      - name: Cadena completa (detectar, cortar, subtitular, publicar)
+        if: steps.gate.outputs.started == 'true'
+        run: |
+          python -m clipagent worker --once --top-n 5
+          python -m clipagent publish loop --once --live
+          python -m clipagent publish audit
+          python -m clipagent status
+
+      # Si algo se atasca: queda registrado con motivo y hora en
+      # state/run-log.jsonl (artefacto cerebro-logs-sebastian), no
+      # parado en silencio. El panel debe mostrar ese registro.
+      - name: Registrar atasco (motivo + hora, visible)
+        if: failure()
+        run: |
+          python - <<'EOF'
+          import json, os
+          from datetime import datetime, timezone
+          os.makedirs("state", exist_ok=True)
+          entry = {
+              "at": datetime.now(timezone.utc).isoformat(),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "job": "vod-check-and-publish",
+              "panel": "sebastian",
+              "conclusion": "failure",
+          }
+          with open("state/run-log.jsonl", "a") as f:
+              f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+          print(json.dumps(entry, ensure_ascii=False))
+          EOF
+
+      - name: Subir registro de atascos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-logs-sebastian
+          path: state/run-log.jsonl
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Guardar estado para mañana
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-state-sebastian
+          path: |
+            queue.db
+            seen_vods.json
+            publish_queue.json
+            state/tiktok_browser.json
+            state/panel-state.json
+            state/counter.json
+          if-no-files-found: ignore
+          retention-days: 30

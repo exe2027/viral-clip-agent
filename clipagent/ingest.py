@@ -603,7 +603,7 @@ def main() -> int:
                    help="Paso de la ventana deslizante en segundos (default: ventana/2)")
     p.add_argument("--min-separation", type=int, default=60, help="Separación mínima entre picos (default: 60)")
     p.add_argument("--pre-roll", type=int, default=20, help="Segundos antes del pico (default: 20)")
-    p.add_argument("--duration", type=int, default=60, help="Duración de cada clip (default: 60)")
+    p.add_argument("--duration", type=int, default=40, help="Duración de cada clip (default: 40, objetivo; mínimo 36 s y tope duro 60 s, reglas del usuario 2026-11-17)")
     p.add_argument("--lang", choices=["es", "en", "both"], default="both",
                    help="Idioma a puntuar: es, en o both (default: both)")
     p.add_argument("--crop", choices=["center", "left", "right"], default="center",

@@ -2,6 +2,16 @@
 
 Fecha: 17 nov 2026. Estado: plan + auditorías completadas. Nada desplegado en producción, ninguna cuenta creada, ninguna credencial pedida ni guardada.
 
+**Decisión del usuario 17 nov 2026 (tarde): "Todo automático".**
+No acepta cortar manual en el teléfono con CapCut. La vía principal
+pasa a ser **Cloudflare (panel/API/cola) + GitHub Actions como
+compute principal $0** (detección, corte, subtítulos y publicación
+100% automáticos tras pulsar Iniciar). Detalle en
+`docs/plan-principal.md`. Solo Cloudflare + manual queda como
+respaldo degradado (`docs/plan-cloudflare-solo.md`). Lo anterior
+(decisión de la mañana: GitHub Actions "le complica", solo
+Cloudflare) queda anulado.
+
 ## 1. Qué existe hoy (auditado, no inventado)
 
 ### Panel — `panel-de-clips-gta-6`, versión v17
@@ -108,7 +118,10 @@ En la versión independiente, por panel:
 - Sus propias cuentas y credenciales por panel: TikTok, YouTube (clave API + OAuth), Meta (token largo de Página/Instagram, App ID 29102700319392159 solo para el panel de Sebastián; el colega usa su propia app), Gemini API key, token de API de Cloudflare para el despliegue.
 - Dominio: aceptar `*.pages.dev` gratis o dar subdominio propio por persona.
 - Acceso al repo para quien despliegue + GitHub Environments con sus secretos.
-- Decisión pendiente: ¿hoy se publica con el agente navegador (aceptando el riesgo residual ToS) o 100% manual? El tribunal la dejó en sus manos.
+- Decisión tomada 17 nov 2026 ("Todo automático"): la publicación
+  es automática tras Iniciar (GitHub Actions como compute
+  principal); el agente navegador queda solo para la subida directa
+  a TikTok (runner autoalojado) y lo manual solo como respaldo.
 - Para hoy (17 nov): el clip nº1 listo para TikTok; si el agente navegador no está cableado aún, el Plan B manual es la única vía real hoy.
 
 ## 7. Orden de trabajo para hoy
@@ -117,7 +130,10 @@ En la versión independiente, por panel:
 2. Versionar el cerebro en el repo (MÁSTER PROMPT, reglas, decisiones) y arreglar el push 403.
 3. Partir el cerebro en workers + tabla `jobs` (Python, Opción A, 2–4 días).
 4. Backend del panel en Cloudflare (Worker + D1 + R2) + login por panel + migración de `app.db`.
-5. Workflows por panel en GitHub Actions + cron diario.
+5. Workflows por panel en GitHub Actions + cron diario (vía
+   principal: `.github/workflows/cerebro-sebastian.yml` y
+   `cerebro-colega.yml`, ya creados; falta que el push 403 deje
+   subirlos al repo).
 6. Agente navegador TikTok con protocolo captcha + anti-duplicado.
 7. En paralelo: pedir auditoría TikTok y probar Zernio con 1 clip (nunca duplicar el clip del día).
 8. Cuando un panel esté listo, verificación por panel: cola vacía de datos del otro, cuentas propias conectadas, 1 clip de prueba solo en su panel.

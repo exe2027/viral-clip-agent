@@ -600,8 +600,9 @@ def main() -> int:
     p.add_argument("--pre-roll", type=int, default=20)
     p.add_argument("--duration", type=int, default=None,
                    help="Duración forzada del clip en segundos (default: "
-                        "config clips.target_duration_s, 30 s; el corte "
-                        "variable usa target/min/max de config.yaml)")
+                        "config clips.target_duration_s, 40 s; el corte "
+                        "variable usa target/min/max de config.yaml: "
+                        "mínimo 36 s, tope duro 60 s)")
     p.add_argument("--human-scores", help="JSON con la entrada humana del "
                    "score de viralidad por clip: {\"1\": {\"hook\": 8, "
                    "\"claridad\": 9, ...}, \"all\": {...}}; sin él, los "
@@ -651,16 +652,17 @@ def main() -> int:
         print("Error: para cortar hace falta el VOD: pasa el ID/URL o --video.", file=sys.stderr)
         return 1
 
-    # Cortes variables (config.yaml, sección clips): objetivo 30 s,
-    # rango 21-40 s, tope duro 60 s. --duration fuerza la duración;
-    # si no, manda target_duration_s. El segmento descargado cubre
-    # pre-roll + max(target, max_duration_s) para que el corte
-    # preciso tenga margen para afinar.
+    # Cortes variables (config.yaml, sección clips): objetivo 40 s,
+    # mínimo 36 s, tope duro 60 s (reglas del usuario 2026-11-17: el
+    # clip de 21 s era "muy poco"; prohibido 25-35 s, regla de oro).
+    # --duration fuerza la duración; si no, manda target_duration_s.
+    # El segmento descargado cubre pre-roll + max(target,
+    # max_duration_s) para que el corte preciso tenga margen.
     cfg = load_config() if load_config else {}
     clip_cfg = (cfg or {}).get("clips") or {}
-    target_dur = args.duration or int(clip_cfg.get("target_duration_s") or 30)
-    max_dur = args.duration or int(clip_cfg.get("max_duration_s") or 40)
-    min_dur = 1 if args.duration else int(clip_cfg.get("min_duration_s") or 21)
+    target_dur = args.duration or int(clip_cfg.get("target_duration_s") or 40)
+    max_dur = args.duration or int(clip_cfg.get("max_duration_s") or 60)
+    min_dur = 1 if args.duration else int(clip_cfg.get("min_duration_s") or 36)
     use_precise = (args.precise_cut if args.precise_cut is not None
                    else bool(clip_cfg.get("precise_cut", True)))
     seg_len = args.pre_roll + max(target_dur, max_dur)

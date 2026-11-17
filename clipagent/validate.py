@@ -29,6 +29,9 @@ KNOWN_TOP_KEYS = {
     "auto_approve", "scoring", "breaker", "metadata", "live",
     # Fan-out: se validan abajo.
     "fanout", "public_url", "platform_accounts",
+    # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
+    # lista canónica en config.yaml; se valida en validate_config.
+    "rules",
 }
 
 
@@ -178,9 +181,41 @@ def validate_config(cfg, source="config.yaml"):
                   "clips.max_duration_s",
                   f"debe cumplirse min <= objetivo <= max, "
                   f"es {minimum_d} <= {target} <= {maximum_d}")
+        # Reglas 2026-11-17 (usuario): el mínimo es 36 s (primer
+        # segundo por encima del rango prohibido 25-35) y el objetivo
+        # no puede caer dentro de ese rango (el objetivo viejo, 30 s,
+        # era imposible de publicar por la propia puerta del panel);
+        # el tope duro es 60 s (máximo de un Short).
+        if minimum_d <= 35:
+            c.err("clips.min_duration_s",
+                  "debe ser > 35 s (mínimo 36 s, regla del usuario "
+                  "2026-11-17: el clip de 21 s era 'muy poco')")
+        if 25 <= target <= 35:
+            c.err("clips.target_duration_s",
+                  "no puede estar en 25-35 s (regla de oro: ningún "
+                  "clip de 30 s)")
+        if maximum_d > 60:
+            c.err("clips.max_duration_s",
+                  "no puede pasar de 60 s (tope duro)")
     c.check(cfg, "clips.precise_cut", "bool")
     for k in ("pre_roll", "window", "min_separation"):
         c.check(cfg, f"clips.{k}", "int", minimum=0)
+    # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
+    # la lista canónica `rules:` debe coincidir con clips/subtitles.
+    rules = c.check(cfg, "rules", "dict")
+    if rules is not None:
+        c.check(cfg, "rules.min_duration_s", "int", minimum=36)
+        c.check(cfg, "rules.target_duration_s", "int", minimum=36)
+        c.check(cfg, "rules.hard_cap_s", "int", minimum=36, maximum=60)
+        c.check(cfg, "rules.pre_roll_s", "int", minimum=20)
+        c.check(cfg, "rules.subtitle_zone", "str",
+                choices={"gameplay"})
+        if rules.get("min_duration_s") != minimum_d:
+            c.err("rules.min_duration_s",
+                  "debe coincidir con clips.min_duration_s")
+        if rules.get("target_duration_s") != target:
+            c.err("rules.target_duration_s",
+                  "debe coincidir con clips.target_duration_s")
 
     # subtitles
     c.check(cfg, "subtitles", "dict")

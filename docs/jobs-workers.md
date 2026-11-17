@@ -173,15 +173,21 @@ nada ni dejar nada prendido: GitHub corre el trabajo cuando toca
 (cron o dispatch) y se apaga solo. La PC solo se necesitaría para el
 login inicial una vez (sesión TikTok), no 24/7.
 
-Qué ejecuta el workflow por corrida (destino principal de estos
-workers):
+Qué ejecuta el workflow por corrida (cadena que funciona hoy, sin
+cableado pendiente):
 
 ```
 python -m clipagent watch --once               # VODs nuevos -> cola legacy
-python -m clipagent pipeline bridge --limit 5  # cola legacy -> step pipelines
-python -m clipagent workers start --once       # supervisor: vod->picos->corte->subtitulos->empaquetar
+python -m clipagent worker --once --top-n 5    # cadena monolítica: picos -> corte -> subtítulos -> empaquetar
+python -m clipagent publish loop --once --live # publicación por API (política 6.3)
 python -m clipagent publish audit              # estado de publicación
 ```
+
+El cambio futuro a la partición (`pipeline bridge --limit 5` +
+`workers start --once`) está pendiente del cableado del §7.4 y de
+que el supervisor cree los jobs de publicar solo (hoy se detiene en
+`empaquetar`); hasta entonces, la cadena monolítica es la que da el
+100% automático.
 
 Requisitos del runner (ya casi todos en el workflow): `ffmpeg`
 (apt), `pip install -e .[dev,youtube,whisper]` (el extra `whisper`
@@ -233,13 +239,18 @@ pero deja de ser 100% automática. No es el plan principal.
   coordinar con el agente de workflows).** Los archivos
   `.github/workflows/cerebro-sebastian.yml` y `cerebro-colega.yml`
   hoy llaman al worker monolítico legacy (`clipagent worker
-  --once`) y su cabecera dice "ALTERNATIVA, NO LA VÍA PRINCIPAL"
-  (redactada bajo la decisión anterior, ya anulada). El cambio es:
-  mantener `watch --once`, añadir `pipeline bridge` y sustituir
-  `worker --once` por `workers start --once`. No se toca en esta
-  entrega porque esos archivos los lleva otro agente en paralelo;
-  el cambio exacto queda aquí registrado para que el coordinador
-  lo dirija.
+  --once`) + `publish loop --once --live`: esa es la cadena que
+  funciona hoy (auto_clips descarga chat+vídeo él mismo). Su
+  cabecera ya se corrigió en la reconciliación del 17 nov (decía
+  "ALTERNATIVA, NO LA VÍA PRINCIPAL"; ahora dice vía principal).
+  El cambio a `pipeline bridge` + `workers start --once` sigue
+  pendiente de (a) el cableado chat/vídeo de arriba y (b) que el
+  supervisor cree los jobs de publicar solo tras empaquetar — hoy
+  se detiene ahí y publicar desde esa partición exige aprobación
+  explícita (`clipagent pipeline publish`), lo que rompería el
+  "Todo automático". No se cambia el workflow hasta que (a) y (b)
+  existan; el cambio exacto queda aquí registrado para que el
+  coordinador lo dirija.
 - Probar subtítulos por Gemini API gratis (audio → SRT) con 1 clip
   (respaldo de subtítulos, no principal).
 - Pedir el scope `video.upload` de TikTok (borrador por API).

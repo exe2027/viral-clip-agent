@@ -57,21 +57,40 @@ DEFAULT_CONFIG = {
         "crop": "center",
         "crf": 23,
         "preset": "fast",
-        # Cortes variables (ya no 60 s fijos): objetivo 30 s, rango
-        # 21-40 s, tope duro 60 s. Ver config.yaml.
-        "duration": 30,
-        "target_duration_s": 30,
-        "min_duration_s": 21,
-        "max_duration_s": 40,
+        # REGLAS DE DURACIÓN (decisión del usuario 2026-11-17, ver
+        # rules: en config.yaml): el clip de 21 s publicado en test
+        # era "muy poco". Mínimo 36 s = primer segundo entero por
+        # encima del rango prohibido 25-35 (regla de oro: ningún clip
+        # de 30 s; el objetivo viejo de 30 s caía dentro del rango
+        # prohibido, así que el default era imposible de publicar).
+        # Objetivo 40 s = 20 s pre-roll + 20 s tras el pico (payoff
+        # a 20 s dentro del clip). Tope duro 60 s = máximo de un
+        # Short de YouTube y tope del proyecto, nunca el default.
+        "duration": 40,
+        "target_duration_s": 40,
+        "min_duration_s": 36,
+        "max_duration_s": 60,
+        "hard_cap_s": 60,
+        "forbidden_duration_range": [25, 35],
         "precise_cut": True,
         "pre_roll": 20,
         "window": 10,
         "min_separation": 60,
+        # Layout split vertical: juego arriba 1320 px, cámara abajo
+        # 600 px (1080x1920). Los subtítulos viven en la zona de
+        # juego, nunca sobre la cámara (ver subtitle_styles).
+        "split_game_h": 1320,
+        "split_cam_h": 600,
     },
     "subtitles": {
-        "default_style": "tiktok",
+        "default_style": "karaoke",
         "subtitle_lang": "auto",  # auto | es | en
         "translate": True,        # traducir a inglés lo que no sea español
+        # Zona de subtítulos (decisión del usuario 2026-11-17): siempre
+        # en la zona de juego, nunca sobre la cara del influencer / la
+        # webcam. MarginV mínimo = split_cam_h + safe_gap_px = 680.
+        "subtitle_zone": "gameplay",
+        "subtitle_safe_gap_px": 80,
     },
     # Política de traducción (regla del usuario, 2026-11-16):
     # es -> transcribe-only; cualquier otro idioma -> translate-to-en.
@@ -80,22 +99,26 @@ DEFAULT_CONFIG = {
         "others": "translate-to-en",
     },
     "subtitle_styles": {
+        # margin_v 680 en los tres estilos (decisión del usuario
+        # 2026-11-17): con Alignment=2 el texto queda en la zona de
+        # juego (borde inferior en y=1240), nunca sobre la webcam
+        # (1320-1920). burn_subtitles() lo impone como mínimo.
         "tiktok": {
             "font_color": "#FFFFFF", "border_color": "#000000",
             "border_width": 3, "fontsize": 48, "bold": True,
-            "margin_v": 140, "max_chars": 20, "max_duration": 2.0,
+            "margin_v": 680, "max_chars": 20, "max_duration": 2.0,
             "box": False,
         },
         "highlight": {
             "font_color": "#FFFF00", "border_color": "#000000",
             "border_width": 2, "fontsize": 52, "bold": True,
-            "margin_v": 140, "max_chars": 20, "max_duration": 2.0,
+            "margin_v": 680, "max_chars": 20, "max_duration": 2.0,
             "box": True,
         },
         "karaoke": {
             "font_color": "#FFFF00", "border_color": "#000000",
             "border_width": 3, "fontsize": 56, "bold": True,
-            "margin_v": 140, "max_chars": 8, "max_duration": 1.0,
+            "margin_v": 680, "max_chars": 8, "max_duration": 1.0,
             "box": False,
         },
     },
@@ -176,6 +199,77 @@ DEFAULT_CONFIG = {
         "facebook_reels": {"page_id": ""},
     },
 }
+
+
+# REGLAS OBVIAS DEL PROYECTO (decisiones del usuario 2026-11-16/17).
+# Canónicas en config.yaml `rules:`; estos valores son el espejo en
+# código cuando no hay config.yaml. Si una regla cambia, cambia en
+# los dos sitios. Las impone: precise_cut.py (duración), transcribe.py
+# (subtítulos), policy.py (puerta de publicación) y validate.py.
+#   * Duración: mínimo 36 s, objetivo 40 s, tope duro 60 s, prohibido
+#     25-35 s (regla de oro: ningún clip de 30 s). El clip de 21 s
+#     publicado en test el 2026-11-17 era "muy poco" (usuario).
+#   * Pre-roll: 20 s de contexto antes del pico.
+#   * Subtítulos: siempre en la zona de juego, nunca sobre la cara
+#     del influencer / la webcam (split: juego 0-1320 px, cámara
+#     1320-1920 px; MarginV mínimo 680 = 600 + 80).
+#   * Nunca tapar minimapa ni HUD; layout split vertical.
+#   * Nunca afirmar un juego no verificado; nunca quemar subtítulos
+#     alucinados (manda la transcripción corregida por el usuario).
+RULES_MIN_DURATION_S = 36
+RULES_TARGET_DURATION_S = 40
+RULES_HARD_CAP_S = 60
+RULES_FORBIDDEN_DURATION_RANGE = (25, 35)
+RULES_PRE_ROLL_S = 20
+RULES_SPLIT_GAME_H = 1320
+RULES_SPLIT_CAM_H = 600
+RULES_SUBTITLE_SAFE_GAP_PX = 80
+RULES_SUBTITLE_MIN_MARGIN_V = (
+    RULES_SPLIT_CAM_H + RULES_SUBTITLE_SAFE_GAP_PX)  # 680
+
+
+def clip_duration_ok(duration_s, cfg=None):
+    """(ok, motivo) para la duración de un clip según las reglas.
+
+    Rechaza: < mínimo (36 s, "muy poco"), dentro del rango prohibido
+    25-35 s (regla de oro), o > tope duro 60 s.
+    """
+    if cfg is not None:
+        clips = (cfg or {}).get("clips") or {}
+        min_d = int(clips.get("min_duration_s") or RULES_MIN_DURATION_S)
+        max_d = int(clips.get("max_duration_s") or RULES_HARD_CAP_S)
+        fr = clips.get("forbidden_duration_range") or list(
+            RULES_FORBIDDEN_DURATION_RANGE)
+    else:
+        min_d, max_d = RULES_MIN_DURATION_S, RULES_HARD_CAP_S
+        fr = list(RULES_FORBIDDEN_DURATION_RANGE)
+    if duration_s < min_d:
+        return False, (f"duración {duration_s:.1f} s < mínimo {min_d} s "
+                       f"(regla del usuario 2026-11-17: clips muy cortos no)")
+    if fr and float(fr[0]) <= duration_s <= float(fr[1]):
+        return False, (f"duración {duration_s:.1f} s en el rango prohibido "
+                       f"{fr[0]}-{fr[1]} s (regla de oro: ningún clip de 30 s)")
+    if duration_s > max_d:
+        return False, (f"duración {duration_s:.1f} s > tope duro {max_d} s")
+    return True, ""
+
+
+def subtitle_min_margin_v(cfg=None):
+    """MarginV mínimo para que el subtítulo no tape la webcam.
+
+    Layout split: juego 0-1320 px, cámara 1320-1920 px. Con
+    Alignment=2 el borde inferior del texto queda en 1920-MarginV;
+    para que quede dentro del juego con 80 px de hueco hacen falta
+    600 + 80 = 680 px.
+    """
+    if cfg is not None:
+        clips = (cfg or {}).get("clips") or {}
+        subs = (cfg or {}).get("subtitles") or {}
+        cam_h = int(clips.get("split_cam_h") or RULES_SPLIT_CAM_H)
+        gap = int(subs.get("subtitle_safe_gap_px")
+                  or RULES_SUBTITLE_SAFE_GAP_PX)
+        return cam_h + gap
+    return RULES_SUBTITLE_MIN_MARGIN_V
 
 
 def _merge(base, override):

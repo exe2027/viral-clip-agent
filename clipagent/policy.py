@@ -137,6 +137,23 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
         return _deny("retenido",
                      f"sin score SEO para {platform} en el manifiesto")
 
+    # 0. Duración (reglas del usuario 2026-11-17): ningún clip por
+    # debajo de 36 s ("muy poco", el de 21 s publicado en test), ninguno
+    # dentro del rango prohibido 25-35 s (regla de oro: ningún clip de
+    # 30 s) y ninguno por encima del tope duro de 60 s. Un clip corto
+    # no se publica aunque pase viralidad y SEO: se retiene para
+    # re-cortarlo más largo.
+    duration = clip.get("duration")
+    if duration is not None:
+        try:
+            from .config import clip_duration_ok
+            ok_dur, why_dur = clip_duration_ok(float(duration), cfg)
+        except Exception:
+            ok_dur, why_dur = True, ""
+        checks.append(f"duración: {duration} s")
+        if not ok_dur:
+            return _deny("retenido", why_dur)
+
     # 1. Filtros duros de puntaje (6B.2 / 6B.5).
     status, why = publish_status(virality, seo, seo_override=seo_override,
                                  seo_gate=seo_gate, viral_min=viral_min)
