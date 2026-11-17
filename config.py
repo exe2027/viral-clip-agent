@@ -40,6 +40,19 @@ DEFAULT_CONFIG = {
     "tools": {
         "twitch_downloader_cli": "",
     },
+    # Juego y lanzamiento (Fase 2.3): la fecha se compara en la zona
+    # indicada; un VOD de un juego que no está en "games" es rojo
+    # del semáforo y el watcher lo salta. Para añadir otro juego,
+    # basta agregar una entrada con sus patrones de categoría.
+    "game": {
+        "release_date": "2026-11-19",
+        "timezone": "America/Santiago",
+    },
+    "games": [
+        {"name": "GTA 6", "id": "gta6",
+         "patterns": ["gta 6", "gta vi", "gta6", "grand theft auto vi",
+                      "grand theft auto 6"]},
+    ],
     "clips": {
         "crop": "center",
         "crf": 23,

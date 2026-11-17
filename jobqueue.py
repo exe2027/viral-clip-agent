@@ -67,7 +67,6 @@ RUNS_DIR = os.path.join(HERE, "runs")
 
 MIN_FREE_GB = 2.0
 MAX_ATTEMPTS = 3
-GTA6_LAUNCH = date(2026, 11, 19)  # jueves 19 nov 2026
 
 STATES = ("queued", "processing", "ready_for_review", "approved",
           "rejected", "published", "failed", "dead")
@@ -114,24 +113,56 @@ def parse_url(url: str):
         "twitch.tv/videos/<id> o el ID de Twitch.")
 
 
-def detect_game(category: str | None, title: str | None):
-    """'gta6' solo si la CATEGORÍA es GTA VI, 'other' si la categoría
-    es otro juego, None si la categoría es desconocida.
+def load_games_config(config_path: str | None = None):
+    """(games, release_date, timezone) desde config.yaml.
+
+    Fallback (sin config o sin claves): solo GTA 6, lanzamiento
+    2026-11-19 en America/Santiago. ``games`` es una lista de
+    {name, id, patterns}; ``release_date`` un date.
+    """
+    try:
+        from config import load_config
+        cfg = load_config(config_path) or {}
+    except Exception:
+        cfg = {}
+    games = cfg.get("games") or []
+    if not games:
+        games = [{"name": "GTA 6", "id": "gta6",
+                  "patterns": list(GTA6_PATTERNS)}]
+    game_cfg = cfg.get("game") or {}
+    try:
+        rel_date = date.fromisoformat(
+            str(game_cfg.get("release_date") or "2026-11-19"))
+    except ValueError:
+        rel_date = date(2026, 11, 19)
+    tz = str(game_cfg.get("timezone") or "America/Santiago")
+    return games, rel_date, tz
+
+
+def detect_game(category: str | None, title: str | None, games=None):
+    """ID del juego si la CATEGORÍA casa con uno de la lista de
+    config (``games:``), 'other' si la categoría es otro juego,
+    None si la categoría es desconocida.
 
     La CATEGORÍA manda sobre el título: un VOD de GTA V, Just
     Chatting o San Andreas que menciona "GTA 6"/"GTA VI" en el
     título (descarga, tráiler...) NO es GTA 6. Sin categoría no se
-    da por GTA 6 por el título solo: None -> revisión humana
-    (el semáforo lo marca como rojo "juego no verificable" y el
-    watcher lo salta como juego_no_gta6, nunca lo encola).
+    da por un juego de la lista por el título solo: None ->
+    revisión humana (el semáforo lo marca como rojo "juego no
+    verificable" y el watcher lo salta como juego_no_permitido,
+    nunca lo encola).
 
     Casos reales (IlloJuan, 2026-11-16) que antes daban falso
     positivo: "10 DÍAS DESCARGA DE GTA VI" (sin categoría) y
     "ÚLTIMO TRÁILER DE GTA 6" (categoría Just Chatting, contenido
     San Andreas)."""
+    if games is None:
+        games, _, _ = load_games_config()
     cat = (category or "").strip().lower()
-    if any(p in cat for p in GTA6_PATTERNS):
-        return "gta6"
+    for game in games or []:
+        pats = game.get("patterns") or []
+        if any(p.lower() in cat for p in pats):
+            return game.get("id") or game.get("name")
     if cat:
         return "other"
     return None
@@ -422,28 +453,41 @@ def check_semaphore(job: dict, allowlist: set | None = None,
     # NO es un rojo del semáforo. Estar en la lista blanca que sube el
     # usuario = permiso ya dado. `allowlist_bypass` solo marca que el
     # job se encoló con --force para pruebas locales.)
-    # 2. Juego detectado distinto de GTA 6 (o no verificable).
-    game = detect_game(job.get("vod_category"), job.get("vod_title"))
+    # 2. Juego detectado fuera de la lista de config (o no verificable).
+    games, rel_date, tz_name = load_games_config()
+    allowed_ids = {(g.get("id") or g.get("name")) for g in games}
+    game = detect_game(job.get("vod_category"), job.get("vod_title"), games)
     if game is None:
         reds.append("juego no verificable: sin categoría ni título del VOD")
-    elif game != "gta6":
+    elif game not in allowed_ids:
+        names = ", ".join(g.get("name") or g.get("id") for g in games)
         reds.append(
-            f"juego detectado ≠ GTA 6 (categoría: "
+            f"juego detectado ≠ {names} (categoría: "
             f"{job.get('vod_category') or 'sin categoría'})")
 
-    # 3. VOD anterior al lanzamiento de GTA 6 (19 nov 2026).
+    # 3. VOD anterior al lanzamiento (fecha de config, comparada en
+    # su zona horaria, no en UTC: un VOD del 19 nov a las 01:00 UTC
+    # es 18 nov en Chile).
     raw_date = job.get("vod_start_time")
     vod_date = None
     if raw_date:
         try:
-            vod_date = datetime.fromisoformat(raw_date).date()
+            dt = datetime.fromisoformat(raw_date)
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(tz_name)
+                vod_date = (dt.astimezone(tz).date() if dt.tzinfo
+                            is not None else dt.date())
+            except Exception:
+                vod_date = dt.date()
         except ValueError:
             vod_date = None
     if vod_date is None:
         reds.append("fecha del VOD no verificable (sin start_time)")
-    elif vod_date < GTA6_LAUNCH:
+    elif vod_date < rel_date:
         reds.append(
-            f"VOD anterior al lanzamiento de GTA 6 (19 nov 2026): {vod_date}")
+            f"VOD anterior al lanzamiento ({rel_date.isoformat()}): "
+            f"{vod_date}")
 
     # 4. Música con copyright sospechada (título o categoría).
     haystack = f"{job.get('vod_title') or ''} {job.get('vod_category') or ''}".lower()

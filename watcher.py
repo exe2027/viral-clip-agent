@@ -69,8 +69,8 @@ también se guarda lo visto (con outcome ``would_enqueue`` o
 ``skipped:<motivo>``), para que una segunda pasada no vuelva a
 proponer lo mismo; en ``--live`` un VOD marcado ``would_enqueue`` se
 re-evalúa y se encola de verdad (el dry-run nunca "gasta" un VOD).
-Un VOD marcado ``skipped:juego_no_gta6`` no se re-evalúa (el juego
-de un VOD terminado no cambia).
+Un VOD marcado ``skipped:juego_no_permitido`` no se re-evalúa (el
+juego de un VOD terminado no cambia).
 
 Sin push, sin publicar, sin contactar streamers: esto solo LEE datos
 públicos y encola en la cola local.
@@ -89,7 +89,8 @@ from datetime import date, datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from jobqueue import Queue, QueueError, detect_game, kill_switch_active  # noqa: E402
+from jobqueue import (Queue, QueueError, detect_game,  # noqa: E402
+                    kill_switch_active, load_games_config)
 
 # --- Twitch: GQL público (el que usa la web twitch.tv) -------------------
 # Client-ID público y estático de la web de Twitch. No es una key
@@ -125,7 +126,7 @@ RETRYABLE_SKIPS = ("kill_switch", "tope_diario",
                    "en_processing", "vod_en_curso", "ya_en_cola",
                    "error_red")
 # Motivo definitivo: el juego de un VOD terminado no cambia.
-PERMANENT_SKIP = "juego_no_gta6"
+PERMANENT_SKIP = "juego_no_permitido"
 
 
 class WatcherError(Exception):
@@ -495,7 +496,7 @@ def decide(vod, influencer, state, queue, cfg, kill_switch, dry_run):
         if outcome == "enqueued":
             return "seen", "ya encolado antes (job #%s)" % prev.get("job_id")
         if outcome == f"skipped:{PERMANENT_SKIP}":
-            return "seen", "ya visto: juego ≠ GTA 6 (definitivo)"
+            return "seen", "ya visto: juego fuera de la lista (definitivo)"
         if dry_run:
             if outcome == "skipped:vod_en_curso":
                 pass  # re-evaluar: el VOD pudo terminar desde la última pasada
@@ -513,9 +514,11 @@ def decide(vod, influencer, state, queue, cfg, kill_switch, dry_run):
     # `denegado` / `revocado` excluyen.
     if influencer["estado"] in ("denegado", "revocado"):
         return "skip", f"fuera_de_lista (estado: {influencer['estado']})"
-    game = detect_game(vod.get("category"), vod.get("title"))
-    if game != "gta6":
-        return "skip", (f"juego_no_gta6 (categoría: "
+    games, _, _ = load_games_config()
+    allowed_ids = {(g.get("id") or g.get("name")) for g in games}
+    game = detect_game(vod.get("category"), vod.get("title"), games)
+    if game not in allowed_ids:
+        return "skip", (f"juego_no_permitido (categoría: "
                         f"{vod.get('category') or 'sin categoría'})")
     today = date.today().isoformat()
     key = f"{influencer['usuario']}|{today}"

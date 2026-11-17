@@ -87,7 +87,7 @@ GTAV_VOD = dict(GTA6_VOD, vod_id="kick-testgta-bbbbbbbb",
 # menciona GTA VI/6 pero el juego NO es GTA 6. Antes del arreglo,
 # detect_game() casaba el título y el watcher los marcaba
 # "would_enqueue". Con la corrección (la categoría manda) deben salir
-# "skip" con juego_no_gta6.
+# "skip" con juego_no_permitido.
 ILLOJUAN_DESCARGA = {"platform": "twitch", "vod_id": "2924180678",
                      "url": "https://www.twitch.tv/videos/2924180678",
                      "title": "10 DÍAS 📅 DESCARGA DE GTA VI",
@@ -176,7 +176,7 @@ class TestDecide(unittest.TestCase):
         action, reason = decide(GTAV_VOD, INF_CONCEDIDO, self.state,
                                 self.q, self.cfg, False, True)
         self.assertEqual(action, "skip")
-        self.assertIn("juego_no_gta6", reason)
+        self.assertIn("juego_no_permitido", reason)
 
     def test_illojuan_descarga_gta_vi_sin_categoria_no_se_encola(self):
         # VOD 2924180678: título "DESCARGA DE GTA VI", sin categoría.
@@ -184,7 +184,7 @@ class TestDecide(unittest.TestCase):
         action, reason = decide(ILLOJUAN_DESCARGA, INF_CONCEDIDO,
                                 self.state, self.q, self.cfg, False, True)
         self.assertEqual(action, "skip")
-        self.assertIn("juego_no_gta6", reason)
+        self.assertIn("juego_no_permitido", reason)
 
     def test_illojuan_trailer_gta6_just_chatting_no_se_encola(self):
         # VOD 2901476435: título "ÚLTIMO TRÁILER DE GTA 6", categoría
@@ -192,7 +192,7 @@ class TestDecide(unittest.TestCase):
         action, reason = decide(ILLOJUAN_TRAILER, INF_CONCEDIDO,
                                 self.state, self.q, self.cfg, False, True)
         self.assertEqual(action, "skip")
-        self.assertIn("juego_no_gta6", reason)
+        self.assertIn("juego_no_permitido", reason)
 
     def test_kill_switch_bloquea_todo(self):
         action, reason = decide(GTA6_VOD, INF_CONCEDIDO, self.state,

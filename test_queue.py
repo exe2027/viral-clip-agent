@@ -118,6 +118,57 @@ class TestDetectGame(unittest.TestCase):
         self.assertIsNone(detect_game("", ""))
 
 
+class TestGamesConfig(unittest.TestCase):
+    """Fase 2.3: juegos y lanzamiento viven en config, no en el código."""
+
+    GAMES2 = [
+        {"name": "GTA 6", "id": "gta6",
+         "patterns": ["gta 6", "gta vi", "grand theft auto vi"]},
+        {"name": "GTA 5", "id": "gta5",
+         "patterns": ["gta 5", "gta v", "grand theft auto v"]},
+    ]
+
+    def test_otro_juego_de_la_lista_no_es_rojo(self):
+        self.assertEqual(
+            detect_game("Grand Theft Auto V", "", self.GAMES2), "gta5")
+
+    def test_juego_fuera_de_la_lista_sigue_siendo_other(self):
+        self.assertEqual(
+            detect_game("Rob Run", "", self.GAMES2), "other")
+
+    def test_lanzamiento_desde_config(self):
+        from jobqueue import load_games_config
+        games, rel, tz = load_games_config()
+        self.assertEqual([g["id"] for g in games], ["gta6"])
+        self.assertEqual(rel.isoformat(), "2026-11-19")
+        self.assertEqual(tz, "America/Santiago")
+
+
+class TestSemaphoreTimezone(unittest.TestCase):
+    """Fase 2.3: la fecha del VOD se compara en America/Santiago."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _check(self, **over):
+        mpath = _manifest(self.tmp.name, [(1, True)])
+        return check_semaphore(_job(manifest_path=mpath, **over),
+                               allowlist={"coker"})
+
+    def test_vod_19nov_01utc_es_18nov_en_chile(self):
+        # 01:00 UTC del 19 = 22:00 del 18 en Chile: antes del lanzamiento.
+        reds = self._check(vod_start_time="2026-11-19T01:00:00+00:00")
+        self.assertTrue(any("anterior al lanzamiento" in r for r in reds))
+
+    def test_vod_19nov_04utc_es_19nov_en_chile(self):
+        # 04:00 UTC del 19 = 01:00 del 19 en Chile: ya no es anterior.
+        reds = self._check(vod_start_time="2026-11-19T04:00:00+00:00")
+        self.assertFalse(any("anterior al lanzamiento" in r for r in reds))
+
+
 class TestQueue(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
