@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Test de humo end-to-end (sin red) del prompt final.
 
-Vídeo sintético de 10 s (ffmpeg testsrc) + chat sintético con 1
+Vídeo sintético de 120 s (ffmpeg testsrc) + chat sintético con 1
 pico real => detect -> render -> manifiesto -> publicación
 simulada, pasando por los filtros de puntaje (6B). Sin red: el
 vídeo y el chat son locales; la subida se simula con el publicador
 mockeado (la política decide por viralidad/SEO de verdad).
+
+El clip es de 40 s (objetivo del usuario 2026-11-17, mínimo 36 s,
+tope 60 s, pre-roll 20 s): un clip más corto lo rechaza bien la
+puerta de duración, así que el fixture simula un clip válido para
+que el flujo completo se pruebe de verdad.
 """
 import copy
 import datetime
@@ -27,8 +32,9 @@ from clipagent.publish import PublishQueue, publish_one
 def _chat(path):
     # Chat de 120 s con fondo disperso (1 msg cada 5 s) y una ráfaga
     # de 25 risas a los 5 s: la mediana de ventanas queda baja y el
-    # pico pasa el filtro (múltiplo >= 3x). El vídeo dura 10 s, así
-    # que el pico cae dentro del vídeo.
+    # pico pasa el filtro (múltiplo >= 3x). El vídeo dura 120 s, así
+    # que el pico cae dentro del vídeo y hay margen para un clip de
+    # 40 s con pre-roll de 20 s.
     comments = []
     for t in range(0, 120, 5):
         comments.append({"content_offset_seconds": t,
@@ -43,7 +49,7 @@ def _chat(path):
     return path
 
 
-def _video(path, dur_s=10):
+def _video(path, dur_s=120):
     subprocess.run(
         ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
          "-i", f"testsrc=duration={dur_s}:size=640x360:rate=30",
@@ -62,8 +68,8 @@ class TestSmoke(unittest.TestCase):
             out_dir = os.path.join(tmp, "runs")
             argv = ["auto_clips.py", "--chat", chat, "--video", video,
                     "--out", out_dir, "--top-n", "1", "--min-separation",
-                    "20", "--window", "10", "--duration", "10",
-                    "--pre-roll", "2"]
+                    "20", "--window", "10", "--duration", "40",
+                    "--pre-roll", "20"]
             with mock.patch.object(sys, "argv", argv):
                 self.assertEqual(main(), 0)
             with open(os.path.join(out_dir, "manifest.json"),
