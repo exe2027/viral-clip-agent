@@ -39,14 +39,22 @@ Sin ella, `publish()` se niega; sin `client_secrets.json` /
 
 ### Cuota (lo que manda el tope diario)
 
-- Cuota diaria por proyecto: **~10.000 unidades**.
-- Una subida (`videos.insert`): **~1.600 unidades**.
-- Máximo por cuota: **~6 Shorts/día** (10.000 / 1.600).
-- Plan del proyecto: **3-5/día** (3 planeados = 4.800 unidades,
-  con margen para errores y reintentos).
+CORREGIDO 2026-11-17 (el valor anterior, 1.600 u./subida y ~6/día,
+era el de antes de dic 2025; ver `limits.yaml` y el historial
+oficial de revisiones de la YouTube Data API v3):
+
+- `videos.insert` cuesta **1 unidad** en su propio bucket "Video
+  Uploads", por defecto **100 llamadas/día** (valor conservador;
+  el historial del 2 nov 2026 habla de 10.000 unidades/día en ese
+  bucket). El pool compartido de **10.000 unidades/día** es solo
+  para el resto de métodos (`thumbnails.set` 50 u., lecturas...).
+- Máximo por cuota: **100 Shorts/día**. La cuota YA NO limita el
+  plan del proyecto: **3-5/día**, muy por debajo en cualquier caso.
 - La cuota se resetea a medianoche hora del Pacífico (EE. UU.).
   Si se agota, la API devuelve 403 `quotaExceeded`: esperar al día
   siguiente, no insistir.
+- Desde el 2 nov 2026, los videos subidos desde proyectos no
+  verificados YA NO quedan bloqueados en modo privado.
 
 ## Draft-first: TikTok, Instagram, Facebook
 

@@ -83,31 +83,84 @@ WHITELIST_FALLBACK = os.path.join(BASE_DIR, "allowed_streamers.yaml")
 DRAFTS_DIR = os.path.join(BASE_DIR, "drafts")
 
 # ---------------------------------------------------------------------------
-# Topes y franja (Bloque 7). Los de YT los manda la cuota de la API;
-# los del resto, la prudencia con cuentas nuevas (ver README:
-# "Cuentas nuevas: 1 publicación por día por plataforma" la primera
-# semana; estos topes son el techo una vez calentada la cuenta).
+# Topes y franja (Bloque 7). Se leen de limits.yaml (Fase 2.4); los
+# valores de abajo son solo el fallback si falta ese archivo.
+# Los topes por plataforma son prudencia con cuentas nuevas (ver
+# README: "Cuentas nuevas: 1 publicación por día por plataforma"
+# la primera semana; estos topes son el techo una vez calentada la
+# cuenta). La cuota de YouTube sí es un dato de la plataforma,
+# verificado 2026-11-17 en la documentación oficial:
+#   videos.insert (subida): 1.600 unidades; cuota diaria por
+#   defecto: 10.000 unidades -> máx. ~6 Shorts/día por cuota.
 # ---------------------------------------------------------------------------
+PLATFORMS = ("youtube_shorts", "tiktok", "instagram_reels", "facebook_reels")
+
+_DEFAULT_LIMITS = {
+    "youtube_shorts": {"plan_per_day": 3, "max_per_day": 5,
+                       "quota_upload_cost_units": 1,
+                       "quota_upload_calls_per_day": 100,
+                       "quota_other_daily_units": 10000},
+    "tiktok": {"plan_per_day": 2, "max_per_day": 3},
+    "instagram_reels": {"plan_per_day": 2, "max_per_day": 3},
+    "facebook_reels": {"plan_per_day": 2, "max_per_day": 3},
+    "min_spacing_hours": 2,
+    "publish_window": [18, 24],
+    "new_account_daily": 1,
+}
+
+
+def load_limits(path=None):
+    """Límites de plataforma desde limits.yaml (o el fallback).
+
+    Devuelve un dict con una entrada por plataforma (plan_per_day,
+    max_per_day, y en YouTube la cuota) más min_spacing_hours,
+    publish_window y new_account_daily. Si falta el archivo o
+    PyYAML, devuelve los valores por defecto del código.
+    """
+    limits = {k: dict(v) if isinstance(v, dict) else v
+              for k, v in _DEFAULT_LIMITS.items()}
+    if path is None:
+        path = os.path.join(BASE_DIR, "limits.yaml")
+    try:
+        import yaml
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, ImportError):
+        return limits
+    for platform in PLATFORMS:
+        entry = data.get(platform)
+        if isinstance(entry, dict):
+            limits[platform].update(entry)
+    for key in ("min_spacing_hours", "publish_window", "new_account_daily"):
+        if key in data:
+            limits[key] = data[key]
+    return limits
+
+
+_LIMITS = load_limits()
+
 DAILY_LIMITS = {
     # plataforma: (plan_día, máximo_día)
-    "youtube_shorts": (3, 5),
-    "tiktok": (2, 3),
-    "instagram_reels": (2, 3),
-    "facebook_reels": (2, 3),
+    p: (int(_LIMITS[p]["plan_per_day"]), int(_LIMITS[p]["max_per_day"]))
+    for p in PLATFORMS
 }
-MIN_SPACING_HOURS = 2          # espaciamiento mínimo entre subidas
-PUBLISH_WINDOW = (18, 24)      # franja tarde/noche Chile (18:00-23:59)
-NEW_ACCOUNT_DAILY = 1          # cuentas nuevas: 1/día la primera semana
+MIN_SPACING_HOURS = int(_LIMITS["min_spacing_hours"])
+PUBLISH_WINDOW = tuple(_LIMITS["publish_window"])
+NEW_ACCOUNT_DAILY = int(_LIMITS["new_account_daily"])
 
-# YouTube Data API v3 — cuota (ver PUBLISHING.md):
-#   cuota diaria por proyecto: ~10.000 unidades
-#   videos.insert (subida): ~1.600 unidades
-#   -> máx. ~6 Shorts/día por cuota; el plan es 3-5/día.
-YOUTUBE_DAILY_QUOTA_UNITS = 10000
-YOUTUBE_UPLOAD_COST_UNITS = 1600
-YOUTUBE_MAX_UPLOADS_BY_QUOTA = YOUTUBE_DAILY_QUOTA_UNITS // YOUTUBE_UPLOAD_COST_UNITS  # 6
-
-PLATFORMS = ("youtube_shorts", "tiktok", "instagram_reels", "facebook_reels")
+# YouTube Data API v3 — cuota (ver limits.yaml y el historial
+# oficial de revisiones, 2026-11-17): videos.insert cuesta 1 unidad
+# en su propio bucket "Video Uploads" (por defecto 100 llamadas/día,
+# valor conservador); el pool compartido de 10.000 u./día es solo
+# para el resto de métodos (lecturas, thumbnails.set 50 u., etc.).
+# El 1.600 u./subida era el valor anterior a dic 2025.
+YOUTUBE_UPLOAD_COST_UNITS = int(
+    _LIMITS["youtube_shorts"]["quota_upload_cost_units"])
+YOUTUBE_UPLOAD_CALLS_PER_DAY = int(
+    _LIMITS["youtube_shorts"]["quota_upload_calls_per_day"])
+YOUTUBE_DAILY_QUOTA_UNITS = int(
+    _LIMITS["youtube_shorts"]["quota_other_daily_units"])
+YOUTUBE_MAX_UPLOADS_BY_QUOTA = YOUTUBE_UPLOAD_CALLS_PER_DAY  # 100
 
 # Estados de la cola (diseño de jobqueue.py, creado en paralelo):
 #   queued -> ready_for_review -> approved -> published / failed
@@ -619,6 +672,7 @@ class YouTubePublisher:
                 "client_secrets": secrets, "token": creds,
                 "quota_units_per_day": YOUTUBE_DAILY_QUOTA_UNITS,
                 "upload_cost_units": YOUTUBE_UPLOAD_COST_UNITS,
+                "upload_calls_per_day": YOUTUBE_UPLOAD_CALLS_PER_DAY,
                 "max_uploads_by_quota": YOUTUBE_MAX_UPLOADS_BY_QUOTA,
                 "published_today": len(self.queue.published_today("youtube_shorts"))}
 
@@ -641,11 +695,14 @@ class YouTubePublisher:
                                     else "SIN client_secrets.json/token.json — no se puede subir")))
         ok_limits, limits_msg = check_limits(self.queue, "youtube_shorts")
         checks.append((ok_limits, f"topes: {limits_msg}"))
-        # Cuota: 3 subidas planeadas = 4.800 unidades de 10.000.
+        # Cuota: el plan (3-5/día) va contra el bucket propio de
+        # videos.insert (100 llamadas/día), no contra el pool de
+        # 10.000 u. compartido.
         plan, _max = DAILY_LIMITS["youtube_shorts"]
-        checks.append((plan * YOUTUBE_UPLOAD_COST_UNITS <= YOUTUBE_DAILY_QUOTA_UNITS,
-                       f"cuota: plan {plan}/día = {plan * YOUTUBE_UPLOAD_COST_UNITS} "
-                       f"unidades de {YOUTUBE_DAILY_QUOTA_UNITS} (máx. {YOUTUBE_MAX_UPLOADS_BY_QUOTA}/día)"))
+        checks.append((plan <= YOUTUBE_MAX_UPLOADS_BY_QUOTA,
+                       f"cuota: plan {plan}/día de {YOUTUBE_MAX_UPLOADS_BY_QUOTA} "
+                       f"llamadas/día en el bucket de videos.insert "
+                       f"({YOUTUBE_UPLOAD_COST_UNITS} unidad por subida)"))
         return {"platform": "youtube_shorts", "clip": clip_path,
                 "streamer": streamer, "dry_run": True,
                 "would_publish": all(c[0] for c in checks),

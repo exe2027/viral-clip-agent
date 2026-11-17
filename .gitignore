@@ -13,6 +13,7 @@ queue.kill
 client_secrets.json
 token.json
 publish_queue.json
+tokens/
 seen_vods.json
 worker.lock
 drafts/          # paquetes manuales de subida (estado local)

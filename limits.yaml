@@ -1,0 +1,67 @@
+# limits.yaml — límites de plataformas (Fase 2.4).
+#
+# Cada límite lleva su fuente y su fecha de revisión.
+#   reviewed: null = SIN verificar en la documentación oficial
+#   (TODO): el valor es el más conservador y solo se usa como tope
+#   interno del proyecto, no como dato de la plataforma.
+# Si falta este archivo, publisher.py usa los mismos valores como
+# fallback en el código (ver load_limits).
+#
+# YouTube (CORREGIDO 2026-11-17; la verificación anterior usaba una
+# página movida y un valor viejo). Historial oficial de revisiones
+# de la YouTube Data API v3:
+#   - 4 dic 2025: el costo de videos.insert baja de ~1.600 a ~100 u.
+#   - 1 jun 2026: videos.insert (y search.list) pasan a su propio
+#     bucket de cuota, separado del pool compartido de 10.000 u./día.
+#   - 2 nov 2026: "A call to this method has a quota cost of 1 unit
+#     in its own granular quota bucket" y los proyectos no
+#     verificados YA NO quedan bloqueados en modo privado.
+#   La Calculadora de cuota citada por guías 2026 da por defecto
+#   100 llamadas/día a videos.insert; la entrada del 2 nov habla
+#   de 10.000 unidades/día en ese bucket. Se toma el valor
+#   CONSERVADOR (100 llamadas/día) como tope: el plan del proyecto
+#   (3-5/día) queda muy por debajo en cualquier caso, así que la
+#   cuota YA NO es el factor que limita las subidas.
+#   El "100/día, cuesta 1 unidad" de AUDIT-claude-code.md, que la
+#   verificación anterior descartó como falso, era CORRECTO en el
+#   fondo (1 unidad por llamada, ~100/día) y el 1.600 era el valor
+#   viejo. Fuente: https://developers.google.com/youtube/data/revision_history
+youtube_shorts:
+  plan_per_day: 3
+  max_per_day: 5
+  quota_upload_cost_units: 1
+  quota_upload_calls_per_day: 100
+  quota_other_daily_units: 10000
+  quota_source_url: "https://developers.google.com/youtube/data/revision_history"
+  quota_reviewed: "2026-11-17"
+  # plan/max son topes internos del proyecto (prudencia con cuentas
+  # nuevas), no un límite de YouTube: por eso reviewed es null.
+  source_url: null
+  reviewed: null
+  note: "TODO: verificar si YouTube impone un tope diario de subidas distinto de la cuota."
+
+tiktok:
+  plan_per_day: 2
+  max_per_day: 3
+  source_url: null
+  reviewed: null
+  note: "TODO: verificar en la documentación oficial de la Content Posting API el tope diario y si sin auditoría de la app solo se puede publicar en privado."
+
+instagram_reels:
+  plan_per_day: 2
+  max_per_day: 3
+  source_url: null
+  reviewed: null
+  note: "TODO: verificar en la documentación oficial de la Graph API el límite diario de Reels y el tiempo de procesamiento del video."
+
+facebook_reels:
+  plan_per_day: 2
+  max_per_day: 3
+  source_url: null
+  reviewed: null
+  note: "TODO: verificar en la documentación oficial de la Graph API los requisitos de duración, resolución y fps, y el límite diario de Reels."
+
+# Frenos internos del proyecto (no son límites de plataforma).
+min_spacing_hours: 2
+publish_window: [18, 24]
+new_account_daily: 1
