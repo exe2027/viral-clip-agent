@@ -889,6 +889,15 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     if is_paused(platform)[0]:
         return {"action": "paused",
                 "reason": f"{platform} pausada: {is_paused(platform)[1]}"}
+    # 6.5: cuenta nueva (menos de 7 días): ritmo reducido, 1/día.
+    from .accounts import is_new_account
+    if is_new_account(platform):
+        today = queue.published_today(platform)
+        if len(today) >= NEW_ACCOUNT_DAILY:
+            return {"action": "limited",
+                    "reason": (f"cuenta nueva: ritmo reducido "
+                               f"({len(today)}/{NEW_ACCOUNT_DAILY} hoy, "
+                               f"primera semana)")}
     ok, why = check_limits(queue, platform)
     if not ok:
         return {"action": "limited", "reason": why}

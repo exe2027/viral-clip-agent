@@ -68,12 +68,42 @@ def load_identifiers(base_dir=None):
         return out
     for platform, ident in out.items():
         entry = data.get(platform) or {}
-        for key in ("label", "handle", "page_name", "notes"):
+        for key in ("label", "handle", "page_name", "notes",
+                    "created_at"):
             if entry.get(key):
                 ident[key] = entry[key]
         if data.get("last_verified"):
             ident["last_verified"] = data["last_verified"]
     return out
+
+
+def account_age_days(platform, base_dir=None, today=None):
+    """Días desde que se creó la cuenta (None si no se sabe).
+
+    `created_at` (YYYY-MM-DD) vive en accounts.yaml; sin él, la
+    cuenta se trata como antigua (ritmo completo).
+    """
+    from datetime import date
+    ident = load_identifiers(base_dir).get(platform) or {}
+    created = ident.get("created_at")
+    if not created:
+        return None
+    try:
+        born = date.fromisoformat(str(created)[:10])
+    except ValueError:
+        return None
+    ref = today or date.today()
+    return max(0, (ref - born).days)
+
+
+def is_new_account(platform, base_dir=None, today=None):
+    """Cuenta nueva: menos de 7 días desde su creación (6.5).
+
+    La primera semana el ritmo es reducido (NEW_ACCOUNT_DAILY en
+    limits.yaml, 1/día).
+    """
+    age = account_age_days(platform, base_dir, today)
+    return age is not None and age < 7
 
 
 def _token_ok(platform, base_dir):
