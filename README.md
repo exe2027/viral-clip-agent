@@ -12,7 +12,9 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 
 Hace: detecta los mejores momentos de un directo por el **chat** (risas e hype, no por la transcripción), los corta en vertical `1080x1920`, les pone subtítulos, les genera título + descripción + tags para TikTok, Reels y Shorts, y los deja listos para revisar.
 
-No hace: no publica solo. Nada se sube sin que un humano lo apruebe antes. Tampoco detecta los momentos con Gemini: la detección es por el chat, Gemini solo sirve para lo de abajo (visión, opcional).
+Publica solo según la política (sin humano por clip): un clip se publica solo si pasa todos los cheques (viralidad ≥ 50, SEO ≥ 90 por plataforma, sin rojos del semáforo). Al publicar en YouTube Shorts, el fan-out lo intenta también en TikTok, Instagram Reels y Facebook Reels, cada una con sus propias puertas (ver "Fan-out" más abajo). Lo que no pasa queda retenido o en borrador con el motivo visible, nunca se finge una publicación.
+
+No hace: no detecta los momentos con Gemini: la detección es por el chat, Gemini solo sirve para lo de abajo (visión, opcional).
 
 ### 1. Requisitos
 
@@ -69,7 +71,24 @@ python clips_chat_v2.py chat.json --video vod.mp4 --out clips
 1. Abre `runs/<vod-id>/manifest.md` y mira los clips, sus títulos y su puntaje.
 2. Mira los 3 fotogramas de cada clip en `runs/<vod-id>/clips/thumbnails/` antes de elegir título y portada.
 3. Si el título promete algo que no se ve en el clip (una jugada, un juego), no lo uses: el check anti-clickbait de `viral_package.py` lo rechaza y lo degrada a un título de reacción.
-4. Sube a mano a TikTok / Instagram / Facebook / YouTube. La subida automática no está en este repo.
+4. Sube a mano solo lo que quedó en borrador (ver "Fan-out" más abajo): si una plataforma no tiene token, auditoría o URL pública, el paquete manual está en `drafts/<clip>_<plataforma>/`.
+
+### Fan-out: apenas se publica en YouTube, también en las otras 3
+
+Cuando un clip se publica con éxito en YouTube Shorts, el bucle lo encola automáticamente en TikTok, Instagram Reels y Facebook Reels con el mismo clip y su paquete por plataforma (título, descripción y tags propios de cada una). Cada plataforma pasa por sus propias puertas: puntaje por plataforma (viralidad ≥ 50, SEO ≥ 90, SEO < 70 bloqueo duro), cuota y ritmo de `limits.yaml`, circuit breaker, lista blanca en el momento de publicar y pausas. Si una falla o no tiene credenciales, queda en **draft con el motivo visible** (en la cola y en el panel local) y las demás siguen; el fallo de una nunca revierte el publicado de YouTube ni de las otras. Se apaga con `fanout.enabled: false` en `config.yaml`.
+
+| Plataforma | Cómo sube | Qué falta para que publique sola |
+|---|---|---|
+| YouTube Shorts | Data API v3 (`videos.insert`) | OAuth (`client_secrets.json` + token en `tokens/`) |
+| TikTok | Content Posting API, Direct Post con subida de archivo por chunks (sin URL pública) | Token con scope `video.publish` + **app auditada** (sin auditoría, TikTok solo deja publicar en privado y el sistema cae a draft) |
+| Instagram Reels | Graph API: contenedor → esperar FINISHED → publicar | Token + cuenta Profesional + `ig_user_id` (`platform_accounts.instagram_reels.ig_user_id` o `IG_USER_ID`) + **URL HTTPS pública del video** (`public_url.base_url`) |
+| Facebook Reels | Graph API: start → subida por chunks a `rupload.facebook.com` → finish | Page access token + `page_id` (`platform_accounts.facebook_reels.page_id` o `FACEBOOK_PAGE_ID`) |
+
+**URL pública para Instagram.** Instagram no acepta el archivo local por API: Meta descarga el video desde una URL HTTPS pública. Este repo **no sube nada a ningún hosting**: tú sirves el directorio de clips en un hosting estático con HTTPS y configuras la base en `config.yaml > public_url.base_url` (o `CLIP_PUBLIC_BASE_URL` en `.env`). La URL final es base + ruta relativa del clip en el repo (ej: `https://clips.tudominio.com/runs/v1/clips/c1.mp4`). Sin base configurada, Instagram queda en draft con el motivo "sin URL pública configurada".
+
+**Reintentos.** Un fallo transitorio (5xx, rate limit) se reintenta en el siguiente ciclo del bucle, hasta 3 veces; después el ítem va a "failed" para revisión humana. Un draft por falta de credenciales, auditoría o configuración **no** se reintenta a ciegas: queda en draft hasta que lo resuelvas (ver `clipagent doctor`). Si TikTok o Instagram siguen procesando el video, el bucle retoma la misma publicación en el siguiente ciclo sin volver a subir (se guarda el `publish_id` / `container_id`).
+
+**Dónde se ve.** En el panel local (`clipagent panel`): la tabla "Borradores (draft)" muestra plataforma, clip y motivo; "Últimos publicados" muestra lo publicado por plataforma. En la cola (`publish_queue.json`) cada ítem guarda su historial con motivos.
 
 Con cola y aprobación, el flujo es el mismo pero ordenado:
 

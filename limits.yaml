@@ -43,23 +43,23 @@ youtube_shorts:
 tiktok:
   plan_per_day: 2
   max_per_day: 3
-  source_url: null
+  source_url: "https://developers.tiktok.com/doc/content-posting-api-get-started"
   reviewed: null
-  note: "TODO: verificar en la documentación oficial de la Content Posting API el tope diario y si sin auditoría de la app solo se puede publicar en privado."
+  note: "Flujo Direct Post verificado 2026-11-17 en la doc oficial (creator_info -> init FILE_UPLOAD -> PUT por chunks 5-64 MB -> status/fetch; init 6 peticiones/min). Sin auditoría de la app, TikTok solo permite publicar en privado (error unaudited_client_can_only_post_to_private_accounts) y el sistema cae a draft. Tope diario de la plataforma SIN verificar (guías secundarias dicen ~15/día): plan/max son topes internos del proyecto, no un límite de TikTok."
 
 instagram_reels:
   plan_per_day: 2
   max_per_day: 3
-  source_url: null
+  source_url: "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/"
   reviewed: null
-  note: "TODO: verificar en la documentación oficial de la Graph API el límite diario de Reels y el tiempo de procesamiento del video."
+  note: "TODO: la doc oficial de Meta devolvió 403 al verificarla 2026-11-17; el flujo (contenedor -> FINISHED -> publicar, URL HTTPS pública obligatoria) está corroborado por varias guías que citan esa doc. Sin verificar: límite diario (50 vs 100 según la fuente) y duración máxima por API (90 s vs 15 min). plan/max son topes internos del proyecto."
 
 facebook_reels:
   plan_per_day: 2
   max_per_day: 3
-  source_url: null
+  source_url: "https://developers.facebook.com/docs/video-api/guides/reels-publishing"
   reviewed: null
-  note: "TODO: verificar en la documentación oficial de la Graph API los requisitos de duración, resolución y fps, y el límite diario de Reels."
+  note: "TODO: la doc oficial de Meta devolvió 403 al verificarla 2026-11-17; el flujo en 3 fases (start -> rupload.facebook.com -> finish) está corroborado por varias guías que citan esa doc. Requisitos del video (MP4 9:16, 3-90 s) y límite de 30 Reels/día por Página según esas guías, sin verificar en la fuente oficial. plan/max son topes internos del proyecto."
 
 # Frenos internos del proyecto (no son límites de plataforma).
 min_spacing_hours: 2

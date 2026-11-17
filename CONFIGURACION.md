@@ -47,6 +47,10 @@ Solo se cortan y se publican clips de streamers que están en esta lista. Estar 
 | ¿Ya tienes cuenta de TikTok? ¿Cuál es el @? ¿La app para publicar por API está aprobada? | Ej: @elclipdegta6____bits, creada, app sin aprobar | TikTok ES @elclipdegta6____bits, creada, app sin aprobar | `clipagent setup` / `clipagent doctor` |
 | ¿Ya tienes cuenta de Instagram? ¿Es profesional? ¿Está vinculada a una Página de Facebook? | Ej: @elclipdegta6, profesional, vinculada a Elclipdegta6 | Instagram @elclipdegta6, profesional, vinculada | `clipagent setup` / `clipagent doctor` |
 | ¿Ya tienes Página de Facebook? ¿Cuál es su nombre? | Ej: Elclipdegta6, creada | Página Elclipdegta6, creada | `clipagent setup` / `clipagent doctor` |
+| ¿Cuál es el ig_user_id de Instagram (para publicar Reels por API)? | El número de la cuenta en Meta (Graph API Explorer o la configuración de la app) | Sin configurar (Instagram en draft) | `config.yaml > platform_accounts.instagram_reels.ig_user_id` o `IG_USER_ID` en `.env` |
+| ¿Cuál es el page_id de la Página de Facebook (para publicar Reels por API)? | El número de la Página en Meta | Sin configurar (Facebook en draft) | `config.yaml > platform_accounts.facebook_reels.page_id` o `FACEBOOK_PAGE_ID` en `.env` |
+| ¿Dónde están servidos los clips con HTTPS (para que Instagram los descargue)? | La base de tu hosting estático, ej: https://clips.tudominio.com/ | Sin configurar (Instagram en draft) | `config.yaml > public_url.base_url` o `CLIP_PUBLIC_BASE_URL` en `.env` |
+| Al publicar en YouTube, ¿se publica también en TikTok, Instagram y Facebook automáticamente (fan-out)? | sí / no | Sí (cada plataforma con sus propias puertas; el fallo de una no bloquea a las otras) | `config.yaml > fanout.enabled` |
 | ¿Cuántos clips al día se pueden publicar por plataforma? | Números por plataforma | YouTube 3-5, TikTok 1, Instagram 1, Facebook 1 (cuentas nuevas) | Límites de publicación (ver README) |
 | ¿En qué horario se publica? | Ej: 18:00-23:59 hora de Chile | 18:00-23:59, hora de Chile | Configuración de publicación |
 
