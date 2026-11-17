@@ -24,6 +24,11 @@ def build_parser():
 
     sub.add_parser("doctor", help="Comprueba todas las conexiones "
                    "(solo lectura, sin publicar nada)")
+
+    p_add = sub.add_parser(
+        "add", help="Agrega un streamer desde su link a streamers.yaml")
+    p_add.add_argument("link", help="twitch.tv/<canal>, kick.com/<canal> "
+                       "o link de VOD")
     return parser
 
 
@@ -38,6 +43,11 @@ def main(argv=None):
     if args.command == "doctor":
         from .doctor import run_doctor
         return run_doctor()
+    if args.command == "add":
+        from .links import add_link
+        ok, msg = add_link(args.link)
+        print(msg)
+        return 0 if ok else 1
     parser.print_help()
     return 1
 
