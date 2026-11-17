@@ -200,6 +200,16 @@ debe llamar a `gate_publish()` / `record published_ok|fail` y a
 (bloque 1) usa el **mismo archivo `queue.kill`** como kill-switch:
 su `kill_switch_active()` y el de este módulo miran el mismo flag.
 
+**Arranque gradual (6.7, 2026-11-17):** `autopublish.mode` en
+config.yaml elige entre `gradual` (por defecto) y `full`.
+En `gradual`, la política (`clipagent/policy.py`) consulta el gate
+de este contador antes de publicar, y el bucle de publicación
+(`clipagent publish loop`) registra cada resultado con
+`published_ok` / `published_fail` en `state/counter.json`, así las
+fases y las rachas avanzan solas con la publicación real. En `full`
+se publica según la política (6.3) sin pasar por las fases y el
+contador no se toca.
+
 ## 6. Estado en disco (`state/counter.json`)
 
 ```json
