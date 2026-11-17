@@ -436,13 +436,84 @@ class PublishQueue:
 
         El flujo manual usa solo "approved"; el bucle automático
         (6.3) pasa ("approved", "queued") y la política decide.
-        El orden por prioridad llega en 6B.1 (order_queue).
+        6B.1: la cola NUNCA es FIFO — el orden lo da
+        priority.order_queue por plataforma (el SEO cambia por
+        plataforma, así que la prioridad también). Los ítems sin
+        manifiesto (sin puntaje) quedan al final, en su orden.
         """
         now = _now_chile().isoformat()
-        return [i for i in self.data["items"]
-                if i["state"] in states
-                and (platform is None or i["platform"] == platform)
-                and (not i.get("scheduled_for") or i["scheduled_for"] <= now)]
+        due = [i for i in self.data["items"]
+               if i["state"] in states
+               and (platform is None or i["platform"] == platform)
+               and (not i.get("scheduled_for")
+                    or i["scheduled_for"] <= now)]
+        if platform is None:
+            return due
+        scored, no_score = _order_items(due, platform)
+        return [s["_item"] for s in scored] + no_score
+
+    def scored_items(self, platform, states=("approved", "queued")):
+        """Ítems con su desglose de prioridad (6B.1/6B.6).
+
+        Devuelve la lista de order_queue (cada entrada trae
+        ``priority`` con el desglose, ``status``, ``status_reason``,
+        ``queue_position``, ``left_behind`` y ``auto_archive``) con
+        la clave ``_item`` apuntando al ítem de la cola. Los ítems
+        sin manifiesto no se puntúan y no aparecen aquí.
+        """
+        now = _now_chile().isoformat()
+        due = [i for i in self.data["items"]
+               if i["state"] in states
+               and i["platform"] == platform
+               and (not i.get("scheduled_for")
+                    or i["scheduled_for"] <= now)]
+        scored, _no_score = _order_items(due, platform)
+        return scored
+
+
+def _clip_scores(item, platform):
+    """Puntajes de un ítem para order_queue, o None sin manifiesto.
+
+    Lee viralidad, SEO de la plataforma, múltiplo de chat, vod_id,
+    inicio y fecha de creación del ítem (para la penalización por
+    edad), y si hay override registrado en el manifiesto.
+    """
+    clip, manifest = load_clip_package(item["clip"])
+    if clip is None:
+        return None
+    seo_entry = (clip.get("seo_scores") or {}).get(platform) or {}
+    seo = seo_entry.get("score") if isinstance(seo_entry, dict) else seo_entry
+    overrides = {o.get("platform")
+                 for o in (manifest or {}).get("seo_overrides", [])}
+    history = item.get("history") or [{}]
+    return {
+        "virality": (clip.get("viral_score") or {}).get("total", 0),
+        "seo": seo if seo is not None else 0,
+        "chat_multiple": (clip.get("viral") or {}).get("viral_multiple") or 1.0,
+        "vod_id": item.get("vod_id") or (manifest or {}).get("vod_id") or "",
+        "start_sec": clip.get("start", 0),
+        "created_at": history[0].get("at", ""),
+        "uploaded": item["state"] == "published",
+        "seo_override": platform in overrides,
+    }
+
+
+def _order_items(items, platform):
+    """(scored, no_score): ítems ordenados por priority.order_queue.
+
+    `scored` es la salida de order_queue con ``_item`` apuntando al
+    ítem original; `no_score` son los ítems sin manifiesto, en su
+    orden original, que quedan al final de la cola.
+    """
+    from .priority import order_queue
+    clips, no_score = [], []
+    for item in items:
+        scores = _clip_scores(item, platform)
+        if scores is None:
+            no_score.append(item)
+            continue
+        clips.append(dict(scores, _item=item))
+    return order_queue(clips, platform), no_score
 
 
 def check_limits(queue, platform):
