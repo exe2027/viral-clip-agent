@@ -223,24 +223,52 @@ def run(cmd, what: str):
     return r
 
 
-TWITCH_CLI_DEFAULT = os.path.expanduser(
-    "~/workspace/tools/twitchdownloader/TwitchDownloaderCLI")
-
-
 def twitch_cli() -> str:
-    """Ruta a TwitchDownloaderCLI: del PATH si está, si no la ruta
-    conocida de este equipo (v1.56.5, NO está en el PATH)."""
+    """Ruta a TwitchDownloaderCLI.
+
+    Precedencia: variable TWITCH_DL_CLI > config.yaml
+    (tools.twitch_downloader_cli) > PATH. La ruta fija
+    ``~/workspace/...`` de antes no existe en otros equipos y
+    fallaba con un error poco claro: ahora, si no está en ningún
+    lado, levanta RuntimeError diciendo dónde ponerla.
+    """
+    env_path = (os.environ.get("TWITCH_DL_CLI") or "").strip()
+    if env_path:
+        if os.path.isfile(env_path):
+            return env_path
+        raise RuntimeError(
+            f"TWITCH_DL_CLI apunta a {env_path!r} pero ese archivo no "
+            "existe. Corrige la variable o quítala.")
+    cfg_path = ""
+    if load_config:
+        try:
+            cfg_path = (((load_config() or {}).get("tools") or {})
+                        .get("twitch_downloader_cli") or "").strip()
+        except Exception:
+            cfg_path = ""
+    if cfg_path:
+        if os.path.isfile(cfg_path):
+            return cfg_path
+        raise RuntimeError(
+            "config.yaml tools.twitch_downloader_cli apunta a "
+            f"{cfg_path!r} pero ese archivo no existe. Corrige la "
+            "ruta en config.yaml.")
     found = shutil.which("TwitchDownloaderCLI")
     if found:
         return found
-    if os.path.isfile(TWITCH_CLI_DEFAULT):
-        return TWITCH_CLI_DEFAULT
-    return "TwitchDownloaderCLI"
+    raise RuntimeError(
+        "No se encontró TwitchDownloaderCLI: no está en el PATH, ni "
+        "en TWITCH_DL_CLI ni en config.yaml "
+        "(tools.twitch_downloader_cli). Instálalo o pon su ruta en "
+        "uno de esos dos sitios.")
 
 
 def twitch_cli_available() -> bool:
-    cli = twitch_cli()
-    return shutil.which(cli) is not None or os.path.isfile(cli)
+    try:
+        twitch_cli()
+    except RuntimeError:
+        return False
+    return True
 
 
 def inspect_chat_json(chat_path: str, vod_id: str = None):
@@ -634,8 +662,9 @@ def main() -> int:
     # TwitchDownloaderCLI solo hace falta para Twitch. Kick usa su API + ffmpeg.
     needs_download = bool(vod_id and (not args.chat or (not args.video and not args.dry_run)))
     if needs_download and platform == "twitch" and not twitch_cli_available():
-        print("Error: TwitchDownloaderCLI no está en el PATH ni en "
-              "~/workspace/tools/twitchdownloader/.", file=sys.stderr)
+        print("Error: TwitchDownloaderCLI no está en el PATH, ni en "
+              "TWITCH_DL_CLI ni en config.yaml "
+              "(tools.twitch_downloader_cli).", file=sys.stderr)
         return 1
     if shutil.which("ffmpeg") is None and not args.dry_run:
         print("Error: FFmpeg no está en el PATH.", file=sys.stderr)

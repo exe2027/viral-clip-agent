@@ -34,6 +34,12 @@ DEFAULT_CONFIG = {
         "es": ["#GTA6", "#GTA6Clips", "#ElClipDeGTA6", "#GTA", "#RockstarGames", "#gaming"],
         "en": ["#GTA6", "#GTA6Clips", "#GTA", "#RockstarGames", "#gaming", "#clips"],
     },
+    # Herramientas externas (rutas). Vacío = buscar en el PATH.
+    # twitch_downloader_cli: ruta a TwitchDownloaderCLI si no está
+    # en el PATH; también vale la variable TWITCH_DL_CLI (manda).
+    "tools": {
+        "twitch_downloader_cli": "",
+    },
     "clips": {
         "crop": "center",
         "crf": 23,

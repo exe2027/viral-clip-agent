@@ -7,6 +7,14 @@
 # (ver el documento de auditoría en el repo). No están aquí: cambian
 # con frecuencia y pertenecen a limits.yaml, no a la config del canal.
 
+# Herramientas externas (rutas). Vacío = buscar en el PATH.
+# twitch_downloader_cli: ruta a TwitchDownloaderCLI si no está en
+# el PATH; también vale la variable TWITCH_DL_CLI (manda sobre esto).
+# La ruta fija ~/workspace/tools/... de antes no existe en otros
+# equipos: no se hardcodea ninguna ruta de un equipo concreto.
+tools:
+  twitch_downloader_cli: ""
+
 # Lista blanca de streamers (revisión interna, bloque 1, 2026-11-16):
 # solo estos canales se pueden encolar en jobqueue.py. REGLA DEL
 # USUARIO (2026-11-16): estar en esta lista = permiso ya dado por
