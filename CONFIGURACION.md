@@ -82,7 +82,8 @@ Solo se cortan y se publican clips de streamers que están en esta lista. Estar 
 
 | Pregunta | Para qué es | Por defecto | Dónde va |
 |---|---|---|---|
-| ¿Tienes API key de Gemini? | Solo para la visión: vetar títulos que prometen algo que no se ve en pantalla, con Gemini Flash-Lite (3 fotogramas por clip). La detección del momento es por el chat, nunca por Gemini. Sin key, la visión queda apagada y la app funciona igual. | Sin key (visión apagada) | `.env > GEMINI_API_KEY` |
+| ¿Tienes API key de Gemini? | Solo para la visión, con Gemini 3.5 Flash-Lite (3 fotogramas por clip): vetar títulos que prometen algo que no se ve en pantalla, y elegir el mejor frame para la miniatura (`thumbnails.py --vision`). La detección del momento es por el chat, nunca por Gemini. Sin key, la visión queda apagada y la app funciona igual. | Sin key (visión apagada) | `.env > GEMINI_API_KEY` |
+| ¿Quieres que Gemini elija el mejor frame? | Sí / no | Sí (con `--vision`; sin key cae al fotograma del payoff) | `thumbnails.py --vision` |
 | ¿Cómo se crea la key de Gemini, si no la tienes? | En https://aistudio.google.com, Get API key, Create API key in new project. Gratis, sin tarjeta. **No toques "Set up billing" ni "Upgrade": esa pantalla pide tarjeta y no es la de la key gratis.** Tener Gemini Pro (la app) no te da una API key sola. Cuesta ~$0,0006 por clip, capa gratuita 500 peticiones/día. | — | — |
 | ¿Tienes Twitch Client ID y Client Secret? | Solo para el monitor de influencers (`watcher.py`) por la vía oficial Helix. Sin ellos, el monitor usa la ruta pública y sirve igual para vigilar. | Sin credenciales | `.env > TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` |
 | ¿Tienes alguna otra API que quieras usar? | Ej: ElevenLabs, OpenAI, fal.ai (OpenShorts las pide, este repo no) | Ninguna | `.env` (nunca en el repo) |
