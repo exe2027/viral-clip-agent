@@ -833,7 +833,7 @@ def _ass_time(seconds):
 
 
 def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
-                       offset=0.0, max_end=None):
+                       offset=0.0, max_end=None, game_voice=None):
     """Convierte bloques SRT en un ASS karaoke palabra por palabra.
 
     Cada bloque se reparte entre sus palabras en proporción a su
@@ -845,7 +845,17 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
     proporcional basta para el efecto viral. ``offset`` desplaza los
     tiempos (p. ej. al quemar sobre un recorte del clip) y
     ``max_end`` recorta los bloques que se salen del recorte.
+
+    ``game_voice`` (idea de Uri, 2026-11-17): tramos de voz del
+    juego (ver game_voice.py). Los bloques que caen dentro salen
+    con el estilo "Game" (cursiva, palabra activa azul #7FE3FF,
+    como Uri) y con la etiqueta "JUEGO:" delante: es el subtítulo
+    propio del juego, distinto del del streamer. Esos bloques NO
+    cuentan en la comprobación final de subtítulos del streamer
+    (ver game_voice.words_outside_game_voice).
     """
+    from .game_voice import normalize_game_voice
+
     font_color = style.get("font_color", "#FFFFFF")
     active_color = style.get("active_word_color") or "#FFFF00"
     border_color = style.get("border_color", "#000000")
@@ -853,6 +863,16 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
     fontsize = style.get("fontsize", 64)
     margin_v = style.get("margin_v", 140)
     bold = -1 if style.get("bold", True) else 0
+    game_spans = normalize_game_voice(
+        game_voice, max_end) if game_voice else []
+    game_style = (
+        f"Style: Game,{font_name},{fontsize},"
+        f"{hex_to_ass_color('#7FE3FF', 1.0)},"
+        f"{hex_to_ass_color(font_color, 1.0)},"
+        f"{hex_to_ass_color(border_color, 1.0)},"
+        f"{hex_to_ass_color('#000000', 0.0)},"
+        f"0,1,0,0,100,100,0,0,1,{border_width},0,2,10,10,{margin_v},1\n"
+    ) if game_spans else ""
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -871,6 +891,7 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
         f"{hex_to_ass_color(border_color, 1.0)},"
         f"{hex_to_ass_color('#000000', 0.0)},"
         f"{bold},0,0,0,100,100,0,0,1,{border_width},0,2,10,10,{margin_v},1\n"
+        + game_style +
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
@@ -889,6 +910,12 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
             end = min(end, max_end)
         if end <= start:
             continue
+        # Voz del juego: estilo Game + etiqueta JUEGO (ver docstring).
+        is_game = any(s["start"] <= (start + end) / 2.0 < s["end"]
+                      for s in game_spans)
+        block_style = "Game" if is_game else "Karaoke"
+        if is_game and not text.strip().startswith("JUEGO:"):
+            text = "JUEGO: " + text.strip()
         # Las llaves serían etiquetas de anulación en ASS: se
         # neutralizan para que el texto se vea tal cual.
         words = [w.replace("{", "(").replace("}", ")")
@@ -908,7 +935,7 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
         karaoke_text = "".join(
             f"{{\\k{d}}}{w} " for d, w in zip(durs, words)).rstrip()
         lines.append(
-            f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Karaoke,,"
+            f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},{block_style},,"
             f"0,0,0,,{karaoke_text}\n"
         )
     return "".join(lines)
@@ -1029,7 +1056,8 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
                    border_color="#000000", border_width=3, margin_v=140,
                    style=None, config=None, offset=0.0,
                    context_text=None,
-                   context_duration=CONTEXT_BANNER_DEFAULT_DURATION):
+                   context_duration=CONTEXT_BANNER_DEFAULT_DURATION,
+                   game_voice=None):
     """Quema el SRT en el vídeo con ffmpeg (estilo openshorts, adaptado
     a vertical 1080x1920: PlayRes explícito y fuente grande).
 
@@ -1049,6 +1077,11 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
     de contexto arriba los primeros ``context_duration`` segundos
     (ver context_banner_filter), también con karaoke. Sin él, el
     quemado es exactamente el de siempre.
+
+    Voz del juego (idea de Uri, 2026-11-17): ``game_voice`` (tramos
+    de game_voice.py) marca los bloques del juego en karaoke con
+    el estilo "Game" (cursiva, azul #7FE3FF, etiqueta "JUEGO:").
+    Sin ``game_voice`` el quemado es exactamente el de siempre.
     """
     if style:
         cfg = config or {}
@@ -1102,7 +1135,7 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
         duration = get_duration(video_path)
         ass_text = srt_to_karaoke_ass(
             parse_srt(srt_path), ass_style, font_name=font_name,
-            offset=offset, max_end=duration)
+            offset=offset, max_end=duration, game_voice=game_voice)
         with tempfile.NamedTemporaryFile(
                 suffix=".ass", delete=False,
                 mode="w", encoding="utf-8") as tmp:

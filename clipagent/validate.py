@@ -29,6 +29,8 @@ KNOWN_TOP_KEYS = {
     "auto_approve", "scoring", "breaker", "metadata", "live",
     # Fan-out: se validan abajo.
     "fanout", "public_url", "platform_accounts",
+    # Señales de Uri (2026-11-17): solo diagnóstico, no puntaje.
+    "signals",
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
     # lista canónica en config.yaml; se valida en validate_config.
     "rules",
@@ -275,6 +277,26 @@ def validate_config(cfg, source="config.yaml"):
                 not all(_is_int(x) and x >= 0 for x in box):
             c.err("facecam_box",
                   "debe ser null o [x, y, w, h] con enteros >= 0")
+
+    # Señales de Uri (2026-11-17): solo diagnóstico en el manifiesto;
+    # no tocan viralidad, prioridad ni filtros duros. Valores fuera
+    # de rango son error de config, no silencio.
+    c.check(cfg, "signals", "dict")
+    c.check(cfg, "signals.heatmap", "dict")
+    c.check(cfg, "signals.heatmap.enabled", "bool")
+    for k in ("bucket_s", "top_n", "min_separation_s", "max_gap_s"):
+        c.check(cfg, f"signals.heatmap.{k}", "int", minimum=1)
+    c.check(cfg, "signals.motion", "dict")
+    c.check(cfg, "signals.motion.enabled", "bool")
+    c.check(cfg, "signals.motion.threshold", "num", minimum=0)
+    c.check(cfg, "signals.motion.frozen_max_pct", "num",
+            minimum=0, maximum=100)
+    c.check(cfg, "signals.motion.strong_virality_min", "num",
+            minimum=0, maximum=100)
+    c.check(cfg, "signals.game_voice", "dict")
+    c.check(cfg, "signals.game_voice.enabled", "bool")
+    c.check(cfg, "signals.game_voice.silence_s", "num", minimum=0)
+    c.check(cfg, "signals.game_voice.active_dbfs", "num")
 
     # watcher / reel_study
     c.check(cfg, "watcher", "dict")

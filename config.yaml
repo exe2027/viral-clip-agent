@@ -331,6 +331,29 @@ scoring:
   audio_weight: 1.0
   audio_weight_kick: 1.5
 
+# Señales de Uri (clipper-directos, 2026-11-17): heatmap de YouTube,
+# % de juego en movimiento y voz del juego. Son DIAGNÓSTICO en el
+# manifiesto (signals.*): NO cambian la fórmula de viralidad (7
+# componentes), ni la de prioridad, ni los filtros duros, ni el
+# ritmo anti-ban. Sin yt-dlp o sin heatmap, el heatmap queda
+# "available: false" y el pipeline sigue solo con el chat.
+signals:
+  heatmap:
+    enabled: true         # leer el heatmap si el VOD es de YouTube
+    bucket_s: 10          # ancho del bucket (como Uri)
+    top_n: 15             # picos a devolver
+    min_separation_s: 60  # separación mínima entre picos
+    max_gap_s: 30         # un pico de heatmap solo confirma el pico de chat si está a <= 30 s
+  motion:
+    enabled: true         # medir % de movimiento en el clip cortado
+    threshold: 3.0        # diferencia media por segundo para "se mueve" (como Uri GAME_MOV)
+    frozen_max_pct: 10.0  # 0-10% = vídeo en pausa / pantalla fija (criterio de Uri)
+    strong_virality_min: 85  # viralidad >= 85 (urgente) para que un clip congelado valga
+  game_voice:
+    enabled: true         # detectar voz del juego (silencio del streamer + audio activo)
+    silence_s: 2.0        # el streamer calla >= 2 s mientras suena el juego
+    active_dbfs: -45.0    # RMS por encima de esto = hay sonido de juego
+
 # Aprobación automática por política (6.3): sin humano por clip.
 # min_band: null = sin requisito de banda.
 auto_approve:

@@ -154,6 +154,29 @@ DEFAULT_CONFIG = {
         "audio_weight": 1.0,
         "audio_weight_kick": 1.5,
     },
+    # Señales de Uri (clipper-directos, 2026-11-17): heatmap, % de
+    # movimiento y voz del juego. Solo diagnóstico en el manifiesto;
+    # NO tocan viralidad, prioridad, filtros duros ni ritmo.
+    "signals": {
+        "heatmap": {
+            "enabled": True,
+            "bucket_s": 10,
+            "top_n": 15,
+            "min_separation_s": 60,
+            "max_gap_s": 30,
+        },
+        "motion": {
+            "enabled": True,
+            "threshold": 3.0,
+            "frozen_max_pct": 10.0,
+            "strong_virality_min": 85.0,
+        },
+        "game_voice": {
+            "enabled": True,
+            "silence_s": 2.0,
+            "active_dbfs": -45.0,
+        },
+    },
     # Aprobación automática por política (6.3): sin humano por clip.
     # min_band: null = sin requisito de banda; descartar | revisar |
     # prioritario | urgente (bandas de viral_score).

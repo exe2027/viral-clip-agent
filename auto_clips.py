@@ -628,6 +628,18 @@ def main() -> int:
                    help="Bloque 6: RMS por segundo en la ventana del candidato y veredicto "
                         "confirmar/sospechar (chat alto + audio plano = sospechar spam); "
                         "se corta igual, solo se marca en el manifiesto")
+    p.add_argument("--no-heatmap", dest="heatmap", action="store_false",
+                   default=None,
+                   help="No leer el heatmap de YouTube (default: lo que diga "
+                        "config.yaml signals.heatmap.enabled, true)")
+    p.add_argument("--no-motion", dest="motion", action="store_false",
+                   default=None,
+                   help="No medir el % de juego en movimiento (default: "
+                        "config.yaml signals.motion.enabled, true)")
+    p.add_argument("--no-game-voice", dest="game_voice", action="store_false",
+                   default=None,
+                   help="No detectar voz del juego (default: config.yaml "
+                        "signals.game_voice.enabled, true)")
     p.add_argument("--precise-cut", dest="precise_cut", action="store_true",
                    default=None,
                    help="Afinar inicio/fin por frase/silencio dentro del "
@@ -667,6 +679,20 @@ def main() -> int:
                    else bool(clip_cfg.get("precise_cut", True)))
     seg_len = args.pre_roll + max(target_dur, max_dur)
     human_scores = {}
+    # Señales de Uri (2026-11-17): heatmap, movimiento y voz del
+    # juego. Solo diagnóstico en el manifiesto: no tocan viralidad,
+    # prioridad, filtros duros ni ritmo. La CLI apaga cada una; si
+    # no, manda config.yaml signals.*.enabled.
+    _sig_cfg = (cfg or {}).get("signals") or {}
+    use_heatmap = (args.heatmap if args.heatmap is not None
+                   else bool(_sig_cfg.get("heatmap", {}).get("enabled", True)))
+    use_motion = (args.motion if args.motion is not None
+                  else bool(_sig_cfg.get("motion", {}).get("enabled", True)))
+    use_game_voice = (args.game_voice if args.game_voice is not None
+                      else bool(_sig_cfg.get("game_voice", {}).get("enabled", True)))
+    heatmap_cfg = _sig_cfg.get("heatmap", {}) or {}
+    motion_cfg = _sig_cfg.get("motion", {}) or {}
+    game_voice_cfg = _sig_cfg.get("game_voice", {}) or {}
     if args.human_scores:
         with open(args.human_scores, encoding="utf-8") as f:
             human_scores = json.load(f)
@@ -892,6 +918,27 @@ def main() -> int:
                 "seo_overrides": [], "clips": [],
                 "descartados": discarded,
                 "status": "ok" if peaks else "sin_momentos_virales"}
+    # Señal de Uri (2026-11-17): heatmap de YouTube ("lo más
+    # repetido"), UNA sola lectura de metadatos con yt-dlp para
+    # todo el VOD. Sin yt-dlp, sin heatmap o si el VOD no es de
+    # YouTube, queda available False y el pipeline sigue solo con
+    # el chat: nunca tumba el job.
+    heatmap_result = {"available": False, "source": "youtube_heatmap",
+                      "peaks": [], "reason": "heatmap desactivado"}
+    if use_heatmap and args.vod:
+        try:
+            from clipagent.heatmap import heatmap_for_url
+            heatmap_result = heatmap_for_url(
+                args.vod,
+                top_n=int(heatmap_cfg.get("top_n", 15)),
+                min_separation=int(heatmap_cfg.get("min_separation_s", 60)))
+            print(f"Heatmap: {heatmap_result['reason']}")
+        except Exception as e:  # noqa: BLE001 - el heatmap nunca tumba el job
+            heatmap_result = {"available": False,
+                              "source": "youtube_heatmap", "peaks": [],
+                              "reason": f"no se pudo leer el heatmap: {e}"}
+            print(f"Heatmap: {heatmap_result['reason']}", file=sys.stderr)
+    manifest["heatmap"] = heatmap_result
     # 7.1: candidatos para la selección con LLM (una llamada con
     # todos, tras el corte) + datos para recalcular el viral_score
     # con el hook del LLM. Sin LLM, el manifiesto queda igual.
@@ -1050,6 +1097,7 @@ def main() -> int:
         audio_info = None
         precise_info = None
         transcript = None
+        window_path = None
         if args.audio_check or use_precise:
             window_path = cut_source
             # El pico dentro de la ventana: pre_roll si la ventana es el
@@ -1146,6 +1194,58 @@ def main() -> int:
                           file=sys.stderr)
             if tmp_window and os.path.isfile(tmp_window):
                 os.remove(tmp_window)
+        # Señal de Uri (2026-11-17): voz del juego, estimada ANTES
+        # del corte para que el layout "game" se aplique al cortar.
+        # Se detecta sobre la ventana ya descargada (transcripción
+        # + RMS + movimiento): el streamer calla >= 2 s mientras el
+        # audio sigue activo y el juego se mueve. Los tramos pasan
+        # de coordenadas de ventana a coordenadas de clip (el clip
+        # empieza en precise_info["start"] dentro de la ventana, o
+        # en 0 sin corte preciso). Sin transcripción no se estima
+        # nada a ciegas. La detección es "estimada" y sin texto:
+        # las palabras del juego no se inventan.
+        game_voice_clip = []
+        if use_game_voice and transcript is not None and window_path \
+                and os.path.isfile(window_path):
+            try:
+                from clipagent.audio import rms_per_second as _rms_ps
+                from clipagent.game_voice import (
+                    detect_game_voice as _detect_gv,
+                    normalize_game_voice as _norm_gv)
+                from clipagent.motion import measure_motion as _mm_w
+                _win_dur = None
+                try:
+                    from clipagent.precise_cut import (
+                        get_video_duration as _gvd_w)
+                    _win_dur = _gvd_w(window_path)
+                except Exception:
+                    _win_dur = None
+                _motion_w = _mm_w(
+                    window_path, duration=_win_dur,
+                    threshold=float(motion_cfg.get("threshold", 3.0)))
+                _spans_w = _detect_gv(
+                    transcript,
+                    audio_rms=_rms_ps(window_path),
+                    clip_duration=_win_dur,
+                    silence_s=float(game_voice_cfg.get("silence_s", 2.0)),
+                    active_dbfs=float(game_voice_cfg.get("active_dbfs", -45.0)),
+                    motion_per_second=(_motion_w.get("motion_per_second")
+                                       if _motion_w.get("available") else None),
+                    motion_threshold=float(motion_cfg.get("threshold", 3.0)))
+                _offset = (precise_info["start"]
+                           if precise_info is not None else 0.0)
+                game_voice_clip = _norm_gv(
+                    [[s - _offset, e - _offset] for s, e in
+                     [(sp["start"], sp["end"]) for sp in _spans_w]],
+                    cut_dur, source="estimada")
+                if game_voice_clip:
+                    print(f"    Voz del juego (estimada): "
+                          f"{len(game_voice_clip)} tramo(s) "
+                          f"{[(s['start'], s['end']) for s in game_voice_clip]}")
+            except Exception as e:  # noqa: BLE001 - nunca tumba el job
+                print(f"    Voz del juego: no se pudo estimar ({e}); "
+                      "se sigue sin ella.", file=sys.stderr)
+                game_voice_clip = []
         # Corte con layout responsive (regla del proyecto): decide por
         # fotogramas muestreados (stack / pip / center, por tramos si
         # cambia dentro del clip). Sin layout.py, recorte centrado.
@@ -1158,6 +1258,10 @@ def main() -> int:
                 # sobre el detectado.
                 if vod_box and not layout_cfg.get("facecam_box"):
                     layout_cfg["facecam_box"] = vod_box
+                if game_voice_clip:
+                    # Tramos de voz del juego: esos tramos se cortan
+                    # en layout "game" (juego a pantalla completa).
+                    layout_cfg["game_voice"] = game_voice_clip
                 layout_decision = cut_clip_with_layout(
                     cut_source, cut_start, cut_dur, out_file,
                     crf=args.crf, preset=args.preset, crop=args.crop,
@@ -1294,6 +1398,7 @@ def main() -> int:
         viral_score = None
         signals = None
         seo_scores = None
+        motion_result = None
         if viral_score_mod:
             # `multiple` es el del filtro previo (mismo cálculo, con
             # suelo 1.0 en la mediana): no se recalcula aquí.
@@ -1337,11 +1442,38 @@ def main() -> int:
                                for w in seg.get("words", [])]}
                     for seg in transcript.get("segments", [])]}
             try:
+                # Señales de Uri (2026-11-17): el movimiento se mide
+                # sobre el clip ya cortado (1 fps, una pasada de
+                # ffmpeg); el heatmap se leyó una vez para todo el
+                # VOD; la voz del juego se estimó antes del corte.
+                # Todo diagnóstico: no cambia viralidad, prioridad
+                # ni filtros duros.
+                motion_result = None
+                if use_motion and os.path.isfile(out_file):
+                    try:
+                        from clipagent.motion import measure_motion
+                        motion_result = measure_motion(
+                            out_file, duration=cut_dur,
+                            threshold=float(motion_cfg.get("threshold", 3.0)))
+                        if motion_result.get("available"):
+                            print(f"    Movimiento: "
+                                  f"{motion_result['motion_pct']}% "
+                                  f"({motion_result['reason']})")
+                    except Exception as e:  # noqa: BLE001 - nunca tumba el job
+                        print(f"    Movimiento: no se pudo medir ({e}); "
+                              "se sigue sin él.", file=sys.stderr)
+                        motion_result = None
                 signals = compute_signals(
                     detail=detail[peak_ts], peak_ts=peak_ts,
                     clip_start=clip_start_abs, clip_duration=cut_dur,
                     transcript=transcript_clip, video_path=out_file,
-                    lang=args.lang if args.lang in ("es", "en") else "es")
+                    lang=args.lang if args.lang in ("es", "en") else "es",
+                    heatmap_peaks=(heatmap_result.get("peaks")
+                                   if heatmap_result.get("available") else None),
+                    motion=motion_result,
+                    game_voice=game_voice_clip,
+                    virality_total=(viral_score["total"]
+                                    if viral_score else None))
             except Exception as e:
                 print(f"    Señales MVP: falló ({e}); se sigue sin señales.",
                       file=sys.stderr)
@@ -1372,6 +1504,12 @@ def main() -> int:
             "viral_score": viral_score,
             "signals": signals,
             "seo_scores": seo_scores,
+            # Señales de Uri (2026-11-17, solo diagnóstico): tramos
+            # de voz del juego (estimados, sin texto inventado) y %
+            # de movimiento del clip. No cambian viralidad, prioridad
+            # ni filtros duros.
+            "game_voice": game_voice_clip,
+            "motion": motion_result,
             "moment_card": moment_card,
             "visible": visible,
             "visible_reason": visible_reason,
@@ -1486,6 +1624,20 @@ def main() -> int:
         if ss:
             lines.append("- SEO: " + " | ".join(
                 f"{p}: {r['score']} ({r['status']})" for p, r in ss.items()))
+        sig = c.get("signals") or {}
+        uri_bits = []
+        if sig.get("heatmap_peak_s") is not None:
+            uri_bits.append(f"heatmap {sig['heatmap_peak_s']}s "
+                            f"(score {sig.get('heatmap_score')})")
+        if sig.get("motion_pct") is not None:
+            uri_bits.append(f"movimiento {sig['motion_pct']}% "
+                            f"({sig.get('motion_flag')})")
+        if c.get("game_voice"):
+            uri_bits.append("voz del juego: " + ", ".join(
+                f"{s['start']}-{s['end']}s" + (" (estimada)" if s.get("estimated") else "")
+                for s in c["game_voice"]))
+        if uri_bits:
+            lines.append("- Señales Uri: " + " | ".join(uri_bits))
         lines += [""]
     with open(os.path.join(out_dir, "manifest.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

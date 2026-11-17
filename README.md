@@ -227,6 +227,70 @@ Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65
 python auto_clips.py https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9 --top-n 5 --audio-check --precise-cut
 ```
 
+## Señales de Uri (2026-11-17): heatmap + movimiento + voz del juego
+
+Tres ideas de `clipper-directos` de Uri Cortina, integradas como
+**diagnóstico en el manifiesto, no como componentes de
+viralidad**. La fórmula de viralidad (7 componentes), la de
+prioridad, los filtros duros y el ritmo anti-ban NO cambiaron
+(`test_uri_signals.py::TestSignalsIntegration::test_viral_score_unchanged_by_uri_signals`
+lo prueba con el fixture Coker). $0: sin Mac, sin Claude Code de
+pago, sin Groq, sin dependencias nuevas (ffmpeg + yt-dlp si está).
+
+- **Heatmap de YouTube** (`clipagent/heatmap.py`): una lectura de
+  `yt-dlp -J` por VOD, buckets de 10 s normalizados 0–1, top 15
+  picos con ≥ 60 s entre sí (igual que `hype.py` de Uri). Un pico
+  de chat solo se confirma con heatmap si hay un pico a ≤ 30 s
+  (`signals.heatmap_peak_s`, `signals.heatmap_score`). Sin yt-dlp,
+  sin heatmap en ese VOD o VOD de Twitch/Kick: `heatmap_available:
+  False` con el motivo, el pipeline sigue solo con el chat.
+  `--no-heatmap` lo apaga; `config.yaml` `signals.heatmap.*`.
+- **% de juego en movimiento** (`clipagent/motion.py`): 1 fps,
+  frames grises 160×90 en una pasada de ffmpeg (reutiliza
+  `render.extract_gray_frames`), diferencia media entre frames
+  consecutivos, umbral 3,0 (el `GAME_MOV` de Uri). `motion_pct` =
+  % de segundos en movimiento. 0–10% = vídeo en pausa/pantalla
+  fija (criterio de Uri): solo vale si la reacción es muy fuerte
+  (viralidad ≥ 85, `pausa_pero_reaccion_fuerte`); si no,
+  `pausa_pantalla_fija` = revisar a mano, no se publica a ciegas.
+  Es un flag, no descarta ni bloquea nada por sí solo.
+  `--no-motion` lo apaga; `config.yaml` `signals.motion.*`.
+- **Voz del juego** (`clipagent/game_voice.py`): el streamer calla
+  ≥ 2 s mientras el audio sigue activo (RMS > −45 dBFS) y el juego
+  se mueve: tramo estimado de voz del juego, sin texto inventado
+  (las palabras del juego no se transcriben, solo se marca el
+  tramo). En el corte, esos tramos pasan a layout `game` (juego a
+  pantalla completa, mismo recorte 9:16 centrado) y vuelven al
+  layout anterior al terminar; los tramos < 1,5 s se fusionan con
+  el vecino. En los subtítulos, estilo `Game` (cursiva, palabra
+  activa azul #7FE3FF, etiqueta `JUEGO:`) y esos tramos quedan
+  fuera de la comprobación final contra la transcripción del
+  streamer (como Uri: un desacuerdo largo es el juego hablando,
+  nunca un error a cortar). El manifiesto guarda `game_voice` por
+  clip (`[{start, end, estimated, source}]`, `game_lang` opcional)
+  y `manifest.md` lo resume. `--no-game-voice` lo apaga;
+  `config.yaml` `signals.game_voice.*`.
+
+Ejemplo en `manifest.json` (por clip):
+
+```json
+{
+  "signals": {
+    "heatmap_peak_s": 1200, "heatmap_score": 1.0,
+    "heatmap_available": true,
+    "motion_pct": 80.0, "motion_flag": "en_movimiento",
+    "game_voice": [{"start": 5.0, "end": 8.0, "estimated": true,
+                    "source": "estimada"}],
+    "game_voice_estimated": true
+  },
+  "game_voice": [{"start": 5.0, "end": 8.0, "estimated": true,
+                  "source": "estimada"}],
+  "motion": {"available": true, "motion_pct": 80.0, "seconds": 40,
+             "threshold": 3.0, "reason": "juego en movimiento"}
+}
+```
+
+
 ## Qué cambió en la v2
 
 **1. Español, por fin.** La v1 solo entendía risas en inglés (`lol, lmao, kekw, lul, xd`). La v2 suma:

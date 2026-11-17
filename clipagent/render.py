@@ -1267,27 +1267,136 @@ def scan_segments(video_path, duration, start_offset=0.0, cfg=None):
 # Decisión por clip (muestreo + tramos)
 # ---------------------------------------------------------------------------
 
-def decide_layout(video_path, duration, start_offset=0.0, cfg=None):
+def apply_game_voice(segments, game_voice, duration, min_run=1.5):
+    """Parte los tramos de layout por los tramos de voz del juego.
+
+    Idea de Uri (clipper-directos, layout.py): cuando habla el
+    juego, el plano pasa a juego a pantalla completa; al terminar,
+    vuelve el layout que había. Aquí el layout del proyecto es
+    juego arriba / cámara abajo (split), así que el tramo de voz
+    del juego es "game" (juego a pantalla completa, mismo recorte
+    que "center") y el resto conserva su layout.
+
+    ``segments``: tramos de decide_layout (start/end/layout/params/
+    reason). ``game_voice``: tramos normalizados de
+    game_voice.normalize_game_voice (o lista cruda: se normaliza
+    aquí). Tramos "game" más cortos que ``min_run`` (1,5 s, como
+    Uri MIN_RUN) se fusionan con el vecino más largo, para no
+    parpadear de plano. Devuelve la lista nueva de tramos, sin
+    huecos y en orden.
+    """
+    from .game_voice import normalize_game_voice
+
+    spans = normalize_game_voice(game_voice, duration)
+    if not spans or not segments:
+        return segments
+    out = []
+    for seg in segments:
+        cuts = [seg["start"], seg["end"]]
+        for span in spans:
+            for edge in (span["start"], span["end"]):
+                if seg["start"] < edge < seg["end"]:
+                    cuts.append(edge)
+        cuts = sorted(set(cuts))
+        for a, b in zip(cuts, cuts[1:]):
+            if b - a <= 0:
+                continue
+            mid = (a + b) / 2.0
+            is_game = any(s["start"] <= mid < s["end"] for s in spans)
+            piece = dict(seg)
+            piece["start"], piece["end"] = float(a), float(b)
+            if is_game:
+                piece["layout"] = "game"
+                piece["params"] = {}
+                piece["reason"] = (
+                    seg.get("reason", "")
+                    + " | voz del juego: juego a pantalla completa "
+                      "(tramo estimado)" if any(
+                          s.get("estimated") for s in spans
+                          if s["start"] <= mid < s["end"])
+                    else seg.get("reason", "")
+                    + " | voz del juego: juego a pantalla completa")
+            out.append(piece)
+    # Fusionar tramos "game" más cortos que min_run con el vecino
+    # más largo (como Uri: los runs cortos toman el modo del vecino
+    # más largo), y re-fusionar vecinos con el mismo layout.
+    merged = []
+    for piece in out:
+        if merged and merged[-1]["layout"] == piece["layout"]:
+            merged[-1]["end"] = piece["end"]
+        else:
+            merged.append(dict(piece))
+    changed = True
+    while changed and len(merged) > 1:
+        changed = False
+        for i, piece in enumerate(merged):
+            if piece["layout"] != "game":
+                continue
+            if piece["end"] - piece["start"] >= min_run:
+                continue
+            neighbours = [merged[j] for j in (i - 1, i + 1)
+                          if 0 <= j < len(merged)]
+            if not neighbours:
+                continue
+            winner = max(neighbours,
+                         key=lambda n: n["end"] - n["start"])
+            piece["layout"] = winner["layout"]
+            piece["params"] = dict(winner.get("params") or {})
+            piece["reason"] = (piece.get("reason", "")
+                               + " | tramo de juego < 1,5 s: fusionado "
+                                 "con el vecino más largo")
+            changed = True
+            break
+        if changed:
+            fused = []
+            for piece in merged:
+                if fused and fused[-1]["layout"] == piece["layout"]:
+                    fused[-1]["end"] = piece["end"]
+                else:
+                    fused.append(dict(piece))
+            merged = fused
+    merged[0]["start"] = 0.0
+    for i in range(1, len(merged)):
+        merged[i]["start"] = merged[i - 1]["end"]
+    merged[-1]["end"] = float(duration)
+    return merged
+
+
+def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
+                  game_voice=None):
     """Decide el layout de un clip muestreando fotogramas.
 
     Devuelve {"mode", "segments": [{start, end, layout, params, reason}],
     "samples": [{t, layout, reason}]}. Los tiempos son relativos al clip.
+
+    ``game_voice`` (opcional): tramos de voz del juego (ver
+    game_voice.py; también vale ``cfg["game_voice"]``). Los tramos
+    que caen dentro pasan a layout "game" (juego a pantalla
+    completa); el resto conserva su layout (split: juego arriba,
+    cámara abajo).
     """
     cfg = {**DEFAULTS, **(cfg or {})}
+    # Voz del juego: también vale en los layouts forzados (el modo
+    # forzado es el layout base; los tramos de voz del juego pasan
+    # a "game" igualmente, como Uri).
+    game_voice = (game_voice if game_voice is not None
+                  else cfg.get("game_voice"))
     forced = cfg.get("mode", "auto")
     if forced in ("stack", "pip", "center"):
-        return {"mode": forced,
-                "segments": [{"start": 0.0, "end": float(duration),
-                              "layout": forced, "params": {},
-                              "reason": f"forzado por config/CLI (--layout {forced})"}],
-                "samples": []}
+        segments = [{"start": 0.0, "end": float(duration),
+                     "layout": forced, "params": {},
+                     "reason": f"forzado por config/CLI (--layout {forced})"}]
+        if game_voice:
+            segments = apply_game_voice(segments, game_voice, duration)
+        return {"mode": forced, "segments": segments, "samples": []}
     if cfg.get("facecam_box"):
-        return {"mode": "pip",
-                "segments": [{"start": 0.0, "end": float(duration),
-                              "layout": "pip",
-                              "params": {"box": list(cfg["facecam_box"])},
-                              "reason": "facecam_box explícito en config.yaml"}],
-                "samples": []}
+        segments = [{"start": 0.0, "end": float(duration),
+                     "layout": "pip",
+                     "params": {"box": list(cfg["facecam_box"])},
+                     "reason": "facecam_box explícito en config.yaml"}]
+        if game_voice:
+            segments = apply_game_voice(segments, game_voice, duration)
+        return {"mode": "pip", "segments": segments, "samples": []}
 
     # Escaneo por tramo (Bloque 4): muestrea cada 2 s y clasifica
     # 0/1/2 cams por regiones estables. Se reusan sus fotogramas para
@@ -1455,6 +1564,13 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None):
                     r["reason"] += (f" | webcam por cara en "
                                     f"{[int(v) for v in fbox]} -> split "
                                     f"vertical: juego arriba, cámara abajo")
+    # Voz del juego (idea de Uri): los tramos en los que habla el
+    # juego pasan a "game" (juego a pantalla completa); el resto
+    # conserva su layout. Se aplica ANTES del seguimiento de cara /
+    # divisor (Arreglo 6), que solo sigue tramos stack/center.
+    game_voice = game_voice if game_voice is not None else cfg.get("game_voice")
+    if game_voice:
+        merged = apply_game_voice(merged, game_voice, duration)
     # Arreglo 6: params del tramo = MEDIANA de sus muestras, no la
     # última (una lectura ruidosa de split contaminaba todo el
     # tramo: Coker daba 68 en vez de 80) + seguimiento dentro del
@@ -1673,6 +1789,15 @@ def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
                 f"[pp_cam]crop={bw}:{bh}:{bx}:{by},scale={pw}:{ph}:flags=lanczos,"
                 f"setsar=1[pp_camv];"
                 f"[pp_bgv][pp_camv]overlay={ox}:{oy},format=yuv420p[{vout}]")
+    if layout == "game":
+        # Voz del juego (idea de Uri): juego a pantalla completa
+        # durante el tramo. Mismo recorte que "center" (vertical
+        # 9:16 del gameplay, sin webcam encima): la cámara no se
+        # superpone al juego y no tapa minimapa ni HUD.
+        x_expr = {"center": "(iw-ih*9/16)/2", "left": "0",
+                  "right": "iw-ih*9/16"}.get(crop, "(iw-ih*9/16)/2")
+        return (f"[{vin}]crop=ih*9/16:ih:x={x_expr},"
+                f"scale={OUT_W}:{OUT_H},format=yuv420p[{vout}]")
     # center (defecto seguro). Arreglo 6: si el tramo trae un track
     # de cara, el recorte SIGUE su centro (interpolado entre
     # muestras con la expresión en x; t relativo al tramo).
@@ -1782,17 +1907,23 @@ def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
 
 def cut_clip_with_layout(video_path, start_sec, duration, output_path,
                          crf=23, preset="fast", crop="center",
-                         layout_mode="auto", cfg=None):
+                         layout_mode="auto", cfg=None, game_voice=None):
     """Corta un clip vertical 1080x1920 con layout responsive.
 
     Devuelve la decisión de layout (para el manifiesto). Si el layout
     es uno solo para todo el clip, un solo pase de ffmpeg; si cambia
     por tramos, un pase por tramo + concat.
+
+    ``game_voice``: tramos de voz del juego (ver game_voice.py;
+    también vale ``cfg["game_voice"]``). Esos tramos se cortan en
+    layout "game" (juego a pantalla completa).
     """
     cfg = {**DEFAULTS, **(cfg or {})}
     if layout_mode is not None:
         # --layout en CLI manda sobre config.yaml; None = usar config.
         cfg["mode"] = layout_mode
+    if game_voice is not None:
+        cfg["game_voice"] = game_voice
     src_w, src_h = _probe_size(video_path)
     decision = decide_layout(video_path, duration, start_offset=start_sec,
                              cfg=cfg)
@@ -1894,6 +2025,11 @@ def _crop_rects_for_frame(src_w, src_h, layout, params, cfg, t=None):
     (Arreglo 6); sin t, el estático de params."""
     p = _scale_to_sample(params, src_w, src_h)
     track = (params or {}).get("track")
+    if layout == "game":
+        # Voz del juego: solo se ve gameplay a pantalla completa.
+        cw = src_h * 9 // 16
+        cx = (src_w - cw) // 2
+        return [("gameplay", cx, 0, cw, src_h)]
     if layout == "split":
         game_h = p.get("game_h", 1320)
         gw = int(src_h * OUT_W / game_h)

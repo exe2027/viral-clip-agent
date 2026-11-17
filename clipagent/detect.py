@@ -416,7 +416,9 @@ def _transcript_words(transcript):
 
 def compute_signals(detail=None, chat_scores=None, audio_rms=None,
                     transcript=None, video_path=None, peak_ts=None,
-                    clip_start=None, clip_duration=None, lang="es"):
+                    clip_start=None, clip_duration=None, lang="es",
+                    heatmap_peaks=None, motion=None, game_voice=None,
+                    virality_total=None):
     """Señales MVP para un candidato, todo medido en local.
 
     detail: detail[ventana] del pico (users, msgs, risas, hype).
@@ -427,6 +429,20 @@ def compute_signals(detail=None, chat_scores=None, audio_rms=None,
     video_path: clip/segmento ya descargado (para RMS y caras Haar).
     peak_ts: pico en segundos absolutos del VOD; clip_start: inicio
         del clip en el VOD. peak_rel = peak_ts - clip_start.
+
+    Señales de Uri (2026-11-17, clipper-directos) — DIAGNÓSTICO,
+    no componentes del score de viralidad (la fórmula de 7
+    componentes y sus pesos NO cambian; ver detect.score_clip):
+      * heatmap_peaks: picos de heatmap.py (YouTube "lo más
+        repetido") -> heatmap_peak_s (el más cercano al pico, si
+        está a <= 30 s) y heatmap_score (0..1).
+      * motion: dict de motion.measure_motion (o un % float) ->
+        motion_pct y motion_flag ("en_movimiento" /
+        "pausa_pantalla_fija" / "pausa_pero_reaccion_fuerte").
+        Un clip congelado NO se descarta por esto: solo se marca.
+      * game_voice: tramos normalizados de game_voice.py ->
+        game_voice (tramos) y game_voice_estimated (True si la
+        detección es estimada, sin texto inventado).
 
     Devuelve dict; cada señal que no se puede medir es None.
       * unique_users_per_10s: usuarios únicos en la ventana.
@@ -452,6 +468,15 @@ def compute_signals(detail=None, chat_scores=None, audio_rms=None,
         "peak_coincidence_s": None,
         "payoff_position_s": None,
         "hook_words_0_3s": None,
+        # Señales de Uri (diagnóstico, no componentes del score):
+        "heatmap_peak_s": None,
+        "heatmap_score": None,
+        "heatmap_available": None,
+        "motion_pct": None,
+        "motion_flag": None,
+        "motion_flag_reason": None,
+        "game_voice": None,
+        "game_voice_estimated": None,
     }
     if detail:
         signals["unique_users_per_10s"] = detail.get("users")
@@ -550,6 +575,48 @@ def compute_signals(detail=None, chat_scores=None, audio_rms=None,
             "max_gap_s": round(max(gaps), 1) if gaps else None,
             "coinciden": all(g <= 5.0 for g in gaps) if gaps else None,
         }
+
+    # Señales de Uri (diagnóstico; no tocan el score de viralidad).
+    # Heatmap: el pico de "lo más repetido" más cercano al pico de
+    # chat, solo si está a <= 30 s (si no, no confirma nada).
+    if heatmap_peaks:
+        from .heatmap import nearest_heatmap_peak
+        peaks_list = heatmap_peaks
+        if isinstance(heatmap_peaks, dict):
+            peaks_list = heatmap_peaks.get("peaks") or []
+            signals["heatmap_available"] = bool(
+                heatmap_peaks.get("available"))
+        else:
+            signals["heatmap_available"] = bool(peaks_list)
+        nearest = nearest_heatmap_peak(peaks_list, peak_rel)
+        if nearest is not None:
+            signals["heatmap_peak_s"] = nearest["t"]
+            signals["heatmap_score"] = nearest["score"]
+    elif heatmap_peaks is not None:
+        signals["heatmap_available"] = False
+    # Movimiento: % medido (dict de motion.measure_motion o % float).
+    motion_pct = None
+    if isinstance(motion, dict):
+        motion_pct = motion.get("motion_pct")
+    elif motion is not None:
+        try:
+            motion_pct = float(motion)
+        except (TypeError, ValueError):
+            motion_pct = None
+    if motion_pct is not None:
+        from .motion import motion_flag as _motion_flag
+        flag, flag_reason = _motion_flag(motion_pct, virality_total)
+        signals["motion_pct"] = motion_pct
+        signals["motion_flag"] = flag
+        signals["motion_flag_reason"] = flag_reason
+    # Voz del juego: tramos normalizados (sin texto inventado).
+    if game_voice:
+        from .game_voice import normalize_game_voice
+        spans = normalize_game_voice(
+            game_voice, clip_duration) if clip_duration else list(game_voice)
+        signals["game_voice"] = spans
+        signals["game_voice_estimated"] = any(
+            s.get("estimated") for s in spans if isinstance(s, dict))
     return signals
 
 

@@ -846,6 +846,10 @@ def visible_from_layout(layout_decision, payoff_ts_clip=20.0):
         return {"visible": VISIBLE_CAMS_GAMEPLAY,
                 "reason": "layout split: juego arriba y cámara abajo, se ven ambos",
                 "layout": layout, "cams": cams}
+    if layout == "game":
+        return {"visible": VISIBLE_GAMEPLAY,
+                "reason": "layout game (voz del juego): juego a pantalla completa",
+                "layout": layout, "cams": cams}
     if layout == "center":
         if cams is None or cams == 1:
             return {"visible": VISIBLE_UNKNOWN,
