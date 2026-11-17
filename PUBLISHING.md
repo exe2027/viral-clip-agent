@@ -91,7 +91,7 @@ los valores por defecto, que son el estado real conocido.
 
 ## Cola de publicación
 
-Estados (diseño de `queue.py`, creado en paralelo por otro agente;
+Estados (diseño de `jobqueue.py`, creado en paralelo por otro agente;
 este módulo es compatible con él):
 
 ```

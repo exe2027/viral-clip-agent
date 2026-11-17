@@ -14,8 +14,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import queue as qmod  # noqa: E402
-from queue import (  # noqa: E402
+from jobqueue import (  # noqa: E402
     Queue, QueueError, check_semaphore, classify_error, detect_game,
     kill_switch_active, parse_url,
 )

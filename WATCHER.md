@@ -2,7 +2,7 @@
 
 `watcher.py` vigila la lista blanca de `influencers.yaml` y detecta
 directos en vivo y VODs nuevos, para no tener que pegar la URL a mano.
-El encolado manual por URL (`queue.py add`) queda como opción
+El encolado manual por URL (`jobqueue.py add`) queda como opción
 secundaria.
 
 **Hoy la lista blanca es SOLO IlloJuan** (https://www.twitch.tv/illojuan,
@@ -18,7 +18,7 @@ Hace:
 - Cada pasada, por cada influencer: ¿está en vivo? (título, juego,
   espectadores, desde cuándo) y ¿qué VODs nuevos hay desde la última
   pasada?
-- Encola en `queue.py` los VODs terminados que pasan TODOS los frenos.
+- Encola en `jobqueue.py` los VODs terminados que pasan TODOS los frenos.
 - Guarda lo visto en `seen_vods.json` (gitignored) para no duplicar.
 
 NO hace:
@@ -45,7 +45,7 @@ La canónica es `influencers.yaml`. REGLA DEL USUARIO (2026-11-16):
 estar en la lista que sube el usuario YA es permiso. Hoy IlloJuan
 está en `concedido`, así que el watcher lo monitorea y **encola
 sus VODs de GTA 6**. Solo `denegado` / `revocado` excluyen.
-`queue.py` usa además `allowlist` en `config.yaml` para encolar:
+`jobqueue.py` usa además `allowlist` en `config.yaml` para encolar:
 IlloJuan ya está en ambas.
 
 ## Frenos (todos, antes de encolar)
@@ -74,7 +74,7 @@ Si falla uno, el VOD no se encola y el motivo queda registrado en
 8. **Aprobación humana:** el job pasa por `ready_for_review`; nada se
    publica solo.
 
-Además `queue.py add` aplica sus propias validaciones (disco ≥ 2 GB
+Además `jobqueue.py add` aplica sus propias validaciones (disco ≥ 2 GB
 libres, dedup por VOD + idioma).
 
 ## Fuentes de datos (todo gratis, $0)

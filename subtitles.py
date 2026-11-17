@@ -126,40 +126,13 @@ Uso:
 """
 
 import argparse
-import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
-import sysconfig
 
 
-def _preload_stdlib_queue():
-    """Carga el `queue` de la stdlib antes que nada.
-
-    El repo tiene un queue.py propio (cola de aprobación) que haría
-    sombra al módulo `queue` de la stdlib: al descargar el modelo
-    VAD de HuggingFace, concurrent.futures hace `import queue` y se
-    encuentra con el queue.py del proyecto (sin SimpleQueue), y la
-    descarga falla con AttributeError. Cargando el `queue` de la
-    stdlib por ruta explícita queda en sys.modules y ya no se
-    vuelve a resolver por sys.path.
-    """
-    if "queue" in sys.modules:
-        return
-    try:
-        stdlib_dir = sysconfig.get_paths()["stdlib"]
-        spec = importlib.util.spec_from_file_location(
-            "queue", os.path.join(stdlib_dir, "queue.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["queue"] = module
-        spec.loader.exec_module(module)
-    except Exception:
-        pass
-
-
-_preload_stdlib_queue()
 
 DEFAULT_MODEL = "tiny"
 DEFAULT_MAX_CHARS = 20

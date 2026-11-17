@@ -2,7 +2,7 @@
 """
 worker.py — el único worker de viral-clip-agent (bloque 1 del tribunal).
 
-Saca jobs de la cola FIFO (queue.py), uno a la vez, y ejecuta
+Saca jobs de la cola FIFO (jobqueue.py), uno a la vez, y ejecuta
 ``auto_clips.py`` (sin LLM, sin tokens) con el link del job. Cuando
 termina, el clip + manifiesto quedan en ``ready_for_review``: nada se
 publica desde aquí.
@@ -43,7 +43,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from queue import (  # noqa: E402
+from jobqueue import (  # noqa: E402
     HERE, KILL_SWITCH_PATH, MAX_ATTEMPTS, Queue, QueueError,
     check_semaphore, classify_error, kill_switch_active,
 )

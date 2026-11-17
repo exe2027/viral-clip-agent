@@ -17,14 +17,14 @@ Bloque 10 del tribunal (2026-11-16). Documentación completa en
   compartido con la cola (bloque 1). Si existe, nada se publica.
 
 NO publica nada por sí mismo: solo registra eventos y decide si la
-cola PUEDE publicar. La cola (``queue.py``) es la que publica, y debe
+cola PUEDE publicar. La cola (``jobqueue.py``) es la que publica, y debe
 consultar a este módulo antes de cada publicación (ver
 ``gate_publish()`` y el subcomando ``gate``).
 
-Interfaz con la cola (``queue.py``, bloque 1 — ya existe):
+Interfaz con la cola (``jobqueue.py``, bloque 1 — ya existe):
   estados: queued → processing → ready_for_review → approved →
   published / failed (además: rejected, dead). El semáforo de
-  queue.py marca en rojo los jobs con juego ≠ GTA 6,
+  jobqueue.py marca en rojo los jobs con juego ≠ GTA 6,
   VOD anterior al 19 nov 2026, música con copyright sospechada, o
   manifiesto/layout/subtítulos incompletos.
   * tras la revisión humana:  ``record approved_clean`` /
@@ -36,7 +36,7 @@ Interfaz con la cola (``queue.py``, bloque 1 — ya existe):
   * antes de cada lote:      si existe ``queue.kill``, parar.
   La lista blanca canónica es influencers.yaml (solo "concedido") +
   allowed_streamers.yaml, leída por ``publisher.load_whitelist()``
-  (bloque 7); queue.py usa además ``allowlist`` en config.yaml.
+  (bloque 7); jobqueue.py usa además ``allowlist`` en config.yaml.
   ``phase4_ready()`` consulta esas fuentes en ese orden.
   Publicar es trabajo de ``publisher.py`` (bloque 7): este módulo
   solo decide si se PUEDE publicar.
@@ -431,7 +431,7 @@ def whitelist_nonempty(cfg=None):
     except Exception:
         pass
     try:
-        from queue import load_allowlist
+        from jobqueue import load_allowlist
         if load_allowlist():
             return True
     except Exception:

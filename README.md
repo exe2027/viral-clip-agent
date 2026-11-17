@@ -74,10 +74,10 @@ python clips_chat_v2.py chat.json --video vod.mp4 --out clips
 Con cola y aprobación, el flujo es el mismo pero ordenado:
 
 ```bash
-python queue.py add https://kick.com/coker/videos/<uuid> --lang es
-python queue.py list
+python jobqueue.py add https://kick.com/coker/videos/<uuid> --lang es
+python jobqueue.py list
 python worker.py --once        # procesa un job y lo deja en ready_for_review
-python queue.py approve 3      # o: python queue.py reject 3
+python jobqueue.py approve 3      # o: python jobqueue.py reject 3
 ```
 
 ### 5. Configuración
@@ -390,12 +390,12 @@ Gemini: al crear la key Gemini pidió tarjeta, así que no se pone
 tarjeta ni se crea cuenta de facturación. No se pide ninguna key de
 pago para este bloque.
 
-Detalle técnico: el repo tiene un `queue.py` propio (cola de
-aprobación) que haría sombra al módulo `queue` de la stdlib cuando
+Detalle técnico (2026-11-17): la cola de aprobación se llamaba
+`queue.py` y hacía sombra al módulo `queue` de la stdlib cuando
 faster-whisper descarga el modelo VAD (concurrent.futures hace
-`import queue` y falla con AttributeError). `subtitles.py` carga el
-`queue` de la stdlib por ruta explícita al arrancar para que quede
-en `sys.modules`.
+`import queue` y falla con AttributeError). Se renombró a
+`jobqueue.py` y se eliminaron los parches que cargaban la stdlib
+por ruta explícita, así que ya no hay sombra ni parche.
 
 Pruebas reales de aceptación (2026-11-16, `.venv`, modelo tiny con
 escalado a base cuando saltó un umbral; SRT en
@@ -706,17 +706,17 @@ Lo único que queda a mano es subirlos a TikTok / Reels / Shorts: eso no se pued
 
 ## Cola FIFO + worker + aprobación
 
-`queue.py` + `worker.py`: un VOD entra en la cola, un solo worker lo
+`jobqueue.py` + `worker.py`: un VOD entra en la cola, un solo worker lo
 procesa con `auto_clips.py` y el clip queda en `ready_for_review`
 hasta que un humano lo aprueba o lo rechaza. **Nada se publica desde
 aquí.**
 
 ```bash
-python queue.py add https://kick.com/coker/videos/<uuid> --lang es
-python queue.py list            # ver la cola
-python queue.py approve 3       # aprobar un job en ready_for_review
-python queue.py reject 3        # rechazarlo
-python queue.py status          # resumen + disco + kill-switch
+python jobqueue.py add https://kick.com/coker/videos/<uuid> --lang es
+python jobqueue.py list            # ver la cola
+python jobqueue.py approve 3       # aprobar un job en ready_for_review
+python jobqueue.py reject 3        # rechazarlo
+python jobqueue.py status          # resumen + disco + kill-switch
 python worker.py --once         # procesar un job y salir
 python worker.py                # procesar la cola hasta vaciarla
 ```
@@ -975,7 +975,7 @@ para el detalle completo.
   debajo de la mediana. Reanudación solo manual
   (`counter.py resume --yes`).
 - **Kill-switch**: archivo `queue.kill` en la raíz del repo, el mismo
-  que usa `queue.py` (bloque 1). Si existe, nada se publica.
+  que usa `jobqueue.py` (bloque 1). Si existe, nada se publica.
 - **La cola consulta la puerta** antes de publicar:
   `counter.py gate --platform youtube --clip c1` (exit 0 =
   permitido) o `gate_publish()` desde Python. La lista blanca

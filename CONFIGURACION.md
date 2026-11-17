@@ -76,7 +76,7 @@ Solo se cortan y se publican clips de streamers que están en esta lista. Estar 
 |---|---|---|---|
 | ¿Hashtags en español? | Lista, ej: #GTA6 #GTA6Clips | #GTA6, #GTA6Clips, #ElClipDeGTA6, #GTA, #RockstarGames, #gaming | `config.yaml > hashtags.es` |
 | ¿Hashtags en inglés? | Lista, ej: #GTA6 #GTA6Clips | #GTA6, #GTA6Clips, #GTA, #RockstarGames, #gaming, #clips | `config.yaml > hashtags.en` |
-| ¿Se puede publicar sin tu aprobación? | sí / no | **No, nunca**: todo clip queda en revisión hasta que lo apruebes | Cola + `queue.py approve / reject` |
+| ¿Se puede publicar sin tu aprobación? | sí / no | **No, nunca**: todo clip queda en revisión hasta que lo apruebes | Cola + `jobqueue.py approve / reject` |
 
 ## 7. APIs y claves (opcional, todo funciona sin ellas salvo que se diga lo contrario)
 

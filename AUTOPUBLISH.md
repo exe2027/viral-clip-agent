@@ -94,7 +94,7 @@ La lista blanca son los streamers de la lista que sube el usuario.
 **Vacía = fase 4 bloqueada.** La fuente canónica es
 **`influencers.yaml`** (REGLA 2026-11-16: estar en la lista =
 permiso ya dado, sin ficha) **+ `allowed_streamers.yaml`**, leídas por
-`publisher.load_whitelist()` (bloque 7); `queue.py` (bloque 1) usa
+`publisher.load_whitelist()` (bloque 7); `jobqueue.py` (bloque 1) usa
 además la clave `allowlist` de nivel superior en `config.yaml`.
 `phase4_ready()` consulta esas fuentes en ese orden. Hoy está
 IlloJuan. `metrics_green` es una declaración manual: poner `true`
@@ -134,13 +134,13 @@ python3 counter.py resume --yes             # lo quita (y limpia el breaker)
 ```
 
 `queue.kill` NO se commitea ni se deja creado por defecto: su
-presencia significa "parado". Confirmado: `queue.py` (bloque 1) usa
+presencia significa "parado". Confirmado: `jobqueue.py` (bloque 1) usa
 este mismo archivo (`KILL_SWITCH_PATH` en la raíz del repo) y su
 worker se pausa si existe. Un solo flag para los dos bloques.
 
-## 5. Interfaz con la cola (`queue.py`, bloque 1) y el publicador (`publisher.py`, bloque 7)
+## 5. Interfaz con la cola (`jobqueue.py`, bloque 1) y el publicador (`publisher.py`, bloque 7)
 
-La cola es `queue.py` (SQLite en `queue.db`, bloque 1). Sus estados
+La cola es `jobqueue.py` (SQLite en `queue.db`, bloque 1). Sus estados
 reales:
 
 ```
@@ -149,7 +149,7 @@ queued → processing → ready_for_review → approved → published
 processing → queued (reintento transitorio) / failed / dead
 ```
 
-El semáforo de `queue.py` (`check_semaphore`) marca en rojo un job
+El semáforo de `jobqueue.py` (`check_semaphore`) marca en rojo un job
 con juego ≠ GTA 6, VOD anterior al 19 nov 2026, música
 con copyright sospechada, o manifiesto/layout/subtítulos
 incompletos; con rojos no se aprueba sin `--force-confirm`
@@ -196,7 +196,7 @@ Funciones importables desde `counter.py`: `load_state`,
 
 `publisher.py` (bloque 7) es el único módulo que publica y el que
 debe llamar a `gate_publish()` / `record published_ok|fail` y a
-`record red_flag|copyright|strike` cuando corresponda. `queue.py`
+`record red_flag|copyright|strike` cuando corresponda. `jobqueue.py`
 (bloque 1) usa el **mismo archivo `queue.kill`** como kill-switch:
 su `kill_switch_active()` y el de este módulo miran el mismo flag.
 

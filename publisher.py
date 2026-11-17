@@ -26,7 +26,7 @@ Integración con el resto del repo (solo lee, no edita):
   * viral_package.py — el paquete por plataforma (título, caption,
     hashtags, tags, miniatura, subtítulos) sale de manifest.json,
     que auto_clips.py / clips_chat_v2.py ya escriben por clip.
-  * queue.py (otro agente lo crea en paralelo) — estados:
+  * jobqueue.py (otro agente lo crea en paralelo) — estados:
     queued -> ready_for_review -> approved -> published / failed.
     Este módulo define su interfaz contra ese diseño: un ítem de
     publicación es un dict con {"clip", "platform", "state", ...} y
@@ -109,7 +109,7 @@ YOUTUBE_MAX_UPLOADS_BY_QUOTA = YOUTUBE_DAILY_QUOTA_UNITS // YOUTUBE_UPLOAD_COST_
 
 PLATFORMS = ("youtube_shorts", "tiktok", "instagram_reels", "facebook_reels")
 
-# Estados de la cola (diseño de queue.py, creado en paralelo):
+# Estados de la cola (diseño de jobqueue.py, creado en paralelo):
 #   queued -> ready_for_review -> approved -> published / failed
 # Este módulo añade dos estados terminales propios:
 #   quarantined — rechazo por copyright/contenido, revisión humana.
@@ -406,7 +406,7 @@ def audit_report_text(audit):
 
 
 # ---------------------------------------------------------------------------
-# Cola de publicación (interfaz compatible con queue.py)
+# Cola de publicación (interfaz compatible con jobqueue.py)
 # ---------------------------------------------------------------------------
 class PublishQueue:
     """Cola persistente en publish_queue.json.

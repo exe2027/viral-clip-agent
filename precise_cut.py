@@ -44,34 +44,12 @@ de facturación.
 """
 
 import argparse
-import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
-import sysconfig
 
-# queue.py local (cola de aprobación, bloque 1 del tribunal) tapa el
-# `queue` de la stdlib que faster-whisper necesita (queue.SimpleQueue).
-# Misma idea que subtitles.py:_preload_stdlib_queue: cargar la stdlib
-# por ruta explícita antes de importar subtitles.
-def _preload_stdlib_queue():
-    q = sys.modules.get("queue")
-    if q is not None and hasattr(q, "SimpleQueue"):
-        return
-    try:
-        stdlib_dir = sysconfig.get_paths()["stdlib"]
-        spec = importlib.util.spec_from_file_location(
-            "queue", os.path.join(stdlib_dir, "queue.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["queue"] = module
-        spec.loader.exec_module(module)
-    except Exception:
-        pass
-
-
-_preload_stdlib_queue()
 
 DEFAULT_MAX_DURATION = 60
 DEFAULT_PRE_ROLL = 2.5      # inicio 2-3 s antes del disparador

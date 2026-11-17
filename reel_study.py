@@ -25,7 +25,7 @@ Lo que NO hace, a propósito (reglas del proyecto, 2026-11-16):
     real del directo, con permiso del streamer en lista blanca.
   * NO publica solo ni programa solo: los títulos sugeridos pasan
     por el check promesa-payoff de viral_package.py y quedan para
-    aprobación humana en la cola (queue.py). Nada se publica
+    aprobación humana en la cola (jobqueue.py). Nada se publica
     desde aquí.
   * NO copia títulos ni captions de otros creadores: las
     plantillas son patrones ("pregunta", "superlativo", "cita del

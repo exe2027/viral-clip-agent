@@ -95,7 +95,7 @@ DEFAULT_CONFIG = {
         },
         # Sin "whitelist" aquí: la lista blanca canónica es
         # influencers.yaml + allowed_streamers.yaml (la lee
-        # publisher.load_whitelist(); queue.py usa además la clave
+        # publisher.load_whitelist(); jobqueue.py usa además la clave
         # "allowlist" de nivel superior en config.yaml).
         "metrics_green": False,     # true solo con métricas en verde (revisión manual)
     },

@@ -32,7 +32,7 @@ registra el motivo):
      publicar, queda como opción futura, no implementada).
   5. Dedup: ``seen_vods.json`` (gitignored) guarda cada VOD visto con
      su resultado. Un VOD ya visto no se vuelve a proponer. La cola
-     (``queue.py``) además rechaza un VOD + idioma que ya tenga un job
+     (``jobqueue.py``) además rechaza un VOD + idioma que ya tenga un job
      activo.
   6. Tope diario: máx. N VODs nuevos por influencer y día (defecto 5,
      configurable en ``config.yaml`` -> ``watcher``).
@@ -89,7 +89,7 @@ from datetime import date, datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from queue import Queue, QueueError, detect_game, kill_switch_active  # noqa: E402
+from jobqueue import Queue, QueueError, detect_game, kill_switch_active  # noqa: E402
 
 # --- Twitch: GQL público (el que usa la web twitch.tv) -------------------
 # Client-ID público y estático de la web de Twitch. No es una key

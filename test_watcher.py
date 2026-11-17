@@ -3,7 +3,7 @@
 
   * GQL de Twitch: respuesta real de illojuan (2026-11-16, en vivo).
   * Kick: respuestas reales de coker (2026-11-16, en vivo).
-  * Frenos y dedup: con BD temporal de queue.py y estado temporal.
+  * Frenos y dedup: con BD temporal de jobqueue.py y estado temporal.
 
 Uso: python3 test_watcher.py
 """
@@ -21,7 +21,7 @@ sys.path.insert(0, HERE)
 import watcher
 from watcher import (TwitchPublicGQL, decide, kick_check, load_state,
                      record_vod, run_once)
-from queue import Queue
+from jobqueue import Queue
 
 # --- Fixture: GQL real de illojuan, 2026-11-16 19:15 (en vivo, GTA V) ---
 GQL_ILLOJUAN = [{

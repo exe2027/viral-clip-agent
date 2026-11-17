@@ -89,7 +89,6 @@ Requisitos: Python 3.10+, FFmpeg en el PATH y TwitchDownloaderCLI
 """
 
 import argparse
-import importlib.util
 import json
 import os
 import re
@@ -97,38 +96,9 @@ import shutil
 import statistics
 import subprocess
 import sys
-import sysconfig
 from collections import defaultdict
 
 
-def _preload_stdlib_queue():
-    """Carga el `queue` de la stdlib antes que nada (misma idea que
-    subtitles.py:_preload_stdlib_queue).
-
-    El repo tiene un queue.py propio (cola de aprobación, bloque 1 de
-    la revisión interna) que haría sombra al `queue` de la stdlib: faster-whisper
-    hace `import queue` y se encuentra el queue.py del proyecto (sin
-    SimpleQueue), y la transcripción falla con AttributeError. Cargando
-    la stdlib por ruta explícita queda en sys.modules y ya no se vuelve
-    a resolver por sys.path. Va ANTES de importar clips_chat_v2: su
-    cadena de imports ya carga el queue.py local. Si el `queue` ya
-    cargado es el de la stdlib (tiene SimpleQueue), no se toca.
-    """
-    q = sys.modules.get("queue")
-    if q is not None and hasattr(q, "SimpleQueue"):
-        return
-    try:
-        stdlib_dir = sysconfig.get_paths()["stdlib"]
-        spec = importlib.util.spec_from_file_location(
-            "queue", os.path.join(stdlib_dir, "queue.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["queue"] = module
-        spec.loader.exec_module(module)
-    except Exception:
-        pass
-
-
-_preload_stdlib_queue()
 
 from clips_chat_v2 import (
     cut_vertical_clip,

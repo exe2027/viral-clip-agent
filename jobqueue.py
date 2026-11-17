@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-queue.py — cola FIFO persistente de viral-clip-agent (bloque 1 del tribunal).
+jobqueue.py — cola FIFO persistente de viral-clip-agent (bloque 1 del tribunal).
 
 Un VOD entra en la cola, el worker (worker.py) lo procesa con
 auto_clips.py y el clip queda en ``ready_for_review`` hasta que un
@@ -44,11 +44,11 @@ Kill-switch: si existe el archivo ``queue.kill`` en esta carpeta, el
 worker se pausa inmediatamente. Se reanuda borrando el archivo.
 
 Uso:
-    python queue.py add <url> --lang es [--force] [--streamer coker]
-    python queue.py list [--state queued]
-    python queue.py approve <id> [--force-confirm]
-    python queue.py reject <id>
-    python queue.py status
+    python jobqueue.py add <url> --lang es [--force] [--streamer coker]
+    python jobqueue.py list [--state queued]
+    python jobqueue.py approve <id> [--force-confirm]
+    python jobqueue.py reject <id>
+    python jobqueue.py status
 """
 
 import argparse

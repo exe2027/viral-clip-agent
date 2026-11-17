@@ -8,7 +8,7 @@
 # con frecuencia y pertenecen a limits.yaml, no a la config del canal.
 
 # Lista blanca de streamers (revisión interna, bloque 1, 2026-11-16):
-# solo estos canales se pueden encolar en queue.py. REGLA DEL
+# solo estos canales se pueden encolar en jobqueue.py. REGLA DEL
 # USUARIO (2026-11-16): estar en esta lista = permiso ya dado por
 # el hecho de que el usuario lo subió; no hay ficha de permiso.
 # Para agregar un streamer, agrega su canal (slug de Twitch/Kick,
@@ -222,7 +222,7 @@ facecam_box: null
 
 # Watcher / monitor de influencers (ver WATCHER.md).
 # Vigila la lista blanca de influencers.yaml: detecta directos en vivo
-# y VODs nuevos, y los encola en queue.py con todos los frenos.
+# y VODs nuevos, y los encola en jobqueue.py con todos los frenos.
 # Por defecto --dry-run: no encola nada sin --live explícito.
 watcher:
   poll_minutes: 15        # intervalo entre pasadas en --loop (y en cron)
@@ -261,7 +261,7 @@ autopublish:
     default: 120          # fase 3: ventana de veto en TikTok / Instagram / Facebook
   # Sin "whitelist" aquí: la lista blanca canónica es influencers.yaml
   # + allowed_streamers.yaml, que lee publisher.load_whitelist();
-  # queue.py usa además "allowlist" aquí en config.yaml (nivel
+  # jobqueue.py usa además "allowlist" aquí en config.yaml (nivel
   # superior). REGLA 2026-11-16: estar en la lista = permiso ya
   # dado. Vacía en todas = fase 4 bloqueada.
   metrics_green: false    # poner true solo cuando las métricas estén en verde (revisión manual)
