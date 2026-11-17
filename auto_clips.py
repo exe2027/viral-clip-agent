@@ -1192,7 +1192,12 @@ def main() -> int:
             _dup_reason, _dup_entry = find_duplicate(
                 out_file, cut_dur, clip_start_abs,
                 os.path.dirname(out_dir), vod_id,
-                manifest_clips=manifest["clips"])
+                manifest_clips=manifest["clips"],
+                # El manifiesto propio nunca es "otro VOD": sin esto,
+                # un --fresh descartaba el clip re-cortado como
+                # duplicado de su propia entrada anterior.
+                exclude_manifest=os.path.join(out_dir,
+                                              "manifest.json"))
             if _dup_reason:
                 print(f"    Dedup: duplicado ({_dup_reason}); "
                       "no se empaqueta ni se encola.", file=sys.stderr)

@@ -124,6 +124,29 @@ class TestFindDuplicate(unittest.TestCase):
                                        manifest_clips=existing)
             self.assertIsNone(reason)
 
+    def test_manifiesto_propio_no_es_otro_vod(self):
+        # Regresión (Fase 9, test de humo final): con --fresh el clip
+        # re-cortado se comparaba contra su propio manifiesto anterior
+        # (el directorio "runs" no coincide con vod_id=None) y se
+        # descartaba como duplicado de sí mismo. Con exclude_manifest
+        # no se marca duplicado aunque la huella sea idéntica.
+        with tempfile.TemporaryDirectory() as tmp:
+            nuevo = os.path.join(tmp, "nuevo.mp4")
+            _make_video(nuevo)
+            fp = clip_fingerprint(nuevo, 10)
+            own = [{"file": "clips/c1.mp4", "start": 100,
+                    "duration": 10, "peak": 105,
+                    "fingerprint": [f"{h:016x}" for h in fp]}]
+            own_dir = self._run_dir(tmp, "runs", own)
+            reason, _ = find_duplicate(
+                nuevo, 10, 200, tmp, None,
+                exclude_manifest=os.path.join(own_dir, "manifest.json"))
+            self.assertIsNone(reason)
+            # Sin la exclusión, el mismo manifiesto sí lo marcaba.
+            reason, entry = find_duplicate(nuevo, 10, 200, tmp, None)
+            self.assertIsNotNone(reason)
+            self.assertIn("otro VOD (runs)", reason)
+
     def test_mismo_momento_en_otro_vod_por_huella(self):
         with tempfile.TemporaryDirectory() as tmp:
             # Otro VOD con un clip cuya huella es la del vídeo nuevo.

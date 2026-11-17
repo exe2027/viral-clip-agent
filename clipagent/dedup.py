@@ -87,8 +87,16 @@ def _fingerprint_of(entry):
         return None
 
 
-def _entries_from_manifests(runs_dir, exclude_vod=None):
-    """(vod_id, clip_entry) de los manifiestos en runs/ (recientes)."""
+def _entries_from_manifests(runs_dir, exclude_vod=None,
+                            exclude_path=None):
+    """(vod_id, clip_entry) de los manifiestos en runs/ (recientes).
+
+    `exclude_path` es el manifiesto de la corrida actual: sin él,
+    la propia corrida se trataría como "otro VOD" (su directorio
+    no coincide con `vod_id` cuando este es None o es un id de
+    Twitch/Kick) y un clip re-cortado con --fresh se descartaría
+    como duplicado de sí mismo.
+    """
     if not os.path.isdir(runs_dir):
         return []
     run_dirs = []
@@ -102,6 +110,9 @@ def _entries_from_manifests(runs_dir, exclude_vod=None):
     for _mtime, vod_id, manifest_path in run_dirs[:MAX_OTHER_RUNS]:
         if vod_id == exclude_vod:
             continue
+        if exclude_path is not None and os.path.abspath(
+                manifest_path) == os.path.abspath(exclude_path):
+            continue
         try:
             import json
             with open(manifest_path, encoding="utf-8") as f:
@@ -114,14 +125,16 @@ def _entries_from_manifests(runs_dir, exclude_vod=None):
 
 
 def find_duplicate(clip_path, duration, start, runs_dir, vod_id,
-                   manifest_clips=None):
+                   manifest_clips=None, exclude_manifest=None):
     """Busca un duplicado de un clip recién cortado.
 
     Devuelve (motivo, clip_duplicado) o (None, None).
     1. Mismo VOD: ventana solapada con un clip ya en el manifiesto.
     2. Dos VODs: huella de 3 frames coincidente con un clip de
        otro VOD (mismo momento capturado en dos VODs).
-    `manifest_clips` son las entradas ya cortadas de este VOD.
+    `manifest_clips` son las entradas ya cortadas de este VOD;
+    `exclude_manifest` es el manifiesto de la corrida actual, que
+    nunca se trata como otro VOD (ver _entries_from_manifests).
     """
     end = start + duration
     for entry in manifest_clips or []:
@@ -134,7 +147,7 @@ def find_duplicate(clip_path, duration, start, runs_dir, vod_id,
     if fingerprint is None:
         return None, None
     for other_vod, entry in _entries_from_manifests(
-            runs_dir, exclude_vod=vod_id):
+            runs_dir, exclude_vod=vod_id, exclude_path=exclude_manifest):
         other_fp = _fingerprint_of(entry)
         if other_fp is None:
             continue
