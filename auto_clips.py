@@ -96,7 +96,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-from collections import defaultdict
 
 
 
@@ -104,7 +103,7 @@ from clips_chat_v2 import (
     cut_vertical_clip,
     fmt_ts,
     get_video_duration,
-    score_message,
+    sample_messages,
     score_windows,
     select_top_peaks,
 )
@@ -325,25 +324,20 @@ def download_twitch_segment(vod_id: str, start_sec: float, end_sec: float,
     return out_path
 
 
-def sample_messages(chat_path: str, window_start: int, window_size: int = 10, limit: int = 3):
-    """Mensajes de risa/hype de esa ventana, para sugerir el título."""
-    with open(chat_path, encoding="utf-8") as f:
-        data = json.load(f)
-    examples = []
-    for c in data.get("comments", []):
-        off = c.get("content_offset_seconds")
-        if off is None:
-            continue
-        if window_start <= int(off) < window_start + window_size:
-            body = (c.get("message", {}).get("body", "") or "").strip()
-            if not body:
-                continue
-            _, laugh, hype = score_message(body)
-            if laugh or hype:
-                examples.append(body)
-            if len(examples) >= limit:
-                break
-    return examples
+def write_manifest_atomic(out_dir: str, manifest: dict) -> str:
+    """Escribe manifest.json de forma atómica.
+
+    Se vuelca a un temporal en la misma carpeta y se mueve con
+    ``os.replace``: si el proceso muere a mitad de un job, el
+    manifiesto en disco siempre es un JSON completo (el de los
+    clips ya cortados), nunca un archivo a medias.
+    """
+    tmp_path = os.path.join(out_dir, ".manifest.json.tmp")
+    final_path = os.path.join(out_dir, "manifest.json")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, final_path)
+    return final_path
 
 
 def suggest_titles(detail, lang: str, game: str = None):
@@ -1080,9 +1074,11 @@ def main() -> int:
                 "segments": layout_decision.get("segments", []),
             }
         manifest["clips"].append(clip_entry)
+        # Manifiesto tras CADA clip (atómico): si el job muere en el
+        # clip 3 de 5, los clips 1-2 ya están guardados en disco.
+        write_manifest_atomic(out_dir, manifest)
 
-    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    write_manifest_atomic(out_dir, manifest)
     lines = [f"# Clips — VOD {vod_id or 'local'}", ""]
     for c in manifest["clips"]:
         lines += [f"## Clip {c['n']} — {c['file']}",
