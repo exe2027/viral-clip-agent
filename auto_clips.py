@@ -212,9 +212,11 @@ except ImportError:
 try:
     # Score de viralidad 0-100 + señales MVP (7 componentes, banda,
     # filtro previo). Distinto del score de chat: no se mezclan.
-    from clipagent.detect import compute_signals, filter_passed, score_clip
+    from clipagent.detect import (audio_weight_for, compute_signals,
+                                  filter_passed, score_clip)
     viral_score_mod = True
 except ImportError:
+    audio_weight_for = None
     compute_signals = None
     filter_passed = None
     score_clip = None
@@ -1193,9 +1195,14 @@ def main() -> int:
             if audio_info is not None:
                 audio_in = {"stats": audio_info.get("stats"),
                             "words": audio_info.get("words")}
+            # 7.2: peso del audio configurable y mayor en Kick.
+            _audio_w = (audio_weight_for(platform, cfg)
+                        if audio_weight_for else None)
             viral_score = score_clip(detail[peak_ts], multiple,
                                      rank=rank_map.get(peak_ts),
-                                     human=human, audio=audio_in)
+                                     human=human, audio=audio_in,
+                                     audio_weight=_audio_w,
+                                     platform=platform)
             print(f"    Viralidad: {viral_score['total']}/100 "
                   f"({viral_score['band']})"
                   + (" [BETA: componentes estimados]" if viral_score["beta"] else "")

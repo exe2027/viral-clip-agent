@@ -206,6 +206,10 @@ def audio_component(audio=None):
     si no, por std: >=15 -> 9, 11-15 -> 7-8, 9-11 -> 5-6, <9 -> 4.
     Sin palabras transcritas (0 palabras con transcripción hecha),
     máx. 4/10: un pico de chat con el audio sin voz es sospechoso.
+    7.2: picos de energía (range_db = máx - mín del RMS por
+    segundo): rango >= 25 dB -> +1; 15-25 dB -> +0,5. Las risas y
+    los gritos se miden por el chat (detail risas/hype) y por la
+    transcripción (palabras): el audio aporta los picos de energía.
     """
     if audio is None:
         return None, "sin audio medido (pendiente)"
@@ -232,13 +236,48 @@ def audio_component(audio=None):
     else:
         value = 4.0
         reason = f"audio poco dinámico: std {std} dB"
+    # 7.2: picos de energía (gritos, reacciones, subidones).
+    range_db = stats.get("range_db")
+    if range_db is not None and range_db >= 25.0:
+        value += 1.0
+        reason += f"; picos de energía (rango {range_db} dB) (+1)"
+    elif range_db is not None and range_db >= 15.0:
+        value += 0.5
+        reason += f"; picos de energía (rango {range_db} dB) (+0,5)"
     if words is not None and words == 0:
         value = min(value, AUDIO_NO_VOICE_CAP)
         reason += f"; 0 palabras transcritas -> máx. {AUDIO_NO_VOICE_CAP:.0f}/10"
     elif words is not None and words >= 50:
         value = min(10.0, value + 1.0)
         reason += f"; {words} palabras transcritas (+1)"
-    return round(value, 2), reason
+    return round(min(value, 10.0), 2), reason
+
+
+# 7.2: peso del audio, configurable y mayor en Kick (en Kick el
+# chat es menos fiable como señal y el audio manda más). Por
+# defecto 1,0 / 1,5: con esos valores el total no cambia.
+AUDIO_WEIGHT_DEFAULT = 1.0
+AUDIO_WEIGHT_KICK_DEFAULT = 1.5
+
+
+def audio_weight_for(platform, cfg=None):
+    """Peso del componente audio para una plataforma (7.2).
+
+    Lee config.yaml `scoring.audio_weight` y
+    `scoring.audio_weight_kick` (por defecto 1,0 y 1,5).
+    """
+    scoring = (cfg or {}).get("scoring") or {}
+    base = scoring.get("audio_weight", AUDIO_WEIGHT_DEFAULT)
+    kick = scoring.get("audio_weight_kick", AUDIO_WEIGHT_KICK_DEFAULT)
+    try:
+        base = float(base)
+    except (TypeError, ValueError):
+        base = AUDIO_WEIGHT_DEFAULT
+    try:
+        kick = float(kick)
+    except (TypeError, ValueError):
+        kick = AUDIO_WEIGHT_KICK_DEFAULT
+    return kick if (platform or "").lower() == "kick" else base
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +306,8 @@ def _human_value(human, name):
     return value, reason
 
 
-def score_clip(detail, chat_multiple, rank=None, human=None, audio=None):
+def score_clip(detail, chat_multiple, rank=None, human=None, audio=None,
+               audio_weight=None, platform=None):
     """Score de viralidad completo de un clip.
 
     detail: detail[ventana] de score_windows (o None si no hay chat).
@@ -276,6 +316,10 @@ def score_clip(detail, chat_multiple, rank=None, human=None, audio=None):
     human: dict {hook, claridad, novedad, loop, packaging} con
         valores 0-10 (número o {"value", "reason"}).
     audio: ver audio_component (None = pendiente).
+    audio_weight / platform (7.2): peso del componente audio; por
+        defecto 1,0 (o el de audio_weight_for si se pasa platform).
+        El total se renormaliza para seguir en 0-100: con los pesos
+        por defecto el resultado es idéntico al de siempre.
 
     Devuelve dict con total, components (los 7, cada uno con value,
     estimated y reason), band, beta (True si algún componente es
@@ -324,8 +368,17 @@ def score_clip(detail, chat_multiple, rank=None, human=None, audio=None):
             "value": audio_value, "estimated": False, "reason": audio_reason,
         }
 
+    # 7.2: peso del audio configurable (mayor en Kick). El total se
+    # renormaliza a 0-100: con el peso por defecto (1,0) la suma de
+    # pesos es 10 y el resultado es idéntico al de siempre.
+    weights = dict(WEIGHTS)
+    if audio_weight is None and platform is not None:
+        audio_weight = audio_weight_for(platform)
+    if audio_weight is not None:
+        weights["audio"] = float(audio_weight)
     total = round(
-        sum(components[name]["value"] * WEIGHTS[name] for name in WEIGHTS), 1)
+        sum(components[name]["value"] * weights[name] for name in weights)
+        * 10.0 / sum(weights.values()), 1)
     pasa, motivos = filter_passed(detail, chat_multiple, rank=rank)
 
     return {
@@ -340,6 +393,7 @@ def score_clip(detail, chat_multiple, rank=None, human=None, audio=None):
         "chat_multiple": round(float(chat_multiple), 2) if chat_multiple is not None else None,
         "filter_passed": pasa,
         "filter_reasons": motivos,
+        "audio_weight": weights["audio"],
     }
 
 

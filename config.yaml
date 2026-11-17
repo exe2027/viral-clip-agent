@@ -298,6 +298,11 @@ autopublish:
 scoring:
   seo_gate: 90
   viral_min: 50
+  # 7.2: peso del componente audio del score de viralidad. En Kick
+  # es mayor (1,5): el chat es menos fiable como señal y el audio
+  # manda más. Con estos valores el total no cambia.
+  audio_weight: 1.0
+  audio_weight_kick: 1.5
 
 # Aprobación automática por política (6.3): sin humano por clip.
 # min_band: null = sin requisito de banda.

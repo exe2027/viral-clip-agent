@@ -267,6 +267,8 @@ def validate_config(cfg, source="config.yaml"):
     c.check(cfg, "scoring", "dict")
     c.check(cfg, "scoring.seo_gate", "int", minimum=0, maximum=100)
     c.check(cfg, "scoring.viral_min", "int", minimum=0, maximum=100)
+    c.check(cfg, "scoring.audio_weight", "num", minimum=0, maximum=5)
+    c.check(cfg, "scoring.audio_weight_kick", "num", minimum=0, maximum=5)
     c.check(cfg, "auto_approve", "dict")
     c.check(cfg, "auto_approve.enabled", "bool")
     if (cfg.get("auto_approve") or {}).get("min_band") is not None:

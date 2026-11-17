@@ -128,6 +128,8 @@ DEFAULT_CONFIG = {
     "scoring": {
         "seo_gate": 90,
         "viral_min": 50,
+        "audio_weight": 1.0,
+        "audio_weight_kick": 1.5,
     },
     # Aprobación automática por política (6.3): sin humano por clip.
     # min_band: null = sin requisito de banda; descartar | revisar |
