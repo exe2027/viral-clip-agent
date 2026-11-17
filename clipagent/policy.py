@@ -147,6 +147,8 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
         # Bloqueo duro de SEO (0-69): sin override posible.
         return _deny("descartado",
                      f"SEO {seo:.0f} < 70: bloqueo duro, sin override")
+    improved_pkg = None
+    improved_seo = None
     if status == "bloqueado_seo":
         # 6B.4: auto-mejora del SEO antes de descartar (máx. 3
         # reintentos con el LLM). Sin LLM, se retiene con motivo.
@@ -165,6 +167,11 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
                 f"mejor SEO {best['score']}")
             if best["score"] >= seo_gate:
                 checks.append("seo_retry: llegó al gate, se publica")
+                # El paquete mejorado vuelve al llamador para
+                # escribirlo en el manifiesto (6B.4): si no, la
+                # subida usaría el título viejo.
+                improved_pkg = result["best_pkg"]
+                improved_seo = best["score"]
             else:
                 return _deny("retenido",
                              f"SEO {seo:.0f} < {seo_gate} y el reintento "
@@ -225,4 +232,6 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
             "reason": f"pasa la política (viralidad {virality:.0f}, "
                       f"SEO {seo:.0f}, prioridad {prio['priority']:.1f})",
             "virality": virality, "seo": seo, "priority": prio,
-            "band": band, "checks": checks}
+            "band": band, "checks": checks,
+            "improved_pkg": improved_pkg,
+            "improved_seo": improved_seo}

@@ -473,6 +473,53 @@ class PublishQueue:
         return scored
 
 
+def _apply_improved_package(clip_path, platform, best_pkg, best_score):
+    """6B.4: escribe el paquete SEO mejorado en el manifiesto.
+
+    Actualiza title_es/desc_es/hashtags_es, el paquete por
+    plataforma que lee la subida (viral.platforms) y el score SEO
+    guardado. Escritura atómica (tmp + os.replace). Devuelve True
+    si se escribió.
+    """
+    run_dir = os.path.dirname(os.path.dirname(os.path.abspath(clip_path)))
+    manifest_path = os.path.join(run_dir, "manifest.json")
+    manifest = _load_json(manifest_path, None)
+    if not manifest:
+        return False
+    clip_name = os.path.basename(clip_path)
+    target = None
+    for clip in manifest.get("clips", []):
+        listed = os.path.basename(clip.get("file", ""))
+        base = listed.rsplit(".mp4", 1)[0]
+        if clip_name == listed or clip_name.startswith(base):
+            target = clip
+            break
+    if target is None:
+        return False
+    if best_pkg.get("title"):
+        target["title_es"] = best_pkg["title"]
+    if best_pkg.get("description"):
+        target["desc_es"] = best_pkg["description"]
+    if best_pkg.get("hashtags"):
+        target["hashtags_es"] = " ".join(best_pkg["hashtags"])
+    if best_score is not None:
+        target.setdefault("seo_scores", {}).setdefault(platform, {})["score"] = best_score
+    platforms = target.setdefault("viral", {}).setdefault("platforms", {})
+    entry = platforms.setdefault(platform, {})
+    if best_pkg.get("title"):
+        entry["title"] = best_pkg["title"]
+    if best_pkg.get("description"):
+        entry["caption"] = best_pkg["description"]
+    tags = best_pkg.get("tags") or best_pkg.get("hashtags") or []
+    if tags:
+        entry["tags"] = list(tags)[:15]
+    tmp = manifest_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, manifest_path)
+    return True
+
+
 def _item_age_days(item):
     """Días desde que el ítem entró en la cola (0 si no se sabe)."""
     from datetime import datetime
@@ -964,13 +1011,26 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
                 "reason": "sin entrada en el manifiesto"}
     overrides = {o.get("platform")
                  for o in (manifest or {}).get("seo_overrides", [])}
+    # 6B.4: si hay LLM disponible, la política puede reintentar el
+    # SEO (70-89) con variantes generadas; sin LLM, se retiene.
+    from .llm import get_llm_client, make_seo_variant
+    llm = get_llm_client()
+    make_variant = make_seo_variant(llm) if llm.available() else None
     decision = evaluate(
         clip, platform, queue=queue, cfg=cfg,
         red_flags=item.get("red_flags"), game=item.get("game"),
         vod_id=item.get("vod_id") or (manifest or {}).get("vod_id"),
         mode=mode, counter_state=counter_state,
         seo_override=platform in overrides,
-        age_days=_item_age_days(item))
+        age_days=_item_age_days(item),
+        make_variant=make_variant)
+    if decision["decision"] == "publicar" and decision.get("improved_pkg"):
+        # El reintento llegó al gate: el manifiesto guarda el
+        # paquete mejorado para que la subida use ese título y
+        # esa descripción, no los viejos.
+        _apply_improved_package(clip_path, platform,
+                                decision["improved_pkg"],
+                                decision["improved_seo"])
     if decision["decision"] == "descartado":
         queue.set_state(item, "discarded", decision["reason"])
         return {"action": "discarded", "reason": decision["reason"]}

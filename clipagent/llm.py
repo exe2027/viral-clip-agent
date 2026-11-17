@@ -23,6 +23,10 @@ class LLMClient:
 
     name = "base"
 
+    def available(self):
+        """¿Se puede usar (hay clave/configuración)? Sin LLM: False."""
+        return False
+
     def generate(self, prompt: str) -> str:
         raise NotImplementedError
 
@@ -79,6 +83,73 @@ class GeminiLLMClient(LLMClient):
             return payload["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError):
             return ""
+
+
+def make_seo_variant(client, lang="es"):
+    """make_variant(pkg, worst_block) para seo_score.retry_best (6B.4).
+
+    Pide al LLM una variante SOLO del bloque más débil (título,
+    descripción, hashtags o texto de miniatura) y devuelve el pkg
+    con ese bloque cambiado. Sin LLM disponible, o si el LLM no
+    responde nada útil, devuelve None (el reintento se para y el
+    clip queda retenido, nunca se publica con SEO < 90).
+    """
+    def _clean_title(text):
+        line = (text or "").strip().splitlines()
+        title = line[0].strip().strip("\"'") if line else ""
+        return title[:60] if title else ""
+
+    def _clean_hashtags(text):
+        tags = [t for t in (text or "").replace(",", " ").split()
+                if t.startswith("#")]
+        if not tags:
+            tags = ["#" + t.strip("#.,") for t in
+                    (text or "").split() if t.strip("#.,")]
+        return tags[:8]
+
+    def variant(pkg, worst):
+        if client is None or not client.available():
+            return None
+        title = pkg.get("title") or ""
+        desc = pkg.get("description") or ""
+        if worst == "title" or worst == "coherence":
+            prompt = ("Escribe UN título nuevo en español para un Short "
+                      "sobre GTA 6. Debe incluir 'GTA 6' al inicio, tener "
+                      f"entre 40 y 55 caracteres, y describir este momento: "
+                      f"{desc[:200]}. Título actual: {title}. Devuelve SOLO "
+                      "el título, sin comillas ni explicación.")
+            new = _clean_title(client.generate(prompt))
+            if not new or new == title:
+                return None
+            return dict(pkg, title=new)
+        if worst == "description":
+            prompt = ("Escribe una descripción nueva en español (2-3 "
+                      "frases) para un Short sobre GTA 6 con este título: "
+                      f"{title}. Debe mencionar GTA 6. Devuelve SOLO la "
+                      "descripción, sin comillas ni explicación.")
+            new = (client.generate(prompt) or "").strip()
+            if not new or new == desc:
+                return None
+            return dict(pkg, description=new[:1000])
+        if worst == "tags":
+            prompt = ("Devuelve 5 hashtags en español para un Short "
+                      f"sobre GTA 6 con este título: {title}. Solo los "
+                      "hashtags separados por espacios, nada más.")
+            new = _clean_hashtags(client.generate(prompt))
+            if not new or new == list(pkg.get("hashtags") or []):
+                return None
+            return dict(pkg, hashtags=new, tags=new)
+        if worst == "thumbnail":
+            prompt = ("Escribe un texto corto (máx. 4 palabras) para la "
+                      f"miniatura de un Short sobre GTA 6 con este título: "
+                      f"{title}. Devuelve SOLO el texto.")
+            new = _clean_title(client.generate(prompt))
+            if not new:
+                return None
+            return dict(pkg, thumbnail_text=new)
+        return None
+
+    return variant
 
 
 def get_llm_client(provider=None, request_fn=None):
