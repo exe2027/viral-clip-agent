@@ -931,8 +931,17 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     return {"action": mapped, "reason": action["reason"]}
 
 
+def _record_counter(counter_state, event, clip, platform, path=None):
+    """6.7: registra published_ok/published_fail en counter.py y
+    guarda el estado. Solo se llama en modo gradual."""
+    from counter import record_event, save_state
+    record_event(counter_state, event, clip=clip, platform=platform)
+    save_state(counter_state, path=path)
+
+
 def publish_loop(queue=None, interval_s=300, live=False, once=False,
-                 cfg=None, stop_event=None, notify_fn=None):
+                 cfg=None, stop_event=None, notify_fn=None,
+                 counter_path=None):
     """Bucle del publicador: evalúa la cola por política y publica.
 
     Una pasada por plataforma (pausadas se saltan), y espera
@@ -949,7 +958,7 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
     counter_state = None
     if mode == "gradual":
         from counter import load_state as _load_counter_state
-        counter_state = _load_counter_state()
+        counter_state = _load_counter_state(counter_path)
     stop = stop_event or threading.Event()
     stats = {"published": 0, "retained": 0, "discarded": 0, "draft": 0,
              "failed": 0, "quarantined": 0, "limited": 0, "paused": 0,
@@ -968,6 +977,18 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
                 action = result["action"]
                 if action in stats:
                     stats[action] += 1
+                # 6.7: en modo gradual, cada resultado alimenta el
+                # contador de AUTOPUBLISH (fases y rachas). En modo
+                # full el contador no se toca.
+                if (counter_state is not None
+                        and action in ("published", "failed",
+                                       "quarantined")):
+                    _record_counter(
+                        counter_state,
+                        "published_ok" if action == "published"
+                        else "published_fail",
+                        clip=item["clip"], platform=platform,
+                        path=counter_path)
                 if action == "published":
                     _breaker.record_success(platform)
                     if notify_fn:
