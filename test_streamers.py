@@ -81,6 +81,41 @@ class TestSingleList(unittest.TestCase):
                  "estado": "denegado"}, path=path, base_dir=tmp)
             self.assertFalse(streamers.is_allowed("fuera", base_dir=tmp))
 
+    def test_watcher_ignora_listas_viejas(self):
+        """4.3: con streamers.yaml presente, el watcher NO vigila a
+        quien solo está en influencers.yaml (lista vieja)."""
+        import watcher as watcher_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "streamers.yaml"), "w",
+                      encoding="utf-8") as f:
+                f.write("streamers:\n"
+                        "  - name: illojuan\n"
+                        "    platform: twitch\n")
+            with open(os.path.join(tmp, "influencers.yaml"), "w",
+                      encoding="utf-8") as f:
+                f.write("influencers:\n"
+                        "  - usuario: illojuan\n"
+                        "    plataforma: twitch\n"
+                        "  - usuario: coker\n"
+                        "    plataforma: kick\n")
+            old_base = streamers.BASE_DIR
+            streamers.BASE_DIR = tmp
+            try:
+                watched = {i["usuario"]
+                           for i in watcher_mod.load_influencers()}
+            finally:
+                streamers.BASE_DIR = old_base
+            self.assertEqual(watched, {"illojuan"})
+
+    def test_tope_diario_por_streamer(self):
+        """4.3: el tope de VODs nuevos por streamer por día existe
+        en config (max_new_vods_per_streamer_per_day: 5) y el
+        watcher lo respeta; ver test_watcher.TestDecide.test_tope_diario."""
+        from config import load_config
+        cfg = load_config()
+        self.assertEqual(
+            cfg["watcher"]["max_new_vods_per_streamer_per_day"], 5)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
