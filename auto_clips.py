@@ -380,6 +380,26 @@ def filter_candidates(peaks, detail, rank_map, median_score):
     return selected, discarded
 
 
+def extract_window(video_path, start_sec, duration, out_path):
+    """Ventana de análisis con inicio EXACTO (re-encode, no -c copy).
+
+    Con ``-ss X -i ... -c copy`` el archivo empieza en el keyframe
+    anterior a X (medido 2026-11-17: GOP de 5 s, ventana pedida a
+    33 s, primer paquete con PTS -3.0): peak_rel, el hook y los
+    subtítulos quedaban desfasados hasta un GOP entero. Con
+    re-encode corto (ultrafast) el primer fotograma es exactamente
+    start_sec (primer PTS 0.0). La ventana es solo para análisis
+    (transcripción/audio/corte preciso), nunca se publica.
+    """
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-ss", str(start_sec),
+         "-i", video_path, "-t", str(duration),
+         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+         "-c:a", "aac", out_path],
+        check=True, capture_output=True, text=True)
+    return out_path
+
+
 def write_manifest_atomic(out_dir: str, manifest: dict) -> str:
     """Escribe manifest.json de forma atómica.
 
@@ -883,10 +903,10 @@ def main() -> int:
             if platform == "twitch" and args.video:
                 tmp_window = os.path.join(
                     out_dir, f".window_{idx:02d}.mp4")
-                subprocess.run(
-                    ["ffmpeg", "-y", "-v", "error", "-ss", str(cut_start),
-                     "-i", video_path, "-t", str(seg_len), "-c", "copy",
-                     tmp_window], check=True)
+                # Ventana con inicio exacto (ver extract_window): con
+                # -c copy empezaba en el keyframe anterior y peak_rel
+                # quedaba desfasado hasta un GOP.
+                extract_window(video_path, cut_start, seg_len, tmp_window)
                 window_path = tmp_window
             peak_rel = peak_ts - window_start_abs
             transcript = None

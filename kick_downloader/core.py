@@ -507,8 +507,17 @@ def download_segment(master_url: str, start_sec: float, duration: float,
         return out_path
     variant = pick_variant(master_url, max_height=max_height)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    # Re-encode (no -c copy): con copia el segmento empieza en el
+    # keyframe anterior al inicio pedido (hasta un segmento HLS
+    # antes) y el corte posterior, que asume que el segmento empieza
+    # exactamente en start_sec, queda desfasado; peak_rel, hook y
+    # subtítulos heredan ese desfase (ver auto_clips.extract_window,
+    # medido 2026-11-17: -3.0 s con GOP de 5 s). El re-encode es un
+    # pase extra por clip, del mismo orden que el corte final.
     cmd = [ffmpeg_path, "-v", "error", "-ss", str(int(start_sec)), "-i", variant,
-           "-t", str(int(duration)), "-c", "copy", "-y", out_path]
+           "-t", str(int(duration)),
+           "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+           "-c:a", "aac", "-y", out_path]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.isfile(out_path):
         raise KickError(f"No se pudo bajar el segmento: {r.stderr.strip()[-500:]}")
