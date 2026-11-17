@@ -144,6 +144,31 @@ Arreglo 6 (2026-11-16) — el recorte SIGUE la cara dentro del tramo:
     los usa, aquí no). El ancla del divisor asume cams 50/50 lado a
     lado; un directo con mitades desiguales quedaría con el divisor
     en el medio (límite conocido).
+
+Detección de vtuber / PNG tuber (2026-11-17, VOD Rubius 2931565552):
+  * Causa del fallo: en el tramo 10332-10372 el avatar es un gato
+    estilo Miku abajo a la izquierda (pelo celeste, orejas,
+    audífonos) cuya boca se abre/cierra con la voz. No es una cara
+    humana (Haar no lo ve: faces_1fps 0 en todo el clip), no toca
+    el borde superior (el detector de cajas de esquina solo busca
+    arriba) y el escritorio de fondo es estático, así que el
+    escaneo daba 2 cams estables al 100% sin costura central y lo
+    trataba como imagen estática. El clip caía a center con
+    seguimiento de cara y el gato se perdía del recorte.
+  * Heurística (``_detect_vtuber_candidates``): sobre los
+    fotogramas del escaneo (160x90, cada 2 s), un parche de celdas
+    con cambio fuerte (boca/parpadeo) en una esquina, con la caja
+    que lo rodea CASI INMÓVIL en ese mismo par de fotogramas (el
+    avatar está quieto; solo se mueve la cara) y presente en una
+    racha larga de muestras. La caja es el parche + 1 celda de
+    margen (pelo/cuerpo) y debe tocar una esquina y medir 3-35%
+    del fotograma. Si no cumple todo, no hay vtuber y el layout
+    cae a center como antes. ``decide_layout`` convierte esa caja
+    en pip y luego en split (juego arriba, avatar abajo), igual
+    que con una webcam humana; si la caja cambia dentro del clip
+    (p. ej. gato abajo-izquierda y luego cámara humana
+    arriba-izquierda), los tramos se parten por caja, no solo por
+    layout, para no aplicar una caja a un tramo donde no está.
 """
 
 import os
@@ -181,6 +206,34 @@ DEFAULTS = {
     "blur_radius": 20,         # radio del boxblur del fondo en stack
     "game": "GTA 6",           # juego para el mapa de zonas seguras
     "safe_zones": None,        # override manual: [[x0,y0,x1,y1], ...] en 0..1
+    # Vtuber / PNG tuber (2026-11-17, VOD Rubius 2931565552): un avatar
+    # reactivo (anime, sin cara humana) no lo ve Haar y no tiene borde
+    # de caja en esquina superior, así que ni _detect_corner_box ni
+    # _face_cam_box lo detectan y el clip caía a center. Heurística
+    # temporal sobre los fotogramas del escaneo (sin dependencias
+    # nuevas, sin ML): un parche pequeño en una esquina que cambia
+    # fuerte (boca que se abre/cierra, parpadeo) mientras el resto de
+    # su caja NO cambia (el avatar está quieto; solo se mueve la
+    # cara), presente en una racha larga de muestras. Una alerta
+    # (avatar que aparece/desaparece animándose) cambia también su
+    # caja entera al aparecer y dura 2-3 muestras: la racha mínima
+    # la descarta. Sin parche que cumpla todo, no hay vtuber y el
+    # layout sigue cayendo a center como antes.
+    "vtuber_enabled": True,   # detectar avatares reactivos en el escaneo
+    "vtuber_active_thr": 25,  # dif. media por celda = cambio fuerte
+    "vtuber_min_cells": 2,    # parche activo mínimo (celdas 10x10)
+    "vtuber_max_cells": 24,   # parche activo máximo (más = gameplay, no cara)
+    "vtuber_body_thr": 8,     # el resto de la caja no debe moverse (dif. media)
+    "vtuber_state_thr": 30,   # los dos estados del par (boca abierta /
+                              # cerrada) tienen brillo parecido; aparecer /
+                              # desaparecer lo cambia mucho más (gato 83->28)
+    "vtuber_present_tol": 20, # |media del parche - estado| <= tol -> presente
+    "vtuber_present_frac": 0.20,  # presente en >= 20% de las muestras
+    "vtuber_min_run": 4,      # racha consecutiva mínima (muestras de 2 s)
+    "vtuber_margin_cells": 1, # margen alrededor del parche (pelo/cuerpo)
+    "vtuber_min_area_frac": 0.03,  # caja entre 3% y 35% del fotograma
+    "vtuber_max_area_frac": 0.35,
+    "vtuber_min_std": 10,     # textura mínima dentro de la caja
     # Arreglo 6: seguimiento de la cara / del divisor dentro del tramo.
     "track_enabled": True,     # seguir la cara (center) o el divisor (stack)
     "track_every_s": 1,        # muestrear la cara cada N s (layout center)
@@ -610,6 +663,239 @@ def _classify_cams_from_stability(stable, cfg, frame_bytes=None):
                  ("; SIN costura central (posible imagen estática)"
                   if n_cams == 2 else "")))
     return n_cams, avatar, boxes, seam, detail
+
+
+# ---------------------------------------------------------------------------
+# Detección de vtuber / PNG tuber (2026-11-17, VOD Rubius 2931565552)
+# ---------------------------------------------------------------------------
+# Un avatar reactivo (anime, mascota, PNG tuber) no es una cara humana
+# (Haar no lo ve) y no tiene por qué tener borde de caja en una esquina
+# superior (el de Rubius está abajo a la izquierda, sin borde). Lo que
+# SÍ lo distingue de un fondo de pantalla o de una imagen estática es
+# temporal: un parche pequeño de su cara cambia fuerte entre fotogramas
+# (la boca se abre/cierra con la voz, parpadeo) mientras el resto del
+# avatar NO se mueve (el sprite está quieto; solo cambia la cara) y el
+# avatar persiste muchos segundos en la misma esquina.
+#
+# La heurística es genérica (nada de "gato Miku" ni coordenadas del
+# VOD): trabaja sobre los fotogramas del escaneo (160x90, cada 2 s) y
+# exige TODO esto para aceptar un candidato; si falta algo, no hay
+# vtuber y el layout cae a center como antes:
+#   1. Parche activo: celdas conexas (10x10 px) con diferencia media
+#      >= vtuber_active_thr entre dos fotogramas consecutivos, de
+#      vtuber_min_cells a vtuber_max_cells celdas (una cara, no todo
+#      el gameplay moviéndose).
+#   2. Cuerpo quieto + estados parecidos: en ALGÚN par con cambio
+#      fuerte en el parche, el resto de la caja (parche + 1 celda de
+#      margen) apenas cambia (dif. media <= vtuber_body_thr) Y los
+#      dos estados del parche tienen brillo parecido (dif. de medias
+#      <= vtuber_state_thr: boca abierta/cerrada). Esto descarta la
+#      aparición / desaparición de un overlay: cuando un avatar
+#      APARECE, su caja entera cambia y el brillo del parche salta.
+#      También descarta una webcam humana moviéndose entera (esa ya
+#      la cubre _face_cam_box).
+#   3. Presente en racha: el parche se parece (media de gris cerca
+#      de uno de los dos estados del mejor par con cambio: boca
+#      abierta o cerrada) en >= vtuber_present_frac de las muestras
+#      y en una racha consecutiva >= vtuber_min_run. Una alerta
+#      ("Gracias <usuario>!" + avatar morado) aparece, se anima y
+#      desaparece en 2-3 muestras: pasa 1 y 2 pero no la racha.
+#   4. Esquina + tamaño + textura: la caja toca dos bordes
+#      adyacentes, mide 3-35% del fotograma y tiene textura (no es
+#      un parche plano de fondo liso).
+# Sin dependencias nuevas: solo stdlib sobre los bytes en gris que
+# ya muestrea el escaneo. Devuelve cajas en px del fotograma de
+# muestra (160x90), listas para _split_params vía pip -> split.
+
+
+def _cell_diff_grid(prev_bytes, cur_bytes, cfg, w=SAMPLE_W, h=SAMPLE_H):
+    """Diferencia media absoluta por celda CELLxCELL entre dos fotogramas."""
+    rows, cols = h // CELL, w // CELL
+    grid = []
+    for r in range(rows):
+        row = []
+        for c in range(cols):
+            s = 0
+            for y in range(r * CELL, (r + 1) * CELL):
+                base = y * w + c * CELL
+                for x in range(CELL):
+                    d = cur_bytes[base + x] - prev_bytes[base + x]
+                    s += d if d >= 0 else -d
+            row.append(s / (CELL * CELL))
+        grid.append(row)
+    return grid
+
+
+def _cell_mean(frame_bytes, c, r, w=SAMPLE_W):
+    """Media de gris de una celda CELLxCELL (c, r)."""
+    s = 0
+    for y in range(r * CELL, (r + 1) * CELL):
+        base = y * w + c * CELL
+        for x in range(CELL):
+            s += frame_bytes[base + x]
+    return s / (CELL * CELL)
+
+
+def _patch_mean(frame_bytes, cells):
+    """Media de gris de un parche (lista de celdas (r, c))."""
+    return sum(_cell_mean(frame_bytes, c, r) for (r, c) in cells) / len(cells)
+
+
+def _active_clusters(max_grid, thr):
+    """Parches conexos (4-vecinos) de celdas con dif. máxima >= thr."""
+    rows, cols = len(max_grid), len(max_grid[0])
+    seen = [[False] * cols for _ in range(rows)]
+    clusters = []
+    for r in range(rows):
+        for c in range(cols):
+            if max_grid[r][c] < thr or seen[r][c]:
+                continue
+            stack = [(r, c)]
+            seen[r][c] = True
+            cells = []
+            while stack:
+                rr, cc = stack.pop()
+                cells.append((rr, cc))
+                for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nr, nc = rr + dr, cc + dc
+                    if (0 <= nr < rows and 0 <= nc < cols
+                            and not seen[nr][nc]
+                            and max_grid[nr][nc] >= thr):
+                        seen[nr][nc] = True
+                        stack.append((nr, nc))
+            clusters.append(cells)
+    return clusters
+
+
+def _detect_vtuber_candidates(frames, cfg):
+    """Candidatos a avatar reactivo en una lista de fotogramas.
+
+    ``frames``: [(t, bytes160x90), ...] en orden temporal (los del
+    escaneo). Devuelve [{box, corner, present_frac, run, detail,
+    _cells, _states}] con box [x0, y0, w, h] en px de muestra;
+    ``_cells``/``_states`` son internos (presencia por fotograma).
+    Lista vacía si ningún parche cumple toda la heurística.
+    """
+    if len(frames) < 3:
+        return []
+    thr = float(cfg.get("vtuber_active_thr", 25))
+    body_thr = float(cfg.get("vtuber_body_thr", 8))
+    pair_grids = [_cell_diff_grid(a, b, cfg)
+                  for (_t0, a), (_t1, b) in zip(frames, frames[1:])]
+    rows, cols = len(pair_grids[0]), len(pair_grids[0][0])
+    max_grid = [[max(g[r][c] for g in pair_grids) for c in range(cols)]
+                for r in range(rows)]
+    margin = int(cfg.get("vtuber_margin_cells", 1))
+    candidates = []
+    for cells in _active_clusters(max_grid, thr):
+        if not (int(cfg.get("vtuber_min_cells", 2)) <= len(cells)
+                <= int(cfg.get("vtuber_max_cells", 24))):
+            continue
+        rs = [r for (r, _c) in cells]
+        cs = [c for (_r, c) in cells]
+        # Caja: parche + margen, recortada al fotograma.
+        r0 = max(0, min(rs) - margin)
+        r1 = min(rows - 1, max(rs) + margin)
+        c0 = max(0, min(cs) - margin)
+        c1 = min(cols - 1, max(cs) + margin)
+        box = [c0 * CELL, r0 * CELL,
+               (c1 - c0 + 1) * CELL, (r1 - r0 + 1) * CELL]
+        area = (box[2] * box[3]) / (SAMPLE_W * SAMPLE_H)
+        if not (float(cfg.get("vtuber_min_area_frac", 0.03)) <= area
+                <= float(cfg.get("vtuber_max_area_frac", 0.35))):
+            continue
+        # Esquina: la caja toca dos bordes adyacentes (margen 1 celda).
+        touches = {"left": box[0] <= CELL,
+                   "right": box[0] + box[2] >= SAMPLE_W - CELL,
+                   "top": box[1] <= CELL,
+                   "bottom": box[1] + box[3] >= SAMPLE_H - CELL}
+        corner = None
+        for name, (a, b) in (("top-left", ("top", "left")),
+                             ("top-right", ("top", "right")),
+                             ("bottom-left", ("bottom", "left")),
+                             ("bottom-right", ("bottom", "right"))):
+            if touches[a] and touches[b]:
+                corner = name
+                break
+        if corner is None:
+            continue
+        # Cuerpo quieto: en un par con cambio fuerte en el parche, el
+        # resto de la caja apenas cambia (avatar quieto, solo la cara
+        # se mueve) Y los dos estados del parche tienen brillo
+        # parecido (boca abierta/cerrada: 77<->83 en el gato de
+        # Rubius). Sin ese par, es aparición/desaparición, no vtuber:
+        # al aparecer, la caja entera cambia y el brillo del parche
+        # salta (83->28 el gato, 9->73 la cámara humana).
+        box_cells = [(r, c) for r in range(r0, r1 + 1)
+                     for c in range(c0, c1 + 1)]
+        cellset = set(cells)
+        rest = [cell for cell in box_cells if cell not in cellset]
+        best = None  # (dif. máx. del parche, (estado_a, estado_b))
+        for gi, g in enumerate(pair_grids):
+            mx = max(g[r][c] for (r, c) in cells)
+            if mx < thr:
+                continue
+            if rest:
+                rest_diff = sum(g[r][c] for (r, c) in rest) / len(rest)
+                if rest_diff > body_thr:
+                    continue
+            ma = _patch_mean(frames[gi][1], cells)
+            mb = _patch_mean(frames[gi + 1][1], cells)
+            if abs(ma - mb) > float(cfg.get("vtuber_state_thr", 30)):
+                continue
+            if best is None or mx > best[0]:
+                best = (mx, (ma, mb))
+        if best is None:
+            continue
+        mx, states = best
+        tol = float(cfg.get("vtuber_present_tol", 20))
+        present = [min(abs(_patch_mean(b, cells) - s) for s in states) <= tol
+                   for (_t, b) in frames]
+        frac = sum(present) / len(present)
+        if frac < float(cfg.get("vtuber_present_frac", 0.20)):
+            continue
+        run = cur = 0
+        for p in present:
+            cur = cur + 1 if p else 0
+            run = max(run, cur)
+        if run < int(cfg.get("vtuber_min_run", 4)):
+            continue
+        # Textura: la caja no es un parche plano de fondo liso.
+        _t, fb = next((_t, b) for (_t, b), p in zip(frames, present) if p)
+        _mean, std = _region_stats(
+            _grid_from_bytes(fb), box[0], box[1],
+            box[0] + box[2] - 1, box[1] + box[3] - 1)
+        if std < float(cfg.get("vtuber_min_std", 10)):
+            continue
+        candidates.append({
+            "box": box, "corner": corner,
+            "cells": len(cells), "present_frac": round(frac, 2),
+            "run": run, "max_diff": round(mx, 1),
+            "detail": (f"vtuber en {corner}: parche activo de "
+                       f"{len(cells)} celdas (dif. máx. {mx:.0f}), "
+                       f"presente {frac:.0%} en racha de {run} muestras"),
+            "_cells": cells, "_states": states})
+    return candidates
+
+
+def _vtuber_for_frame(frame_bytes, candidates, cfg):
+    """El candidato presente en este fotograma, o None.
+
+    Presente = la media del parche está cerca de uno de sus dos
+    estados (boca abierta / cerrada). Si hay varios presentes (p.
+    ej. avatar + alerta), manda el de mayor present_frac: la
+    cámara real persiste más que un overlay transitorio.
+    """
+    if not candidates:
+        return None
+    tol = float(cfg.get("vtuber_present_tol", 20))
+    best = None
+    for cand in candidates:
+        m = _patch_mean(frame_bytes, cand["_cells"])
+        if min(abs(m - s) for s in cand["_states"]) <= tol:
+            if best is None or cand["present_frac"] > best["present_frac"]:
+                best = cand
+    return best
 
 
 _HAAR_CLF = None  # None = aún no intentado; False = no disponible
@@ -1126,6 +1412,15 @@ def _scan_frames(video_path, duration, start_offset, cfg):
             frames.append((float(t), b))
     if not frames:
         return [], []
+    # Vtuber / PNG tuber: candidatos globales del clip (parche activo
+    # + cuerpo quieto + racha larga); cada muestra anota el que está
+    # presente en SU fotograma, si hay alguno.
+    vtuber_candidates = []
+    if cfg.get("vtuber_enabled", True):
+        try:
+            vtuber_candidates = _detect_vtuber_candidates(frames, cfg)
+        except Exception:  # noqa: BLE001 - sin vtuber, el resto sigue igual
+            vtuber_candidates = []
     samples = []
     corner_hits = {"top-left": 0, "top-right": 0,
                    "bottom-left": 0, "bottom-right": 0}
@@ -1139,9 +1434,15 @@ def _scan_frames(video_path, duration, start_offset, cfg):
         else:
             prev = None
         if prev is None:
+            vt = _vtuber_for_frame(b, vtuber_candidates, cfg)
             samples.append({"t": t, "cams": None, "avatar": False,
                             "boxes": {}, "seam": False,
                             "stable_detail": "único fotograma",
+                            "vtuber": ({"box": vt["box"],
+                                        "corner": vt["corner"],
+                                        "present_frac": vt["present_frac"],
+                                        "detail": vt["detail"]}
+                                       if vt else None),
                             "_frame": b, "_stable": None})
             continue
         stable = _cell_stability(prev, b, cfg)
@@ -1154,9 +1455,17 @@ def _scan_frames(video_path, duration, start_offset, cfg):
             detail += f"; rostros en región estable: {len(faces)}"
         elif faces is not None:
             detail += "; sin rostros en región estable (cv2)"
+        vt = _vtuber_for_frame(b, vtuber_candidates, cfg)
+        if vt is not None:
+            detail += f"; {vt['detail']}"
         samples.append({"t": t, "cams": n_cams, "avatar": avatar,
                         "boxes": boxes, "seam": seam,
                         "stable_detail": detail,
+                        "vtuber": ({"box": vt["box"],
+                                    "corner": vt["corner"],
+                                    "present_frac": vt["present_frac"],
+                                    "detail": vt["detail"]}
+                                   if vt else None),
                         "_frame": b, "_stable": stable})
         # Esquinas persistentes: solo cuentan los diffs en los que NO
         # hay 2 cams llenando el fotograma (si las cams lo llenan todo,
@@ -1209,10 +1518,13 @@ def _scan_runs(known, step, duration, min_seg):
         if runs and runs[-1]["cams"] == s["cams"]:
             runs[-1]["end"] = span_end
             runs[-1]["boxes"] = s["boxes"]
+            if runs[-1].get("vtuber") is None:
+                runs[-1]["vtuber"] = s.get("vtuber")
         else:
             runs.append({"cams": s["cams"], "start": span_start,
                          "end": span_end, "avatar": s["avatar"],
                          "boxes": s["boxes"],
+                         "vtuber": s.get("vtuber"),
                          "reason": s["stable_detail"]})
     if not runs:
         return runs
@@ -1232,11 +1544,13 @@ def _scan_runs(known, step, duration, min_seg):
 def scan_segments(video_path, duration, start_offset=0.0, cfg=None):
     """Escaneo por tramo: 0/1/2 cams (y avatar circular) cada 2 s.
 
-    Devuelve {"segments": [{start, end, cams, avatar, boxes, reason}],
-    "samples": [{t, cams, avatar, boxes, stable_detail}],
-    "safe_zones_detected": [{name, box}]}. Los tiempos son relativos
-    al clip. Un tramo más corto que min_segment_s se fusiona con el
-    vecino (misma regla que decide_layout).
+    Devuelve {"segments": [{start, end, cams, avatar, boxes, vtuber,
+    reason}], "samples": [{t, cams, avatar, boxes, vtuber,
+    stable_detail}], "safe_zones_detected": [{name, box}]}. Los tiempos
+    son relativos al clip. Un tramo más corto que min_segment_s se
+    fusiona con el vecino (misma regla que decide_layout). ``vtuber``
+    es la caja del avatar reactivo detectado en el tramo/muestra
+    (o None): ver _detect_vtuber_candidates.
     """
     cfg = {**DEFAULTS, **(cfg or {})}
     samples, persistent = _scan_frames(video_path, duration, start_offset, cfg)
@@ -1444,6 +1758,18 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                     params = {"box": [box[0], box[1], box[2] - box[0] + 1,
                                       box[3] - box[1] + 1]}
                     reason += " | corregido a pip por escaneo"
+            # Vtuber / PNG tuber: avatar reactivo en una esquina sin
+            # cara humana (Haar no lo ve) y sin borde de caja
+            # superior. Si está presente en esta muestra y el layout
+            # sigue siendo center, esa caja ES la cámara: pip (luego
+            # split, juego arriba y avatar abajo). No pisa un stack
+            # ni un pip ya detectado por el escaneo.
+            if layout == "center" and s.get("vtuber"):
+                vt = s["vtuber"]
+                layout = "pip"
+                params = {"box": [float(v) for v in vt["box"][:4]]}
+                reason += (f" | vtuber_detected: {vt['detail']} "
+                           f"-> pip (luego split)")
             # Arreglo 6: anclar el divisor al borde entre las dos cajas
             # estables (el divisor real de las dos cams). El split_x de
             # classify_frame es el gradiente máximo y a veces es un
@@ -1512,14 +1838,24 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
     for s in samples:
         span_start = max(0.0, s["t"] - step / 2)
         span_end = min(float(duration), s["t"] + step / 2)
-        if runs and runs[-1]["layout"] == s["layout"]:
+        # La caja también parte el tramo: dos cámaras distintas en
+        # el mismo clip (vtuber abajo-izquierda y luego webcam humana
+        # arriba-izquierda) no pueden compartir un tramo con una sola
+        # caja; si no, la caja de la última muestra se aplicaría a
+        # todo el tramo y la primera cámara desaparecería del recorte.
+        box_key = None
+        if s["layout"] == "pip":
+            box = (s.get("params") or {}).get("box") or []
+            box_key = tuple(round(float(v), 1) for v in box[:4])
+        if (runs and runs[-1]["layout"] == s["layout"]
+                and runs[-1].get("_box_key") == box_key):
             runs[-1]["end"] = span_end
             runs[-1]["params"] = s["params"]
             runs[-1]["_params_list"].append(s["params"])
         else:
             runs.append({"layout": s["layout"], "start": span_start,
                          "end": span_end, "params": s["params"],
-                         "reason": s["reason"],
+                         "reason": s["reason"], "_box_key": box_key,
                          "_params_list": [s["params"]]})
     runs[0]["start"] = 0.0
     runs[-1]["end"] = float(duration)
@@ -1577,6 +1913,7 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
     # tramo (divisor en stack, cara en center).
     for r in merged:
         plist = r.pop("_params_list", None)
+        r.pop("_box_key", None)
         if r["layout"] == "stack" and plist:
             splits = [p["split_x"] for p in plist if "split_x" in p]
             bands = [p["band"] for p in plist if "band" in p]

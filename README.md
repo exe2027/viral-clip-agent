@@ -660,6 +660,19 @@ python auto_clips.py <vod> --layout pip
   método principal. `decide_layout` usa el escaneo para confirmar o
   corregir la clasificación: 2 cams persistentes sin franja apilada
   → stack; 1 cam persistente sin caja → PiP con la caja estable.
+- **Vtuber / PNG tuber** (`_detect_vtuber_candidates`, 2026-11-17,
+  VOD Rubius 2931565552): un avatar reactivo (anime, sin cara
+  humana) no lo ve Haar y no tiene borde de caja superior, así que
+  caía a center y se perdía del recorte. Heurística temporal sobre
+  los fotogramas del escaneo: un parche pequeño en una esquina que
+  cambia fuerte (boca que se abre/cierra, parpadeo) mientras el
+  resto de su caja no se mueve y el avatar persiste en una racha
+  larga de muestras. Una alerta transitoria (aparece, se anima y
+  desaparece en 2-3 muestras) no pasa la racha. La caja va a pip y
+  luego a split como una webcam normal; si la caja cambia dentro
+  del clip (gato abajo-izquierda y luego webcam humana
+  arriba-izquierda), los tramos se parten por caja. Sin parche que
+  cumpla todo, cae a center como antes. Tests en `test_vtuber.py`.
 - **Zonas seguras por juego**: GTA V tiene el minimapa
   abajo-izquierda y el HUD de salud abajo-derecha; el PiP nunca va
   abajo ni tapa esas zonas (si la esquina pedida solapa una zona, se
