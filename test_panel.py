@@ -212,6 +212,9 @@ class TestPanelScores(unittest.TestCase):
                                "views": 3000}}},
             "weights": {"viral": 0.5, "seo": 0.3, "chat": 0.2},
             "weights_history": [],
+            "live": [{"session": "illojuan_2026-11-17",
+                      "peaks": [{"ts": 100, "score": 90.0, "multiple": 8.0,
+                                 "at": "2026-11-17T20:00:00+00:00"}]}],
             "errors": [],
         }
         body = _render(data)

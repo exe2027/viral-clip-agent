@@ -314,6 +314,15 @@ auto_approve:
 metadata:
   credit_streamer: true
 
+# Directos en vivo (9.2): cooldown entre clips del mismo streamer y
+# tope de clips por directo. segment_minutes es la duración prevista
+# de cada segmento grabado (5-10 min) cuando la grabación esté
+# disponible (hoy BLOQUEADA: sin descargador de directos).
+live:
+  cooldown_minutes: 10
+  max_clips_per_stream: 5
+  segment_minutes: 5
+
 # Circuit breaker por plataforma (6.4): N fallos seguidos o un
 # rechazo por copyright/strike pausan SOLO esa plataforma.
 breaker:

@@ -81,6 +81,12 @@ def build_parser():
                            help="medir lo vencido (24/48 h y 7 d) y mostrar el reporte")
     p_metrics.add_argument("--db", default=None,
                            help="ruta a metrics.db (por defecto, la del repo)")
+    p_live = sub.add_parser("live", help="Seguir un directo en vivo (9.2)")
+    p_live.add_argument("streamer", help="canal (twitch o kick)")
+    p_live.add_argument("--platform", default="twitch",
+                        choices=["twitch", "kick"])
+    p_live.add_argument("--minutes", type=int, default=60,
+                        help="duración de la sesión (por defecto 60)")
     p_watch = sub.add_parser("watch", help="Vigila VODs nuevos")
     p_watch.add_argument("--once", action="store_true", default=True)
     p_watch.add_argument("--loop", action="store_true")
@@ -205,6 +211,38 @@ def main(argv=None):
             print(json.dumps(collect(args.db), indent=2,
                              ensure_ascii=False))
         print(json.dumps(report(args.db), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "live":
+        from .config import load_config
+        from .live import (KickPusherClient, LiveLimits, LiveSession,
+                           TwitchIRCClient)
+        cfg = (load_config() or {}).get("live") or {}
+        limits = LiveLimits(
+            cooldown_minutes=cfg.get("cooldown_minutes", 10),
+            max_clips_per_stream=cfg.get("max_clips_per_stream", 5))
+        session = LiveSession(args.streamer, platform=args.platform,
+                              limits=limits)
+        if args.platform == "kick":
+            source = KickPusherClient(args.streamer)
+            ok, msg = source.connect()
+            if not ok:
+                print(f"No se pudo seguir el directo: {msg}")
+                return 1
+        else:
+            source = TwitchIRCClient([args.streamer])
+            source.connect()
+        print(f"Siguiendo el directo de {args.streamer} "
+              f"({args.platform}) durante {args.minutes} min. "
+              "Ctrl+C para parar.")
+        try:
+            peaks = session.run(source, duration_s=args.minutes * 60)
+        except KeyboardInterrupt:
+            print("\nSesión detenida por el usuario.")
+            peaks = session.peaks
+        print(f"Picos detectados: {len(peaks)}")
+        for peak in peaks:
+            print(f"  - {peak['ts']:.0f}s: {peak['score']} pts "
+                  f"({peak['multiple']}x)")
         return 0
     if args.command == "publish":
         from .publish import main as publish_main

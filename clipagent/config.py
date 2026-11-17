@@ -142,6 +142,12 @@ DEFAULT_CONFIG = {
     "metadata": {
         "credit_streamer": True,
     },
+    # Directos en vivo (9.2).
+    "live": {
+        "cooldown_minutes": 10,
+        "max_clips_per_stream": 5,
+        "segment_minutes": 5,
+    },
     # Circuit breaker por plataforma (6.4): N fallos seguidos o un
     # rechazo por copyright/strike pausan SOLO esa plataforma.
     "breaker": {

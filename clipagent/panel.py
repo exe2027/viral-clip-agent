@@ -74,6 +74,20 @@ def _dashboard_data():
     from .metrics import report as _metrics_report
     from .priority import load_weights as _load_weights
     weights, history = _load_weights()
+    # 9.2: directos seguidos (picos en vivo).
+    live = []
+    live_root = os.path.join(_repo_root(), "runs", "live")
+    if os.path.isdir(live_root):
+        for name in sorted(os.listdir(live_root)):
+            path = os.path.join(live_root, name, "live_peaks.json")
+            if os.path.isfile(path):
+                try:
+                    import json
+                    with open(path, encoding="utf-8") as f:
+                        peaks = json.load(f)
+                    live.append({"session": name, "peaks": peaks})
+                except (OSError, ValueError):
+                    continue
     return {
         "service": service_status(),
         "platforms": platform_states(),
@@ -90,6 +104,7 @@ def _dashboard_data():
         "analytics": _metrics_report(),
         "weights": weights,
         "weights_history": history,
+        "live": live,
         "errors": _recent_errors(),
     }
 
@@ -250,6 +265,15 @@ Recalibrar: <code>clipagent recalibrate</code>.</p>
          f"<td>{_esc((v['mejor_clip'] or {}).get('clip', ''))}"
          f" ({(v['mejor_clip'] or {}).get('views', '')})</td></tr>"
          for p, v in data['analytics'].items())}</table>
+<h2>Directos en vivo (9.2)</h2>
+<p>Picos detectados en directo (la grabación por segmentos está
+bloqueada: sin descargador de directos; los picos quedan marcados
+y el VOD se procesa al terminar). Seguir un directo:
+<code>clipagent live &lt;streamer&gt; [--platform kick] [--minutes N]</code></p>
+<table border="1"><tr><th>Sesión</th><th>Picos</th><th>Último pico</th></tr>
+{''.join(f"<tr><td>{_esc(s['session'])}</td><td>{len(s['peaks'])}</td>"
+         f"<td>{_esc((s['peaks'][-1].get('at', '') if s['peaks'] else ''))}</td></tr>"
+         for s in data['live'])}</table>
 <h2>Últimos publicados</h2>
 <table border="1"><tr><th>Plataforma</th><th>Clip</th>
 <th>Publicado</th></tr>{rows_pub}</table>
