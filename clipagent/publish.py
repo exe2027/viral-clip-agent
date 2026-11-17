@@ -403,6 +403,18 @@ class PublishQueue:
         self.save()
         return item
 
+    def add_note(self, item, note):
+        """Nota en el historial SIN cambiar el estado.
+
+        Para fallos transitorios y procesados pendientes: el ítem
+        sigue en su estado (approved/queued) y el siguiente ciclo
+        del bucle lo retoma. Sin esto, un 5xx lo sacaría de la cola.
+        """
+        item["history"].append({"at": _now_chile().isoformat(),
+                                "state": item["state"], "note": note})
+        self.save()
+        return item
+
     def approve(self, item):
         return self.set_state(item, "approved", "aprobado por el usuario")
 
@@ -826,14 +838,14 @@ class YouTubePublisher:
 
 
 class DraftFirstPublisher:
-    """TikTok / Instagram / Facebook: draft-first, nunca directo.
+    """TikTok / Instagram / Facebook: paquete manual (draft-first).
 
     Genera el paquete listo para subir a mano (archivo + caption +
     hashtags + portada) en drafts/<clip>_<plataforma>/ y lo deja en
-    la cola como estado "draft". La publicación directa solo se
-    habilita cuando audit_accounts() da verde EN ESA PLATAFORMA
-    (app aprobada, cuenta Profesional + Page, Page + token) y el
-    usuario lo aprueba explícitamente.
+    la cola como estado "draft". La publicación directa por API
+    vive en DirectPublisher (fan-out); este publicador solo genera
+    el paquete manual, que además se escribe cuando la API no se
+    puede usar (sin token, sin auditoría, sin URL pública).
     """
 
     def __init__(self, platform, queue=None):
@@ -910,28 +922,156 @@ class DraftFirstPublisher:
                 "4. Duración 3-90 s: el clip de 60 s cabe justo."]
 
     def publish(self, clip_path, live=False):
-        """Directo solo si la auditoría de ESA plataforma está en verde.
-        Hoy ninguna lo está: siempre devuelve el draft."""
-        audit = audit_accounts()[self.platform]
-        if audit["status"] != "green":
-            draft = self.publish_draft(clip_path)
-            return {"ok": False, "reason": f"auditoría {self.platform}: {audit['status']} — draft-first",
-                    "publish_mode": audit["publish_mode"], "draft": draft}
+        """La publicación directa por API vive en DirectPublisher
+        (fan-out). Esta clase solo genera el paquete manual."""
         return {"ok": False,
-                "reason": "publicación directa por API no implementada aún "
-                          "para esta plataforma (falta el cliente); usar el draft"}
+                "reason": "la publicación directa por API es "
+                          "DirectPublisher.publish; este publicador "
+                          "solo genera el paquete manual "
+                          "(publish_draft)"}
+
+
+class DirectPublisher:
+    """TikTok / Instagram / Facebook: publicación directa por API.
+
+    Usa los adaptadores de clipagent.platforms (TikTok Direct Post
+    con FILE_UPLOAD, Instagram contenedor -> publicar, Facebook
+    Reels en 3 fases). Sin token, sin IDs de cuenta o sin URL
+    pública, devuelve mode "draft" con el motivo explícito y
+    genera además el paquete manual (nunca finge una publicación).
+    Los fallos transitorios (5xx, rate limit) y los procesados
+    pendientes (mode "processing") se retoman en el siguiente
+    ciclo con los datos de reanudación guardados en el ítem.
+    """
+
+    def __init__(self, platform, queue=None, base_dir=None,
+                 request_fn=None):
+        assert platform in ("tiktok", "instagram_reels", "facebook_reels")
+        self.platform = platform
+        self.queue = queue or PublishQueue()
+        self.base_dir = base_dir
+        self.request_fn = request_fn
+        self._drafts = DraftFirstPublisher(platform, self.queue)
+
+    def status(self):
+        audit = audit_accounts()[self.platform]
+        return {"platform": self.platform, "audit": audit["status"],
+                "publish_mode": audit["publish_mode"],
+                "drafts_today": len(self.queue.published_today(self.platform))}
+
+    def publish_draft(self, clip_path):
+        """Paquete manual (el de siempre, para subir a mano)."""
+        return self._drafts.publish_draft(clip_path)
+
+    def _package_texts(self, clip_path):
+        """(título, caption) del paquete por plataforma, con
+        fallback al título/descripción generales del manifiesto."""
+        package, _manifest = load_clip_package(clip_path)
+        if package is None:
+            return "", ""
+        viral = package.get("viral", {})
+        pkg = viral.get("platforms", {}).get(self.platform, {})
+        title = pkg.get("title") or package.get("title_es", "")
+        caption = (pkg.get("caption")
+                   or package.get("desc_es", "")
+                   or title)
+        return title, caption
+
+    def _resume_id(self, item):
+        """ID de reanudación guardado en el ítem (publish_id de
+        TikTok o container_id de Instagram), o None."""
+        if not item:
+            return None
+        data = item.get("platform_data") or {}
+        if self.platform == "tiktok":
+            return data.get("publish_id")
+        if self.platform == "instagram_reels":
+            return data.get("container_id")
+        return None
+
+    def publish(self, clip_path, live=False, item=None, cfg=None,
+                request_fn=None, sleep_fn=None):
+        """Subida real por API. Exige live=True; sin él, draft.
+
+        Devuelve el resultado del adaptador: {"ok": True, ...} al
+        publicar, mode "draft" si falta algo de configuración, mode
+        "error" (retryable o no) si la API falla, mode "processing"
+        si la plataforma sigue procesando (con el ID para retomar).
+        """
+        if not live:
+            return {"ok": False, "mode": "draft",
+                    "reason": "dry-run por defecto: sin --live no se "
+                              "sube nada por API"}
+        if cfg is None:
+            from .config import load_config
+            cfg = load_config()
+        # La lista blanca se verifica EN EL MOMENTO de publicar: si
+        # el streamer ya no está en la lista, no se sube nada.
+        streamer = _streamer_from_manifest(
+            os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(clip_path))), "manifest.json"))
+        ok_wl, wl_msg = check_whitelist(streamer)
+        if not ok_wl:
+            return {"ok": False, "mode": "draft",
+                    "reason": f"lista blanca: {wl_msg}"}
+        fn = request_fn if request_fn is not None else self.request_fn
+        _title, caption = self._package_texts(clip_path)
+        if self.platform == "tiktok":
+            from .platforms import TikTokAdapter
+            return TikTokAdapter(self.base_dir, fn).publish_video(
+                clip_path, caption,
+                resume_publish_id=self._resume_id(item),
+                sleep_fn=sleep_fn)
+        if self.platform == "instagram_reels":
+            from . import platform_accounts as _pa
+            from .platforms import InstagramAdapter
+            from .public_url import get_public_url
+            ig_user_id = _pa.get_ig_user_id(cfg)
+            if not ig_user_id:
+                return {"ok": False, "mode": "draft",
+                        "reason": "sin ig_user_id de Instagram "
+                                  "configurado (platform_accounts."
+                                  "instagram_reels.ig_user_id o "
+                                  "IG_USER_ID)"}
+            url, url_reason = get_public_url(clip_path, cfg)
+            if not url:
+                return {"ok": False, "mode": "draft",
+                        "reason": url_reason}
+            return InstagramAdapter(self.base_dir, fn).publish_reel(
+                ig_user_id, url, caption,
+                resume_container_id=self._resume_id(item),
+                sleep_fn=sleep_fn)
+        from . import platform_accounts as _pa
+        from .platforms import FacebookAdapter
+        page_id = _pa.get_facebook_page_id(cfg)
+        if not page_id:
+            return {"ok": False, "mode": "draft",
+                    "reason": "sin page_id de Facebook configurado "
+                              "(platform_accounts.facebook_reels."
+                              "page_id o FACEBOOK_PAGE_ID)"}
+        return FacebookAdapter(self.base_dir, fn).publish_reel(
+            page_id, clip_path, caption)
 
 
 PUBLISHERS = {
     "youtube_shorts": YouTubePublisher,
-    "tiktok": lambda q=None: DraftFirstPublisher("tiktok", q),
-    "instagram_reels": lambda q=None: DraftFirstPublisher("instagram_reels", q),
-    "facebook_reels": lambda q=None: DraftFirstPublisher("facebook_reels", q),
+    "tiktok": lambda q=None: DirectPublisher("tiktok", q),
+    "instagram_reels": lambda q=None: DirectPublisher("instagram_reels", q),
+    "facebook_reels": lambda q=None: DirectPublisher("facebook_reels", q),
 }
 
 
 def get_publisher(platform, queue=None):
     return PUBLISHERS[platform](queue)
+
+
+# Reintentos de fallos transitorios (5xx, rate limit): un draft por
+# fallo transitorio se reintenta en el siguiente ciclo del bucle,
+# hasta este tope; después va a "failed" (revisión humana), nunca
+# se reintenta a ciegas para siempre. Un draft por falta de
+# credenciales/auditoría/configuración NO se reintenta: queda en
+# draft con motivo hasta que el usuario lo resuelva.
+MAX_TRANSIENT_RETRIES = 3
 
 
 # ---------------------------------------------------------------------------
@@ -967,36 +1107,48 @@ def handle_rejection(queue, clip, platform, error):
 # ---------------------------------------------------------------------------
 # Publicación directa y bucle automático (Fase 6.3)
 # ---------------------------------------------------------------------------
-def publish_direct(platform, clip_path, queue=None, live=False):
-    """Publica un clip por API en esa plataforma.
+def _store_resume(item, queue, platform, result):
+    """Guarda el ID de reanudación en el ítem (publish_id de TikTok
+    o container_id de Instagram) para retomar en el siguiente ciclo
+    sin volver a subir el video."""
+    key = value = None
+    if platform == "tiktok" and result.get("publish_id"):
+        key, value = "publish_id", result["publish_id"]
+    elif platform == "instagram_reels" and result.get("container_id"):
+        key, value = "container_id", result["container_id"]
+    if key:
+        item.setdefault("platform_data", {})[key] = value
+        queue.save()
+
+
+def _transient_attempts(item):
+    """Fallos transitorios ya registrados en el historial del ítem."""
+    return sum(1 for h in (item.get("history") or [])
+               if (h.get("note") or "").startswith("fallo transitorio"))
+
+
+def publish_direct(platform, clip_path, queue=None, live=False,
+                   item=None, cfg=None, request_fn=None, sleep_fn=None):
+    """Publica un clip por API en esa plataforma (fan-out).
 
     YouTube: subida real por YouTubePublisher (exige OAuth y live).
-    TikTok / Instagram / Facebook: la subida directa desde el disco
-    NO está cableada todavía (TikTok e Instagram exigen una URL
-    pública del vídeo; Facebook, subida por chunks con polling):
-    se devuelve modo "draft" y el bucle genera el paquete
-    draft-first para subir a mano. Nunca se finge una publicación.
+    TikTok / Instagram / Facebook: DirectPublisher con los
+    adaptadores de clipagent.platforms. Sin token, sin IDs o sin
+    URL pública se devuelve mode "draft" con el motivo explícito.
+    Nunca se finge una publicación.
     """
-    if platform == "youtube_shorts":
-        pub = get_publisher(platform, queue)
-        return pub.publish(clip_path, live=live)
     pub = get_publisher(platform, queue)
-    if hasattr(pub, "publish_draft"):
-        draft = pub.publish_draft(clip_path)
-        return {"ok": False, "mode": "draft",
-                "reason": ("publicación directa no cableada en "
-                           f"{platform}: paquete draft-first en "
-                           f"{draft.get('draft_dir', 'drafts/')}"),
-                "draft": draft}
-    return {"ok": False, "mode": "draft",
-            "reason": f"sin publicador directo para {platform}"}
+    if platform == "youtube_shorts":
+        return pub.publish(clip_path, live=live)
+    return pub.publish(clip_path, live=live, item=item, cfg=cfg,
+                       request_fn=request_fn, sleep_fn=sleep_fn)
 
 
 def publish_one(queue, item, cfg=None, live=False, mode="full",
                 counter_state=None):
     """Un ítem de la cola por la política (6.3). Devuelve
     {"action": published|retained|discarded|draft|failed|
-    quarantined|limited|paused, "reason": ...}."""
+    quarantined|limited|paused|processing, "reason": ...}."""
     from .policy import evaluate
     from .status import is_paused
     platform = item["platform"]
@@ -1062,13 +1214,49 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     ok, why = check_limits(queue, platform)
     if not ok:
         return {"action": "limited", "reason": why}
-    result = publish_direct(platform, clip_path, queue, live=live)
+    result = publish_direct(platform, clip_path, queue, live=live,
+                            item=item, cfg=cfg)
     if result.get("mode") == "draft":
-        queue.set_state(item, "draft", result.get("reason"))
-        return {"action": "draft", "reason": result.get("reason")}
+        # El paquete manual se genera igual (para subir a mano), y
+        # el motivo queda visible en la cola y en el panel.
+        reason = result.get("reason") or "draft"
+        try:
+            draft = get_publisher(platform, queue).publish_draft(
+                clip_path)
+            if isinstance(draft, dict) and draft.get("draft_dir"):
+                reason = (f"{reason} (paquete manual en "
+                          f"{draft['draft_dir']})")
+        except Exception:  # noqa: BLE001 - el draft no rompe el bucle
+            pass
+        queue.set_state(item, "draft", reason)
+        return {"action": "draft", "reason": reason}
+    if result.get("mode") == "processing":
+        # La plataforma sigue procesando: se guarda el ID de
+        # reanudación y el ítem queda en su estado para retomar en
+        # el siguiente ciclo sin volver a subir.
+        _store_resume(item, queue, platform, result)
+        reason = result.get("reason") or "procesando en la plataforma"
+        queue.add_note(item, f"procesando en {platform}: {reason} "
+                             "(se retoma en el siguiente ciclo)")
+        return {"action": "processing", "reason": reason}
+    if result.get("mode") == "error" and result.get("retryable"):
+        # Fallo transitorio (5xx, rate limit): se reintenta en el
+        # siguiente ciclo, hasta MAX_TRANSIENT_RETRIES. Después, cae
+        # al tratamiento normal (failed -> cuarentena en el 2º).
+        attempts = _transient_attempts(item)
+        if attempts < MAX_TRANSIENT_RETRIES:
+            reason = result.get("reason") or "fallo transitorio"
+            queue.add_note(
+                item,
+                f"fallo transitorio (intento {attempts + 1}/"
+                f"{MAX_TRANSIENT_RETRIES}): {reason}; se reintenta "
+                "en el siguiente ciclo")
+            return {"action": "failed", "reason": reason}
     if result.get("ok"):
         video_id = (result.get("video_id") or result.get("publish_id")
-                    or result.get("post_id") or "api")
+                    or result.get("post_id") or result.get("media_id")
+                    or "api")
+        item.pop("platform_data", None)
         queue.mark_published(item, video_id)
         return {"action": "published",
                 "reason": decision["reason"],
