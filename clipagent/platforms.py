@@ -384,9 +384,13 @@ class TwitchAdapter:
 
     def validate(self):
         """GET oauth2/validate: (ok, client_id, expires_in)."""
+        if not _creds.get_secret("TWITCH_CLIENT_ID"):
+            return {"ok": False, "reason": "sin credenciales de Twitch"}
         token = self.app_token()
         if not token:
-            return {"ok": False, "reason": "sin credenciales de Twitch"}
+            return {"ok": False,
+                    "reason": "no se pudo pedir el token de app "
+                              "(id.twitch.tv no respondió)"}
         status, payload = _http(
             "GET", self.VALIDATE_URL,
             {"Authorization": f"OAuth {token}"},
