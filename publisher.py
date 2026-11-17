@@ -171,47 +171,11 @@ QUEUE_STATES = ("queued", "ready_for_review", "approved",
                 "published", "failed", "quarantined", "draft")
 
 # ---------------------------------------------------------------------------
-# Estado conocido de las cuentas (2026-11-16). Es lo que devuelve
-# audit_accounts() hoy; accounts.yaml lo puede sobrescribir.
+# Estado de las cuentas (Fase 3.2): se CALCULA en
+# clipagent/accounts.py desde credenciales reales (tokens/ y
+# client_secrets.json) y sondas de solo lectura. accounts.yaml solo
+# guarda identificadores no secretos (handles, nombre de la Page).
 # ---------------------------------------------------------------------------
-DEFAULT_ACCOUNTS = {
-    "youtube_shorts": {
-        "label": "YouTube ES — El Clip de GTA 6 (@elclipdegta6)",
-        "channel_created": True,
-        "channel_verified": False,   # sin verificar aún
-        "oauth_configured": False,   # sin client_secrets.json / token.json
-        "quota_remaining": None,     # desconocido sin OAuth
-        "strikes": 0,
-        "notes": "Canal creado el 2026-11-16. Falta OAuth (Google Cloud "
-                 "proyecto + client_secrets.json) y verificar el canal.",
-    },
-    "tiktok": {
-        "label": "TikTok ES — El Clip de GTA 6 (@elclipdegta6____bits)",
-        "account_created": True,
-        "app_approved": False,       # sin app de TikTok for Developers
-        "scopes": [],                # sin video.upload ni user.info.basic
-        "notes": "Cuenta creada por el usuario el 2026-11-16. Sin app "
-                 "aprobada: solo draft-first (paquete manual).",
-    },
-    "instagram_reels": {
-        "label": "Instagram ES — @elclipdegta6",
-        "account_created": False,    # Instagram rechazó los códigos
-        "professional": False,
-        "facebook_page_linked": False,
-        "notes": "NO creada: Instagram rechazó 3 códigos de confirmación "
-                 "el 2026-11-16. Reintentar más tarde o desde otro "
-                 "dispositivo/red. Sin cuenta no hay nada que auditar.",
-    },
-    "facebook_reels": {
-        "label": "Facebook — Página El Clip de GTA 6",
-        "page_created": False,
-        "role": None,                # admin/editor de la Page
-        "token": False,              # Page access token
-        "notes": "Page NO creada. La cuenta personal está pendiente de "
-                 "confirmar (Facebook caído el 2026-11-16). Reels solo "
-                 "a Página, nunca a perfil personal.",
-    },
-}
 
 
 # ---------------------------------------------------------------------------
@@ -341,107 +305,22 @@ def check_whitelist(streamer):
 
 
 # ---------------------------------------------------------------------------
-# Auditoría de cuentas
+# Auditoría de cuentas (Fase 3.2): el estado se calcula en
+# clipagent/accounts.py desde credenciales reales y sondas de solo
+# lectura. accounts.yaml ya no se edita a mano para decir que algo
+# "está configurado": si no hay token, no está configurado.
 # ---------------------------------------------------------------------------
-def _load_accounts():
-    """accounts.yaml si existe; si no, el estado conocido por defecto."""
-    if os.path.isfile(ACCOUNTS_FILE):
-        try:
-            import yaml
-            with open(ACCOUNTS_FILE, encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-            merged = {}
-            for key, default in DEFAULT_ACCOUNTS.items():
-                merged[key] = {**default, **(data.get(key) or {})}
-            return merged
-        except ImportError:
-            pass
-    return {k: dict(v) for k, v in DEFAULT_ACCOUNTS.items()}
-
-
-def audit_accounts():
+def audit_accounts(probes=None):
     """Checklist pasa/no-pasa por cuenta. Sin fila en verde, draft-first.
 
-    Devuelve {plataforma: {"status": "green"|"amber"|"red",
-    "checks": [(nombre, pasa, detalle)], "notes": ...}}.
+    Devuelve {plataforma: {"label", "status": "green"|"amber"|"red",
+    "checks": [(nombre, pasa|None, detalle)], "notes",
+    "publish_mode": ...}}. Un chequeo en None es "sin verificar"
+    (ni pasa ni falla). ``probes`` son resultados de sondas de solo
+    lectura (las pasa `clipagent doctor`, ver 3.5).
     """
-    accounts = _load_accounts()
-    result = {}
-
-    # YouTube: canal verificado + OAuth + cuota + sin strikes.
-    yt = accounts["youtube_shorts"]
-    yt_checks = [
-        ("canal creado", bool(yt.get("channel_created")), "@elclipdegta6"),
-        ("canal verificado", bool(yt.get("channel_verified")),
-         "pendiente de verificar en YouTube Studio"),
-        ("OAuth configurado (client_secrets.json + token.json)",
-         bool(yt.get("oauth_configured")), "sin credenciales aún"),
-        ("cuota suficiente para hoy",
-         yt.get("quota_remaining") is None or yt.get("quota_remaining", 0) >= YOUTUBE_UPLOAD_COST_UNITS,
-         "sin OAuth no se puede consultar la cuota"),
-        ("sin strikes", (yt.get("strikes") or 0) == 0,
-         f"{yt.get('strikes') or 0} strikes"),
-    ]
-    yt_ok = all(c[1] for c in yt_checks)
-    result["youtube_shorts"] = {
-        "label": yt["label"],
-        "status": "green" if yt_ok else "amber",
-        "checks": yt_checks,
-        "notes": yt.get("notes", ""),
-        "publish_mode": "API (videos.insert)" if yt_ok else "DRAFT-FIRST hasta completar OAuth y verificación",
-    }
-
-    # TikTok: app aprobada + scopes.
-    tk = accounts["tiktok"]
-    tk_checks = [
-        ("cuenta creada", bool(tk.get("account_created")), "@elclipdegta6____bits"),
-        ("app aprobada en TikTok for Developers", bool(tk.get("app_approved")),
-         "sin app: no hay Direct Post ni borrador por API"),
-        ("scopes video.upload + user.info.basic",
-         "video.upload" in (tk.get("scopes") or []), f"scopes: {tk.get('scopes') or []}"),
-    ]
-    tk_ok = all(c[1] for c in tk_checks)
-    result["tiktok"] = {
-        "label": tk["label"],
-        "status": "green" if tk_ok else "amber",
-        "checks": tk_checks,
-        "notes": tk.get("notes", ""),
-        "publish_mode": "API Direct Post" if tk_ok else "DRAFT-FIRST (paquete manual) hasta aprobar la app (1-4 sem.)",
-    }
-
-    # Instagram: cuenta Profesional + Page vinculada.
-    ig = accounts["instagram_reels"]
-    ig_checks = [
-        ("cuenta creada", bool(ig.get("account_created")), "NO creada"),
-        ("cuenta Profesional (Creator/Business)", bool(ig.get("professional")), "n/a"),
-        ("Página de Facebook vinculada", bool(ig.get("facebook_page_linked")), "n/a"),
-    ]
-    ig_ok = all(c[1] for c in ig_checks)
-    result["instagram_reels"] = {
-        "label": ig["label"],
-        "status": "green" if ig_ok else "red",
-        "checks": ig_checks,
-        "notes": ig.get("notes", ""),
-        "publish_mode": "Graph API (contenedor → publicar)" if ig_ok else "BLOQUEADO: sin cuenta no hay publicación posible",
-    }
-
-    # Facebook: Page + rol + token.
-    fb = accounts["facebook_reels"]
-    fb_checks = [
-        ("Página creada", bool(fb.get("page_created")), "NO creada"),
-        ("rol admin/editor en la Page", bool(fb.get("role")), "n/a"),
-        ("Page access token", bool(fb.get("token")), "n/a"),
-    ]
-    fb_ok = all(c[1] for c in fb_checks)
-    result["facebook_reels"] = {
-        "label": fb["label"],
-        "status": "green" if fb_ok else "red",
-        "checks": fb_checks,
-        "notes": fb.get("notes", ""),
-        "publish_mode": "Graph API a Página" if fb_ok else "BLOQUEADO: sin Page no hay publicación posible",
-    }
-
-    return result
+    from clipagent.accounts import compute_state
+    return compute_state(probes=probes)
 
 
 def audit_report_text(audit):

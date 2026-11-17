@@ -43,10 +43,10 @@ Solo se cortan y se publican clips de streamers que están en esta lista. Estar 
 
 | Pregunta | Opciones / ejemplo | Por defecto | Dónde va |
 |---|---|---|---|
-| ¿Ya tienes canal de YouTube? ¿Cuál es el @? ¿Está verificado? ¿Tiene OAuth configurado? | Ej: @elclipdegta6, creado, sin verificar, sin OAuth | YouTube ES @elclipdegta6, creado, sin verificar, sin OAuth | `accounts.yaml > youtube_shorts` |
-| ¿Ya tienes cuenta de TikTok? ¿Cuál es el @? ¿La app para publicar por API está aprobada? | Ej: @elclipdegta6____bits, creada, app sin aprobar | TikTok ES @elclipdegta6____bits, creada, app sin aprobar | `accounts.yaml > tiktok` |
-| ¿Ya tienes cuenta de Instagram? ¿Es profesional? ¿Está vinculada a una Página de Facebook? | Ej: @elclipdegta6, profesional, vinculada a Elclipdegta6 | Instagram @elclipdegta6, profesional, vinculada | `accounts.yaml > instagram_reels` |
-| ¿Ya tienes Página de Facebook? ¿Cuál es su nombre? | Ej: El Clip de GTA 6, no creada | Página El Clip de GTA 6, no creada | `accounts.yaml > facebook_reels` |
+| ¿Ya tienes canal de YouTube? ¿Cuál es el @? ¿Está verificado? ¿Tiene OAuth configurado? | Ej: @elclipdegta6, creado, sin verificar, sin OAuth | YouTube ES @elclipdegta6, creado, sin verificar, sin OAuth | `clipagent setup` / `clipagent doctor` (el estado se calcula, no se escribe a mano) |
+| ¿Ya tienes cuenta de TikTok? ¿Cuál es el @? ¿La app para publicar por API está aprobada? | Ej: @elclipdegta6____bits, creada, app sin aprobar | TikTok ES @elclipdegta6____bits, creada, app sin aprobar | `clipagent setup` / `clipagent doctor` |
+| ¿Ya tienes cuenta de Instagram? ¿Es profesional? ¿Está vinculada a una Página de Facebook? | Ej: @elclipdegta6, profesional, vinculada a Elclipdegta6 | Instagram @elclipdegta6, profesional, vinculada | `clipagent setup` / `clipagent doctor` |
+| ¿Ya tienes Página de Facebook? ¿Cuál es su nombre? | Ej: Elclipdegta6, creada | Página Elclipdegta6, creada | `clipagent setup` / `clipagent doctor` |
 | ¿Cuántos clips al día se pueden publicar por plataforma? | Números por plataforma | YouTube 3-5, TikTok 1, Instagram 1, Facebook 1 (cuentas nuevas) | Límites de publicación (ver README) |
 | ¿En qué horario se publica? | Ej: 18:00-23:59 hora de Chile | 18:00-23:59, hora de Chile | Configuración de publicación |
 

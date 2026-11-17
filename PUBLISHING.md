@@ -81,8 +81,8 @@ queda en draft-first (o bloqueada). Estado real a 2026-11-16
 |---|---|---|
 | YouTube ES @elclipdegta6 | 🟡 AMBER | Verificar canal + OAuth (client_secrets.json / token.json) |
 | TikTok ES @elclipdegta6____bits | 🟡 AMBER | App aprobada en TikTok for Developers + scopes `video.upload`, `user.info.basic` (1-4 sem.) |
-| Instagram ES @elclipdegta6 | 🔴 RED | Cuenta NO creada (Instagram rechazó los códigos el 2026-11-16); luego pasar a Profesional + vincular Page |
-| Facebook Page El Clip de GTA 6 | 🔴 RED | Page NO creada; luego rol admin/editor + Page access token |
+| Instagram ES @elclipdegta6 | 🟡 AMBER | Cuenta creada por el usuario el 2026-11-16 y vinculada a la Página Elclipdegta6 (pendiente de verificar por API que sea Profesional) |
+| Facebook Page Elclipdegta6 | 🟡 AMBER | Page creada por el usuario el 2026-11-16; luego rol admin/editor + Page access token (pendiente de verificar por API) |
 
 Checklist por cuenta:
 
@@ -94,8 +94,11 @@ Checklist por cuenta:
   Página de Facebook vinculada.
 - **Facebook:** Página creada, rol admin/editor, Page access token.
 
-El estado vive en `accounts.yaml` (editable); si no existe, se usan
-los valores por defecto, que son el estado real conocido.
+El estado YA NO vive en `accounts.yaml` (Fase 3.2): se CALCULA
+comprobando credenciales reales (tokens/ y client_secrets.json) y
+sondas de solo lectura (`clipagent doctor`). `accounts.yaml` solo
+guarda handles y nombres. Lo que exige una llamada a la API queda
+"sin verificar" (ámbar), nunca inventado en verde.
 
 ## Cola de publicación
 
