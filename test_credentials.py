@@ -108,7 +108,7 @@ class TestCredentialsStore(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_publisher_usa_credentials(self):
-        import publisher
+        import clipagent.publish as publisher
         pub = publisher.YouTubePublisher()
         self.assertEqual(pub.CLIENT_SECRETS,
                          creds.client_secrets_path())

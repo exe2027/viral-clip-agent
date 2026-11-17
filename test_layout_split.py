@@ -23,14 +23,14 @@ import subprocess
 import sys
 import unittest
 
-from layout import (DEFAULTS, _face_cam_box, _split_params,
+from clipagent.render import (DEFAULTS, _face_cam_box, _split_params,
                     cut_clip_with_layout, decide_layout, segment_filter_graph)
 
 SEG = "runs/2928823801-verify/segments/seg_01_t03h34m30s.mp4"
 HAS_CV2 = False
 try:
     import cv2  # noqa: F401
-    from layout import _haar_classifier
+    from clipagent.render import _haar_classifier
     HAS_CV2 = _haar_classifier() is not False
 except Exception:
     HAS_CV2 = False

@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import vision
-from vision import _parse_choice, choose_best_frame
+import clipagent.vision as vision
+from clipagent.vision import _parse_choice, choose_best_frame
 
 FRAMES = [
     {"path": "/tmp/f1.jpg", "role": "antes del payoff", "ts_clip": 15.0},
@@ -80,13 +80,13 @@ class TestChooseBestFrame(unittest.TestCase):
 
 class TestThumbnailsVision(unittest.TestCase):
     def test_cover_sin_vision_es_payoff(self):
-        from thumbnails import instagram_cover
+        from clipagent.thumbnails import instagram_cover
         with mock.patch("thumbnails.shutil.copy2"):
             cover = instagram_cover(FRAMES, out_path="/tmp/cover-test.jpg")
         self.assertEqual(cover["source_role"], "payoff")
 
     def test_cover_con_vision_usa_el_frame_elegido(self):
-        from thumbnails import choose_cover_frame
+        from clipagent.thumbnails import choose_cover_frame
         tmp = Path(__import__("tempfile").mkdtemp())
         frames = []
         for i, role in enumerate(

@@ -20,7 +20,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from viral_score import (  # noqa: E402
+from clipagent.detect import (  # noqa: E402
     audio_component,
     band,
     chat_component,

@@ -394,7 +394,7 @@ def suggest_titles_from_patterns(moment_card, patterns, lang="es", n=5):
     Nunca devuelve un título que no haya pasado el check.
     """
     try:
-        from viral_package import check_title, generate_titles
+        from clipagent.metadata import check_title, generate_titles
     except Exception:
         return []
     card = moment_card or {}

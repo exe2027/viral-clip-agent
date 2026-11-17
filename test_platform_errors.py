@@ -15,8 +15,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import publisher
-from publisher import PublishQueue, check_limits, handle_rejection
+import clipagent.publish as publisher
+from clipagent.publish import PublishQueue, check_limits, handle_rejection
 
 CHILE = timezone(timedelta(hours=-3))
 

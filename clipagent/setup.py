@@ -250,7 +250,7 @@ def run_youtube_oauth(base_dir=None):
         print("Falta google-auth-oauthlib: "
               "pip install google-api-python-client google-auth-oauthlib")
         return False
-    from publisher import YouTubePublisher
+    from .publish import YouTubePublisher
     flow = InstalledAppFlow.from_client_secrets_file(
         secrets, [YouTubePublisher.SCOPE])
     creds = flow.run_local_server(port=0)

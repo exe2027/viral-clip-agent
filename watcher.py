@@ -255,7 +255,7 @@ def load_watcher_config(config_path=None):
     se ignoran.
     """
     try:
-        from config import load_config
+        from clipagent.config import load_config
         cfg = load_config(config_path)
     except Exception:
         cfg = {}

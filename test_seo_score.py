@@ -19,7 +19,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from seo_score import (  # noqa: E402
+from clipagent.seo_score import (  # noqa: E402
     _floor_total,
     can_publish,
     coherence_component,

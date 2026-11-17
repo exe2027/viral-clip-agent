@@ -100,7 +100,7 @@ class YouTubeAdapter:
             from googleapiclient.http import MediaFileUpload
         except ImportError:
             return _draft("falta google-api-python-client")
-        from publisher import YouTubePublisher
+        from .publish import YouTubePublisher
         _creds.migrate_legacy_youtube_token(self.base_dir)
         token_file = _creds.token_path("youtube_shorts", self.base_dir)
         if not os.path.isfile(token_file):

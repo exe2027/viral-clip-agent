@@ -14,8 +14,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import publisher
-from publisher import load_limits
+import clipagent.publish as publisher
+from clipagent.publish import load_limits
 
 
 class TestLimits(unittest.TestCase):

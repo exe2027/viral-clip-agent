@@ -81,10 +81,10 @@ import tempfile
 from datetime import datetime, timezone
 
 try:
-    from config import load_config, get_autopublish_config
+    from clipagent.config import load_config, get_autopublish_config
 except ImportError:  # ejecutado desde otro directorio sin config.py
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from config import load_config, get_autopublish_config
+    from clipagent.config import load_config, get_autopublish_config
 
 # ---------------------------------------------------------------------------
 # Rutas y constantes
@@ -425,7 +425,7 @@ def whitelist_nonempty(cfg=None):
     ya dado, no hay ficha de permiso.)
     """
     try:
-        from publisher import load_whitelist
+        from clipagent.publish import load_whitelist
         if load_whitelist():
             return True
     except Exception:

@@ -121,7 +121,7 @@ def load_games_config(config_path: str | None = None):
     {name, id, patterns}; ``release_date`` un date.
     """
     try:
-        from config import load_config
+        from clipagent.config import load_config
         cfg = load_config(config_path) or {}
     except Exception:
         cfg = {}

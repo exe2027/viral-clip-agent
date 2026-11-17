@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import load_config, load_dotenv
+from clipagent.config import load_config, load_dotenv
 from watcher import load_watcher_config
 
 

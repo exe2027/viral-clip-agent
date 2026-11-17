@@ -39,7 +39,7 @@ class TestSingleList(unittest.TestCase):
         from watcher import load_influencers
         watched = {i["usuario"] for i in load_influencers()}
         self.assertEqual(watched, {"illojuan"})
-        from publisher import load_whitelist
+        from clipagent.publish import load_whitelist
         self.assertIn("illojuan", load_whitelist())
 
     def test_respaldo_listas_viejas(self):
@@ -111,7 +111,7 @@ class TestSingleList(unittest.TestCase):
         """4.3: el tope de VODs nuevos por streamer por día existe
         en config (max_new_vods_per_streamer_per_day: 5) y el
         watcher lo respeta; ver test_watcher.TestDecide.test_tope_diario."""
-        from config import load_config
+        from clipagent.config import load_config
         cfg = load_config()
         self.assertEqual(
             cfg["watcher"]["max_new_vods_per_streamer_per_day"], 5)

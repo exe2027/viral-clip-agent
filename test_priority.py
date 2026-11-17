@@ -9,7 +9,7 @@ máx. ±25% por ciclo, con registro; filtros duros nunca cambian.
 
 import random
 
-from priority import (DEFAULT_WEIGHTS, MIN_CLIPS_LEARN, SEO_GATE,
+from clipagent.priority import (DEFAULT_WEIGHTS, MIN_CLIPS_LEARN, SEO_GATE,
                       VIRAL_MIN_PUBLISH, age_penalty, chat_normalized,
                       load_weights, moment_key, order_queue, priority,
                       publish_status, recalibrate, recalibrate_and_save,

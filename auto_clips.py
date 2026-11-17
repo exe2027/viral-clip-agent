@@ -99,7 +99,7 @@ import sys
 
 
 
-from clips_chat_v2 import (
+from clipagent.ingest import (
     cut_vertical_clip,
     fmt_ts,
     get_video_duration,
@@ -107,12 +107,12 @@ from clips_chat_v2 import (
     score_windows,
     select_top_peaks,
 )
-from viral_package import package_clip
+from clipagent.metadata import package_clip
 
 try:
     # Score SEO por plataforma del paquete (seo_score.py).
-    from viral_package import score_package_seo
-    from seo_score import score_all_platforms
+    from clipagent.metadata import score_package_seo
+    from clipagent.seo_score import score_all_platforms
     seo_mod = True
 except ImportError:
     score_package_seo = None
@@ -122,7 +122,7 @@ except ImportError:
 try:
     # Títulos honestos (arreglos 3-4): validar/degradar títulos legacy,
     # derivar lo visible del layout y normalizar el nombre del juego.
-    from viral_package import (
+    from clipagent.metadata import (
         KNOWN_GAMES,
         degrade_title_to_reaction,
         validate_legacy_title,
@@ -146,7 +146,7 @@ except ImportError:  # Kick opcional: Twitch funciona sin kick_downloader
 
 try:
     # Layout responsive (regla del proyecto, ver layout.py).
-    from layout import cut_clip_with_layout, layout_summary
+    from clipagent.render import cut_clip_with_layout, layout_summary
     layout_mod = True
 except ImportError:
     cut_clip_with_layout = None
@@ -155,14 +155,14 @@ except ImportError:
 
 try:
     # Bloque 6: audio como segunda señal + recorte preciso por frase.
-    from audio import audio_verdict
+    from clipagent.audio import audio_verdict
     audio_mod = True
 except ImportError:
     audio_verdict = None
     audio_mod = False
 
 try:
-    from precise_cut import detect_silences, refine_cut
+    from clipagent.precise_cut import detect_silences, refine_cut
     precise_mod = True
 except ImportError:
     detect_silences = None
@@ -172,14 +172,14 @@ except ImportError:
 try:
     # Ficha del momento (bloque 2 de la revisión interna): evidencia del clip
     # (chat, streamer, juego, reacción) para títulos honestos.
-    from moment_card import build_moment_card
+    from clipagent.moment_card import build_moment_card
     moment_mod = True
 except ImportError:
     build_moment_card = None
     moment_mod = False
 
 try:
-    from config import get_layout_config, load_config
+    from clipagent.config import get_layout_config, load_config
 except ImportError:
     get_layout_config = None
     load_config = None
@@ -187,7 +187,7 @@ except ImportError:
 try:
     # Score de viralidad 0-100 + señales MVP (7 componentes, banda,
     # filtro previo). Distinto del score de chat: no se mezclan.
-    from viral_score import compute_signals, filter_passed, score_clip
+    from clipagent.detect import compute_signals, filter_passed, score_clip
     viral_score_mod = True
 except ImportError:
     compute_signals = None
@@ -911,7 +911,7 @@ def main() -> int:
             peak_rel = peak_ts - window_start_abs
             transcript = None
             try:
-                from subtitles import transcribe_audio
+                from clipagent.transcribe import transcribe_audio
                 transcript, _ = transcribe_audio(
                     window_path,
                     language=None if args.lang == "both" else args.lang)

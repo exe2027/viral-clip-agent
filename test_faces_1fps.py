@@ -14,9 +14,9 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import layout
-from config import get_layout_config
-from layout import _detect_faces_at, detect_faces_1fps
+import clipagent.render as layout
+from clipagent.config import get_layout_config
+from clipagent.render import _detect_faces_at, detect_faces_1fps
 
 
 def _video(path, dur_s=10):

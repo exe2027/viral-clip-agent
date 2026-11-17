@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
-from config import get_subtitle_policy, resolve_subtitle_task  # noqa: E402
+from clipagent.config import get_subtitle_policy, resolve_subtitle_task  # noqa: E402
 
 POLICY = {"es": "transcribe-only", "others": "translate-to-en"}
 

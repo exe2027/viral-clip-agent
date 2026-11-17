@@ -69,7 +69,7 @@ class TestComputeState(unittest.TestCase):
         self.assertIn("vencido", tk_checks["token vigente"][2])
 
     def test_audit_accounts_delega(self):
-        import publisher
+        import clipagent.publish as publisher
         audit = publisher.audit_accounts()
         self.assertEqual(set(audit), {"youtube_shorts", "tiktok",
                                       "instagram_reels", "facebook_reels",

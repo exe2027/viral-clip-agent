@@ -83,7 +83,7 @@ def _legacy_streamers(base_dir):
         if norm["name"]:
             merged.setdefault(norm["name"], norm)
     try:
-        from config import load_config
+        from .config import load_config
         cfg = load_config(os.path.join(base_dir, "config.yaml")) or {}
         for name in (cfg.get("allowlist") or []):
             name = str(name).strip().lower()

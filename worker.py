@@ -32,7 +32,6 @@ Uso:
 """
 
 import argparse
-import fcntl
 import json
 import os
 import shutil
@@ -44,6 +43,8 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from clipagent.service import (kill_process_group,
+                           single_instance_lock)  # noqa: E402
 from jobqueue import (  # noqa: E402
     HERE, KILL_SWITCH_PATH, MAX_ATTEMPTS, Queue, QueueError,
     check_semaphore, classify_error, kill_switch_active,
@@ -126,27 +127,6 @@ def _validate_manifest(out_dir: str):
     return manifest, problems
 
 
-def _kill_process_group(proc):
-    """Mata el árbol entero del hijo (auto_clips + sus ffmpeg).
-
-    El hijo corre en su propio grupo de procesos (start_new_session):
-    SIGTERM al grupo, 10 s de gracia, luego SIGKILL al grupo. Matar
-    solo el padre dejaría huérfanos los ffmpeg de los cortes.
-    """
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        proc.wait()
-
-
 def _run_auto_clips(job: dict, top_n: int, timeout_s: int):
     """Ejecuta auto_clips.py para el job. Devuelve (returncode, log_path).
 
@@ -180,11 +160,11 @@ def _run_auto_clips(job: dict, top_n: int, timeout_s: int):
                 if kill_switch_active():
                     _log("Kill-switch detectado a mitad del job: "
                          "matando auto_clips...")
-                    _kill_process_group(proc)
+                    kill_process_group(proc)
                     raise KillSwitchRaised()
                 if time.monotonic() - start > timeout_s:
                     _log(f"Timeout ({timeout_s}s): matando auto_clips...")
-                    _kill_process_group(proc)
+                    kill_process_group(proc)
                     raise TimeoutError(
                         f"auto_clips superó el timeout de {timeout_s}s")
 
@@ -401,26 +381,16 @@ def main(argv=None) -> int:
                    help="Segundos máx. por job (default 7200)")
     args = p.parse_args(argv)
 
-    lock_path = WORKER_LOCK
-    with open(lock_path, "w") as lock_f:
-        try:
-            fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            _log("Ya hay un worker corriendo (worker.lock bloqueado). "
-                 "Solo puede haber 1.")
-            return 2
-        _log(f"Worker arrancado (pid={os.getpid()}, db={args.db})")
-        try:
+    try:
+        with single_instance_lock(WORKER_LOCK):
+            _log(f"Worker arrancado (pid={os.getpid()}, db={args.db})")
             return run_worker(args.db, once=args.once,
                               max_jobs=args.max_jobs, top_n=args.top_n,
                               timeout_s=args.timeout)
-        finally:
-            # Solo se suelta el flock: el archivo worker.lock NO se
-            # borra. Borrarlo tras soltarlo es una carrera (otro
-            # worker puede tomarlo entre el unlock y el remove, y
-            # entonces se borra un lock en uso). El lock real es el
-            # flock, no la existencia del archivo.
-            fcntl.flock(lock_f, fcntl.LOCK_UN)
+    except RuntimeError:
+        _log("Ya hay un worker corriendo (worker.lock bloqueado). "
+             "Solo puede haber 1.")
+        return 2
 
 
 if __name__ == "__main__":
