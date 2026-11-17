@@ -807,4 +807,9 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    # DEPRECADO (Fase 5.2): usa el CLI único. Se mantiene
+    # como wrapper para no romper cron/scripts viejos.
+    import sys as _sys
+    print("aviso: watcher.py está deprecado; usa `clipagent watch`",
+          file=_sys.stderr)
     raise SystemExit(main())

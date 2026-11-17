@@ -806,4 +806,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # DEPRECADO (Fase 5.2): usa el CLI único. Se mantiene
+    # como wrapper para no romper cron/scripts viejos.
+    import sys as _sys
+    print("aviso: counter.py está deprecado; usa `clipagent status`",
+          file=_sys.stderr)
     raise SystemExit(main())
