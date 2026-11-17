@@ -81,7 +81,9 @@ jobs:
             "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
           sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
           sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
-          TwitchDownloaderCLI --help
+          # --help sale con exit 1 en esta versión; no debe tumbar el
+          # paso (bash -e) aunque el binario esté bien instalado.
+          TwitchDownloaderCLI --help || true
 
       - name: Instalar dependencias
         run: |
