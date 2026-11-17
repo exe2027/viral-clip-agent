@@ -191,10 +191,10 @@ def description_component(description, keyword="GTA 6"):
     head = description[:120]
     if keyword and keyword.lower() in head.lower():
         value += 40
-        notes.append(f"hook + keyword en los primeros 120 car. (+40)")
+        notes.append("hook + keyword en los primeros 120 car. (+40)")
     elif keyword and keyword.lower() in description.lower():
         value += 20
-        notes.append(f"keyword fuera de los primeros 120 car. (+20)")
+        notes.append("keyword fuera de los primeros 120 car. (+20)")
     else:
         notes.append(f"sin keyword '{keyword}' en la descripción (+0)")
     tail = description[-150:].lower()
@@ -402,7 +402,7 @@ def score_platform(platform, title=None, description=None, tags=None,
     weights = dict(WEIGHTS[platform])
     if th_val is None:
         # Sin miniatura propia: su peso se reparte entre los demás.
-        w_thumb = weights.pop("thumbnail")
+        weights.pop("thumbnail")
         total_w = sum(weights.values())
         weights = {k: v / total_w for k, v in weights.items()}
     total = sum(components[k]["value"] * weights[k]

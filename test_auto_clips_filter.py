@@ -17,7 +17,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import auto_clips
 from auto_clips import filter_candidates, main
 
 

@@ -9,6 +9,11 @@ __pycache__/
 .venv/
 .env
 *.db
+*.egg-info/
+__pycache__/
+*.pyc
+build/
+dist/
 queue.kill
 client_secrets.json
 token.json

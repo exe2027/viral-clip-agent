@@ -77,7 +77,6 @@ def platform_states(base_dir=None, doctor_rows=None):
     doctor_rows es la lista de filas de doctor.run_doctor (o None,
     en cuyo caso se usa el estado calculado sin sondas).
     """
-    paused_state = _load_state(base_dir)
     if doctor_rows is None:
         computed = _accounts.compute_state(base_dir)
         doctor_rows = [

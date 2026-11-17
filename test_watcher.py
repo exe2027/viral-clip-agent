@@ -8,7 +8,6 @@
 Uso: python3 test_watcher.py
 """
 
-import json
 import os
 import sys
 import tempfile

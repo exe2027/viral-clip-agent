@@ -132,7 +132,7 @@ def parse_srt(path):
         sec, ms = rest.split(",")
         return int(h) * 3600 + int(m) * 60 + int(sec) + int(ms) / 1000.0
 
-    blocks, out = [], []
+    out = []
     for chunk in re.split(r"\n\s*\n", text.strip()):
         lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
         if len(lines) >= 3 and "-->" in lines[1]:

@@ -190,7 +190,7 @@ def transcription_bonus(transcript, peak_rel=None, lang=None):
     if not near:
         return 0.0, "voz lejos del pico"
     langs = {lang} if lang else {"es", "en"}
-    laugh = set().union(*(LAUGH_WORDS.get(l, set()) for l in langs))
+    laugh = set().union(*(LAUGH_WORDS.get(lg, set()) for lg in langs))
     text = " ".join(w["word"].strip().lower().strip("¿?¡!.,") for w in near)
     tokens = set(text.split())
     if tokens & laugh:

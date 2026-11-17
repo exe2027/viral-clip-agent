@@ -121,7 +121,6 @@ def compute_state(base_dir=None, probes=None):
     result = {}
 
     # YouTube: OAuth por credenciales; canal y strikes solo por API.
-    yt_probe = probes.get("youtube_shorts") if probes else None
     yt_token_ok, yt_token_detail = _token_ok("youtube_shorts", base)
     yt_secrets = os.path.isfile(_creds.client_secrets_path(base))
     yt_checks = [

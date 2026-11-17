@@ -1,0 +1,85 @@
+# pyproject.toml — viral-clip-agent (Fase 5.3).
+#
+# Dependencias mínimas por diseño (regla de coste $0 y sin
+# dependencias pesadas): el núcleo solo necesita PyYAML; todo lo
+# demás es opcional con fallback (sin faster-whisper no hay
+# subtítulos; sin cv2 el recorte es centrado; sin las libs de
+# Google la subida a YouTube cae a borrador).
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "viral-clip-agent"
+version = "0.1.0"
+description = "Detector de clips virales de VODs de Twitch/Kick: chat -> picos -> corte 9:16 -> subtítulos -> paquete SEO -> publicación con red de seguridad"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Subtítulos con faster-whisper (local, sin red). Sin él, transcribe
+# avisa y el clip queda sin subtítulos quemados.
+whisper = [
+    "faster-whisper>=1.0",
+]
+# Visión de miniaturas y seguimiento de cara (OpenCV + numpy).
+# Sin cv2, el recorte 9:16 usa el centro como fallback.
+vision = [
+    "opencv-python-headless>=4.8",
+    "numpy>=1.26",
+]
+# Subida real a YouTube por API (OAuth + thumbnails.set). Sin estas
+# libs, YouTube cae a borrador (draft-first) y no se rompe nada.
+youtube = [
+    "google-api-python-client>=2.0",
+    "google-auth-oauthlib>=1.2",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+clipagent = "clipagent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["clipagent*"]
+
+[tool.pytest.ini_options]
+# La suite incluye runs/arreglo6/test_center_track.py (lenta, ~3 min:
+# procesa vídeo real). No se excluye: es el único test del
+# seguimiento de cara.
+testpaths = ["."]
+
+[tool.ruff]
+# Reglas curadas (Fase 5): solo errores y fallos de import. El repo
+# tiene ~175 avisos con las reglas por defecto (EXE001, BLE001,
+# etc.), preexistentes y fuera de alcance; se corrigen de a poco.
+line-length = 79
+target-version = "py310"
+lint.select = ["E", "F"]
+lint.ignore = [
+    "E501",  # líneas largas en docstrings/URLs: se revisan a mano
+]
+[tool.ruff.lint.per-file-ignores]
+# Shims deprecados de la Fase 5.1: avisan y re-exportan el módulo
+# nuevo; el import va después del aviso por diseño (E402).
+"config.py" = ["F401", "F403", "E402"]
+"clips_chat_v2.py" = ["F401", "F403", "E402"]
+"viral_score.py" = ["F401", "F403", "E402"]
+"subtitles.py" = ["F401", "F403", "E402"]
+"layout.py" = ["F401", "F403", "E402"]
+"viral_package.py" = ["F401", "F403", "E402"]
+"publisher.py" = ["F401", "F403", "E402"]
+"audio.py" = ["F401", "F403", "E402"]
+"precise_cut.py" = ["F401", "F403", "E402"]
+"seo_score.py" = ["F401", "F403", "E402"]
+"priority.py" = ["F401", "F403", "E402"]
+"thumbnails.py" = ["F401", "F403", "E402"]
+"moment_card.py" = ["F401", "F403", "E402"]
+"vision.py" = ["F401", "F403", "E402"]
+# Tests: imports tras sys.path, estilo propio.
+"test_*.py" = ["E402"]
+"runs/*" = ["E402"]

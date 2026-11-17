@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Tests de vision.py: Gemini elige el mejor frame, con fallback."""
 import json
-import os
 import unittest
 from pathlib import Path
 from unittest import mock
 
-import clipagent.vision as vision
 from clipagent.vision import _parse_choice, choose_best_frame
 
 FRAMES = [

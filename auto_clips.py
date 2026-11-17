@@ -757,7 +757,7 @@ def main() -> int:
             median = statistics.median(scores.values())
             ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
             rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
-            print(f"Score de viralidad (BETA, sin entrada humana):")
+            print("Score de viralidad (BETA, sin entrada humana):")
             for ts, score in peaks:
                 multiple = score / median if median > 0 else None
                 vs = score_clip(detail[ts], multiple, rank=rank_map.get(ts),
@@ -1211,7 +1211,7 @@ def main() -> int:
                       f"- Descripción: {v['description_first_2_lines']}",
                       f"- Tags: {', '.join(v['tags'])}",
                       f"- Búsquedas a ganar: {', '.join(v['search_queries'])}",
-                      f"- ¿Lo subo así, o lo cambio?"]
+                      "- ¿Lo subo así, o lo cambio?"]
             plats = v.get("platforms", {}) if v else {}
             if plats:
                 lines.append("- Por plataforma (misma idea, paquete distinto):")

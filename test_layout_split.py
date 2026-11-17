@@ -20,7 +20,6 @@ para la detección por cara; sin cv2 los tests de detección se saltan).
 """
 import os
 import subprocess
-import sys
 import unittest
 
 from clipagent.render import (DEFAULTS, _face_cam_box, _split_params,

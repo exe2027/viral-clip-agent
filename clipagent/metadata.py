@@ -596,9 +596,7 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
     what = card.get("what")  # verbo+objeto, o None si no hay evidencia
     reaction = card.get("dominant_reaction") or ""
     risas = card.get("risas") or 0
-    hype = card.get("hype") or 0
     multiple = card.get("viral_multiple")
-    users = card.get("unique_users_peak_30s") or 0
     msgs = card.get("chat_msgs_peak_10s") or 0
     quote_chat = (card.get("quote_chat") or {}).get("text") or ""
     quote_chat_count = (card.get("quote_chat") or {}).get("count") or 0
@@ -1356,10 +1354,9 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         check_card, visible=visible, lang=lang)
 
     what = card.get("what") if card else None
-    quote_streamer = (card.get("quote_streamer") or {}).get("text") if card else None
     if lang == "en":
         thumb = "NO WAY" if reaction == "risas" else ("WAIT FOR IT" if is_hype else "CHAT REACTION")
-        hook = (f"Watch why chat lost it here." if reaction == "risas"
+        hook = ("Watch why chat lost it here." if reaction == "risas"
                 else "Watch this moment — chat went crazy in seconds.")
         onscreen = "CHAT REACTION"
         loop = "And that's why everyone clipped it."
@@ -1504,7 +1501,6 @@ def score_package_seo(pkg, game_verified=None, visible=None, lang="es"):
 # ---------------------------------------------------------------------------
 
 def _self_test():
-    import sys
     here = Path(__file__).parent
     failures = []
 

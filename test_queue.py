@@ -496,7 +496,7 @@ class TestWorkerKill(unittest.TestCase):
 class TestValidateManifest(unittest.TestCase):
     def test_ok_y_vacio(self):
         with tempfile.TemporaryDirectory() as tmp:
-            mpath = _manifest(tmp, [(1, True)])
+            _manifest(tmp, [(1, True)])
             manifest, problems = _validate_manifest(tmp)
             self.assertEqual(problems, [])
             self.assertEqual(len(manifest["clips"]), 1)

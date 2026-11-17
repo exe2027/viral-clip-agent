@@ -76,7 +76,6 @@ class TestCliStartStop(unittest.TestCase):
     def test_start_stop_con_hijos_de_prueba(self):
         # Subproceso real del CLI, con hijos `sleep` (sin red).
         root = os.path.dirname(os.path.abspath(__file__))
-        env = dict(os.environ)
         start = subprocess.Popen(
             [sys.executable, "-m", "clipagent", "start",
              "--child", "a=sleep 60", "--child", "b=sleep 60"],

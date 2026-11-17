@@ -59,7 +59,6 @@ Uso:
 Sin dependencias externas, sin credenciales, sin red. Todo local.
 """
 
-import math
 import os
 import statistics
 

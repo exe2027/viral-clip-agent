@@ -88,8 +88,6 @@ class TestLocalOauth(unittest.TestCase):
         thread.start()
         token_url = f"http://127.0.0.1:{port}/token"
 
-        captured = {}
-
         def fake_run(auth_url, token_url_, client_id, client_secret,
                      scope, redirect_port=0, timeout=300):
             return setup.run_local_oauth(

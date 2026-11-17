@@ -450,7 +450,6 @@ def check_semaphore(job: dict, allowlist: set | None = None,
     """
     reds = []
     allowlist = load_allowlist() if allowlist is None else allowlist
-    streamer = (job.get("streamer") or "").lower()
 
     # 1. (ELIMINADO 2026-11-16 por decisión del usuario: el permiso
     # NO es un rojo del semáforo. Estar en la lista blanca que sube el

@@ -10,7 +10,6 @@ con la API Helix (Get Videos -> broadcaster). Sin credenciales de
 Twitch no se puede resolver y se pide el link del canal.
 """
 import re
-import urllib.parse
 
 from . import streamers as _streamers
 

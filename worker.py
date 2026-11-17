@@ -35,7 +35,6 @@ import argparse
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -46,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clipagent.service import (kill_process_group,
                            single_instance_lock)  # noqa: E402
 from jobqueue import (  # noqa: E402
-    HERE, KILL_SWITCH_PATH, MAX_ATTEMPTS, Queue, QueueError,
+    HERE, MAX_ATTEMPTS, Queue, QueueError,
     check_semaphore, classify_error, kill_switch_active,
 )
 

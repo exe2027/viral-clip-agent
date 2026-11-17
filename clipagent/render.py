@@ -558,14 +558,16 @@ def _is_circular_avatar(stable, box):
     if box is None:
         return False
     x0, y0, x1, y1 = box
-    c = lambda x, y: (min(max(y // CELL, 0), len(stable) - 1),
-                      min(max(x // CELL, 0), len(stable[0]) - 1))
-    corners = [stable[c(x0 + 2, y0 + 2)[0]][c(x0 + 2, y0 + 2)[1]],
-               stable[c(x1 - 2, y0 + 2)[0]][c(x1 - 2, y0 + 2)[1]],
-               stable[c(x0 + 2, y1 - 2)[0]][c(x0 + 2, y1 - 2)[1]],
-               stable[c(x1 - 2, y1 - 2)[0]][c(x1 - 2, y1 - 2)[1]]]
+    def _cell(x, y):
+        return (min(max(y // CELL, 0), len(stable) - 1),
+                min(max(x // CELL, 0), len(stable[0]) - 1))
+
+    corners = [stable[_cell(x0 + 2, y0 + 2)[0]][_cell(x0 + 2, y0 + 2)[1]],
+               stable[_cell(x1 - 2, y0 + 2)[0]][_cell(x1 - 2, y0 + 2)[1]],
+               stable[_cell(x0 + 2, y1 - 2)[0]][_cell(x0 + 2, y1 - 2)[1]],
+               stable[_cell(x1 - 2, y1 - 2)[0]][_cell(x1 - 2, y1 - 2)[1]]]
     cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-    center = stable[c(cx, cy)[0]][c(cx, cy)[1]]
+    center = stable[_cell(cx, cy)[0]][_cell(cx, cy)[1]]
     return center and sum(1 for v in corners if not v) >= 3
 
 
