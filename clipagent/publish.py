@@ -886,6 +886,16 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     if decision["decision"] == "retenido":
         queue.set_state(item, "retained", decision["reason"])
         return {"action": "retained", "reason": decision["reason"]}
+    # 6.2: streamer desactivado en el panel: no se publican sus
+    # clips nuevos (el permiso no se revoca, solo se pausa).
+    if item.get("streamer"):
+        from .streamers import get_streamer
+        entry = get_streamer(item["streamer"])
+        if entry is not None and not entry.get("enabled", True):
+            reason = (f"streamer {item['streamer']} desactivado "
+                      "en el panel")
+            queue.set_state(item, "retained", reason)
+            return {"action": "retained", "reason": reason}
     if is_paused(platform)[0]:
         return {"action": "paused",
                 "reason": f"{platform} pausada: {is_paused(platform)[1]}"}

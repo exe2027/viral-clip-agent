@@ -242,7 +242,7 @@ def load_influencers(path=None):
         "juego": e["game"],
         "estado": e["estado"],
         "canal_original": e["channel_url"],
-    } for e in load_streamers()]
+    } for e in load_streamers() if e.get("enabled", True)]
 
 
 def load_watcher_config(config_path=None):

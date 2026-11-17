@@ -68,6 +68,9 @@ def build_parser():
     p_worker.add_argument("--top-n", type=int, default=5)
     p_worker.add_argument("--timeout", type=int, default=None)
 
+    p_panel = sub.add_parser("panel", help="Panel web local (6.2)")
+    p_panel.add_argument("--port", type=int, default=8765,
+                         help="puerto local (por defecto 8765)")
     p_watch = sub.add_parser("watch", help="Vigila VODs nuevos")
     p_watch.add_argument("--once", action="store_true", default=True)
     p_watch.add_argument("--loop", action="store_true")
@@ -176,6 +179,9 @@ def main(argv=None):
         if args.interval_minutes is not None:
             argv += ["--interval-minutes", str(args.interval_minutes)]
         return _watcher.main(argv)
+    if args.command == "panel":
+        from .panel import run_panel
+        return run_panel(args.port)
     if args.command == "publish":
         from .publish import main as publish_main
         return publish_main(args.args or ["audit"])

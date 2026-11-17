@@ -54,6 +54,9 @@ def _norm(entry):
         "evidencia_url": str(entry.get("evidencia_url") or "").strip(),
         "publish_platforms": [str(p).strip().lower() for p in publish],
         "notas": str(entry.get("notas") or entry.get("notes") or "").strip(),
+        # Interruptor del panel (6.2): False = no se vigila ni se
+        # publican sus clips nuevos. Sin la clave, activo.
+        "enabled": bool(entry.get("enabled", True)),
     }
 
 
@@ -159,6 +162,28 @@ def add_streamer(entry, path=None, base_dir=None):
     current.append(norm)
     _save(current, path)
     return True, f"{norm['name']} agregado a streamers.yaml"
+
+
+def set_enabled(name, enabled, path=None, base_dir=None):
+    """Interruptor del panel (6.2): activa/desactiva un streamer.
+
+    Desactivado no se vigila (watcher) ni se publican sus clips
+    nuevos (la política los retiene). El permiso no se revoca:
+    quitarlo de la lista es otra acción (remove_streamer).
+    Devuelve True si existía.
+    """
+    base = base_dir or BASE_DIR
+    path = path or os.path.join(base, "streamers.yaml")
+    name = (name or "").strip().lower()
+    current = load_streamers(path, base)
+    found = False
+    for e in current:
+        if e["name"] == name:
+            e["enabled"] = bool(enabled)
+            found = True
+    if found:
+        _save(current, path)
+    return found
 
 
 def remove_streamer(name, path=None, base_dir=None):
