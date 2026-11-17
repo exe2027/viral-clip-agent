@@ -16,6 +16,12 @@ aprobación elige uno, el código no elige por el humano. La portada
 de Instagram es una copia del fotograma del payoff
 (``cover_instagram.jpg``), 1080x1920, sin texto quemado por ahora.
 
+Con ``--vision`` (ver ``vision.py``), Gemini Flash-Lite ordena los
+3 frames y propone el mejor para el título dado; la portada pasa a
+ser ese frame. Sin key o si la API falla, se cae al payoff sin
+romper nada. La elección de Gemini es una propuesta: la aprobación
+humana sigue mandando.
+
 Sin payoff conocido se usan 25 % / 50 % / 75 % de la duración, y la
 ficha lo marca (evidence low): los frames siguen siendo reales, pero
 nadie sabe cuál es el momento.
@@ -33,6 +39,7 @@ Uso como CLI:
 
     python thumbnails.py runs/.../clip.mp4 --payoff 20 --out-dir runs/.../thumbnails
     python thumbnails.py runs/.../clip.mp4 --card runs/.../moment_card.json
+    python thumbnails.py runs/.../clip.mp4 --card runs/.../moment_card.json --vision --title "GTA V RP: Errar un tiro y el chat explotó"
 """
 
 import argparse
@@ -40,6 +47,11 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+
+try:
+    from vision import choose_best_frame
+except ImportError:  # vision.py es opcional; sin él no hay --vision
+    choose_best_frame = None
 
 # Desplazamientos alrededor del payoff (s). 5 s es suficiente para que
 # los 3 frames se vean distintos y a la vez sigan siendo "el momento".
@@ -113,24 +125,55 @@ def extract_thumbnail_frames(clip_path, payoff_ts_clip=None, out_dir=None,
     return frames
 
 
-def instagram_cover(frames, out_path=None):
+def choose_cover_frame(frames, title=None, game=None, use_vision=False, model=None):
+    """Frame de portada: con visión, el que elige Gemini; sin ella, el payoff.
+
+    Devuelve (frame, vision_result). ``vision_result`` es None sin
+    visión, o el dict de ``vision.choose_best_frame`` (con
+    ``vision`` en "gemini" | "skipped" | "error"). Sin key o con
+    error, la visión cae al payoff y no lanza excepción.
+    """
+    if not frames:
+        raise ValueError("sin fotogramas: primero extract_thumbnail_frames()")
+    if not use_vision or choose_best_frame is None:
+        payoff = next((f for f in frames if f["role"] == "payoff"), None)
+        return payoff or frames[len(frames) // 2], None
+    kwargs = {}
+    if model:
+        kwargs["model"] = model
+    result = choose_best_frame(frames, title=title, game=game, **kwargs)
+    return frames[result["best_index"]], result
+
+
+def instagram_cover(frames, out_path=None, vision_choice=None, vision_result=None):
     """Portada de Instagram: copia del fotograma del payoff.
 
     ``frames`` es la lista de extract_thumbnail_frames. Sin frame de
     payoff (no había payoff conocido) usa el del 50 % y lo dice.
+    Con ``vision_choice`` (frame devuelto por ``choose_cover_frame``
+    con visión), la portada es ese frame en vez del payoff.
     """
     if not frames:
         raise ValueError("sin fotogramas: primero extract_thumbnail_frames()")
-    payoff = next((f for f in frames if f["role"] == "payoff"), None)
-    chosen = payoff or frames[len(frames) // 2]
+    if vision_choice is not None:
+        chosen = vision_choice
+    else:
+        payoff = next((f for f in frames if f["role"] == "payoff"), None)
+        chosen = payoff or frames[len(frames) // 2]
     out_path = Path(out_path) if out_path else Path(chosen["path"]).parent / "cover_instagram.jpg"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(chosen["path"], out_path)
+    if vision_result and vision_result.get("vision") == "gemini":
+        note = f"elegido por Gemini: {vision_result.get('reason') or ''}".strip()
+    elif vision_result and vision_result.get("vision") in ("skipped", "error"):
+        note = (f"visión {vision_result['vision']} ({vision_result.get('reason')}), "
+                "portada = fotograma del payoff")
+    elif chosen["role"] == "payoff":
+        note = "copia del fotograma del payoff, sin texto quemado"
+    else:
+        note = "SIN payoff conocido: portada = frame del 50% del clip"
     return {"path": str(out_path), "source_ts_clip": chosen["ts_clip"],
-            "source_role": chosen["role"],
-            "note": ("copia del fotograma del payoff, sin texto quemado"
-                     if chosen["role"] == "payoff"
-                     else "SIN payoff conocido: portada = frame del 50% del clip")}
+            "source_role": chosen["role"], "note": note}
 
 
 def thumbnail_candidates_for_clip(clip_path, moment_card=None, out_dir=None):
@@ -148,9 +191,16 @@ def main():
     p.add_argument("--card", help="moment_card.json (usa su payoff_ts_clip)")
     p.add_argument("--out-dir", default=None)
     p.add_argument("--cover", action="store_true", help="Además, generar cover_instagram.jpg")
+    p.add_argument("--vision", action="store_true",
+                   help="Gemini elige el mejor frame para el título (apagado por defecto; necesita GEMINI_API_KEY)")
+    p.add_argument("--title", default=None, help="Título del clip, para que la visión elija el frame que mejor va con él")
+    p.add_argument("--game", default=None, help="Juego del clip")
+    p.add_argument("--model", default=None, help="Modelo de Gemini (default: gemini-2.5-flash-lite)")
+    p.add_argument("--vision-out", default=None, help="Dónde guardar el resultado de la visión (default: <out-dir>/vision.json)")
     args = p.parse_args()
 
     payoff = args.payoff
+    card = None
     if args.card:
         card = json.loads(Path(args.card).read_text(encoding="utf-8"))
         payoff = card.get("payoff_ts_clip")
@@ -159,9 +209,28 @@ def main():
                                       out_dir=args.out_dir)
     for f in frames:
         print(f"  {f['role']}: {f['ts_clip']} s -> {f['path']}")
+    vision_choice, vision_result = None, None
+    if args.vision:
+        title = args.title
+        if title is None and card:
+            title = (card.get("best_title") or
+                     (card.get("titles") or [None])[0])
+        vision_choice, vision_result = choose_cover_frame(
+            frames, title=title, game=args.game or (card or {}).get("game"),
+            use_vision=True, model=args.model)
+        print(f"  Visión: {vision_result['vision']} "
+              f"(mejor frame: {vision_result['best_index'] + 1}, "
+              f"ranking: {vision_result['ranking']}) — {vision_result.get('reason')}")
+        out_dir = Path(args.out_dir) if args.out_dir else Path(frames[0]["path"]).parent
+        vision_path = Path(args.vision_out) if args.vision_out else out_dir / "vision.json"
+        vision_path.write_text(json.dumps(vision_result, indent=2, ensure_ascii=False),
+                               encoding="utf-8")
+        print(f"  Visión guardada en: {vision_path}")
     if args.cover:
         cover = instagram_cover(frames, (Path(args.out_dir) / "cover_instagram.jpg")
-                                if args.out_dir else None)
+                                if args.out_dir else None,
+                                vision_choice=vision_choice,
+                                vision_result=vision_result)
         print(f"  Portada IG: {cover['path']} ({cover['note']})")
     return 0
 

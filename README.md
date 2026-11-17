@@ -90,7 +90,19 @@ Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hash
 
 Ejemplo real: en el clip de Coker el mejor título solo-texto hablaba de errar un tiro, pero en pantalla solo había dos webcams riéndose, sin gameplay. Eso solo lo caza la visión.
 
-**Cuánto cuesta.** Unos $0,0006 por clip con Gemini Flash-Lite. A 20 clips al día son $0,006 al día. La capa gratuita da 500 peticiones al día y nosotros usaríamos unas 20, así que en la práctica no se paga nada.
+**La visión también elige la miniatura.** `vision.py` + `thumbnails.py --vision` mandan los mismos 3 fotogramas (antes del payoff, payoff, después) y Gemini ordena cuál va mejor con el título. La portada pasa a ser ese frame; sin key o si la API falla, se cae al fotograma del payoff. Probado de verdad el 2026-11-16 con los 3 frames de Coker: Gemini eligió el frame 2 (payoff, 20 s), ranking [2, 1, 3].
+
+```bash
+# Elegir el mejor frame con Gemini (apagado por defecto)
+python thumbnails.py runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1.mp4 \
+  --payoff 20 --out-dir runs/kick-coker-01a1dffd/clips/thumbnails \
+  --cover --vision --title "GTA V RP: Errar un tiro y el chat explotó"
+# Guarda vision.json con el ranking y el motivo, y cover_instagram.jpg con el frame elegido
+```
+
+**Modelo.** `gemini-3.5-flash-lite`. Ojo: los modelos 2.5 ya no están disponibles para usuarios nuevos (la API devuelve 404 "no longer available"), por eso el código usa 3.5.
+
+**Cuánto cuesta.** 1 llamada por clip con Gemini Flash-Lite. La capa gratuita da 500 peticiones al día y nosotros usaríamos unas 20, así que en la práctica no se paga nada.
 
 **Cómo crear la key gratis, sin tarjeta.** Tener Gemini Pro (la app) no te da una API key sola: son dos cosas distintas y la key hay que crearla aparte, en Google AI Studio, con la misma cuenta de Google:
 
@@ -106,7 +118,7 @@ Listo, ahí te da la key. **No toques "Set up billing", "Configurar facturación
 GEMINI_API_KEY=tu_key_aqui
 ```
 
-**Estado actual (2026-11-16).** La key ya se creó en AI Studio, gratis y sin tarjeta ni cuenta de facturación. El módulo de visión todavía no está cableado en `auto_clips.py`: hoy la app funciona 100% sin ella, con títulos por texto + clasificador local de layout, y la visión queda apagada por defecto (`vision_skipped`). Guarda la key en el `.env` y quedará lista para activarla cuando se implemente el módulo; no hace falta para usar la app hoy.
+**Estado actual (2026-11-16).** La key ya se creó en AI Studio, gratis y sin tarjeta ni cuenta de facturación, y quedó verificada con una llamada real a `gemini-3.5-flash-lite`. El módulo de visión para miniaturas ya está implementado (`vision.py`, `thumbnails.py --vision`): hoy la app funciona 100% sin ella, con títulos por texto + clasificador local de layout, y la visión queda apagada por defecto (`vision_skipped`). El veto de títulos con visión todavía no está cableado en `auto_clips.py`. Guarda la key en el `.env` para usar `--vision`; no hace falta para usar la app hoy.
 
 ### 7. Aviso
 
