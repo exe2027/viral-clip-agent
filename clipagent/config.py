@@ -117,6 +117,24 @@ DEFAULT_CONFIG = {
         # publisher.load_whitelist(); jobqueue.py usa además la clave
         # "allowlist" de nivel superior en config.yaml).
         "metrics_green": False,     # true solo con métricas en verde (revisión manual)
+        # Modo de arranque (6.7): "gradual" conserva las fases y el
+        # contador (nada automático hasta la fase 4); "full" publica
+        # según la política 6.3 sin pasar por las fases.
+        "mode": "gradual",
+    },
+    # Umbrales duros del sistema de puntaje (6B.2): los valores por
+    # defecto son los de priority.py (90/50). Si se bajan, queda
+    # registrado con fecha en scoring_changes.log.
+    "scoring": {
+        "seo_gate": 90,
+        "viral_min": 50,
+    },
+    # Aprobación automática por política (6.3): sin humano por clip.
+    # min_band: null = sin requisito de banda; descartar | revisar |
+    # prioritario | urgente (bandas de viral_score).
+    "auto_approve": {
+        "enabled": True,
+        "min_band": None,
     },
 }
 

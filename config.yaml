@@ -288,3 +288,19 @@ autopublish:
   # superior). REGLA 2026-11-16: estar en la lista = permiso ya
   # dado. Vacía en todas = fase 4 bloqueada.
   metrics_green: false    # poner true solo cuando las métricas estén en verde (revisión manual)
+  # Modo de arranque (6.7): gradual conserva las fases y el contador
+  # (nada automático hasta la fase 4); full publica según la
+  # política 6.3 sin pasar por las fases.
+  mode: gradual
+
+# Umbrales duros del sistema de puntaje (6B.2): por defecto 90/50.
+# Si se bajan, queda registrado con fecha en scoring_changes.log.
+scoring:
+  seo_gate: 90
+  viral_min: 50
+
+# Aprobación automática por política (6.3): sin humano por clip.
+# min_band: null = sin requisito de banda.
+auto_approve:
+  enabled: true
+  min_band: null

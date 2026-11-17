@@ -14,6 +14,8 @@ __pycache__/
 *.pyc
 build/
 dist/
+scoring_changes.log
+circuit_breaker.json
 queue.kill
 client_secrets.json
 token.json
@@ -22,4 +24,5 @@ platform_state.json
 tokens/
 seen_vods.json
 worker.lock
-drafts/          # paquetes manuales de subida (estado local)
+# paquetes manuales de subida (estado local)
+drafts/

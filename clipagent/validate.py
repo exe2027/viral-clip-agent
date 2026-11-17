@@ -263,11 +263,15 @@ def validate_config(cfg, source="config.yaml"):
                       f"debe ser entero >= 0, es {v!r}")
     c.check(cfg, "autopublish.metrics_green", "bool")
     c.check(cfg, "autopublish.mode", "str", choices=AUTOPUBLISH_MODES)
-    # auto_approve y scoring se validan en 6.3 / 6B; aquí solo el tipo.
-    if "auto_approve" in cfg and not isinstance(cfg["auto_approve"], dict):
-        c.err("auto_approve", "debe ser un mapa")
-    if "scoring" in cfg and not isinstance(cfg["scoring"], dict):
-        c.err("scoring", "debe ser un mapa")
+    # Umbrales duros (6B.2) y auto-aprobación (6.3).
+    c.check(cfg, "scoring", "dict")
+    c.check(cfg, "scoring.seo_gate", "int", minimum=0, maximum=100)
+    c.check(cfg, "scoring.viral_min", "int", minimum=0, maximum=100)
+    c.check(cfg, "auto_approve", "dict")
+    c.check(cfg, "auto_approve.enabled", "bool")
+    if (cfg.get("auto_approve") or {}).get("min_band") is not None:
+        c.check(cfg, "auto_approve.min_band", "str",
+                choices={"descartar", "revisar", "prioritario", "urgente"})
 
     warnings = [f"clave desconocida de nivel superior: {k!r} "
                 f"(se ignora; revisa si es un error de tipeo)"

@@ -167,7 +167,9 @@ YOUTUBE_MAX_UPLOADS_BY_QUOTA = YOUTUBE_UPLOAD_CALLS_PER_DAY  # 100
 #   quarantined — rechazo por copyright/contenido, revisión humana.
 #   draft       — paquete listo para subir manual (draft-first).
 QUEUE_STATES = ("queued", "ready_for_review", "approved",
-                "published", "failed", "quarantined", "draft")
+                "published", "failed", "quarantined", "draft",
+                # Fase 6.3: la política retiene o descarta sin publicar.
+                "retained", "discarded")
 
 # ---------------------------------------------------------------------------
 # Estado de las cuentas (Fase 3.2): se CALCULA en
@@ -373,14 +375,20 @@ class PublishQueue:
                 return item
         return None
 
-    def enqueue(self, clip, platform, streamer=None):
+    def enqueue(self, clip, platform, streamer=None, moment_key=None,
+                red_flags=None, game=None, vod_id=None):
+        """Encola un clip. La política (6.3) necesita estos metadatos
+        guardados en el ítem: moment_key (duplicados), red_flags
+        (semáforo), game y vod_id."""
         if self._find(clip, platform):
             return self._find(clip, platform)
         item = {"clip": clip, "platform": platform, "streamer": streamer,
                 "state": "queued", "history": [
                     {"at": _now_chile().isoformat(), "state": "queued"}],
                 "scheduled_for": None, "published_at": None,
-                "platform_id": None, "quarantine_reason": None}
+                "platform_id": None, "quarantine_reason": None,
+                "moment_key": moment_key, "red_flags": red_flags or [],
+                "game": game, "vod_id": vod_id}
         self.data["items"].append(item)
         self.save()
         return item
@@ -423,11 +431,16 @@ class PublishQueue:
             return None
         return max(i["published_at"] for i in published)
 
-    def due_items(self, platform=None):
-        """Ítems approved cuya hora programada ya llegó (o sin hora)."""
+    def due_items(self, platform=None, states=("approved",)):
+        """Ítems en `states` cuya hora programada ya llegó (o sin hora).
+
+        El flujo manual usa solo "approved"; el bucle automático
+        (6.3) pasa ("approved", "queued") y la política decide.
+        El orden por prioridad llega en 6B.1 (order_queue).
+        """
         now = _now_chile().isoformat()
         return [i for i in self.data["items"]
-                if i["state"] == "approved"
+                if i["state"] in states
                 and (platform is None or i["platform"] == platform)
                 and (not i.get("scheduled_for") or i["scheduled_for"] <= now)]
 
@@ -815,6 +828,133 @@ def handle_rejection(queue, clip, platform, error):
 
 
 # ---------------------------------------------------------------------------
+# Publicación directa y bucle automático (Fase 6.3)
+# ---------------------------------------------------------------------------
+def publish_direct(platform, clip_path, queue=None, live=False):
+    """Publica un clip por API en esa plataforma.
+
+    YouTube: subida real por YouTubePublisher (exige OAuth y live).
+    TikTok / Instagram / Facebook: la subida directa desde el disco
+    NO está cableada todavía (TikTok e Instagram exigen una URL
+    pública del vídeo; Facebook, subida por chunks con polling):
+    se devuelve modo "draft" y el bucle genera el paquete
+    draft-first para subir a mano. Nunca se finge una publicación.
+    """
+    if platform == "youtube_shorts":
+        pub = get_publisher(platform, queue)
+        return pub.publish(clip_path, live=live)
+    pub = get_publisher(platform, queue)
+    if hasattr(pub, "publish_draft"):
+        draft = pub.publish_draft(clip_path)
+        return {"ok": False, "mode": "draft",
+                "reason": ("publicación directa no cableada en "
+                           f"{platform}: paquete draft-first en "
+                           f"{draft.get('draft_dir', 'drafts/')}"),
+                "draft": draft}
+    return {"ok": False, "mode": "draft",
+            "reason": f"sin publicador directo para {platform}"}
+
+
+def publish_one(queue, item, cfg=None, live=False, mode="full",
+                counter_state=None):
+    """Un ítem de la cola por la política (6.3). Devuelve
+    {"action": published|retained|discarded|draft|failed|
+    quarantined|limited|paused, "reason": ...}."""
+    from .policy import evaluate
+    from .status import is_paused
+    platform = item["platform"]
+    clip_path = item["clip"]
+    if not os.path.isfile(clip_path):
+        queue.mark_failed(item, f"archivo no existe: {clip_path}")
+        return {"action": "failed", "reason": "archivo no existe"}
+    clip, manifest = load_clip_package(clip_path)
+    if clip is None:
+        queue.mark_failed(item, "sin entrada en el manifiesto")
+        return {"action": "failed",
+                "reason": "sin entrada en el manifiesto"}
+    overrides = {o.get("platform")
+                 for o in (manifest or {}).get("seo_overrides", [])}
+    decision = evaluate(
+        clip, platform, queue=queue, cfg=cfg,
+        red_flags=item.get("red_flags"), game=item.get("game"),
+        vod_id=item.get("vod_id") or (manifest or {}).get("vod_id"),
+        mode=mode, counter_state=counter_state,
+        seo_override=platform in overrides)
+    if decision["decision"] == "descartado":
+        queue.set_state(item, "discarded", decision["reason"])
+        return {"action": "discarded", "reason": decision["reason"]}
+    if decision["decision"] == "retenido":
+        queue.set_state(item, "retained", decision["reason"])
+        return {"action": "retained", "reason": decision["reason"]}
+    if is_paused(platform)[0]:
+        return {"action": "paused",
+                "reason": f"{platform} pausada: {is_paused(platform)[1]}"}
+    ok, why = check_limits(queue, platform)
+    if not ok:
+        return {"action": "limited", "reason": why}
+    result = publish_direct(platform, clip_path, queue, live=live)
+    if result.get("mode") == "draft":
+        queue.set_state(item, "draft", result.get("reason"))
+        return {"action": "draft", "reason": result.get("reason")}
+    if result.get("ok"):
+        video_id = (result.get("video_id") or result.get("publish_id")
+                    or result.get("post_id") or "api")
+        queue.mark_published(item, video_id)
+        return {"action": "published",
+                "reason": decision["reason"],
+                "url": result.get("url")}
+    action = handle_rejection(queue, clip_path, platform,
+                              result.get("reason") or "error desconocido")
+    return {"action": action["action"], "reason": action["reason"]}
+
+
+def publish_loop(queue=None, interval_s=300, live=False, once=False,
+                 cfg=None, stop_event=None, notify_fn=None):
+    """Bucle del publicador: evalúa la cola por política y publica.
+
+    Una pasada por plataforma (pausadas se saltan), y espera
+    interval_s entre pasadas salvo --once. Devuelve el conteo de
+    acciones. `notify_fn(evento, detalle)` se llama al publicar,
+    fallar o mandar a cuarentena (6.6).
+    """
+    import threading
+    from .config import load_config
+    queue = queue or PublishQueue()
+    cfg = cfg or load_config()
+    mode = ((cfg.get("autopublish") or {}).get("mode") or "gradual")
+    counter_state = None
+    if mode == "gradual":
+        from counter import load_state as _load_counter_state
+        counter_state = _load_counter_state()
+    stop = stop_event or threading.Event()
+    stats = {"published": 0, "retained": 0, "discarded": 0, "draft": 0,
+             "failed": 0, "quarantined": 0, "limited": 0, "paused": 0}
+    while True:
+        for platform in PLATFORMS:
+            for item in queue.due_items(
+                    platform, states=("approved", "queued")):
+                result = publish_one(queue, item, cfg=cfg, live=live,
+                                     mode=mode,
+                                     counter_state=counter_state)
+                action = result["action"]
+                if action in stats:
+                    stats[action] += 1
+                if action == "published" and notify_fn:
+                    notify_fn("publicado",
+                              f"{platform}: {item['clip']} "
+                              f"({result.get('url', '')})")
+                elif action in ("failed", "quarantined") and notify_fn:
+                    notify_fn("falló" if action == "failed"
+                              else "cuarentena",
+                              f"{platform}: {item['clip']}: "
+                              f"{result.get('reason', '')}")
+        if once or stop.is_set():
+            break
+        stop.wait(interval_s)
+    return stats
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main(argv=None):
@@ -838,6 +978,14 @@ def main(argv=None):
     p.add_argument("--clip", required=True)
     p.add_argument("--platform", required=True, choices=list(PLATFORMS))
     p.add_argument("--reason", required=True)
+    p = sub.add_parser("loop", help="bucle automático: evalúa la cola "
+                       "por política y publica (6.3)")
+    p.add_argument("--live", action="store_true",
+                   help="subidas reales (sin --live, YouTube no sube)")
+    p.add_argument("--once", action="store_true",
+                   help="una sola pasada y salir")
+    p.add_argument("--interval-minutes", type=int, default=5,
+                   help="minutos entre pasadas (default 5)")
     args = parser.parse_args(argv)
 
     queue = PublishQueue()
@@ -876,6 +1024,11 @@ def main(argv=None):
         item = queue._find(args.clip, args.platform) or queue.enqueue(args.clip, args.platform)
         queue.quarantine(item, args.reason)
         print(f"En cuarentena: {args.clip} [{args.platform}] — {args.reason}")
+        return 0
+    if args.cmd == "loop":
+        stats = publish_loop(queue, live=args.live, once=args.once,
+                             interval_s=args.interval_minutes * 60)
+        print(json.dumps(stats, indent=2, ensure_ascii=False))
         return 0
     return 0
 

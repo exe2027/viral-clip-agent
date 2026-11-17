@@ -109,25 +109,30 @@ def priority(virality, seo, chat_multiple, age_days=0, weights=None):
     }
 
 
-def publish_status(virality, seo, seo_override=False):
+def publish_status(virality, seo, seo_override=False,
+                   seo_gate=SEO_GATE, viral_min=VIRAL_MIN_PUBLISH):
     """Filtro duro de publicación. Devuelve (estado, motivo).
 
     Estados: ``descartado`` (viralidad < 50), ``bloqueado_seo``
     (SEO < 90 sin override), ``publicable_override`` (SEO < 90 con
     override registrado), ``publicable``.
+
+    Los umbrales se pueden leer de config.yaml (scoring.seo_gate,
+    scoring.viral_min, 6B.2); los valores por defecto son los de
+    siempre y la fórmula no cambia.
     """
     virality = float(virality or 0.0)
     seo = float(seo or 0.0)
-    if virality < VIRAL_MIN_PUBLISH:
+    if virality < viral_min:
         return ("descartado",
-                f"viralidad {virality:.0f} < {VIRAL_MIN_PUBLISH}: descartado")
-    if seo < SEO_GATE and not seo_override:
+                f"viralidad {virality:.0f} < {viral_min}: descartado")
+    if seo < seo_gate and not seo_override:
         return ("bloqueado_seo",
-                f"SEO {seo:.0f} < {SEO_GATE} sin override: no se publica")
-    if seo < SEO_GATE and seo_override:
+                f"SEO {seo:.0f} < {seo_gate} sin override: no se publica")
+    if seo < seo_gate and seo_override:
         return ("publicable_override",
-                f"SEO {seo:.0f} < {SEO_GATE} con override registrado")
-    return ("publicable", f"SEO {seo:.0f} >= {SEO_GATE}")
+                f"SEO {seo:.0f} < {seo_gate} con override registrado")
+    return ("publicable", f"SEO {seo:.0f} >= {seo_gate}")
 
 
 def should_auto_archive(age_days, uploaded, priority_value, virality):
