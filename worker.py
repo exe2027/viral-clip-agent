@@ -36,6 +36,7 @@ import fcntl
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -125,6 +126,27 @@ def _validate_manifest(out_dir: str):
     return manifest, problems
 
 
+def _kill_process_group(proc):
+    """Mata el árbol entero del hijo (auto_clips + sus ffmpeg).
+
+    El hijo corre en su propio grupo de procesos (start_new_session):
+    SIGTERM al grupo, 10 s de gracia, luego SIGKILL al grupo. Matar
+    solo el padre dejaría huérfanos los ffmpeg de los cortes.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        proc.wait()
+
+
 def _run_auto_clips(job: dict, top_n: int, timeout_s: int):
     """Ejecuta auto_clips.py para el job. Devuelve (returncode, log_path).
 
@@ -148,7 +170,7 @@ def _run_auto_clips(job: dict, top_n: int, timeout_s: int):
         logf.write(f"$ {' '.join(cmd)}\n")
         logf.flush()
         proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
-                                cwd=HERE)
+                                cwd=HERE, start_new_session=True)
         start = time.monotonic()
         while True:
             try:
@@ -158,21 +180,11 @@ def _run_auto_clips(job: dict, top_n: int, timeout_s: int):
                 if kill_switch_active():
                     _log("Kill-switch detectado a mitad del job: "
                          "matando auto_clips...")
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
+                    _kill_process_group(proc)
                     raise KillSwitchRaised()
                 if time.monotonic() - start > timeout_s:
                     _log(f"Timeout ({timeout_s}s): matando auto_clips...")
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
+                    _kill_process_group(proc)
                     raise TimeoutError(
                         f"auto_clips superó el timeout de {timeout_s}s")
 
@@ -233,7 +245,7 @@ def process_job(q: Queue, job: dict, top_n: int = 5,
             _log(f"Job #{job_id}: pausado por kill-switch, vuelve a queued")
             raise
         except TimeoutError as e:
-            return _fail(q, job, str(e), "transient", started)
+            return _fail_timeout(q, job, str(e), started)
 
         if rc != 0:
             tail = _read_tail(log_path)
@@ -285,6 +297,38 @@ def process_job(q: Queue, job: dict, top_n: int = 5,
     except Exception as e:  # no dejar el job colgado en processing
         return _fail(q, job, f"error inesperado del worker: {e}",
                      "permanent", started)
+
+
+def _fail_timeout(q: Queue, job: dict, error: str, started: float):
+    """Fallo por timeout: MÁXIMO 1 reintento por timeout.
+
+    Un timeout no es un fallo transitorio cualquiera: si el mismo job
+    ya tuvo un timeout antes (contado en su job_log), el segundo va
+    directo a 'dead' en vez de reencolarse para siempre.
+    """
+    job_id = job["id"]
+    attempts = job["attempts"] + 1
+    elapsed = time.monotonic() - started
+    timeouts = q.count_log(job_id, "timeout") + 1
+    if timeouts > 1:
+        q.set_state(job_id, "dead", attempts=attempts,
+                    error=error, error_kind="timeout")
+        q.log(job_id, "timeout",
+              f"2º timeout en {elapsed:.0f}s: {error[:300]}")
+        q.log(job_id, "dead",
+              "timeout repetido (máx. 1 reintento por timeout)")
+        _log(f"Job #{job_id}: dead (2º timeout, {attempts} intento(s)) — "
+             f"{error[:200]}")
+        return "dead"
+    q.set_state(job_id, "queued", attempts=attempts,
+                error=error, error_kind="timeout")
+    q.log(job_id, "timeout",
+          f"timeout en {elapsed:.0f}s (reintento 1/1 por timeout): "
+          f"{error[:300]}")
+    _log(f"Job #{job_id}: timeout, vuelve a queued "
+         f"(reintento 1/1 por timeout, {attempts} intento(s)) — "
+         f"{error[:200]}")
+    return "queued"
 
 
 def _fail(q: Queue, job: dict, error: str, kind: str, started: float):
@@ -371,11 +415,12 @@ def main(argv=None) -> int:
                               max_jobs=args.max_jobs, top_n=args.top_n,
                               timeout_s=args.timeout)
         finally:
+            # Solo se suelta el flock: el archivo worker.lock NO se
+            # borra. Borrarlo tras soltarlo es una carrera (otro
+            # worker puede tomarlo entre el unlock y el remove, y
+            # entonces se borra un lock en uso). El lock real es el
+            # flock, no la existencia del archivo.
             fcntl.flock(lock_f, fcntl.LOCK_UN)
-            try:
-                os.remove(lock_path)
-            except OSError:
-                pass
 
 
 if __name__ == "__main__":

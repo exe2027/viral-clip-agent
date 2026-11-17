@@ -262,6 +262,13 @@ class Queue:
     def log(self, job_id: int, event: str, detail: str = ""):
         self._log(job_id, event, detail)
 
+    def count_log(self, job_id: int, event: str) -> int:
+        """Cuántas veces se registró `event` en el log del job."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) n FROM job_log WHERE job_id = ? AND event = ?",
+            (job_id, event)).fetchone()
+        return row["n"] if row else 0
+
     # -- operaciones -----------------------------------------------------
     def add(self, url: str, lang: str = "es", streamer: str | None = None,
             force: bool = False, allowlist: set | None = None,
@@ -591,7 +598,10 @@ def main(argv=None) -> int:
             print(f"Kill-switch (queue.kill): "
                   f"{'ACTIVO — worker pausado' if kill_switch_active() else 'no'}")
             lock_path = os.path.join(HERE, "worker.lock")
-            print(f"Worker: {'corriendo (worker.lock existe)' if os.path.exists(lock_path) else 'parado'}")
+            # El archivo worker.lock NO se borra al salir (así se evita
+            # la carrera de borrarlo mientras otro worker lo toma); el
+            # lock real es el flock, no la existencia del archivo.
+            print(f"Worker: {'worker.lock existe (el lock real es flock)' if os.path.exists(lock_path) else 'parado (sin worker.lock)'}")
             return 0
     except QueueError as e:
         print(f"Error: {e}", file=sys.stderr)

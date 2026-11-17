@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -350,9 +351,10 @@ class TestSinMomentosVirales(unittest.TestCase):
                            "status": "sin_momentos_virales"}, f)
             q = Queue(os.path.join(tmp, "t.db"))
             try:
-                job_id = q.add(
-                    "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
-                    lang="es", force=True, allowlist=set())
+                # URL de Twitch: con Kick el worker resolvería los
+                # metadatos por red antes de correr auto_clips.
+                job_id = q.add("2929669422", lang="es", force=True,
+                               allowlist=set())
                 q.set_state(job_id, "queued", out_dir=out_dir)
                 job = q.get_job(job_id)
                 with mock.patch.object(
@@ -367,6 +369,77 @@ class TestSinMomentosVirales(unittest.TestCase):
                 self.assertEqual(final["error_kind"], "no_viral")
             finally:
                 q.close()
+
+
+class TestWorkerKill(unittest.TestCase):
+    """1.4: matar el árbol de procesos, tope de reintentos por timeout
+    y no borrar worker.lock."""
+
+    def _job_en_cola(self, q, tmp):
+        # URL de Twitch (no de Kick): con Kick el worker resolvería
+        # los metadatos por red antes de correr auto_clips.
+        job_id = q.add("2929669422", lang="es", force=True,
+                       allowlist=set())
+        out_dir = os.path.join(tmp, "runs")
+        os.makedirs(out_dir, exist_ok=True)
+        q.set_state(job_id, "queued", out_dir=out_dir)
+        return q.get_job(job_id)
+
+    def test_timeout_mata_el_arbol_entero(self):
+        import subprocess as sp
+        import worker as worker_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, "fake_auto_clips.py")
+            with open(fake, "w", encoding="utf-8") as f:
+                f.write("import subprocess, time\n"
+                        "subprocess.Popen(['sleep', '297'])\n"
+                        "time.sleep(297)\n")
+            job = {"id": 1, "url": "2929669422", "lang": "es",
+                   "out_dir": os.path.join(tmp, "runs")}
+            os.makedirs(job["out_dir"], exist_ok=True)
+            with mock.patch.object(worker_mod, "AUTO_CLIPS", fake):
+                with self.assertRaises(TimeoutError):
+                    worker_mod._run_auto_clips(job, top_n=5, timeout_s=2)
+            # Ni el script falso ni su hijo `sleep` quedan vivos.
+            self.assertNotEqual(
+                sp.run(["pgrep", "-f", "sleep 297"],
+                       capture_output=True).returncode, 0)
+            self.assertNotEqual(
+                sp.run(["pgrep", "-f", fake],
+                       capture_output=True).returncode, 0)
+
+    def test_timeout_solo_un_reintento(self):
+        import worker as worker_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            q = Queue(os.path.join(tmp, "t.db"))
+            try:
+                job = self._job_en_cola(q, tmp)
+                with mock.patch.object(
+                        worker_mod, "_run_auto_clips",
+                        side_effect=TimeoutError("auto_clips superó el timeout")):
+                    self.assertEqual(
+                        worker_mod.process_job(q, job, top_n=5), "queued")
+                    job = q.get_job(job["id"])
+                    self.assertEqual(job["attempts"], 1)
+                    self.assertEqual(q.count_log(job["id"], "timeout"), 1)
+                    self.assertEqual(
+                        worker_mod.process_job(q, job, top_n=5), "dead")
+                    job = q.get_job(job["id"])
+                    self.assertEqual(job["attempts"], 2)
+                    self.assertEqual(job["error_kind"], "timeout")
+            finally:
+                q.close()
+
+    def test_worker_lock_no_se_borra_al_salir(self):
+        import worker as worker_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = os.path.join(tmp, "worker.lock")
+            db_path = os.path.join(tmp, "t.db")
+            with mock.patch.object(worker_mod, "WORKER_LOCK", lock_path):
+                self.assertEqual(
+                    worker_mod.main(["--db", db_path, "--once"]), 0)
+            self.assertTrue(os.path.isfile(lock_path),
+                            "worker.lock se borró al salir (carrera)")
 
 
 class TestValidateManifest(unittest.TestCase):
