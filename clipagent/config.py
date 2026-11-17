@@ -138,6 +138,10 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "min_band": None,
     },
+    # Metadata del paquete (7.5): crédito al streamer en la descripción.
+    "metadata": {
+        "credit_streamer": True,
+    },
     # Circuit breaker por plataforma (6.4): N fallos seguidos o un
     # rechazo por copyright/strike pausan SOLO esa plataforma.
     "breaker": {

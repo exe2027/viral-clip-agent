@@ -26,7 +26,7 @@ KNOWN_TOP_KEYS = {
     "clips", "subtitles", "subtitle_policy", "subtitle_styles",
     "layout", "facecam_box", "watcher", "reel_study", "autopublish",
     # Llegan en fases posteriores (6.3, 6B): se validan entonces.
-    "auto_approve", "scoring", "breaker",
+    "auto_approve", "scoring", "breaker", "metadata",
 }
 
 
@@ -271,6 +271,8 @@ def validate_config(cfg, source="config.yaml"):
     c.check(cfg, "scoring.audio_weight_kick", "num", minimum=0, maximum=5)
     c.check(cfg, "auto_approve", "dict")
     c.check(cfg, "auto_approve.enabled", "bool")
+    c.check(cfg, "metadata", "dict")
+    c.check(cfg, "metadata.credit_streamer", "bool")
     if (cfg.get("auto_approve") or {}).get("min_band") is not None:
         c.check(cfg, "auto_approve.min_band", "str",
                 choices={"descartar", "revisar", "prioritario", "urgente"})

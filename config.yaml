@@ -310,6 +310,10 @@ auto_approve:
   enabled: true
   min_band: null
 
+# Metadata del paquete (7.5): crédito al streamer en la descripción.
+metadata:
+  credit_streamer: true
+
 # Circuit breaker por plataforma (6.4): N fallos seguidos o un
 # rechazo por copyright/strike pausan SOLO esa plataforma.
 breaker:

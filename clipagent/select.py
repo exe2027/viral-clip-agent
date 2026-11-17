@@ -163,6 +163,11 @@ def apply_llm_selection(manifest, selections, score_inputs):
         clip["llm"] = {"score": sel["score"], "hook": sel["hook"],
                        "por_que_viral": sel["por_que_viral"],
                        "start": sel["start"], "end": sel["end"]}
+        # 7.5: el hook del LLM (de la transcripción real) pasa a ser
+        # el hook del paquete: es el que se usa en la metadata.
+        viral = clip.get("viral")
+        if isinstance(viral, dict):
+            viral["hook_first_line"] = sel["hook"]
         peak = clip.get("peak")
         if peak not in score_inputs:
             continue

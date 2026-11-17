@@ -1240,6 +1240,9 @@ def main() -> int:
             lang=args.lang, examples=examples, moment_card=moment_card,
             game=game, streamer=streamer, vod_id=vod_id,
             layout=layout_decision, reel_patterns=reel_patterns,
+            # 7.5: crédito al streamer en la descripción (config).
+            credit_streamer=((cfg or {}).get("metadata") or {}).get(
+                "credit_streamer", True),
         )
         visible = None
         visible_reason = None

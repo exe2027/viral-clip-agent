@@ -571,6 +571,30 @@ def _cap_first(text):
     return text[:1].upper() + text[1:] if text else text
 
 
+def _fit_what(what, prefix_len, target_min=40, target_max=55):
+    """`what` ajustado para un título de largo ideal (7.5).
+
+    Corta por palabras para que `prefix + what` quede entre 40 y
+    55 caracteres (el largo que da +30 en el componente título).
+    Sin recorte a mitad de palabra y sin "…": si no cabe nada de
+    40 car., devuelve None (el llamador usa otro candidato).
+    """
+    words = (what or "").split()
+    if not words:
+        return None
+    budget = target_max - prefix_len
+    kept = []
+    for word in words:
+        trial = " ".join(kept + [word])
+        if len(trial) > budget:
+            break
+        kept.append(word)
+    text = " ".join(kept)
+    if len(text) + prefix_len < target_min:
+        return None
+    return text
+
+
 def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
                     vod_id=None, date=None, visible=None):
     """10 títulos por clip desde la ficha (no 2 plantillas fijas).
@@ -623,6 +647,9 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
         if what_en:
             candidates.append(f"{game_prefix}{_cap_first(what_en)} and chat lost it")
             candidates.append(f"Nobody expected {what_en}")
+            fitted = _fit_what(what_en, len(game_prefix))
+            if fitted:
+                candidates.append(f"{game_prefix}{_cap_first(fitted)}")
         if reaction == "risas":
             candidates.append(f"{game_prefix}Chat couldn't stop laughing")
             candidates.append(f"{risas} laughs in 10 seconds" if risas >= 5 else f"{game_prefix}Everyone laughed at this")
@@ -646,6 +673,11 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
         if what:
             candidates.append(f"{game_prefix}{_cap_first(what)} y el chat explotó")
             candidates.append(f"{_cap_first(what)} que nadie se creyó")
+            # 7.5: título de largo ideal (40-55 car.) con el `what`
+            # ajustado por palabras; si no cabe, no se agrega.
+            fitted = _fit_what(what, len(game_prefix))
+            if fitted:
+                candidates.append(f"{game_prefix}{_cap_first(fitted)}")
         if reaction == "risas":
             candidates.append(f"{game_prefix}El chat no paraba de reírse")
             candidates.append(f"{risas} risas en 10 segundos" if risas >= 5 else f"{game_prefix}Se murieron de risa")
@@ -1247,11 +1279,87 @@ def package_for_platforms(best_title, desc, tags, thumb, lang="both",
     return out
 
 
+# 7.5: longitudes máximas del paquete (título, descripción, hook,
+# hashtags/tags). La descripción se recorta con "…" si pasa de 1000.
+MAX_TITLE_LEN = 60
+MAX_DESC_LEN = 1000
+MAX_HOOK_LEN = 80
+MAX_TAGS = 15
+
+# 7.5: textos de miniatura entre los que elegir (el que mejor puntúe
+# contra el título: sin palabras repetidas, <=2 en MAYÚSCULAS).
+THUMBNAIL_TEXTS = ("NO PUEDE SER", "ESPERA EL FINAL", "LA REACCIÓN",
+                   "MIRA ESTO", "QUÉ MOMENTO")
+
+
+def _prefer_ideal_length(titles):
+    """El mejor título con 40-55 caracteres (7.5), o el primero.
+
+    El largo ideal da +30 en el componente título (34 car. solo +15):
+    entre los títulos que ya pasaron el check, se prefiere uno de
+    largo ideal; si no hay ninguno, manda el primero.
+    """
+    for entry in titles or []:
+        title = entry.get("title") if isinstance(entry, dict) else entry
+        if title and 40 <= len(title) <= 55:
+            return title
+    if titles:
+        first = titles[0]
+        return first.get("title") if isinstance(first, dict) else first
+    return None
+
+
+def _best_thumbnail_text(thumb, title):
+    """Miniatura que mejor puntúa contra el título (7.5).
+
+    thumbnail_component premia <=3 palabras, no repetir el título y
+    <=2 en MAYÚSCULAS. Se prueba el thumb elegido y los demás de la
+    lista; en empate manda el elegido (el primero).
+    """
+    if not thumb:
+        return thumb
+    try:
+        from .seo_score import thumbnail_component
+    except ImportError:
+        return thumb
+    candidates = [thumb] + [t for t in THUMBNAIL_TEXTS if t != thumb]
+    best, best_value = thumb, -1.0
+    for cand in candidates:
+        value, _notes = thumbnail_component(cand, title)
+        if value is not None and value > best_value:
+            best, best_value = cand, value
+    return best
+
+
+def validate_metadata_lengths(pkg):
+    """Longitudes del paquete (7.5). Devuelve [problemas].
+
+    Título <=60, descripción <=1000, hook <=80, hashtags/tags <=15.
+    Solo mide y reporta (el recorte de la descripción, si hace
+    falta, ya se hizo al construir el paquete).
+    """
+    issues = []
+    title = pkg.get("best_title") or ""
+    if len(title) > MAX_TITLE_LEN:
+        issues.append(f"título {len(title)} car. (> {MAX_TITLE_LEN})")
+    desc = pkg.get("description_first_2_lines") or ""
+    if len(desc) > MAX_DESC_LEN:
+        issues.append(f"descripción {len(desc)} car. (> {MAX_DESC_LEN})")
+    hook = pkg.get("hook_first_line") or ""
+    if len(hook) > MAX_HOOK_LEN:
+        issues.append(f"hook {len(hook)} car. (> {MAX_HOOK_LEN})")
+    for key in ("hashtags", "tags"):
+        items = pkg.get(key) or []
+        if len(items) > MAX_TAGS:
+            issues.append(f"{key}: {len(items)} (> {MAX_TAGS})")
+    return issues
+
+
 def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  lang="both", examples=None, moment_card=None, game=None,
                  streamer=None, seen_path=None, vod_id=None, date=None,
                  register=False, visible=None, layout=None,
-                 reel_patterns=None):
+                 reel_patterns=None, credit_streamer=True):
     """Devuelve el paquete viral completo de un clip.
 
     Con ``moment_card`` (recomendado, Bloque 2): los 10 títulos, el
@@ -1328,7 +1436,10 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     titles = generate_titles(check_card, lang=lang, n=10,
                              seen_path=seen_path, vod_id=vod_id, date=date,
                              visible=visible)
-    best = titles[0]["title"] if titles else None
+    # 7.5: entre los títulos que pasaron el check, se prefiere uno
+    # de largo ideal (40-55 car.): da el máximo en el componente
+    # título del SEO. Sin títulos, best queda None como antes.
+    best = _prefer_ideal_length(titles)
     # Arreglo 3, red de seguridad: el mejor título pasa la validación
     # final contra lo visible. No debería fallar (generate_titles ya
     # filtró), pero si un candidato se colara, se degrada a reacción
@@ -1395,9 +1506,32 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  if lang != "en" else
                  f"\nOn-screen context: {reaction_context['text']}.")
 
+    # 7.5: crédito al streamer en la descripción (configurable) +
+    # CTA/pregunta al final. El crédito nombra al streamer del VOD
+    # (nunca hardcodeado); la CTA suma en el componente descripción
+    # del SEO (+30 en vez de +10) y va al final, donde la mide el
+    # score. Sin streamer conocido no hay crédito.
+    _credit_streamer = streamer if streamer not in (None, "", "desconocido") else ""
+    if credit_streamer and _credit_streamer and _credit_streamer not in desc:
+        if lang == "en":
+            desc += f"\n\n🎬 Clip by {_credit_streamer}, live."
+        else:
+            desc += f"\n\n🎬 Clip de {_credit_streamer} en directo."
+    if lang == "en":
+        desc += "\nDid you see that coming? Subscribe for more clips."
+    else:
+        desc += "\n¿Te lo esperabas? Suscríbete para más clips."
+    # 7.5: red de seguridad: la descripción nunca pasa de 1000 car.
+    # (se recorta antes de construir los paquetes por plataforma).
+    if len(desc) > MAX_DESC_LEN:
+        desc = desc[:MAX_DESC_LEN - 1] + "…"
+
     # La miniatura no repite el título: si el thumb coincide, se cambia.
     if best and _norm_title(thumb) in _norm_title(best):
         thumb = "MIRA ESTO"
+    # 7.5: entre los textos de miniatura, el que mejor puntúe contra
+    # el título (sin palabras repetidas, <=2 en MAYÚSCULAS).
+    thumb = _best_thumbnail_text(thumb, best)
 
     # Estudio de reels (reel_study.py): solo AÑADE sugerencias
     # validadas al paquete, nunca cambia best_title ni la descripción.
@@ -1427,6 +1561,7 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "game_label": game_label,
         "thumbnail_text": thumb,  # ≤3 palabras, distinto del título
         "hook_first_line": hook,  # primera línea nueva
+        "length_issues": [],  # 7.5: se rellena tras construir el pkg
         "onscreen_first_2s": onscreen,  # distinto de lo hablado
         "loop_point": loop,
         "description_first_2_lines": desc,
@@ -1450,6 +1585,8 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         except Exception as e:
             pkg["reel_study"] = {"error": f"estudio de reels no aplicado: {e}",
                                  "sample_n": 0}
+    # 7.5: longitudes validadas (la descripción se recorta si pasa).
+    pkg["length_issues"] = validate_metadata_lengths(pkg)
     return pkg
 
 

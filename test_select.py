@@ -131,6 +131,24 @@ class TestApplySelection(unittest.TestCase):
                          8.8)
         self.assertGreater(clip["viral_score"]["total"], base["total"])
 
+    def test_hook_llm_pasa_al_paquete(self):
+        # 7.5: el hook del LLM (de la transcripción real) pasa a ser
+        # el hook del paquete viral.
+        detail = {"msgs": 50, "risas": 12, "hype": 5, "unique_users": 30}
+        base = score_clip(detail, 8.0, rank=1, human=None, audio=None)
+        manifest = {"clips": [{"peak": 100, "start": 100, "duration": 60,
+                               "viral_score": dict(base),
+                               "viral": {"best_title": "t",
+                                         "hook_first_line": "viejo"}}]}
+        inputs = {100: (detail, 8.0, 1, None, None)}
+        selections = [{"candidate_index": 0, "start": 102, "end": 150,
+                       "hook": "¡No lo vas a creer!",
+                       "por_que_viral": "reacción", "score": 88}]
+        apply_llm_selection(manifest, selections, inputs)
+        self.assertEqual(
+            manifest["clips"][0]["viral"]["hook_first_line"],
+            "¡No lo vas a creer!")
+
     def test_hook_humano_manda_sobre_el_llm(self):
         detail = {"msgs": 50, "risas": 12, "hype": 5, "unique_users": 30}
         human = {"hook": {"value": 9.0, "reason": "tribunal"}}
