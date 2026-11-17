@@ -232,8 +232,11 @@ def load_influencers(path=None):
 def load_watcher_config(config_path=None):
     """Sección ``watcher`` de config.yaml + credenciales de Twitch.
 
-    Precedencia de credenciales: variables de entorno
-    TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET > config.yaml.
+    Las credenciales van SOLO por variables de entorno
+    (TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET, o .env en la raíz,
+    que config.load_config carga). config.yaml es versionado y
+    nunca lleva secretos: aunque tenga client_id/client_secret,
+    se ignoran.
     """
     try:
         from config import load_config
@@ -241,16 +244,13 @@ def load_watcher_config(config_path=None):
     except Exception:
         cfg = {}
     w = (cfg or {}).get("watcher") or {}
-    tw = w.get("twitch") or {}
     return {
         "poll_minutes": int(w.get("poll_minutes") or DEFAULT_POLL_MINUTES),
         "max_new_per_day": int(
             w.get("max_new_vods_per_streamer_per_day") or DEFAULT_MAX_NEW_PER_DAY),
         "state_file": w.get("state_file") or DEFAULT_STATE_FILE,
-        "twitch_client_id": (os.environ.get("TWITCH_CLIENT_ID") or
-                             tw.get("client_id") or "").strip(),
-        "twitch_client_secret": (os.environ.get("TWITCH_CLIENT_SECRET") or
-                                 tw.get("client_secret") or "").strip(),
+        "twitch_client_id": (os.environ.get("TWITCH_CLIENT_ID") or "").strip(),
+        "twitch_client_secret": (os.environ.get("TWITCH_CLIENT_SECRET") or "").strip(),
     }
 
 

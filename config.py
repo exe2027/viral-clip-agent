@@ -174,8 +174,43 @@ def _parse_simple_yaml(text):
     return parse_block(lines[0][0]) if lines else {}
 
 
+def load_dotenv(path=None):
+    """Carga un .env (raíz del repo o la ruta dada) sin pisar el entorno.
+
+    Solo rellena variables que aún no existen en el entorno: un
+    export real siempre manda sobre el .env. Los secretos viven
+    aquí o en el entorno, nunca en config.yaml (versionado).
+    """
+    candidates = []
+    if path:
+        candidates.append(path)
+    candidates.append(os.path.join(os.getcwd(), ".env"))
+    candidates.append(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), ".env"))
+    for candidate in candidates:
+        if not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+        return candidate
+    return None
+
+
 def load_config(path=None):
     """Carga config.yaml (o la ruta dada) sobre los valores por defecto."""
+    load_dotenv()
     cfg = DEFAULT_CONFIG
     if path is None:
         candidates = [

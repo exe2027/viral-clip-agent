@@ -8,8 +8,11 @@ __pycache__/
 *.pyc
 .venv/
 .env
-queue.db
+*.db
 queue.kill
+client_secrets.json
+token.json
+publish_queue.json
 seen_vods.json
 worker.lock
 drafts/          # paquetes manuales de subida (estado local)

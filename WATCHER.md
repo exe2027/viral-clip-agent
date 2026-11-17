@@ -131,15 +131,14 @@ Opcional por ahora (el modo GQL público ya monitorea). Pasos:
 4. **Create.** Copiar el **Client ID**.
 5. **New Secret** → copiar el **Client Secret** (solo se muestra una
    vez; guardarlo en el Secure Vault, nunca en chat ni en el repo).
-6. Pasarlas al watcher por variables de entorno (mandan sobre
-   `config.yaml`):
+6. Pasarlas al watcher por variables de entorno o por `.env`
+   en la raíz (copia `.env.example` a `.env`):
    ```bash
    export TWITCH_CLIENT_ID="..."
    export TWITCH_CLIENT_SECRET="..."
    ```
-   o en `config.yaml` → `watcher.twitch.client_id` /
-   `watcher.twitch.client_secret` (el archivo NO se sube con
-   secretos: no commitear credenciales reales ahí).
+   Nunca en `config.yaml`: es versionado y los secretos que
+   hubiera ahí se ignoran.
 
 ## Uso
 
@@ -170,9 +169,8 @@ watcher:
   poll_minutes: 15
   max_new_vods_per_streamer_per_day: 5
   state_file: "seen_vods.json"
-  twitch:
-    client_id: ""       # o TWITCH_CLIENT_ID
-    client_secret: ""   # o TWITCH_CLIENT_SECRET
+  # Credenciales: solo TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
+  # por entorno o .env (ver .env.example). Nunca en config.yaml.
 ```
 
 ### Estado (`seen_vods.json`, gitignored)

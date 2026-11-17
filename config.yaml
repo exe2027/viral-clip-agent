@@ -228,12 +228,13 @@ watcher:
   poll_minutes: 15        # intervalo entre pasadas en --loop (y en cron)
   max_new_vods_per_streamer_per_day: 5
   state_file: "seen_vods.json"  # VODs vistos/enqueued (gitignored, nunca se sube)
-  twitch:
-    client_id: ""         # o variable TWITCH_CLIENT_ID (Helix, gratis)
-    client_secret: ""     # o variable TWITCH_CLIENT_SECRET
-    # Sin credenciales, Twitch usa la ruta pública GQL (sin key, no
-    # oficial, puede cambiar): sirve para monitorear; Helix es la
-    # vía estable cuando el usuario configure la app en dev.twitch.tv.
+  # Credenciales de Twitch (Helix, gratis): SOLO por variables de
+  # entorno TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET, o en .env en la
+  # raíz (gitignored). config.yaml es versionado y NUNCA lleva
+  # secretos: si aquí hubiera client_id/client_secret, se ignoran.
+  # Sin credenciales, Twitch usa la ruta pública GQL (sin key, no
+  # oficial, puede cambiar): sirve para monitorear; Helix es la
+  # vía estable cuando el usuario configure la app en dev.twitch.tv.
 
 # Estudio de reels virales (reel_study.py, 2026-11-16, idea del reel
 # de David Madrazo "content-os"): estudiar reels de GTA, sacarles el
