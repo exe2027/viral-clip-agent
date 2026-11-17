@@ -599,8 +599,15 @@ class YouTubePublisher:
                 "would_publish": all(c[0] for c in checks),
                 "checks": [{"ok": c[0], "detail": c[1]} for c in checks]}
 
-    def publish(self, clip_path, package=None, privacy="public", live=False):
-        """Subida real. Exige live=True, OAuth y dry-run en verde."""
+    def publish(self, clip_path, package=None, privacy="public", live=False,
+                thumbnail_path=None):
+        """Subida real. Exige live=True, OAuth y dry-run en verde.
+
+        Si se pasa thumbnail_path, tras la subida se llama a
+        thumbnails.set (llamada separada, 50 u.; exige canal
+        verificado). Si la miniatura falla, el video YA está subido:
+        el fallo se devuelve en "thumbnail" sin tumbar la subida.
+        """
         if not live:
             return {"ok": False, "reason": "dry-run por defecto: pasa --live para subir de verdad"}
         dry = self.dry_run(clip_path)
@@ -639,8 +646,13 @@ class YouTubePublisher:
         item = self.queue._find(clip_path, "youtube_shorts") or self.queue.enqueue(
             clip_path, "youtube_shorts")
         self.queue.mark_published(item, video_id)
-        return {"ok": True, "video_id": video_id,
-                "url": f"https://www.youtube.com/shorts/{video_id}"}
+        result = {"ok": True, "video_id": video_id,
+                  "url": f"https://www.youtube.com/shorts/{video_id}"}
+        if thumbnail_path:
+            from clipagent.platforms import YouTubeAdapter
+            result["thumbnail"] = YouTubeAdapter().set_thumbnail(
+                video_id, thumbnail_path)
+        return result
 
     def publish_draft(self, clip_path):
         """YouTube no tiene borrador por API: el 'draft' es subir en
