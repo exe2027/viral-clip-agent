@@ -187,10 +187,11 @@ except ImportError:
 try:
     # Score de viralidad 0-100 + señales MVP (7 componentes, banda,
     # filtro previo). Distinto del score de chat: no se mezclan.
-    from viral_score import compute_signals, score_clip
+    from viral_score import compute_signals, filter_passed, score_clip
     viral_score_mod = True
 except ImportError:
     compute_signals = None
+    filter_passed = None
     score_clip = None
     viral_score_mod = False
 
@@ -322,6 +323,33 @@ def download_twitch_segment(vod_id: str, start_sec: float, end_sec: float,
             f"No se pudo bajar el segmento [{int(start_sec)}s, "
             f"{int(end_sec)}s]: {r.stderr.strip()[-500:]}")
     return out_path
+
+
+def filter_candidates(peaks, detail, rank_map, median_score):
+    """Aplica el filtro previo (viral_score.filter_passed) a los picos.
+
+    ``peaks``: [(peak_ts, score)] de select_top_peaks (--top-n ya es
+    un máximo, no una cuota). Devuelve (seleccionados, descartados):
+    seleccionados = [(peak_ts, score, multiple)] en orden cronológico;
+    descartados = [{"peak", "score", "multiple", "rank", "motivos"}].
+    La mediana tiene suelo 1.0: con mediana 0 un pico con puntos
+    queda a score/1 x (si no, por división por cero ningún pico
+    pasaría y un chat casi vacío no daría clips nunca).
+    """
+    floor = max(median_score or 0.0, 1.0)
+    selected = []
+    discarded = []
+    for peak_ts, score in peaks:
+        multiple = round(score / floor, 2)
+        rank = rank_map.get(peak_ts)
+        pasa, motivos = filter_passed(detail[peak_ts], multiple, rank=rank)
+        if pasa:
+            selected.append((peak_ts, score, multiple))
+        else:
+            discarded.append({"peak": peak_ts, "score": score,
+                              "multiple": multiple, "rank": rank,
+                              "motivos": motivos})
+    return selected, discarded
 
 
 def write_manifest_atomic(out_dir: str, manifest: dict) -> str:
@@ -488,7 +516,9 @@ def main() -> int:
     p.add_argument("--chat", help="Usar un chat.json local en vez de descargarlo")
     p.add_argument("--video", help="Usar un vod.mp4 local en vez de descargarlo (solo Twitch)")
     p.add_argument("--out", help="Carpeta de salida (default: runs/<vod-id>)")
-    p.add_argument("--top-n", type=int, default=5)
+    p.add_argument("--top-n", type=int, default=5,
+                   help="MÁXIMO de clips por VOD (no una cuota: solo se "
+                   "cortan los picos que pasan el filtro previo)")
     p.add_argument("--window", type=int, default=10)
     p.add_argument("--min-separation", type=int, default=60)
     p.add_argument("--pre-roll", type=int, default=20)
@@ -724,15 +754,42 @@ def main() -> int:
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
 
-    # 3. Cortar + 4. Titular y manifiesto
+    # 3. Filtro previo: los picos que no pasan (múltiplo < 3x, solo
+    # emote-spam, sin mensajes, fuera del top-5) NO se cortan ni se
+    # encolan; quedan registrados en el manifiesto como descartados.
+    # --top-n es un MÁXIMO, no una cuota.
+    if viral_score_mod:
+        peaks, discarded = filter_candidates(peaks, detail, rank_map,
+                                             median_score)
+    else:
+        print("Aviso: sin viral_score.py, no se aplica el filtro previo; "
+              "se cortan todos los picos.", file=sys.stderr)
+        floor = max(median_score or 0.0, 1.0)
+        peaks = [(ts, s, round(s / floor, 2)) for ts, s in peaks]
+        discarded = []
+    for ts, s, m in peaks:
+        print(f"  Filtro: {fmt_ts(ts)} — {s} pts ({m}x la mediana) pasa")
+    for dc in discarded:
+        print(f"  Descartado: {fmt_ts(dc['peak'])} — {dc['score']} pts "
+              f"({dc['multiple']}x) — {'; '.join(dc['motivos'])}")
+
+    # 4. Cortar + titular y manifiesto
     manifest = {"vod_id": vod_id, "platform": platform,
                 "source_url": args.vod, "lang": args.lang,
-                "seo_overrides": [], "clips": []}
+                "seo_overrides": [], "clips": [],
+                "descartados": discarded,
+                "status": "ok" if peaks else "sin_momentos_virales"}
     if platform == "kick" and kick_meta:
         manifest["kick"] = {"channel": kick_meta["channel"],
                             "title": kick_meta["title"],
                             "chat_source": "web.kick.com/api/v1/chat (sin documentar)"}
-    for idx, (peak_ts, score) in enumerate(peaks, 1):
+    if not peaks:
+        write_manifest_atomic(out_dir, manifest)
+        print("Sin momentos virales: ningún pico pasó el filtro previo "
+              f"({len(discarded)} descartado(s); ver 'descartados' en "
+              "manifest.json). No se cortó nada.")
+        return 0
+    for idx, (peak_ts, score, multiple) in enumerate(peaks, 1):
         clip_start = max(0, peak_ts - args.pre_roll)
         # Corte variable: objetivo target_dur (30 s); el corte preciso
         # lo ajusta dentro de [min_dur, max_dur]. El segmento cubre
@@ -988,7 +1045,8 @@ def main() -> int:
         signals = None
         seo_scores = None
         if viral_score_mod:
-            multiple = score / median_score if median_score else None
+            # `multiple` es el del filtro previo (mismo cálculo, con
+            # suelo 1.0 en la mediana): no se recalcula aquí.
             human = (human_scores.get("all")
                      or human_scores.get(str(idx))
                      or human_scores.get(f"peak_{peak_ts}"))

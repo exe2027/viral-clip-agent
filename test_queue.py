@@ -331,6 +331,44 @@ class TestKillSwitch(unittest.TestCase):
             self.assertTrue(kill_switch_active(path))
 
 
+class TestSinMomentosVirales(unittest.TestCase):
+    """1.3: un manifiesto 'sin_momentos_virales' no es un fallo.
+
+    El job sale de la cola como rechazado (nada que revisar), sin
+    gastar reintentos y sin ir a 'failed'.
+    """
+    def test_process_job_rechaza_sin_gastar_intento(self):
+        from unittest import mock
+        import worker as worker_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = os.path.join(tmp, "runs")
+            os.makedirs(out_dir)
+            with open(os.path.join(out_dir, "manifest.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump({"vod_id": "x", "clips": [],
+                           "descartados": [{"peak": 40, "motivos": ["x"]}],
+                           "status": "sin_momentos_virales"}, f)
+            q = Queue(os.path.join(tmp, "t.db"))
+            try:
+                job_id = q.add(
+                    "https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9",
+                    lang="es", force=True, allowlist=set())
+                q.set_state(job_id, "queued", out_dir=out_dir)
+                job = q.get_job(job_id)
+                with mock.patch.object(
+                        worker_mod, "_run_auto_clips",
+                        return_value=(0, os.path.join(tmp, "worker.log"))):
+                    state = worker_mod.process_job(q, job, top_n=5)
+                self.assertEqual(state, "rejected")
+                final = q.get_job(job_id)
+                self.assertEqual(final["state"], "rejected")
+                self.assertEqual(final["attempts"], 0)
+                self.assertIn("sin momentos virales", final["error"])
+                self.assertEqual(final["error_kind"], "no_viral")
+            finally:
+                q.close()
+
+
 class TestValidateManifest(unittest.TestCase):
     def test_ok_y_vacio(self):
         with tempfile.TemporaryDirectory() as tmp:

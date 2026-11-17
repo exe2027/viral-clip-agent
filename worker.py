@@ -116,7 +116,7 @@ def _validate_manifest(out_dir: str):
         return None, [f"manifest.json ilegible: {e}"]
     clips = manifest.get("clips") or []
     problems = []
-    if not clips:
+    if not clips and manifest.get("status") != "sin_momentos_virales":
         problems.append("sin clips generados (el manifiesto viene vacío)")
     for c in clips:
         rel = c.get("file", "")
@@ -246,6 +246,22 @@ def process_job(q: Queue, job: dict, top_n: int = 5,
         manifest, problems = _validate_manifest(job["out_dir"])
         if problems:
             return _fail(q, job, "; ".join(problems), "permanent", started)
+
+        # 3b. Sin momentos virales: auto_clips terminó bien (código 0)
+        # pero ningún pico pasó el filtro previo. No es un fallo ni
+        # gasta reintentos: el job sale de la cola de revisión como
+        # rechazado, con el motivo explícito en el log y en `error`
+        # (los descartados quedan en manifest.json). No va a
+        # ready_for_review porque no hay nada que revisar.
+        if manifest.get("status") == "sin_momentos_virales":
+            n_desc = len(manifest.get("descartados") or [])
+            msg = ("sin momentos virales: ningún pico pasó el filtro "
+                   f"previo ({n_desc} descartado(s); ver 'descartados' "
+                   "en manifest.json)")
+            q.set_state(job_id, "rejected", error=msg, error_kind="no_viral")
+            q.log(job_id, "no_viral_moments", msg)
+            _log(f"Job #{job_id}: sin momentos virales — {msg}")
+            return "rejected"
 
         manifest_path = os.path.join(job["out_dir"], "manifest.json")
         fresh = q.get_job(job_id)
