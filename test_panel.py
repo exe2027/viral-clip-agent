@@ -225,6 +225,54 @@ class TestPanelScores(unittest.TestCase):
         self.assertIn("bloqueado_seo", body)
         self.assertIn("SEO 84 &lt; 90 sin override", body)
 
+    def test_render_muestra_borradores_con_motivo(self):
+        # Fan-out: un draft muestra plataforma, clip y motivo.
+        from clipagent.panel import _render
+        data = {
+            "service": {"corriendo": True, "supervisor_pid": 123,
+                        "cola": {"queued": 1}},
+            "platforms": {"youtube_shorts": {"state": "conectada",
+                                             "motivo": ""}},
+            "breaker": {"youtube_shorts": (False, None),
+                        "tiktok": (False, None),
+                        "instagram_reels": (False, None),
+                        "facebook_reels": (False, None)},
+            "streamers": [],
+            "queue_counts": {},
+            "jobs": [],
+            "published": [{"platform": "youtube_shorts",
+                           "clip": "runs/v1/clips/b.mp4",
+                           "published_at": "2026-11-17T20:00:00-03:00"}],
+            "retained": [],
+            "drafts": [{"platform": "tiktok",
+                        "clip": "runs/v1/clips/b.mp4",
+                        "history": [
+                            {"at": "2026-11-17T20:00:00-03:00",
+                             "state": "queued"},
+                            {"at": "2026-11-17T20:01:00-03:00",
+                             "state": "draft",
+                             "note": "sin token de TikTok en tokens/ "
+                                     "(paquete manual en drafts/)"}]},
+                       {"platform": "instagram_reels",
+                        "clip": "runs/v1/clips/b.mp4",
+                        "history": [
+                            {"at": "2026-11-17T20:01:00-03:00",
+                             "state": "draft",
+                             "note": "sin URL pública configurada"}]}],
+            "scores": {"youtube_shorts": [], "tiktok": [],
+                       "instagram_reels": [], "facebook_reels": []},
+            "analytics": {},
+            "weights": {"viral": 0.5, "seo": 0.3, "chat": 0.2},
+            "weights_history": [],
+            "live": [],
+            "errors": [],
+        }
+        body = _render(data)
+        self.assertIn("Borradores (draft)", body)
+        self.assertIn("sin token de TikTok en tokens/", body)
+        self.assertIn("sin URL pública configurada", body)
+        self.assertIn("youtube_shorts", body)
+
 
 class TestPanelOverride(unittest.TestCase):
     def test_override_de_usuario_queda_en_el_manifiesto(self):

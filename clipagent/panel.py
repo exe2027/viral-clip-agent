@@ -203,6 +203,16 @@ def _render(data):
         f"<tr><td>#{e['job_id']}</td><td>{_esc(e['ts'])}</td>"
         f"<td>{_esc(e['event'])}</td><td>{_esc(e['detail'])}</td></tr>"
         for e in data["errors"])
+    # Fan-out: borradores con motivo visible (sin token, sin
+    # auditoría, sin URL pública, sin IDs). Un draft no se reintenta
+    # solo: hay que resolver el motivo. El paquete manual está en
+    # drafts/ para subir a mano.
+    rows_draft = "".join(
+        f"<tr><td>{_esc(i['platform'])}</td>"
+        f"<td>{_esc(i['clip'])}</td>"
+        f"<td>{_esc((i.get('history') or [{}])[-1].get('note', ''))}"
+        f"</td></tr>"
+        for i in data["drafts"])
     # 6B.6: cola de publicación por plataforma, ordenada por
     # prioridad, con viralidad, SEO, desglose de la fórmula, estado
     # y motivo de retención.
@@ -282,6 +292,14 @@ y el VOD se procesa al terminar). Seguir un directo:
 automatismo lo hace. Con SEO &lt; 70 sigue siendo bloqueo duro.</p>
 <table border="1"><tr><th>Plataforma</th><th>Clip</th>
 <th>Motivo</th><th>Override</th></tr>{rows_ret}</table>
+<h2>Borradores (draft)</h2>
+<p>Clips que no se publicaron por API: el motivo está en la última
+nota y el paquete manual está en drafts/ para subir a mano. Un
+draft por falta de credenciales, auditoría o configuración NO se
+reintenta solo: hay que resolver el motivo (ver
+<code>clipagent doctor</code>).</p>
+<table border="1"><tr><th>Plataforma</th><th>Clip</th>
+<th>Motivo</th></tr>{rows_draft}</table>
 <h2>Errores recientes</h2>
 <table border="1"><tr><th>Job</th><th>Fecha</th><th>Evento</th>
 <th>Detalle</th></tr>{rows_err}</table>
