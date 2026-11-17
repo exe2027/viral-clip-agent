@@ -523,6 +523,84 @@ class FacebookAdapter:
                     "video_id": resp["video_id"]}
         return _error_result(status, resp)
 
+    # --- Subida por chunks (fan-out): fase 2 que faltaba ---
+    # Docs oficiales (verificado 2026-11-17 vía guías que citan la
+    # guía "Reels Publishing" de developers.facebook.com):
+    #   POST https://rupload.facebook.com/video-upload/v{versión}/
+    #   {video_id}, header Authorization: OAuth {token} (OAuth, no
+    #   Bearer), headers offset y file_size, body binario. Reanudable
+    #   por offset: la respuesta trae start_offset/end_offset.
+    #   También acepta file_url con una URL pública en vez de bytes.
+    CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB por chunk
+
+    def upload_file(self, video_id, clip_path, chunk_size=None):
+        """Fase 2: sube el archivo por chunks a rupload.
+
+        Devuelve {"ok": True} al completar. Si la respuesta no
+        avanza el offset, es error (no se reintenta a ciegas)."""
+        access = self._token()
+        if not access:
+            return _draft("sin Page access token en tokens/")
+        if not os.path.isfile(clip_path):
+            return {"ok": False, "reason":
+                    f"archivo no existe: {clip_path}"}
+        chunk_size = chunk_size or self.CHUNK_SIZE
+        size = os.path.getsize(clip_path)
+        url = (f"{self.upload_host}/video-upload/"
+               f"{GRAPH_VERSION}/{video_id}")
+        offset = 0
+        with open(clip_path, "rb") as f:
+            while offset < size:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                headers = {"Authorization": f"OAuth {access}",
+                           "Content-Type": "application/octet-stream",
+                           "offset": str(offset),
+                           "file_size": str(size)}
+                status, resp = _http(
+                    "POST", url, headers, chunk,
+                    request_fn=self.request_fn)
+                if status != 200:
+                    return _error_result(status, resp)
+                new_offset = resp.get("end_offset")
+                if new_offset is None:
+                    new_offset = offset + len(chunk)
+                try:
+                    new_offset = int(new_offset)
+                except (TypeError, ValueError):
+                    new_offset = offset + len(chunk)
+                if new_offset <= offset:
+                    return {"ok": False, "mode": "error",
+                            "reason": "rupload no avanzó el offset "
+                                      f"({offset}/{size} bytes)",
+                            "retryable": True}
+                offset = new_offset
+        if offset < size:
+            return {"ok": False, "mode": "error",
+                    "reason": "subida incompleta a Facebook "
+                              f"({offset}/{size} bytes)",
+                    "retryable": True}
+        return {"ok": True}
+
+    def publish_reel(self, page_id, clip_path, description):
+        """Reel completo: start -> subida por chunks -> finish.
+
+        Sin page_id o sin token -> draft con el motivo. Los errores
+        de la API se clasifican (5xx reintentable, resto final)."""
+        if not page_id:
+            return _draft("sin page_id de Facebook configurado "
+                          "(platform_accounts.facebook_reels.page_id "
+                          "o FACEBOOK_PAGE_ID)")
+        start = self.start_upload(page_id)
+        if not start.get("ok"):
+            return start
+        up = self.upload_file(start["video_id"], clip_path)
+        if not up.get("ok"):
+            return up
+        return self.finish_upload(page_id, start["video_id"],
+                                  description)
+
     def finish_upload(self, page_id, video_id, description):
         """Fase 3: publica el Reel ya subido."""
         access = self._token()
