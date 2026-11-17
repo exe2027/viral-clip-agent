@@ -424,7 +424,8 @@ class PublishQueue:
 def check_limits(queue, platform):
     """Topes antes de publicar: (ok, motivo).
 
-    - Tope diario (plan) y techo por cuota (YT: 6 por cuota).
+    - Tope diario (plan) y techo (YT: bucket de videos.insert,
+      100 llamadas/día; el resto, topes internos de limits.yaml).
     - Espaciamiento mínimo 2 h desde la última subida.
     - Franja 18:00-23:59 Chile.
     """
