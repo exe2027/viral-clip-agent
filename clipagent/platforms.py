@@ -481,6 +481,77 @@ class InstagramAdapter:
             return {"ok": True, "mode": "api", "media_id": resp["id"]}
         return _error_result(status, resp)
 
+    # --- Publicación completa (fan-out): contenedor -> esperar ->
+    # publicar ---. El contenedor caduca a las 24 h sin publicar;
+    # status_code: IN_PROGRESS / FINISHED / PUBLISHED / ERROR /
+    # EXPIRED. Meta recomienda consultar 1 vez/min, máx. ~5 min.
+    POLL_INTERVAL_S = 15
+    MAX_POLLS = 10  # ~2,5 min; si sigue en proceso, se retoma luego
+
+    def publish_reel(self, ig_user_id, video_url, caption,
+                     cover_url=None, resume_container_id=None,
+                     sleep_fn=None, max_polls=None):
+        """Reel completo: crear contenedor -> esperar FINISHED ->
+        publicar. Sin ig_user_id, sin token o sin URL pública ->
+        draft con el motivo. Si sigue IN_PROGRESS tras max_polls,
+        devuelve mode "processing" con el container_id para retomar
+        sin crear otro contenedor. `sleep_fn` se inyecta en tests.
+        """
+        sleep = sleep_fn or time.sleep
+        max_polls = self.MAX_POLLS if max_polls is None else max_polls
+        if not ig_user_id:
+            return _draft("sin ig_user_id de Instagram configurado "
+                          "(platform_accounts.instagram_reels.ig_user_id "
+                          "o IG_USER_ID)")
+        if not self._token():
+            return _draft("sin token de Instagram en tokens/")
+        if not (video_url or "").startswith("https://"):
+            return _draft("sin URL pública configurada: Instagram "
+                          "exige una URL HTTPS pública del video "
+                          "(ver public_url.base_url en config.yaml)")
+        container_id = resume_container_id
+        recreated = False
+        if container_id is None:
+            created = self.create_container(
+                ig_user_id, video_url, caption, cover_url)
+            if not created.get("ok"):
+                return created
+            container_id = created["container_id"]
+        for _ in range(max_polls):
+            st = self.container_status(container_id)
+            if not st.get("ok"):
+                return st
+            code = st.get("status_code")
+            if code == "FINISHED":
+                return self.publish(ig_user_id, container_id)
+            if code == "PUBLISHED":
+                return {"ok": True, "mode": "api",
+                        "container_id": container_id,
+                        "note": "el contenedor ya estaba publicado"}
+            if code == "ERROR":
+                return {"ok": False, "mode": "error",
+                        "reason": "Instagram: el contenedor quedó "
+                                  "en ERROR (video no procesable)",
+                        "retryable": False}
+            if code == "EXPIRED":
+                if resume_container_id is not None and not recreated:
+                    recreated = True
+                    created = self.create_container(
+                        ig_user_id, video_url, caption, cover_url)
+                    if not created.get("ok"):
+                        return created
+                    container_id = created["container_id"]
+                    continue
+                return {"ok": False, "mode": "error",
+                        "reason": "Instagram: el contenedor caducó "
+                                  "(24 h sin publicar)",
+                        "retryable": False}
+            sleep(self.POLL_INTERVAL_S)
+        return {"ok": False, "mode": "processing",
+                "container_id": container_id, "retryable": True,
+                "reason": "Instagram sigue procesando el contenedor; "
+                          "se retoma en el siguiente ciclo"}
+
 
 class FacebookAdapter:
     """Facebook Reels por Graph API (Reels Publishing API).
