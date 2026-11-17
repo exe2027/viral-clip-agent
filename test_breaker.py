@@ -111,7 +111,8 @@ class TestBreakerLoop(unittest.TestCase):
             # dispara y la 4ª pasada ya no lo intenta.
             calls = {"n": 0}
 
-            def fake_publish_direct(platform, path, queue=None, live=False):
+            def fake_publish_direct(platform, path, queue=None,
+                                    live=False, **kwargs):
                 calls["n"] += 1
                 return {"ok": False, "reason": "500 error del servidor"}
 
