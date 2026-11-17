@@ -49,6 +49,12 @@ def build_parser():
     sub.add_parser("status", help="Estado del servicio, la cola y "
                    "las plataformas")
 
+    p_resume = sub.add_parser(
+        "resume", help="Reanuda una plataforma pausada por el breaker "
+        "(acción explícita, 6.4)")
+    p_resume.add_argument("platform", choices=[
+        "youtube_shorts", "tiktok", "instagram_reels", "facebook_reels"])
+
     p_queue = sub.add_parser("queue", help="Muestra la cola de jobs")
     p_queue.add_argument("--state", default=None,
                          help="filtra por estado (queued, processing, "
@@ -110,6 +116,11 @@ def main(argv=None):
     if args.command == "stop":
         from .service import stop_service
         return stop_service()
+    if args.command == "resume":
+        from .breaker import reset
+        reset(args.platform)
+        print(f"{args.platform} reanudada (breaker reseteado).")
+        return 0
     if args.command == "status":
         from .service import service_status
         import json

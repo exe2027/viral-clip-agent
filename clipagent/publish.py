@@ -905,7 +905,11 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
                 "url": result.get("url")}
     action = handle_rejection(queue, clip_path, platform,
                               result.get("reason") or "error desconocido")
-    return {"action": action["action"], "reason": action["reason"]}
+    # handle_rejection devuelve "retry_once" cuando el ítem queda en
+    # failed con un reintento pendiente: para el bucle es "failed".
+    mapped = {"retry_once": "failed"}.get(action["action"],
+                                         action["action"])
+    return {"action": mapped, "reason": action["reason"]}
 
 
 def publish_loop(queue=None, interval_s=300, live=False, once=False,
@@ -918,6 +922,7 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
     fallar o mandar a cuarentena (6.6).
     """
     import threading
+    from . import breaker as _breaker
     from .config import load_config
     queue = queue or PublishQueue()
     cfg = cfg or load_config()
@@ -928,9 +933,14 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
         counter_state = _load_counter_state()
     stop = stop_event or threading.Event()
     stats = {"published": 0, "retained": 0, "discarded": 0, "draft": 0,
-             "failed": 0, "quarantined": 0, "limited": 0, "paused": 0}
+             "failed": 0, "quarantined": 0, "limited": 0, "paused": 0,
+             "breaker_tripped": 0}
     while True:
         for platform in PLATFORMS:
+            # 6.4: plataforma con el breaker disparado: se salta entera.
+            tripped, trip_reason = _breaker.is_tripped(platform)
+            if tripped:
+                continue
             for item in queue.due_items(
                     platform, states=("approved", "queued")):
                 result = publish_one(queue, item, cfg=cfg, live=live,
@@ -939,15 +949,30 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
                 action = result["action"]
                 if action in stats:
                     stats[action] += 1
-                if action == "published" and notify_fn:
-                    notify_fn("publicado",
-                              f"{platform}: {item['clip']} "
-                              f"({result.get('url', '')})")
-                elif action in ("failed", "quarantined") and notify_fn:
-                    notify_fn("falló" if action == "failed"
-                              else "cuarentena",
-                              f"{platform}: {item['clip']}: "
-                              f"{result.get('reason', '')}")
+                if action == "published":
+                    _breaker.record_success(platform)
+                    if notify_fn:
+                        notify_fn("publicado",
+                                  f"{platform}: {item['clip']} "
+                                  f"({result.get('url', '')})")
+                elif action in ("failed", "quarantined"):
+                    reason = result.get("reason", "")
+                    kind = ("copyright"
+                            if any(w in reason.lower()
+                                   for w in _breaker.COPYRIGHT_WORDS)
+                            else "error")
+                    trip = _breaker.record_failure(
+                        platform, reason, kind=kind, cfg=cfg)
+                    if trip["tripped"]:
+                        stats["breaker_tripped"] += 1
+                        if notify_fn:
+                            notify_fn("plataforma pausada",
+                                      f"{platform}: {trip['reason']}")
+                    elif notify_fn:
+                        notify_fn("falló" if action == "failed"
+                                  else "cuarentena",
+                                  f"{platform}: {item['clip']}: "
+                                  f"{result.get('reason', '')}")
         if once or stop.is_set():
             break
         stop.wait(interval_s)

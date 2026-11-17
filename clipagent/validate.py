@@ -26,7 +26,7 @@ KNOWN_TOP_KEYS = {
     "clips", "subtitles", "subtitle_policy", "subtitle_styles",
     "layout", "facecam_box", "watcher", "reel_study", "autopublish",
     # Llegan en fases posteriores (6.3, 6B): se validan entonces.
-    "auto_approve", "scoring",
+    "auto_approve", "scoring", "breaker",
 }
 
 
@@ -272,6 +272,8 @@ def validate_config(cfg, source="config.yaml"):
     if (cfg.get("auto_approve") or {}).get("min_band") is not None:
         c.check(cfg, "auto_approve.min_band", "str",
                 choices={"descartar", "revisar", "prioritario", "urgente"})
+    c.check(cfg, "breaker", "dict")
+    c.check(cfg, "breaker.max_consecutive_failures", "int", minimum=1)
 
     warnings = [f"clave desconocida de nivel superior: {k!r} "
                 f"(se ignora; revisa si es un error de tipeo)"

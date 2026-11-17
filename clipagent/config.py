@@ -136,6 +136,11 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "min_band": None,
     },
+    # Circuit breaker por plataforma (6.4): N fallos seguidos o un
+    # rechazo por copyright/strike pausan SOLO esa plataforma.
+    "breaker": {
+        "max_consecutive_failures": 3,
+    },
 }
 
 

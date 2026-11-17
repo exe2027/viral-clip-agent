@@ -304,3 +304,8 @@ scoring:
 auto_approve:
   enabled: true
   min_band: null
+
+# Circuit breaker por plataforma (6.4): N fallos seguidos o un
+# rechazo por copyright/strike pausan SOLO esa plataforma.
+breaker:
+  max_consecutive_failures: 3
