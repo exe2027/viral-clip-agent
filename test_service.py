@@ -71,6 +71,51 @@ class TestSupervisor(unittest.TestCase):
     def test_stop_sin_servicio(self):
         self.assertEqual(service.stop_service(self.pid_file), 2)
 
+    def test_recupera_jobs_colgados(self):
+        from jobqueue import Queue
+        db = os.path.join(self.tmp.name, "queue.db")
+        q = Queue(db)
+        try:
+            job_id = q.add("https://www.twitch.tv/videos/123",
+                           streamer="illojuan")
+            q.set_state(job_id, "processing")
+        finally:
+            q.close()
+        self.assertEqual(service.recover_stale_jobs(db), 1)
+        q = Queue(db)
+        try:
+            self.assertEqual(q.get_job(job_id)["state"], "queued")
+        finally:
+            q.close()
+
+    def test_kill_switch_para_el_supervisor(self):
+        stop = threading.Event()
+        kill_path = os.path.join(self.tmp.name, "queue.kill")
+        old_kill = service.KILL_SWITCH_PATH
+        service.KILL_SWITCH_PATH = kill_path
+        try:
+            children = [("a", [sys.executable, "-c",
+                               "import time; time.sleep(30)"])]
+            result = {}
+            t = threading.Thread(
+                target=lambda: result.update(
+                    service.run_supervisor(children, self.pid_file, stop)))
+            t.start()
+            for _ in range(50):
+                if os.path.exists(self.pid_file):
+                    break
+                time.sleep(0.1)
+            self.assertTrue(os.path.exists(self.pid_file))
+            # El usuario toca queue.kill: el supervisor para solo.
+            with open(kill_path, "w", encoding="utf-8") as f:
+                f.write("freno de emergencia\n")
+            t.join(timeout=20)
+            self.assertFalse(t.is_alive())
+            self.assertFalse(os.path.exists(self.pid_file))
+        finally:
+            service.KILL_SWITCH_PATH = old_kill
+            stop.set()
+
 
 class TestCliStartStop(unittest.TestCase):
     def test_start_stop_con_hijos_de_prueba(self):

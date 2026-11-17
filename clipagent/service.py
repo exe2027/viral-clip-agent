@@ -132,6 +132,21 @@ def service_running(pid_file=SERVICE_PID_FILE):
     return bool(data and _pid_alive(data.get("supervisor_pid", 0)))
 
 
+def recover_stale_jobs(db_path=None):
+    """Jobs colgados en 'processing' de un worker que murió.
+
+    Se llama al arrancar el servicio, antes de levantar el worker
+    (ningún worker vivo los está procesando): vuelven a 'queued'
+    sin gastar intento. Devuelve cuántos se recuperaron.
+    """
+    from jobqueue import Queue
+    q = Queue(db_path) if db_path else Queue()
+    try:
+        return q.requeue_stale_processing()
+    finally:
+        q.close()
+
+
 def run_supervisor(children_spec=None, pid_file=SERVICE_PID_FILE,
                    stop_event=None, restart_delay=RESTART_DELAY_S,
                    max_restarts=MAX_RESTARTS):
@@ -175,6 +190,12 @@ def run_supervisor(children_spec=None, pid_file=SERVICE_PID_FILE,
     try:
         while not stop_event.is_set():
             time.sleep(1)
+            if os.path.exists(KILL_SWITCH_PATH):
+                # El usuario tocó queue.kill a mano: parada de
+                # emergencia; el supervisor sale y mata a los hijos.
+                print("[supervisor] kill-switch activo (queue.kill): "
+                      "parando todo el árbol.")
+                break
             if not children:
                 # Todos los hijos descartados por demasiadas caídas:
                 # no queda nada que supervisar.
@@ -231,6 +252,12 @@ def start_service(children_spec=None, pid_file=SERVICE_PID_FILE):
         print("el servicio ya está corriendo "
               f"(ver {os.path.basename(pid_file)}). Usa `clipagent stop`.")
         return 2
+    # Jobs colgados del worker anterior (crash/reinicio): vuelven a
+    # la cola sin gastar intento, antes de levantar el worker nuevo.
+    recovered = recover_stale_jobs()
+    if recovered:
+        print(f"servicio: {recovered} job(s) colgado(s) recuperados "
+              "a la cola.")
     # Sesión propia: el supervisor es líder de su grupo, así que
     # `clipagent stop` puede matar su grupo sin tocar la terminal
     # desde la que se lanzó.

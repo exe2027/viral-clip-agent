@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -53,6 +54,26 @@ AUTO_CLIPS = os.path.join(HERE, "auto_clips.py")
 WORKER_LOCK = os.path.join(HERE, "worker.lock")
 DEFAULT_TIMEOUT_S = 7200  # 2 h por job (un VOD de Twitch puede tardar)
 POLL_S = 1.0
+
+# El auto_clips en curso (si lo hay). El handler de SIGTERM/SIGINT lo
+# mata antes de salir: sin esto, `clipagent stop` mataba al worker y
+# dejaba huérfano a auto_clips (corre en su propia sesión).
+_CURRENT_PROC = [None]
+
+
+def _stop_handler(signum, frame):
+    proc = _CURRENT_PROC[0]
+    if proc is not None and proc.poll() is None:
+        _log("Señal de parada: matando auto_clips en curso...")
+        kill_process_group(proc)
+    # Salir con el código habitual de la señal, sin traceback.
+    raise SystemExit(128 + signum)
+
+
+def install_stop_handlers():
+    """SIGTERM/SIGINT matan al hijo en curso antes de salir (6.1)."""
+    signal.signal(signal.SIGTERM, _stop_handler)
+    signal.signal(signal.SIGINT, _stop_handler)
 
 
 def _log(msg: str):
@@ -150,22 +171,26 @@ def _run_auto_clips(job: dict, top_n: int, timeout_s: int):
         logf.flush()
         proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
                                 cwd=HERE, start_new_session=True)
+        _CURRENT_PROC[0] = proc
         start = time.monotonic()
-        while True:
-            try:
-                rc = proc.wait(timeout=POLL_S)
-                return rc, log_path
-            except subprocess.TimeoutExpired:
-                if kill_switch_active():
-                    _log("Kill-switch detectado a mitad del job: "
-                         "matando auto_clips...")
-                    kill_process_group(proc)
-                    raise KillSwitchRaised()
-                if time.monotonic() - start > timeout_s:
-                    _log(f"Timeout ({timeout_s}s): matando auto_clips...")
-                    kill_process_group(proc)
-                    raise TimeoutError(
-                        f"auto_clips superó el timeout de {timeout_s}s")
+        try:
+            while True:
+                try:
+                    rc = proc.wait(timeout=POLL_S)
+                    return rc, log_path
+                except subprocess.TimeoutExpired:
+                    if kill_switch_active():
+                        _log("Kill-switch detectado a mitad del job: "
+                             "matando auto_clips...")
+                        kill_process_group(proc)
+                        raise KillSwitchRaised()
+                    if time.monotonic() - start > timeout_s:
+                        _log(f"Timeout ({timeout_s}s): matando auto_clips...")
+                        kill_process_group(proc)
+                        raise TimeoutError(
+                            f"auto_clips superó el timeout de {timeout_s}s")
+        finally:
+            _CURRENT_PROC[0] = None
 
 
 class KillSwitchRaised(Exception):
@@ -379,6 +404,7 @@ def main(argv=None) -> int:
     p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S,
                    help="Segundos máx. por job (default 7200)")
     args = p.parse_args(argv)
+    install_stop_handlers()
 
     try:
         with single_instance_lock(WORKER_LOCK):
