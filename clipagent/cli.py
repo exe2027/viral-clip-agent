@@ -99,6 +99,79 @@ def build_parser():
     p_pub.add_argument("args", nargs=argparse.REMAINDER,
                        help="argumentos de publisher.py "
                        "(audit, dry-run, publish, status, quarantine...)")
+
+    p_jobs = sub.add_parser(
+        "jobs", help="Tabla step_jobs: listar, encolar, reanudar")
+    p_jobs.add_argument("action", nargs="?", default="list",
+                        choices=["list", "enqueue", "show", "resume",
+                                 "stale"],
+                        help="list (default) | enqueue | show | resume "
+                        "| stale")
+    p_jobs.add_argument("--db", default=None)
+    p_jobs.add_argument("--estado", default=None,
+                        help="filtra por estado (pending, running, done, "
+                        "failed, scheduled, processing, posted, "
+                        "esperando_humano)")
+    p_jobs.add_argument("--paso", default=None,
+                        help="filtra por paso (vod, picos, corte, "
+                        "subtitulos, empaquetar, publicar)")
+    p_jobs.add_argument("--clip", default=None,
+                        help="clip_id (enqueue/show/resume lo usan)")
+    p_jobs.add_argument("--plataforma", default=None)
+    p_jobs.add_argument("--payload", default="{}",
+                        help="JSON del payload (enqueue)")
+    p_jobs.add_argument("--prioridad", type=float, default=0.0)
+    p_jobs.add_argument("--job-id", type=int, default=None)
+    p_jobs.add_argument("--limit", type=int, default=20)
+
+    p_workers = sub.add_parser(
+        "workers", help="Supervisor único: Iniciar / estado / un paso")
+    p_workers.add_argument("action", nargs="?", default="status",
+                           choices=["start", "status", "step"],
+                           help="start (Iniciar del panel) | status | "
+                           "step (un solo paso, depuración)")
+    p_workers.add_argument("--db", default=None)
+    p_workers.add_argument("--paso", default=None,
+                           help="paso para 'step' (vod, picos, corte, "
+                           "subtitulos, empaquetar, publicar)")
+    p_workers.add_argument("--once", action="store_true",
+                           help="procesa lo debido y sale (cron/tests)")
+    p_workers.add_argument("--max-jobs", type=int, default=None)
+    p_workers.add_argument("--poll", type=int, default=5,
+                           help="segundos entre ticks (default: 5)")
+
+    p_pipeline = sub.add_parser(
+        "pipeline", help="Encolar una cadena o una publicación")
+    p_pipeline.add_argument("action", choices=["enqueue", "publish",
+                                               "bridge"],
+                            help="enqueue (cadena vod->...->empaquetar) | "
+                            "publish (un clip + plataforma, manual) | "
+                            "bridge (cola legacy -> step pipelines)")
+    p_pipeline.add_argument("--limit", type=int, default=5,
+                            help="jobs legacy a puentear (bridge)")
+    p_pipeline.add_argument("--db", default=None)
+    p_pipeline.add_argument("--clip", required=False, default=None,
+                            help="clip_id (enqueue) o id del clip "
+                            "(publish); bridge no lo usa")
+    p_pipeline.add_argument("--url", default=None,
+                            help="URL del VOD (enqueue)")
+    p_pipeline.add_argument("--payload", default="{}",
+                            help="JSON del payload (enqueue)")
+    p_pipeline.add_argument("--plataforma", default=None,
+                            help="plataforma (publish)")
+    p_pipeline.add_argument("--clip-path", default=None,
+                            help="MP4 del clip (publish)")
+    p_pipeline.add_argument("--mode", default="draft",
+                            choices=["draft", "dry-run", "api"],
+                            help="modo de publicación (default: draft)")
+    p_pipeline.add_argument("--prioridad", type=float, default=0.0)
+
+    p_tiktok = sub.add_parser(
+        "tiktok-browser",
+        help="Agente navegador TikTok (1 clip/día, sesión persistente, "
+        "captcha atendido por humano; corre en runner autoalojado)")
+    p_tiktok.add_argument("args", nargs=argparse.REMAINDER,
+                          help="login | upload | verify | status ...")
     return parser
 
 
@@ -247,6 +320,151 @@ def main(argv=None):
     if args.command == "publish":
         from .publish import main as publish_main
         return publish_main(args.args or ["audit"])
+    if args.command == "tiktok-browser":
+        from .tiktok_browser import main as tiktok_main
+        return tiktok_main(args.args or ["status"])
+    if args.command == "jobs":
+        import json as _json
+        from .jobs import StepJobs
+        store = StepJobs(args.db) if args.db else StepJobs()
+        try:
+            if args.action == "list":
+                jobs = store.list_jobs(estado=args.estado,
+                                       paso=args.paso,
+                                       clip_id=args.clip,
+                                       limit=args.limit)
+                print(f"step_jobs: {store.counts()}")
+                for job in jobs:
+                    print(f"  #{job['id']} [{job['estado']:<16}] "
+                          f"{job['paso']:<11} {job['clip_id']} "
+                          f"({job.get('plataforma') or '-'}, "
+                          f"intentos={job['intentos']})"
+                          + (f" — {job['error'][:120]}"
+                             if job.get("error") else ""))
+                return 0
+            if args.action == "enqueue":
+                if not args.clip or not args.paso:
+                    print("enqueue exige --clip y --paso",
+                          file=sys.stderr)
+                    return 2
+                job = store.enqueue(
+                    args.clip, args.paso, plataforma=args.plataforma,
+                    payload=_json.loads(args.payload or "{}"),
+                    prioridad=args.prioridad)
+                print(f"Encolado step job #{job['id']} "
+                      f"({job['paso']}, {job['clip_id']}, "
+                      f"{job['estado']})")
+                return 0
+            if args.action == "show":
+                job = store.get(args.job_id) if args.job_id else None
+                if job is None:
+                    print("show exige --job-id", file=sys.stderr)
+                    return 2
+                print(_json.dumps(job, indent=2, ensure_ascii=False))
+                for ev in store.events(job["id"]):
+                    print(f"  {ev['ts']} {ev['event']}: {ev['detail']}")
+                return 0
+            if args.action == "resume":
+                job = store.resume(args.job_id)
+                print(f"Job #{job['id']} reanudado -> pending.")
+                return 0
+            if args.action == "stale":
+                n = store.requeue_stale()
+                print(f"Recuperados {n} job(s) de un worker muerto.")
+                return 0
+        finally:
+            store.close()
+        return 0
+    if args.command == "workers":
+        from .jobs import StepJobs
+        from .workers import run_supervisor, run_worker, workers_status
+        store = StepJobs(args.db) if args.db else StepJobs()
+        try:
+            if args.action == "status":
+                import json as _json
+                st = workers_status(store)
+                print(f"conteos: {st['counts']}")
+                print(f"debidos por paso: {st['due_by_step']}")
+                print("cómputo por paso (worker = cabe en Cloudflare "
+                      "Workers; external = exige cómputo externo):")
+                for paso, where in st["compute"].items():
+                    print(f"  {paso:<11} {where}")
+                if st["stuck"]:
+                    print("ATASCADOS (motivo y hora):")
+                    for job in st["stuck"]:
+                        print(f"  #{job['id']} [{job['estado']}] "
+                              f"{job['paso']} {job['clip_id']} — "
+                              f"{job.get('error', '')[:120]} "
+                              f"({job['updated_at']})")
+                else:
+                    print("Atascados: ninguno.")
+                print(_json.dumps(st, indent=2, ensure_ascii=False,
+                                  default=str))
+                return 0
+            if args.action == "step":
+                if not args.paso:
+                    print("step exige --paso", file=sys.stderr)
+                    return 2
+                return run_worker(store, args.paso, once=args.once,
+                                  max_jobs=args.max_jobs,
+                                  poll_s=args.poll)
+            return run_supervisor(store, once=args.once,
+                                  max_jobs=args.max_jobs,
+                                  poll_s=args.poll)
+        finally:
+            store.close()
+    if args.command == "pipeline":
+        import json as _json
+        from .jobs import StepJobs
+        from .workers import (bridge_legacy_queue, enqueue_pipeline,
+                              enqueue_publish)
+        store = StepJobs(args.db) if args.db else StepJobs()
+        try:
+            if args.action == "bridge":
+                from jobqueue import Queue
+                q = Queue(args.db) if args.db else Queue()
+                try:
+                    created = bridge_legacy_queue(store, q,
+                                                  limit=args.limit)
+                finally:
+                    q.close()
+                print(f"Puenteados {len(created)} VOD(s) legacy a "
+                      "step pipelines.")
+                for job in created:
+                    print(f"  step job #{job['id']} (vod, "
+                          f"{job['clip_id']})")
+                return 0
+            if args.action == "enqueue":
+                if not args.clip:
+                    print("enqueue exige --clip", file=sys.stderr)
+                    return 2
+                payload = _json.loads(args.payload or "{}")
+                if args.url:
+                    payload["url"] = args.url
+                job = enqueue_pipeline(store, args.clip, payload,
+                                       prioridad=args.prioridad)
+                print(f"Cadena encolada: step job #{job['id']} "
+                      f"(vod, {job['clip_id']}). El supervisor avanza "
+                      "solo hasta empaquetar; publicar es manual.")
+                return 0
+            if args.action == "publish":
+                if not args.clip:
+                    print("publish exige --clip", file=sys.stderr)
+                    return 2
+                if not args.plataforma or not args.clip_path:
+                    print("publish exige --plataforma y --clip-path",
+                          file=sys.stderr)
+                    return 2
+                job = enqueue_publish(store, args.clip,
+                                      args.plataforma, args.clip_path,
+                                      mode=args.mode,
+                                      prioridad=args.prioridad)
+                print(f"Publicación encolada: step job #{job['id']} "
+                      f"({args.plataforma}, modo {args.mode}).")
+                return 0
+        finally:
+            store.close()
+        return 0
     parser.print_help()
     return 1
 
