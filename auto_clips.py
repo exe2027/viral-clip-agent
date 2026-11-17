@@ -185,6 +185,31 @@ except ImportError:
     load_config = None
 
 try:
+    # Checkpoint por job (Fase 5.5): reanuda desde la última etapa
+    # completa (runs/<vod>/state.json). Sin él, no hay reanudación.
+    from clipagent.checkpoint import (
+        clip_done,
+        load_manifest,
+        load_state,
+        mark_clip_done,
+        mark_stage,
+        resume_entry,
+        save_state,
+        stage_done,
+    )
+    checkpoint_mod = True
+except ImportError:
+    clip_done = None
+    load_manifest = None
+    load_state = None
+    mark_clip_done = None
+    mark_stage = None
+    resume_entry = None
+    save_state = None
+    stage_done = None
+    checkpoint_mod = False
+
+try:
     # Score de viralidad 0-100 + señales MVP (7 componentes, banda,
     # filtro previo). Distinto del score de chat: no se mezclan.
     from clipagent.detect import compute_signals, filter_passed, score_clip
@@ -588,6 +613,7 @@ def main() -> int:
     p.add_argument("--no-viral", action="store_true", help="No genera el empaquetado viral (títulos, miniatura, SEO)")
     p.add_argument("--delete-vod", action="store_true", help="Sin efecto: ya no se baja el VOD entero (se guardan solo segmentos por pico). Se mantiene el flag para no romper llamadas viejas")
     p.add_argument("--force-chat", action="store_true", help="Forzar la descarga del chat aunque ya exista un chat.json válido (por defecto se reutiliza: la descarga tarda ~18 min en un VOD de 3 h)")
+    p.add_argument("--fresh", action="store_true", help="Ignorar el checkpoint (runs/<vod>/state.json) y rehacer todo desde cero")
     p.add_argument("--audio-fallback", action="store_true", help="En Kick, si el chat viene vacío, buscar picos por audio transcrito (muestreo)")
     p.add_argument("--audio-check", action="store_true",
                    help="Bloque 6: RMS por segundo en la ventana del candidato y veredicto "
@@ -674,6 +700,17 @@ def main() -> int:
     clips_dir = os.path.join(out_dir, "clips")
     os.makedirs(clips_dir, exist_ok=True)
 
+    # Checkpoint (Fase 5.5): reanuda desde la última etapa completa.
+    # --fresh ignora el estado anterior y rehace todo.
+    state = load_state(out_dir) if checkpoint_mod and not args.fresh else {}
+    prev_manifest = (load_manifest(out_dir)
+                     if checkpoint_mod and not args.fresh else None)
+    if args.fresh:
+        print("Checkpoint: --fresh, se rehace todo desde cero.")
+    elif state.get("clips"):
+        print(f"Checkpoint: {len(state['clips'])} clip(s) ya hechos "
+              f"en {out_dir} (se reutilizan si el archivo existe).")
+
     chat_path = args.chat or os.path.join(out_dir, "chat.json")
     # Sin --video ya no hay vod.mp4: Twitch corta de un segmento por
     # pico (ver el bucle). video_path solo vive con --video local.
@@ -690,8 +727,15 @@ def main() -> int:
         print("Error: FFmpeg no está en el PATH.", file=sys.stderr)
         return 1
 
-    # 1. Descargar el chat (o reutilizar)
-    if args.chat:
+    # 1. Descargar el chat (o reutilizar). Si el checkpoint dice que
+    # el chat ya está en runs/<vod>/chat.json, no se vuelve a bajar
+    # (la descarga tarda ~18 min en un VOD de 3 h).
+    reuse_chat = (checkpoint_mod and not args.chat and vod_id
+                  and not args.force_chat and stage_done(state, "chat")
+                  and os.path.isfile(chat_path))
+    if reuse_chat:
+        print("Chat: reutilizado del checkpoint (chat.json ya descargado).")
+    elif args.chat:
         chat_path = args.chat
     elif vod_id:
         if platform == "kick":
@@ -718,6 +762,11 @@ def main() -> int:
     if not os.path.isfile(chat_path):
         print(f"Error: no existe el chat: {chat_path}", file=sys.stderr)
         return 1
+    if checkpoint_mod and not args.chat:
+        # El chat vive en runs/<vod>/chat.json: la etapa queda marcada
+        # (con --chat externo no, ese archivo puede desaparecer).
+        mark_stage(state, "chat")
+        save_state(out_dir, state)
     # Con --chat local en Kick igual hacen falta los metadatos (source HLS,
     # duración) para bajar los segmentos.
     if platform == "kick" and kick_meta is None and args.vod:
@@ -821,6 +870,11 @@ def main() -> int:
     for dc in discarded:
         print(f"  Descartado: {fmt_ts(dc['peak'])} — {dc['score']} pts "
               f"({dc['multiple']}x) — {'; '.join(dc['motivos'])}")
+    if checkpoint_mod:
+        mark_stage(state, "detect",
+                   peaks=[ts for ts, _, _ in peaks],
+                   descartados=len(discarded))
+        save_state(out_dir, state)
 
     # 4. Cortar + titular y manifiesto
     manifest = {"vod_id": vod_id, "platform": platform,
@@ -839,6 +893,19 @@ def main() -> int:
               "manifest.json). No se cortó nada.")
         return 0
     for idx, (peak_ts, score, multiple) in enumerate(peaks, 1):
+        # Checkpoint: clip ya hecho en una corrida anterior (archivo
+        # en disco + entrada en el manifiesto anterior) -> se
+        # reutiliza la entrada y se saltan descarga, corte y paquete.
+        if checkpoint_mod:
+            prev_entry = resume_entry(prev_manifest, peak_ts)
+            if (prev_entry is not None and clip_done(state, peak_ts)
+                    and os.path.isfile(os.path.join(
+                        out_dir, prev_entry.get("file", "")))):
+                print(f"[{idx}/{len(peaks)}] {fmt_ts(peak_ts)} reutilizado "
+                      f"del checkpoint ({prev_entry['file']}).")
+                manifest["clips"].append(prev_entry)
+                write_manifest_atomic(out_dir, manifest)
+                continue
         clip_start = max(0, peak_ts - args.pre_roll)
         # Corte variable: objetivo target_dur (30 s); el corte preciso
         # lo ajusta dentro de [min_dur, max_dur]. El segmento cubre
@@ -1184,8 +1251,14 @@ def main() -> int:
         # Manifiesto tras CADA clip (atómico): si el job muere en el
         # clip 3 de 5, los clips 1-2 ya están guardados en disco.
         write_manifest_atomic(out_dir, manifest)
+        if checkpoint_mod:
+            mark_clip_done(state, peak_ts, fname)
+            save_state(out_dir, state)
 
     write_manifest_atomic(out_dir, manifest)
+    if checkpoint_mod:
+        mark_stage(state, "manifest")
+        save_state(out_dir, state)
     lines = [f"# Clips — VOD {vod_id or 'local'}", ""]
     for c in manifest["clips"]:
         lines += [f"## Clip {c['n']} — {c['file']}",
