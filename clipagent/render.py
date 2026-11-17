@@ -1693,6 +1693,93 @@ def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
 # Corte de un clip con layout responsive
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Facecam del VOD, una sola vez (Fase 7.4)
+# ---------------------------------------------------------------------------
+
+VOD_LAYOUT_FILE = "layout.json"
+
+
+def vod_layout_path(out_dir):
+    """Ruta de runs/<vod>/layout.json."""
+    return os.path.join(out_dir, VOD_LAYOUT_FILE)
+
+
+def load_vod_layout(out_dir):
+    """Layout del VOD guardado, o None si no existe o no valida."""
+    import json
+    path = vod_layout_path(out_dir)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "facecam_box" not in data:
+        return None
+    return data
+
+
+def save_vod_layout(out_dir, data):
+    """Guarda runs/<vod>/layout.json (escritura atómica)."""
+    import json
+    path = vod_layout_path(out_dir)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+    return path
+
+
+def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
+    """Detecta la facecam UNA vez por VOD (7.4).
+
+    Muestrea `n_samples` fotogramas repartidos por el VOD y clasifica
+    cada uno; la caja que aparece en al menos 2 muestras (misma
+    posición, redondeada) es la facecam del VOD. Devuelve
+    {"facecam_box": [x, y, w, h] en el fotograma de muestra (160x90)
+    o None, "method": "detected"|"none", "samples": n, "hits": m}.
+    Si `facecam_box` ya está en config, no detecta nada (manda
+    siempre, ver decide_layout): devuelve method "config".
+    """
+    cfg = {**DEFAULTS, **(cfg or {})}
+    if cfg.get("facecam_box"):
+        return {"facecam_box": list(cfg["facecam_box"]),
+                "method": "config", "samples": 0, "hits": 0}
+    if not duration or duration <= 0 or not os.path.isfile(video_path):
+        return {"facecam_box": None, "method": "none",
+                "samples": 0, "hits": 0}
+    fractions = [0.05, 0.25, 0.5, 0.75, 0.95][:max(1, n_samples)]
+    votes = {}
+    samples = 0
+    for frac in fractions:
+        g = gray_frame(video_path, max(0.0, duration * frac))
+        if g is None:
+            continue
+        samples += 1
+        try:
+            layout, params, _reason = classify_frame(g, cfg)
+        except Exception:  # noqa: BLE001 - un fotograma malo no tumba nada
+            continue
+        if layout != "pip":
+            continue
+        box = (params or {}).get("box")
+        if not box or len(box) < 4:
+            continue
+        key = tuple(int(round(float(v))) for v in box[:4])
+        votes[key] = votes.get(key, 0) + 1
+    if not votes:
+        return {"facecam_box": None, "method": "none",
+                "samples": samples, "hits": 0}
+    best, hits = max(votes.items(), key=lambda kv: kv[1])
+    if hits < 2:
+        return {"facecam_box": None, "method": "none",
+                "samples": samples, "hits": hits}
+    return {"facecam_box": list(best), "method": "detected",
+            "samples": samples, "hits": hits}
+
+
 def cut_clip_with_layout(video_path, start_sec, duration, output_path,
                          crf=23, preset="fast", crop="center",
                          layout_mode="auto", cfg=None):

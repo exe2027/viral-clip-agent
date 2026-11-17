@@ -100,6 +100,15 @@ class TestManifiestoIncremental(unittest.TestCase):
             with open(manifest_path, encoding="utf-8") as f:
                 manifest = json.load(f)
             self.assertEqual([c["n"] for c in manifest["clips"]], [1, 2])
+            # 7.4: layout.json se escribe antes del bucle (detección
+            # una vez por VOD) y sobrevive al crash.
+            layout_path = os.path.join(out_dir, "layout.json")
+            self.assertTrue(os.path.isfile(layout_path),
+                            "sin layout.json tras el crash")
+            with open(layout_path, encoding="utf-8") as f:
+                layout = json.load(f)
+            self.assertIn("method", layout)
+            self.assertIn("facecam_box", layout)
             self.assertFalse(os.path.exists(
                 os.path.join(out_dir, ".manifest.json.tmp")))
 
