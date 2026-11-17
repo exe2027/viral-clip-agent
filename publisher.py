@@ -33,15 +33,14 @@ Integración con el resto del repo (solo lee, no edita):
     los estados que usa son exactamente esos, más "quarantined"
     (terminal, para copyright/contenido) y "draft" (paquete listo
     para subir manual, sin publicar).
-  * influencers.yaml (Bloques 8+9) + allowed_streamers.yaml — lista
-    blanca de streamers. La canónica es influencers.yaml. REGLA DEL
+  * streamers.yaml — lista blanca única de streamers (Fase 4.1;
+    antes influencers.yaml + allowed_streamers.yaml). REGLA DEL
     USUARIO (2026-11-16): estar en la lista que sube el usuario YA
     es permiso, sin ficha ni contacto previo. Se relee en cada
     publicación: si el streamer ya no está en la lista, la subida
     se bloquea aunque el clip ya estuviera aprobado.
-  * accounts.yaml — estado conocido de cada cuenta (para la
-    auditoría). Si no existe, audit_accounts() usa los valores
-    por defecto, que son el estado real conocido a 2026-11-16.
+  * accounts.yaml — solo identificadores no secretos; el estado de
+    cada cuenta se CALCULA (clipagent/accounts.py, Fase 3.2).
 
 Credenciales: NINGUNA se crea ni se guarda aquí. YouTube usa OAuth
 2.0 (client_secrets.json + token.json, ver PUBLISHING.md). Sin esos
@@ -277,14 +276,26 @@ def _parse_whitelist_file(path):
 def load_whitelist(path=None):
     """Lista blanca vigente, releída fresca en cada llamada.
 
-    Fuente canónica: influencers.yaml (Bloques 8+9). Se suma
-    allowed_streamers.yaml como atajo. Vacía = lista vacía.
+    Fuente canónica: streamers.yaml (Fase 4.1, un solo lector en
+    clipagent/streamers.py). Si se pasa una ruta explícita se lee
+    ese archivo; si no existe streamers.yaml, se suman las listas
+    viejas como respaldo. Vacía = lista vacía.
     """
     if path:
         return _parse_whitelist_file(path)
+    from clipagent.streamers import load_streamers
     merged = {}
-    merged.update(_parse_whitelist_file(WHITELIST_FALLBACK))
-    merged.update(_parse_whitelist_file(WHITELIST_FILE))
+    for entry in load_streamers():
+        merged[entry["name"]] = {
+            "name": entry["name"],
+            "platform": entry["platform"],
+            "permission": "lista",
+            "granted": entry["fecha_permiso"],
+            "estado": entry["estado"],
+        }
+    if not merged:
+        merged.update(_parse_whitelist_file(WHITELIST_FALLBACK))
+        merged.update(_parse_whitelist_file(WHITELIST_FILE))
     return merged
 
 

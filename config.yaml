@@ -29,12 +29,12 @@ games:
     patterns: ["gta 6", "gta vi", "gta6", "grand theft auto vi",
                "grand theft auto 6"]
 
-# Lista blanca de streamers (revisión interna, bloque 1, 2026-11-16):
-# solo estos canales se pueden encolar en jobqueue.py. REGLA DEL
-# USUARIO (2026-11-16): estar en esta lista = permiso ya dado por
-# el hecho de que el usuario lo subió; no hay ficha de permiso.
-# Para agregar un streamer, agrega su canal (slug de Twitch/Kick,
-# en minúsculas):
+# Lista blanca de streamers (DEPRECADO Fase 4.1: la lista única es
+# streamers.yaml; esto queda solo como respaldo si ese archivo no
+# existe). REGLA DEL USUARIO (2026-11-16): estar en esta lista =
+# permiso ya dado por el hecho de que el usuario lo subió; no hay
+# ficha de permiso. Para agregar un streamer, usa
+# `clipagent add <link>` (escribe en streamers.yaml):
 allowlist:
   - illojuan
 

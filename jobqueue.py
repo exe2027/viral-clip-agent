@@ -179,22 +179,25 @@ def kill_switch_active(path: str = KILL_SWITCH_PATH) -> bool:
 
 
 def load_allowlist(config_path: str | None = None):
-    """Streamers de la lista blanca, desde ``allowlist`` en config.yaml.
+    """Streamers de la lista blanca, desde streamers.yaml (Fase 4.1).
 
     REGLA DEL USUARIO (2026-11-16): estar en esta lista = permiso ya
     dado por el hecho de que el usuario lo subió. No hay ficha de
     permiso. Vacía (o ausente) = lista vacía. Se compara en
-    minúsculas y sin espacios.
+    minúsculas y sin espacios. Si streamers.yaml no existe, se leen
+    las listas viejas (config.yaml/allowlist, influencers.yaml,
+    allowed_streamers.yaml) como respaldo.
     """
     try:
-        from config import load_config
-        cfg = load_config(config_path)
+        from clipagent.streamers import load_streamers
+        base = None
+        if config_path:
+            base = os.path.dirname(os.path.abspath(config_path))
+        entries = load_streamers(base_dir=base)
+        return {e["name"] for e in entries
+                if e["estado"] not in ("denegado", "revocado")}
     except Exception:
         return set()
-    raw = (cfg or {}).get("allowlist") or []
-    if isinstance(raw, str):
-        raw = [raw]
-    return {str(s).strip().lower() for s in raw if str(s).strip()}
 
 
 # ---------------------------------------------------------------------------

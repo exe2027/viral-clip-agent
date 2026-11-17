@@ -1,0 +1,28 @@
+# streamers.yaml — la ÚNICA lista de streamers (Fase 4.1).
+#
+# Unifica las tres listas que había antes (config.yaml/allowlist,
+# influencers.yaml y allowed_streamers.yaml): esas tres quedan como
+# respaldo de solo lectura y ya no se editan. Todo lector usa
+# clipagent/streamers.py.
+#
+# REGLA DEL USUARIO (2026-11-16): estar en esta lista = permiso ya
+# dado por el hecho de que el usuario lo subió. NO hay ficha de
+# permiso que registrar ni contacto previo. Solo `denegado` /
+# `revocado` excluyen al streamer (el usuario lo sacó de la lista).
+# `evidencia_url` es OPCIONAL: un enlace donde quedó el permiso,
+# si lo hay.
+#
+# `publish_platforms`: en qué plataformas se pueden publicar sus
+# clips (youtube, tiktok, instagram, facebook).
+
+streamers:
+  - name: illojuan
+    platform: twitch
+    channel_url: "https://www.twitch.tv/illojuan"
+    game: "GTA 6"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-16"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Primer influencer del monitor. Permiso ya dado por el usuario (2026-11-16)."

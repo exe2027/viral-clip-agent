@@ -2,7 +2,7 @@
 """
 watcher.py — monitor de influencers para viral-clip-agent.
 
-Vigila la lista blanca de ``influencers.yaml`` (hoy: SOLO IlloJuan,
+Vigila la lista blanca de ``streamers.yaml`` (hoy: SOLO IlloJuan,
 https://www.twitch.tv/illojuan) y, cada pasada:
 
   * detecta si cada influencer está EN VIVO (título, juego, espectadores),
@@ -20,7 +20,7 @@ revisa en la siguiente pasada, cuando ya esté terminado.
 FRENOS (antes de encolar un VOD; si falla uno, no se encola y se
 registra el motivo):
   1. Kill-switch: si existe ``queue.kill``, no se encola NADA.
-  2. Lista blanca: solo influencers de ``influencers.yaml`` (la
+  2. Lista blanca: solo influencers de ``streamers.yaml`` (la
      canónica). REGLA 2026-11-16: estar en la lista que sube el
      usuario YA es permiso; solo `denegado`/`revocado` excluyen.
      Un influencer fuera de la lista no se encola, aunque el VOD
@@ -199,35 +199,50 @@ def load_yaml(path):
         import yaml
     except ImportError:
         raise WatcherError(
-            "Hace falta PyYAML para leer influencers.yaml "
+            "Hace falta PyYAML para leer streamers.yaml "
             "(pip install pyyaml).")
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
 def load_influencers(path=None):
-    """Lista blanca canónica: entradas de influencers.yaml.
+    """Lista blanca canónica: entradas de streamers.yaml (Fase 4.1).
 
     Devuelve [{usuario, plataforma, idioma, juego, estado, ...}].
+    Si se pasa una ruta explícita a un archivo viejo, se lee ese
+    archivo; si no, manda streamers.yaml (con respaldo a las listas
+    viejas si no existe).
     """
-    path = path or os.path.join(HERE, "influencers.yaml")
-    if not os.path.isfile(path):
-        raise WatcherError(f"No existe {path}: sin lista blanca no se vigila a nadie.")
-    data = load_yaml(path)
-    entries = data.get("influencers") or []
-    out = []
-    for e in entries:
-        if not isinstance(e, dict) or not (e.get("usuario") or "").strip():
-            continue
-        out.append({
-            "usuario": str(e["usuario"]).strip().lower(),
-            "plataforma": str(e.get("plataforma") or "twitch").strip().lower(),
-            "idioma": str(e.get("idioma") or "es").strip().lower() or "es",
-            "juego": str(e.get("juego") or "").strip(),
-            "estado": str(e.get("estado") or "pendiente").strip().lower(),
-            "canal_original": str(e.get("canal_original") or "").strip(),
-        })
-    return out
+    if path:
+        if not os.path.isfile(path):
+            raise WatcherError(f"No existe {path}: sin lista blanca no se vigila a nadie.")
+        data = load_yaml(path)
+        entries = data.get("influencers") or data.get("streamers") or []
+        out = []
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            usuario = str(e.get("usuario") or e.get("name") or "").strip()
+            if not usuario:
+                continue
+            out.append({
+                "usuario": usuario.lower(),
+                "plataforma": str(e.get("plataforma") or e.get("platform") or "twitch").strip().lower(),
+                "idioma": str(e.get("idioma") or e.get("language") or "es").strip().lower() or "es",
+                "juego": str(e.get("juego") or e.get("game") or "").strip(),
+                "estado": str(e.get("estado") or "pendiente").strip().lower(),
+                "canal_original": str(e.get("canal_original") or e.get("channel_url") or "").strip(),
+            })
+        return out
+    from clipagent.streamers import load_streamers
+    return [{
+        "usuario": e["name"],
+        "plataforma": e["platform"],
+        "idioma": e["language"],
+        "juego": e["game"],
+        "estado": e["estado"],
+        "canal_original": e["channel_url"],
+    } for e in load_streamers()]
 
 
 def load_watcher_config(config_path=None):
@@ -588,7 +603,7 @@ def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
         f"({', '.join(i['usuario'] + ' [' + i['plataforma'] + ', ' + i['estado'] + ']' for i in influencers) or 'ninguno'})")
     if not influencers:
         log("  Lista blanca vacía: nada que vigilar. "
-            "Agrega un influencer a influencers.yaml.")
+            "Agrega un influencer a streamers.yaml (clipagent add <link>).")
         return summary, 0
 
     for inf in influencers:
@@ -735,7 +750,7 @@ def main(argv=None) -> int:
                    help="No tocar la cola (es el defecto)")
     p.add_argument("--streamer", help="Vigilar solo este influencer (slug)")
     p.add_argument("--config", help="Ruta de config.yaml")
-    p.add_argument("--influencers", help="Ruta de influencers.yaml")
+    p.add_argument("--influencers", help="Ruta de streamers.yaml (o archivo viejo)")
     p.add_argument("--state", help="Ruta de seen_vods.json")
     p.add_argument("--db", help="Ruta de queue.db")
     p.add_argument("--interval-minutes", type=int,
@@ -762,7 +777,7 @@ def main(argv=None) -> int:
     if args.streamer:
         only = args.streamer.strip().lower()
         if not any(i["usuario"] == only for i in influencers):
-            print(f"Error: {only!r} no está en influencers.yaml.",
+            print(f"Error: {only!r} no está en streamers.yaml.",
                   file=sys.stderr)
             return 1
     else:

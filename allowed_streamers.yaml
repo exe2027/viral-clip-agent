@@ -1,4 +1,6 @@
-# NOTA: la lista blanca canónica es influencers.yaml (Bloques 8+9).
+# DEPRECADO (Fase 4.1): la lista única es streamers.yaml. Este
+# archivo queda como respaldo de solo lectura y ya no se edita.
+# NOTA: la lista blanca canónica era influencers.yaml (Bloques 8+9).
 # Este archivo es un atajo con formato simple; publisher.py lee los
 # dos. Si un streamer está en ambos, manda influencers.yaml.
 #
