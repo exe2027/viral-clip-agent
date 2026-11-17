@@ -204,6 +204,207 @@ class TikTokAdapter:
                           "con el scope video.publish", error_code=code)
         return _error_result(status, resp)
 
+    # --- Direct Post completo (fan-out): FILE_UPLOAD + polling ---
+    # Docs oficiales (verificado 2026-11-17):
+    # - Creator info (obligatorio antes de cada post):
+    #   https://developers.tiktok.com/docs/en/content-posting-api-reference-direct-post
+    # - Media transfer (chunks 5-64 MB, 1-1000 chunks):
+    #   https://developers.tiktok.com/docs/en/content-posting-api-media-transfer-guide
+    # - Estado: POST /v2/post/publish/status/fetch/ (PROCESSING_*
+    #   -> PUBLISH_COMPLETE / FAILED; el post_id público solo llega
+    #   tras la moderación).
+    # Con FILE_UPLOAD no hace falta URL pública del video: se suben
+    # los bytes. La publicación es automática al completar el
+    # procesado; no hay llamada "publish" separada.
+    CHUNK_SIZE = 5 * 1024 * 1024  # 5 MB por chunk (mínimo del API)
+    POLL_INTERVAL_S = 10
+    MAX_POLLS = 12  # ~2 min; si sigue procesando, se retoma luego
+
+    def creator_info(self):
+        """Opciones de privacidad y duración máxima del creador.
+
+        La doc lo exige antes de cada post: el privacy_level del
+        init debe ser una de las opciones devueltas. Sin token o
+        sin permisos -> draft; error de red/5xx -> error
+        reintentable."""
+        access = self._token()
+        if not access:
+            return _draft("sin token de TikTok en tokens/")
+        status, resp = _http(
+            "POST", f"{self.API}/v2/post/publish/creator_info/query/",
+            {"Authorization": f"Bearer {access}"}, {},
+            request_fn=self.request_fn)
+        data = resp.get("data") or {}
+        error = resp.get("error") or {}
+        if status == 200 and data:
+            return {"ok": True, "mode": "api", **data}
+        code = error.get("code")
+        if status in (401, 403) and code in (
+                "access_token_invalid", "scope_not_authorized"):
+            return _draft(f"token sin permisos ({code}): reautorizar "
+                          "con el scope video.publish", error_code=code)
+        return _error_result(status, resp)
+
+    def publish_status(self, publish_id):
+        """Estado de una publicación: PROCESSING_*, PUBLISH_COMPLETE
+        o FAILED (con fail_reason)."""
+        access = self._token()
+        if not access:
+            return _draft("sin token de TikTok en tokens/")
+        status, resp = _http(
+            "POST", f"{self.API}/v2/post/publish/status/fetch/",
+            {"Authorization": f"Bearer {access}"},
+            {"publish_id": publish_id}, request_fn=self.request_fn)
+        data = resp.get("data") or {}
+        if status == 200 and data.get("status"):
+            out = {"ok": True, "mode": "api",
+                   "status": data["status"], "publish_id": publish_id}
+            if data.get("post_id"):
+                out["post_id"] = data["post_id"]
+            if data.get("fail_reason"):
+                out["fail_reason"] = data["fail_reason"]
+            return out
+        return _error_result(status, resp)
+
+    def _init_file_upload(self, title, video_size, privacy_level):
+        """Init con FILE_UPLOAD: devuelve publish_id y upload_url."""
+        access = self._token()
+        chunk_size = min(self.CHUNK_SIZE, video_size)
+        total = (video_size + chunk_size - 1) // chunk_size
+        payload = {
+            "post_info": {"title": title,
+                          "privacy_level": privacy_level,
+                          "disable_duet": False, "disable_comment": False,
+                          "disable_stitch": False,
+                          "video_cover_timestamp_ms": 1000},
+            "source_info": {"source": "FILE_UPLOAD",
+                            "video_size": video_size,
+                            "chunk_size": chunk_size,
+                            "total_chunk_count": total},
+        }
+        status, resp = _http(
+            "POST", f"{self.API}/v2/post/publish/video/init/",
+            {"Authorization": f"Bearer {access}"}, payload,
+            request_fn=self.request_fn)
+        data = resp.get("data") or {}
+        error = resp.get("error") or {}
+        if status == 200 and data.get("publish_id"):
+            return {"ok": True, "mode": "api",
+                    "publish_id": data["publish_id"],
+                    "upload_url": data.get("upload_url"),
+                    "chunk_size": chunk_size}
+        code = error.get("code")
+        if code == "unaudited_client_can_only_post_to_private_accounts":
+            return _draft("app sin auditar: TikTok solo permite publicar "
+                          "en privado (SELF_ONLY) hasta pasar la auditoría",
+                          error_code=code)
+        if status in (401, 403) and code in (
+                "access_token_invalid", "scope_not_authorized"):
+            return _draft(f"token sin permisos ({code}): reautorizar "
+                          "con el scope video.publish", error_code=code)
+        return _error_result(status, resp)
+
+    def _upload_chunks(self, upload_url, clip_path, video_size,
+                       chunk_size):
+        """PUT secuenciales con Content-Range al upload_url del init.
+        206 por chunk, 201 al completar."""
+        offset = 0
+        with open(clip_path, "rb") as f:
+            while offset < video_size:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                end = offset + len(chunk) - 1
+                headers = {"Content-Type": "video/mp4",
+                           "Content-Length": str(len(chunk)),
+                           "Content-Range":
+                               f"bytes {offset}-{end}/{video_size}"}
+                status, resp = _http(
+                    "PUT", upload_url, headers, chunk,
+                    request_fn=self.request_fn)
+                if status not in (200, 201, 206):
+                    return _error_result(status, resp)
+                offset += len(chunk)
+        if offset < video_size:
+            return {"ok": False, "mode": "error",
+                    "reason": "subida incompleta a TikTok "
+                              f"({offset}/{video_size} bytes)",
+                    "retryable": True}
+        return {"ok": True}
+
+    def publish_video(self, clip_path, title, privacy_level=None,
+                      resume_publish_id=None, sleep_fn=None,
+                      max_polls=None):
+        """Direct Post completo desde el disco (FILE_UPLOAD).
+
+        creator_info -> init -> PUT por chunks -> polling de estado
+        hasta PUBLISH_COMPLETE. Si sigue procesando tras max_polls,
+        devuelve mode "processing" con el publish_id para retomar
+        en el siguiente ciclo sin volver a subir (resume). Un
+        FAILED de TikTok es error final (no reintentable); un 5xx
+        es reintentable. `sleep_fn` se inyecta en tests.
+        """
+        sleep = sleep_fn or time.sleep
+        max_polls = self.MAX_POLLS if max_polls is None else max_polls
+        if not os.path.isfile(clip_path):
+            return {"ok": False, "reason":
+                    f"archivo no existe: {clip_path}"}
+        if not self._token():
+            return _draft("sin token de TikTok en tokens/")
+        size = os.path.getsize(clip_path)
+        publish_id = resume_publish_id
+        if publish_id is None:
+            info = self.creator_info()
+            if not info.get("ok"):
+                return info
+            options = info.get("privacy_level_options") or []
+            level = privacy_level
+            if level is None:
+                if "PUBLIC_TO_EVERYONE" in options:
+                    level = "PUBLIC_TO_EVERYONE"
+                elif options:
+                    level = options[0]
+                else:
+                    level = "SELF_ONLY"
+            if options and level not in options:
+                return _draft(
+                    f"privacidad {level} no permitida por TikTok "
+                    f"para esta cuenta (opciones: {', '.join(options)})")
+            init = self._init_file_upload(title, size, level)
+            if not init.get("ok"):
+                return init
+            publish_id = init["publish_id"]
+            if not init.get("upload_url"):
+                return {"ok": False, "mode": "error",
+                        "reason": "TikTok no devolvió upload_url "
+                                  "en el init", "retryable": True}
+            up = self._upload_chunks(init["upload_url"], clip_path,
+                                     size, init["chunk_size"])
+            if not up.get("ok"):
+                return up
+        for _ in range(max_polls):
+            st = self.publish_status(publish_id)
+            if not st.get("ok"):
+                return st
+            status = st.get("status")
+            if status == "PUBLISH_COMPLETE":
+                out = {"ok": True, "mode": "api",
+                       "publish_id": publish_id}
+                if st.get("post_id"):
+                    out["post_id"] = st["post_id"]
+                return out
+            if status == "FAILED":
+                return {"ok": False, "mode": "error",
+                        "status": "FAILED",
+                        "reason": "TikTok rechazó la publicación: "
+                                  f"{st.get('fail_reason') or 'sin motivo'}",
+                        "retryable": False}
+            sleep(self.POLL_INTERVAL_S)
+        return {"ok": False, "mode": "processing",
+                "publish_id": publish_id, "retryable": True,
+                "reason": "TikTok sigue procesando el video; "
+                          "se retoma en el siguiente ciclo"}
+
 
 class InstagramAdapter:
     """Instagram Reels por Graph API (Instagram API con Facebook Login).
