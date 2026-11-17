@@ -327,3 +327,31 @@ live:
 # rechazo por copyright/strike pausan SOLO esa plataforma.
 breaker:
   max_consecutive_failures: 3
+
+# Fan-out: al publicar un clip en YouTube Shorts, se intenta
+# publicar también en TikTok, Instagram Reels y Facebook Reels,
+# cada una con sus propias puertas (puntaje, cuota, breaker,
+# auditoría). enabled: false = sin propagación desde YouTube.
+fanout:
+  enabled: true
+
+# URL pública del video (fan-out): Instagram exige que Meta
+# descargue el video desde una URL HTTPS pública. Esto NO sube
+# nada: es la base del hosting estático donde TÚ sirves los clips
+# (por ejemplo, el directorio runs/ publicado en un hosting con
+# HTTPS). La URL final es base + ruta relativa del clip en el repo.
+# Sin base, Instagram queda en draft con el motivo explícito.
+# También vale CLIP_PUBLIC_BASE_URL en .env (manda el entorno).
+public_url:
+  base_url: ""
+
+# IDs de cuenta por plataforma (fan-out): Instagram necesita el
+# ig_user_id y Facebook el page_id. No son secretos. Se sacan de
+# Meta (Graph API Explorer o la configuración de la app). Vacíos =
+# draft con el motivo explícito. También valen IG_USER_ID y
+# FACEBOOK_PAGE_ID en .env (mandan sobre esto).
+platform_accounts:
+  instagram_reels:
+    ig_user_id: ""
+  facebook_reels:
+    page_id: ""

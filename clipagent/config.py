@@ -153,6 +153,28 @@ DEFAULT_CONFIG = {
     "breaker": {
         "max_consecutive_failures": 3,
     },
+    # Fan-out (publicación en las otras 3 al publicar en YouTube):
+    # enabled false = cada plataforma solo publica por su propio
+    # ítem en la cola, sin propagar desde YouTube.
+    "fanout": {
+        "enabled": True,
+    },
+    # URL pública del video (fan-out): Instagram exige que Meta
+    # descargue el video desde una URL HTTPS pública; este módulo
+    # NO sube nada: la base es el hosting estático que el usuario
+    # configura para servir los clips. Vacía = Instagram en draft.
+    # También vale la variable CLIP_PUBLIC_BASE_URL (manda el .env).
+    "public_url": {
+        "base_url": "",
+    },
+    # IDs de cuenta por plataforma (fan-out): no son secretos, pero
+    # no viven en accounts.yaml (que solo guarda handles). Vacíos =
+    # draft con el motivo explícito. También valen IG_USER_ID y
+    # FACEBOOK_PAGE_ID en .env (mandan sobre config.yaml).
+    "platform_accounts": {
+        "instagram_reels": {"ig_user_id": ""},
+        "facebook_reels": {"page_id": ""},
+    },
 }
 
 

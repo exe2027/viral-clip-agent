@@ -27,6 +27,8 @@ KNOWN_TOP_KEYS = {
     "layout", "facecam_box", "watcher", "reel_study", "autopublish",
     # Llegan en fases posteriores (6.3, 6B): se validan entonces.
     "auto_approve", "scoring", "breaker", "metadata", "live",
+    # Fan-out: se validan abajo.
+    "fanout", "public_url", "platform_accounts",
 }
 
 
@@ -282,6 +284,16 @@ def validate_config(cfg, source="config.yaml"):
                 choices={"descartar", "revisar", "prioritario", "urgente"})
     c.check(cfg, "breaker", "dict")
     c.check(cfg, "breaker.max_consecutive_failures", "int", minimum=1)
+    # Fan-out: interruptor, base de URL pública e IDs de cuenta.
+    c.check(cfg, "fanout", "dict")
+    c.check(cfg, "fanout.enabled", "bool")
+    c.check(cfg, "public_url", "dict")
+    c.check(cfg, "public_url.base_url", "str")
+    c.check(cfg, "platform_accounts", "dict")
+    for p in ("instagram_reels", "facebook_reels"):
+        c.check(cfg, f"platform_accounts.{p}", "dict")
+    c.check(cfg, "platform_accounts.instagram_reels.ig_user_id", "str")
+    c.check(cfg, "platform_accounts.facebook_reels.page_id", "str")
 
     warnings = [f"clave desconocida de nivel superior: {k!r} "
                 f"(se ignora; revisa si es un error de tipeo)"
