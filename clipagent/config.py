@@ -222,6 +222,10 @@ def load_config(path=None):
         except ImportError:
             data = _parse_simple_yaml(text)
         cfg = _merge(DEFAULT_CONFIG, data)
+    # Fase 5.4: la config se valida al arrancar; un error nombra la
+    # clave exacta (ConfigError). Las claves desconocidas solo avisan.
+    from .validate import validate_config, warn_unknown
+    warn_unknown(validate_config(cfg, source=path or "config.yaml"))
     return cfg
 
 
