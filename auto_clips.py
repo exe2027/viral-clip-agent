@@ -611,6 +611,11 @@ def main() -> int:
     p.add_argument("--preset", default="fast")
     p.add_argument("--dry-run", action="store_true", help="Solo descarga el chat y lista picos, sin video ni cortes")
     p.add_argument("--no-viral", action="store_true", help="No genera el empaquetado viral (títulos, miniatura, SEO)")
+    p.add_argument("--llm-select", dest="llm_select", action="store_true",
+                   help="Selección de momentos con LLM tras el corte (7.1): una llamada con todos los candidatos; sin LLM o si falla, se sigue con el chat. El worker la pasa siempre.")
+    p.add_argument("--no-llm-select", dest="llm_select", action="store_false",
+                   help="No usar el LLM para seleccionar momentos.")
+    p.set_defaults(llm_select=False)
     p.add_argument("--delete-vod", action="store_true", help="Sin efecto: ya no se baja el VOD entero (se guardan solo segmentos por pico). Se mantiene el flag para no romper llamadas viejas")
     p.add_argument("--force-chat", action="store_true", help="Forzar la descarga del chat aunque ya exista un chat.json válido (por defecto se reutiliza: la descarga tarda ~18 min en un VOD de 3 h)")
     p.add_argument("--fresh", action="store_true", help="Ignorar el checkpoint (runs/<vod>/state.json) y rehacer todo desde cero")
@@ -882,6 +887,11 @@ def main() -> int:
                 "seo_overrides": [], "clips": [],
                 "descartados": discarded,
                 "status": "ok" if peaks else "sin_momentos_virales"}
+    # 7.1: candidatos para la selección con LLM (una llamada con
+    # todos, tras el corte) + datos para recalcular el viral_score
+    # con el hook del LLM. Sin LLM, el manifiesto queda igual.
+    llm_candidates = []
+    llm_inputs = {}
     if platform == "kick" and kick_meta:
         manifest["kick"] = {"channel": kick_meta["channel"],
                             "title": kick_meta["title"],
@@ -904,6 +914,19 @@ def main() -> int:
                 print(f"[{idx}/{len(peaks)}] {fmt_ts(peak_ts)} reutilizado "
                       f"del checkpoint ({prev_entry['file']}).")
                 manifest["clips"].append(prev_entry)
+                # 7.1: el clip reanudado también es candidato (sin
+                # transcripción en esta corrida; sin recompute de
+                # score, solo se registra la selección del LLM).
+                llm_candidates.append({
+                    "start": prev_entry.get("start", 0),
+                    "end": prev_entry.get("start", 0)
+                           + prev_entry.get("duration", 30),
+                    "transcript": None,
+                    "chat_score": prev_entry.get("score", 0),
+                    "chat_multiple": (prev_entry.get("viral") or {}).get(
+                        "viral_multiple", 1.0),
+                    "risas": prev_entry.get("risas", 0),
+                    "hype": prev_entry.get("hype", 0)})
                 write_manifest_atomic(out_dir, manifest)
                 continue
         clip_start = max(0, peak_ts - args.pre_roll)
@@ -1248,12 +1271,47 @@ def main() -> int:
                 "segments": layout_decision.get("segments", []),
             }
         manifest["clips"].append(clip_entry)
+        # 7.1: candidato para la selección con LLM (transcripción de
+        # la ventana + chat). Los datos para recalcular el viral_score
+        # con el hook del LLM van aparte, por pico.
+        llm_candidates.append({
+            "start": clip_entry["start"],
+            "end": clip_entry["start"] + clip_entry["duration"],
+            "transcript": transcript,
+            "chat_score": score, "chat_multiple": multiple,
+            "risas": d["risas"], "hype": d["hype"]})
+        if viral_score is not None:
+            llm_inputs[peak_ts] = (detail[peak_ts], multiple,
+                                   rank_map.get(peak_ts), human, audio_in)
         # Manifiesto tras CADA clip (atómico): si el job muere en el
         # clip 3 de 5, los clips 1-2 ya están guardados en disco.
         write_manifest_atomic(out_dir, manifest)
         if checkpoint_mod:
             mark_clip_done(state, peak_ts, fname)
             save_state(out_dir, state)
+
+    # 7.1: selección con LLM (opcional, una llamada con todos los
+    # candidatos). Sin LLM o si falla, el manifiesto queda tal cual.
+    if manifest["clips"] and args.llm_select and llm_candidates:
+        try:
+            from clipagent.llm import get_llm_client
+            from clipagent.select import apply_llm_selection, select_moments
+            _client = get_llm_client()
+            _selections, _used = select_moments(llm_candidates, _client)
+            if _used and _selections:
+                _n = apply_llm_selection(manifest, _selections, llm_inputs)
+                print(f"LLM: {len(_selections)} momento(s) seleccionados, "
+                      f"{_n} viral_score(s) actualizados con el hook LLM.")
+                write_manifest_atomic(out_dir, manifest)
+            elif _used:
+                print("LLM: sin selecciones válidas; se sigue con los "
+                      "candidatos del chat.")
+            else:
+                print("LLM: sin LLM disponible; se sigue con los "
+                      "candidatos del chat.")
+        except Exception as e:  # noqa: BLE001 - nunca tumbar el job
+            print(f"LLM: la selección falló ({e}); se sigue con el chat.",
+                  file=sys.stderr)
 
     write_manifest_atomic(out_dir, manifest)
     if checkpoint_mod:

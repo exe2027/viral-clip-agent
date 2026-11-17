@@ -158,7 +158,10 @@ def _run_auto_clips(job: dict, top_n: int, timeout_s: int):
     os.makedirs(out_dir, exist_ok=True)
     _backup_manifests(out_dir)
     cmd = [sys.executable, "-u", AUTO_CLIPS, job["url"], "--lang", job["lang"],
-           "--out", out_dir, "--top-n", str(top_n)]
+           "--out", out_dir, "--top-n", str(top_n),
+           # 7.1: selección con LLM tras el corte (opt-in en
+           # auto_clips; sin LLM o si falla, sigue con el chat).
+           "--llm-select"]
     chat_path = os.path.join(out_dir, "chat.json")
     if os.path.isfile(chat_path):
         cmd += ["--chat", chat_path]  # reutiliza el chat ya descargado
