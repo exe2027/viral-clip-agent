@@ -72,7 +72,8 @@ class TestComputeState(unittest.TestCase):
         import publisher
         audit = publisher.audit_accounts()
         self.assertEqual(set(audit), {"youtube_shorts", "tiktok",
-                                      "instagram_reels", "facebook_reels"})
+                                      "instagram_reels", "facebook_reels",
+                                      "twitch", "kick"})
         for platform, entry in audit.items():
             self.assertIn(entry["status"], ("green", "amber", "red"))
             self.assertTrue(entry["checks"])

@@ -231,4 +231,41 @@ def compute_state(base_dir=None, probes=None):
         "publish_mode": ("Graph API a Página" if fb_status == "green"
                          else "BLOQUEADO: sin Page verificada no hay publicación por API"),
     }
+
+    # Twitch (watcher): client credentials por .env; el token de app
+    # se pide solo y dura ~60 días (no tiene refresh_token).
+    tw_id = bool(_creds.get_secret("TWITCH_CLIENT_ID"))
+    tw_secret = bool(_creds.get_secret("TWITCH_CLIENT_SECRET"))
+    tw_token_ok, tw_token_detail = _token_ok("twitch", base)
+    tw_checks = [
+        ("TWITCH_CLIENT_ID y TWITCH_CLIENT_SECRET en .env",
+         bool(tw_id and tw_secret),
+         "sin credenciales el watcher usa GQL como respaldo (no oficial)"),
+        ("token de app vigente",
+         tw_token_ok if (tw_id and tw_secret) else None,
+         tw_token_detail),
+    ]
+    tw_status = _status(tw_checks, "twitch")
+    result["twitch"] = {
+        "label": "Twitch — watcher (Helix)",
+        "status": tw_status,
+        "checks": tw_checks,
+        "notes": "Client credentials para el watcher; sin credenciales, GQL como respaldo.",
+        "publish_mode": "n/a (no publica; solo vigila)",
+    }
+
+    # Kick: no hay nada que conectar para descargar VODs y chat de
+    # VODs; el chat en vivo es un websocket no oficial.
+    result["kick"] = {
+        "label": "Kick — sin API oficial de chat",
+        "status": "green",
+        "checks": [
+            ("descarga de VODs y chat de VODs sin credenciales", True,
+             "funciona sin token"),
+            ("chat en vivo por websocket Pusher (no oficial)", None,
+             "puede romperse sin aviso; no hay credencial que configurar"),
+        ],
+        "notes": "La API pública (api.kick.com/public/v1) no cubre el chat.",
+        "publish_mode": "n/a (no publica; solo origen de clips)",
+    }
     return result

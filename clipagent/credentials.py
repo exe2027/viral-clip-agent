@@ -34,19 +34,21 @@ STATIC_SECRETS = ("TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET",
                   "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
 
-def tokens_dir(base_dir=None):
-    """Carpeta tokens/ (la crea con 0700 si no existe)."""
+def tokens_dir(base_dir=None, create=False):
+    """Carpeta tokens/. Solo la crea (con 0700) si create=True:
+    leer un token no debe crear carpetas como efecto secundario."""
     path = os.path.join(base_dir or BASE_DIR, TOKENS_DIRNAME)
-    os.makedirs(path, exist_ok=True)
-    try:
-        os.chmod(path, 0o700)
-    except OSError:
-        pass
+    if create:
+        os.makedirs(path, exist_ok=True)
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
     return path
 
 
 def token_path(platform, base_dir=None):
-    """Ruta de tokens/<plataforma>.json."""
+    """Ruta de tokens/<plataforma>.json (no crea la carpeta)."""
     return os.path.join(tokens_dir(base_dir), f"{platform}.json")
 
 
@@ -73,6 +75,7 @@ def save_token(platform, data, base_dir=None):
 
     Devuelve la ruta escrita.
     """
+    tokens_dir(base_dir, create=True)
     path = token_path(platform, base_dir)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
