@@ -101,7 +101,7 @@ def _game_allowed(game, cfg=None):
 
 def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
              game=None, vod_id=None, mode="full", counter_state=None,
-             seo_override=False, make_variant=None):
+             seo_override=False, make_variant=None, age_days=0):
     """Decide sobre un clip para una plataforma.
 
     Devuelve {"decision": "publicar"|"retenido"|"descartado",
@@ -216,7 +216,10 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
                          f"modo gradual: {gate['reason']}")
 
     multiple = (clip.get("viral") or {}).get("viral_multiple") or 1.0
-    prio = _priority(virality, seo, multiple, age_days=0)
+    # 6B.2: la penalización por edad (clip > 7 días: -10/día) se
+    # aplica también a la prioridad que muestra la decisión, igual
+    # que en el orden de la cola.
+    prio = _priority(virality, seo, multiple, age_days=age_days)
     checks.append(f"prioridad {prio['priority']:.1f}")
     return {"decision": "publicar",
             "reason": f"pasa la política (viralidad {virality:.0f}, "

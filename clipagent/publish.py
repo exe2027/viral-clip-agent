@@ -169,7 +169,9 @@ YOUTUBE_MAX_UPLOADS_BY_QUOTA = YOUTUBE_UPLOAD_CALLS_PER_DAY  # 100
 QUEUE_STATES = ("queued", "ready_for_review", "approved",
                 "published", "failed", "quarantined", "draft",
                 # Fase 6.3: la política retiene o descarta sin publicar.
-                "retained", "discarded")
+                "retained", "discarded",
+                # 6B.2: clip viejo de prioridad baja, archivado solo.
+                "archived")
 
 # ---------------------------------------------------------------------------
 # Estado de las cuentas (Fase 3.2): se CALCULA en
@@ -469,6 +471,23 @@ class PublishQueue:
                     or i["scheduled_for"] <= now)]
         scored, _no_score = _order_items(due, platform)
         return scored
+
+
+def _item_age_days(item):
+    """Días desde que el ítem entró en la cola (0 si no se sabe)."""
+    from datetime import datetime
+    history = item.get("history") or [{}]
+    created = history[0].get("at", "")
+    if not created:
+        return 0
+    try:
+        dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    now = _now_chile()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=now.tzinfo)
+    return max(0, (now - dt).days)
 
 
 def _clip_scores(item, platform):
@@ -950,7 +969,8 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
         red_flags=item.get("red_flags"), game=item.get("game"),
         vod_id=item.get("vod_id") or (manifest or {}).get("vod_id"),
         mode=mode, counter_state=counter_state,
-        seo_override=platform in overrides)
+        seo_override=platform in overrides,
+        age_days=_item_age_days(item))
     if decision["decision"] == "descartado":
         queue.set_state(item, "discarded", decision["reason"])
         return {"action": "discarded", "reason": decision["reason"]}
@@ -1033,9 +1053,17 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
     stop = stop_event or threading.Event()
     stats = {"published": 0, "retained": 0, "discarded": 0, "draft": 0,
              "failed": 0, "quarantined": 0, "limited": 0, "paused": 0,
-             "breaker_tripped": 0}
+             "breaker_tripped": 0, "archived": 0}
     while True:
         for platform in PLATFORMS:
+            # 6B.2: archivado automático: clip con 3+ días sin subir
+            # por prioridad baja (< 70) se archiva solo, no frena
+            # a los buenos ni se reintenta.
+            for scored in queue.scored_items(platform):
+                if scored["auto_archive"]:
+                    queue.set_state(scored["_item"], "archived",
+                                    scored["auto_archive_reason"])
+                    stats["archived"] += 1
             # 6.4: plataforma con el breaker disparado: se salta entera.
             tripped, trip_reason = _breaker.is_tripped(platform)
             if tripped:
