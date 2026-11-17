@@ -4,6 +4,114 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 
 **Automático:** `auto_clips.py` hace todo en un solo comando — descarga chat, detecta, corta y empaqueta cada clip para viral. Ver [Automatización](#automatización-un-solo-comando). En Twitch baja el VOD; en Kick baja solo el segmento de 60 s de cada pico, nunca el VOD entero.
 
+## Tutorial: cómo usarlo (paso a paso)
+
+¿Te acaban de entregar este repo? Empieza por `CONFIGURACION.md`: ahí están todas las preguntas que Muse te tiene que hacer en un solo mensaje (canal, streamers, cuentas, clips, subtítulos, APIs) antes de configurar nada.
+
+### Qué hace y qué no hace
+
+Hace: detecta los mejores momentos de un directo por el **chat** (risas e hype, no por la transcripción), los corta en vertical `1080x1920`, les pone subtítulos, les genera título + descripción + tags para TikTok, Reels y Shorts, y los deja listos para revisar.
+
+No hace: no publica solo. Nada se sube sin que un humano lo apruebe antes. Tampoco detecta los momentos con Gemini: la detección es por el chat, Gemini solo sirve para lo de abajo (visión, opcional).
+
+### 1. Requisitos
+
+- Python 3.10+
+- [FFmpeg](https://ffmpeg.org/) en el PATH (también `ffprobe`, que viene con FFmpeg)
+- TwitchDownloaderCLI en el PATH (solo para Twitch; Kick no lo necesita)
+- Git, para clonar el repo
+
+### 2. Instalación
+
+```bash
+git clone https://github.com/exe2027/viral-clip-agent.git
+cd viral-clip-agent
+python3 -m venv .venv
+.venv/bin/pip install faster-whisper
+```
+
+El venv es obligatorio para los subtítulos: el Python del sistema no sirve para faster-whisper. El resto del pipeline no necesita dependencias de Python.
+
+### 3. Uso rápido: un solo comando
+
+```bash
+# Twitch, por ID o URL del VOD
+python auto_clips.py 1234567890
+python auto_clips.py https://www.twitch.tv/videos/1234567890 --lang es
+
+# Kick, por URL del vídeo
+python auto_clips.py https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9 --top-n 5
+```
+
+Eso descarga el chat, detecta los picos, corta los clips en vertical, les pone el paquete viral y deja todo en `runs/<vod-id>/` con `manifest.json`, `manifest.md` y `titles.txt`.
+
+Antes de gastar tiempo y disco, prueba sin cortar nada:
+
+```bash
+# Solo ver los picos, sin bajar el vídeo ni cortar
+python auto_clips.py 1234567890 --dry-run
+
+# Probar con los archivos de ejemplo que trae el repo (sin Twitch ni Kick)
+python auto_clips.py --chat test_chat.json --video test_vod.mp4 --out runs/prueba
+```
+
+Y si ya tienes el chat y el vídeo descargados, el modo manual es:
+
+```bash
+# 1. Ver los picos
+python clips_chat_v2.py chat.json --dry-run
+# 2. Cortar los 5 mejores
+python clips_chat_v2.py chat.json --video vod.mp4 --out clips
+```
+
+### 4. Revisar antes de publicar (obligatorio)
+
+1. Abre `runs/<vod-id>/manifest.md` y mira los clips, sus títulos y su puntaje.
+2. Mira los 3 fotogramas de cada clip en `runs/<vod-id>/clips/thumbnails/` antes de elegir título y portada.
+3. Si el título promete algo que no se ve en el clip (una jugada, un juego), no lo uses: el check anti-clickbait de `viral_package.py` lo rechaza y lo degrada a un título de reacción.
+4. Sube a mano a TikTok / Instagram / Facebook / YouTube. La subida automática no está en este repo.
+
+Con cola y aprobación, el flujo es el mismo pero ordenado:
+
+```bash
+python queue.py add https://kick.com/coker/videos/<uuid> --lang es
+python queue.py list
+python worker.py --once        # procesa un job y lo deja en ready_for_review
+python queue.py approve 3      # o: python queue.py reject 3
+```
+
+### 5. Configuración
+
+Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hashtags ES/EN, duración del corte, estilos de subtítulo (`tiktok`, `highlight`, `karaoke`) y zonas seguras del HUD. Edítalo antes de tu primera corrida y no subas tus datos personales al repo.
+
+### 6. API de Gemini (opcional, solo para la visión)
+
+**Para qué es.** El texto ya genera los títulos, pero el texto no ve la pantalla. Gemini entra solo como veto barato: cuando un título promete algo visible (una jugada, un tiro, un juego), revisa 3 fotogramas del clip con Gemini Flash-Lite y dice si eso se ve o no. Si no se ve, se prueba otro título, y si no queda ninguno, se baja a un título seguro de reacción ("el chat no paraba de reírse"). La detección del momento sigue siendo por el chat, nunca por Gemini.
+
+Ejemplo real: en el clip de Coker el mejor título solo-texto hablaba de errar un tiro, pero en pantalla solo había dos webcams riéndose, sin gameplay. Eso solo lo caza la visión.
+
+**Cuánto cuesta.** Unos $0,0006 por clip con Gemini Flash-Lite. A 20 clips al día son $0,006 al día. La capa gratuita da 500 peticiones al día y nosotros usaríamos unas 20, así que en la práctica no se paga nada.
+
+**Cómo crear la key gratis, sin tarjeta.** Tener Gemini Pro (la app) no te da una API key sola: son dos cosas distintas y la key hay que crearla aparte, en Google AI Studio, con la misma cuenta de Google:
+
+1. Entra a https://aistudio.google.com
+2. Arriba a la derecha, **Get API key**
+3. **Create API key in new project**
+
+Listo, ahí te da la key. **No toques "Set up billing", "Configurar facturación" ni "Upgrade / Subir de nivel": esa es la pantalla que pide la tarjeta de crédito y no es la de la key gratis.** Si te pide tarjeta es porque estás en esa pantalla, sal de ahí y vuelve al paso 2.
+
+**Dónde guardarla.** En un archivo `.env` en la raíz del proyecto (nunca en el README, nunca en el chat, nunca subida a GitHub: `.env` ya está en el `.gitignore`):
+
+```bash
+GEMINI_API_KEY=tu_key_aqui
+```
+
+**Estado actual (2026-11-16).** La key ya se creó en AI Studio, gratis y sin tarjeta ni cuenta de facturación. El módulo de visión todavía no está cableado en `auto_clips.py`: hoy la app funciona 100% sin ella, con títulos por texto + clasificador local de layout, y la visión queda apagada por defecto (`vision_skipped`). Guarda la key en el `.env` y quedará lista para activarla cuando se implemente el módulo; no hace falta para usar la app hoy.
+
+### 7. Aviso
+
+Bajar el VOD de otro streamer y republicarlo puede infringir las normas de Twitch/Kick y el copyright del creador o del juego. Úsalo solo con streamers de la lista blanca en `allowed_streamers.yaml` (estar en la lista = permiso ya dado).
+
 ## Qué cambió en la v2.4
 
 **Scoring corregido:**
