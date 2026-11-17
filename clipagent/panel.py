@@ -70,6 +70,10 @@ def _dashboard_data():
     drafts = [i for i in items if i["state"] == "draft"]
     # 6B.6: cola de publicación por prioridad, con desglose.
     scores = {p: pq.scored_items(p) for p in PLATFORMS}
+    # 9.1: analíticas + estado del aprendizaje (6B.7).
+    from .metrics import report as _metrics_report
+    from .priority import load_weights as _load_weights
+    weights, history = _load_weights()
     return {
         "service": service_status(),
         "platforms": platform_states(),
@@ -83,6 +87,9 @@ def _dashboard_data():
         "retained": retained,
         "drafts": drafts,
         "scores": scores,
+        "analytics": _metrics_report(),
+        "weights": weights,
+        "weights_history": history,
         "errors": _recent_errors(),
     }
 
@@ -230,6 +237,19 @@ def _render(data):
 penalización por edad). La cola nunca es FIFO: el SEO cambia por
 plataforma, así que el orden también.</p>
 {sections_scores}
+<h2>Analíticas (9.1)</h2>
+<p>Pesos del puntaje: viral {_esc(data['weights'].get('viral'))}, SEO {_esc(data['weights'].get('seo'))}, chat {_esc(data['weights'].get('chat'))}
+{' (BETA: menos de 30 clips con datos a 7 días)' if not data['weights_history'] else f" — {len(data['weights_history'])} recalibración(es)"}.
+Recalibrar: <code>clipagent recalibrate</code>.</p>
+<table border="1"><tr><th>Plataforma</th><th>Clips</th>
+<th>Medidos 24 h</th><th>Mediana 24 h</th>
+<th>Medidos 48 h</th><th>Mediana 48 h</th><th>Mejor clip</th></tr>
+{''.join(f"<tr><td>{_esc(p)}</td><td>{v['clips']}</td>"
+         f"<td>{v['medidos_24h']}</td><td>{v['mediana_24h']}</td>"
+         f"<td>{v['medidos_48h']}</td><td>{v['mediana_48h']}</td>"
+         f"<td>{_esc((v['mejor_clip'] or {}).get('clip', ''))}"
+         f" ({(v['mejor_clip'] or {}).get('views', '')})</td></tr>"
+         for p, v in data['analytics'].items())}</table>
 <h2>Últimos publicados</h2>
 <table border="1"><tr><th>Plataforma</th><th>Clip</th>
 <th>Publicado</th></tr>{rows_pub}</table>

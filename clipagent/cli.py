@@ -75,6 +75,12 @@ def build_parser():
                              help="Recalibra los pesos con las métricas (6B.7)")
     p_recal.add_argument("--db", default=None,
                          help="ruta a metrics.db (por defecto, la del repo)")
+    p_metrics = sub.add_parser("metrics",
+                               help="Métricas de clips publicados (9.1)")
+    p_metrics.add_argument("--collect", action="store_true",
+                           help="medir lo vencido (24/48 h y 7 d) y mostrar el reporte")
+    p_metrics.add_argument("--db", default=None,
+                           help="ruta a metrics.db (por defecto, la del repo)")
     p_watch = sub.add_parser("watch", help="Vigila VODs nuevos")
     p_watch.add_argument("--once", action="store_true", default=True)
     p_watch.add_argument("--loop", action="store_true")
@@ -191,6 +197,14 @@ def main(argv=None):
         from .learning import run_recalibrate
         report = run_recalibrate(args.db)
         print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "metrics":
+        import json
+        from .metrics import collect, report
+        if args.collect:
+            print(json.dumps(collect(args.db), indent=2,
+                             ensure_ascii=False))
+        print(json.dumps(report(args.db), indent=2, ensure_ascii=False))
         return 0
     if args.command == "publish":
         from .publish import main as publish_main

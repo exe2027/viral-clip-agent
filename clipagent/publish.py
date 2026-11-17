@@ -1092,7 +1092,7 @@ def _record_counter(counter_state, event, clip, platform, path=None):
 
 def publish_loop(queue=None, interval_s=300, live=False, once=False,
                  cfg=None, stop_event=None, notify_fn=None,
-                 counter_path=None):
+                 counter_path=None, metrics_path=None):
     """Bucle del publicador: evalúa la cola por política y publica.
 
     Una pasada por plataforma (pausadas se saltan), y espera
@@ -1150,6 +1150,15 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
                         path=counter_path)
                 if action == "published":
                     _breaker.record_success(platform)
+                    # 9.1: el clip publicado entra en métricas (vistas
+                    # a 24/48 h y 7 d). Nunca rompe el bucle.
+                    try:
+                        from .metrics import record_publication
+                        record_publication(item["clip"], platform,
+                                           item.get("platform_id"),
+                                           db_path=metrics_path)
+                    except Exception:  # noqa: BLE001 - métricas nunca rompen
+                        pass
                     if notify_fn:
                         notify_fn("publicado",
                                   f"{platform}: {item['clip']} "

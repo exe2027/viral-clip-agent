@@ -85,7 +85,9 @@ class TestCounterLoop(unittest.TestCase):
                                          "veto_minutes": None}):
             stats = publish_loop(q, live=True, once=True,
                                  cfg=_cfg(mode),
-                                 counter_path=counter_path)
+                                 counter_path=counter_path,
+                                 metrics_path=os.path.join(
+                                     tmp, "metrics.db"))
         return stats, counter_path
 
     def test_gradual_publicado_suma_al_contador(self):

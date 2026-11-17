@@ -205,6 +205,13 @@ class TestPanelScores(unittest.TestCase):
                                           "chat": 0.2}}}],
                 "tiktok": [], "instagram_reels": [],
                 "facebook_reels": []},
+            "analytics": {"youtube_shorts": {
+                "clips": 2, "medidos_24h": 2, "mediana_24h": 1500,
+                "medidos_48h": 1, "mediana_48h": 3000,
+                "mejor_clip": {"clip": "runs/v1/clips/b.mp4",
+                               "views": 3000}}},
+            "weights": {"viral": 0.5, "seo": 0.3, "chat": 0.2},
+            "weights_history": [],
             "errors": [],
         }
         body = _render(data)
