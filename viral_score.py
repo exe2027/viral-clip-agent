@@ -465,27 +465,14 @@ def compute_signals(detail=None, chat_scores=None, audio_rms=None,
                 1 for w in words if 0 <= w["start"] <= 3.0)
 
     # Caras Haar 1 fps (layout.py; None si no hay OpenCV/vídeo).
+    # Una sola pasada de ffmpeg para todo el clip
+    # (layout.detect_faces_1fps): antes era un ffmpeg por segundo.
     if video_path and os.path.isfile(video_path) and clip_duration:
         try:
-            import subprocess as _sp
-            r = _sp.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                         "-show_entries", "stream=width,height",
-                         "-of", "csv=p=0", video_path],
-                        capture_output=True, text=True, check=True)
-            w, h = (int(x) for x in r.stdout.strip().split(",")[:2])
-            from layout import _detect_faces_at
+            from layout import detect_faces_1fps
             from config import get_layout_config
-            cfg = get_layout_config()
-            faces = []
-            t = 0
-            while t < int(clip_duration):
-                found = _detect_faces_at(video_path, float(t), w, h, cfg)
-                if found is None:
-                    faces = None
-                    break
-                faces.append({"t": t, "faces": len(found)})
-                t += 1
-            signals["faces_1fps"] = faces
+            signals["faces_1fps"] = detect_faces_1fps(
+                video_path, clip_duration, get_layout_config())
         except Exception:
             signals["faces_1fps"] = None
 

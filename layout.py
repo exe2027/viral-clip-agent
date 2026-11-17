@@ -692,6 +692,57 @@ def _detect_faces_at(video_path, t, src_w, src_h, cfg):
             for (x, y, fw, fh) in faces]
 
 
+def extract_gray_frames(video_path, duration, w=SAMPLE_W, h=SAMPLE_H):
+    """Todos los fotogramas en gris a 1 fps, en UNA pasada de ffmpeg.
+
+    Devuelve [bytes(w*h), ...] con un elemento por segundo
+    (t=0..duration-1). Lista vacía si ffmpeg falla o duration es 0.
+    Antes, cada segundo costaba un proceso ffmpeg propio
+    (_gray_bytes por segundo); ahora es un solo proceso.
+    """
+    n = max(0, int(duration))
+    if n == 0:
+        return []
+    cmd = ["ffmpeg", "-v", "error", "-i", video_path,
+           "-vf", f"fps=1,scale={w}:{h},format=gray",
+           "-frames:v", str(n), "-f", "rawvideo", "-"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, check=True).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+    size = w * h
+    return [out[i * size:(i + 1) * size] for i in range(n)
+            if len(out[i * size:(i + 1) * size]) == size]
+
+
+def detect_faces_1fps(video_path, clip_duration, cfg):
+    """Caras Haar a 1 fps con UNA sola pasada de ffmpeg.
+
+    Devuelve [{"t": t, "faces": n}, ...] (un elemento por segundo)
+    o None si no hay detector OpenCV utilizable. Equivale a llamar
+    a _detect_faces_at una vez por segundo, pero con un solo
+    proceso ffmpeg en vez de uno por segundo (viral_score.py
+    llamaba a _detect_faces_at en bucle: un clip de 30 s eran
+    30 procesos).
+    """
+    tw, th = int(cfg["track_w"]), int(cfg["track_h"])
+    frames = extract_gray_frames(video_path, clip_duration, tw, th)
+    n = max(0, int(clip_duration))
+    if not frames:
+        return [{"t": t, "faces": 0} for t in range(n)]
+    faces = []
+    for t, b in enumerate(frames):
+        found = _detect_faces_opencv(
+            b, None, w=tw, h=th,
+            min_neighbors=int(cfg["track_min_neighbors"]),
+            min_size=(int(cfg["track_min_face"]),
+                      int(cfg["track_min_face"])))
+        if found is None:
+            return None
+        faces.append({"t": t, "faces": len(found)})
+    return faces
+
+
 def _median(vals):
     s = sorted(vals)
     return s[len(s) // 2]
