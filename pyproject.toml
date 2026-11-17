@@ -26,8 +26,12 @@ whisper = [
 ]
 # Visión de miniaturas y seguimiento de cara (OpenCV + numpy).
 # Sin cv2, el recorte 9:16 usa el centro como fallback.
+# PIN <5: cv2 5.x eliminó CascadeClassifier y el XML de Haar
+# (verificado 2026-11-17: cv2 5.0.0 no tiene CascadeClassifier),
+# y la detección de caras depende de ambos. Sin el pin, CI
+# instalaría 5.x y detect_faces_1fps devolvería None.
 vision = [
-    "opencv-python-headless>=4.8",
+    "opencv-python-headless>=4.8,<5",
     "numpy>=1.26",
 ]
 # Subida real a YouTube por API (OAuth + thumbnails.set). Sin estas

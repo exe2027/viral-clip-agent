@@ -45,6 +45,12 @@ class TestDetectFaces1Fps(unittest.TestCase):
             with mock.patch.object(layout.subprocess, "run",
                                    side_effect=contar):
                 faces = detect_faces_1fps(video, 10, cfg)
+            # detect_faces_1fps devuelve None (no lista) sin detector
+            # Haar: si esto falla, falta cv2 4.x en el entorno (CI
+            # instala .[vision]; ver pyproject.toml y ci.yml).
+            self.assertIsNotNone(
+                faces, "sin detector Haar (cv2 4.x + numpy) en este "
+                "entorno; detect_faces_1fps devolvió None")
             self.assertEqual(llamadas["n"], 1)
             self.assertEqual([f["t"] for f in faces], list(range(10)))
             self.assertTrue(all(isinstance(f["faces"], int)
