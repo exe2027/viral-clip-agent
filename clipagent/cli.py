@@ -71,6 +71,10 @@ def build_parser():
     p_panel = sub.add_parser("panel", help="Panel web local (6.2)")
     p_panel.add_argument("--port", type=int, default=8765,
                          help="puerto local (por defecto 8765)")
+    p_recal = sub.add_parser("recalibrate",
+                             help="Recalibra los pesos con las métricas (6B.7)")
+    p_recal.add_argument("--db", default=None,
+                         help="ruta a metrics.db (por defecto, la del repo)")
     p_watch = sub.add_parser("watch", help="Vigila VODs nuevos")
     p_watch.add_argument("--once", action="store_true", default=True)
     p_watch.add_argument("--loop", action="store_true")
@@ -182,6 +186,12 @@ def main(argv=None):
     if args.command == "panel":
         from .panel import run_panel
         return run_panel(args.port)
+    if args.command == "recalibrate":
+        import json
+        from .learning import run_recalibrate
+        report = run_recalibrate(args.db)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
     if args.command == "publish":
         from .publish import main as publish_main
         return publish_main(args.args or ["audit"])
