@@ -766,6 +766,7 @@ def visible_from_layout(layout_decision, payoff_ts_clip=20.0):
     corrige donde layout.py no se atreve):
       * stack (dos webcams apiladas) -> cams-only.
       * pip (webcam sobre gameplay) -> cams+gameplay.
+      * split (juego arriba, cámara abajo) -> cams+gameplay.
       * center + 0 cams -> gameplay.
       * center + 2 cams -> cams-only: dos caras/personas sin
         gameplay visible (Just Chatting). layout.py deja "center"
@@ -810,6 +811,10 @@ def visible_from_layout(layout_decision, payoff_ts_clip=20.0):
     if layout == "pip":
         return {"visible": VISIBLE_CAMS_GAMEPLAY,
                 "reason": "layout pip: webcam sobre gameplay",
+                "layout": layout, "cams": cams}
+    if layout == "split":
+        return {"visible": VISIBLE_CAMS_GAMEPLAY,
+                "reason": "layout split: juego arriba y cámara abajo, se ven ambos",
                 "layout": layout, "cams": cams}
     if layout == "center":
         if cams is None or cams == 1:

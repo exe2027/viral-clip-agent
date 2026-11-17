@@ -11,9 +11,13 @@ fotogramas muestreados, antes de cortar:
 
   * Dos webcams lado a lado -> se APILAN verticalmente, una encima de la
     otra, llenando los 1080x1920 sin barras negras.
-  * Una webcam + gameplay -> gameplay a pantalla completa con la webcam
-    encima en picture-in-picture (esquina superior, sin tapar el minimapa
-    ni el HUD, que en GTA están abajo).
+  * Una webcam + gameplay -> SPLIT VERTICAL (regla 2026-11-16, corrección
+    del usuario al ver el clip de IlloJuan: el PiP grande en el centro
+    tapaba el juego y el recorte centrado seguía la cara, así que solo
+    se veía la cámara): el juego ARRIBA ocupando la mayor parte del
+    frame (~69%) y la cámara ABAJO, más chica (~31%), sin tapar
+    minimapa ni HUD (la cámara nunca se superpone al juego). Si el
+    juego no se ve, la cámara se ACHICA, nunca al revés.
   * Solo gameplay, sin webcam -> recorte vertical centrado normal.
   * Si el layout cambia dentro del clip (p. ej. de cams a gameplay),
     el layout se adapta POR TRAMOS, no un recorte fijo para todo el clip.
@@ -155,6 +159,12 @@ DEFAULTS = {
     "pip_width": 480,          # ancho de la webcam en PiP (px, sobre 1080)
     "pip_corner": "top-right", # top-right | top-left (nunca abajo: minimapa/HUD)
     "pip_margin": 24,          # margen de la webcam PiP al borde
+    # Split vertical (webcam+gameplay, regla 2026-11-16): juego arriba,
+    # cámara abajo. Alturas en px sobre 1080x1920 (1320+600=1920).
+    "split_game_h": 1320,      # alto del panel de juego (mayor parte)
+    "split_cam_h": 600,        # alto del panel de cámara
+    "split_cam_small_h": 480,  # cámara achicada si el juego no se ve
+    "split_cam_max_w_frac": 0.45,  # caja de cam > 45% del ancho -> achicarla
     # Umbrales de detección (calibrados, ver docstring):
     "band_max_frac": 0.65,     # banda de contenido <= 65% del alto -> letterbox
     "seam_center_tol": 0.08,   # costura a <= 8% del ancho del centro
@@ -398,7 +408,9 @@ def _detect_corner_box(g, grads, med, cfg):
     webcam real tiene el borde completo; un tejado o un letrero del
     gameplay solo cruza parte del borde). Sin la continuidad, el
     gameplay nocturno de Locones daba un falso positivo en top-left.
-    Si no está claro, None (cae a centrado, seguro).
+    La caja NO es siempre 16:9: la de IlloJuan es casi cuadrada
+    (~400x408 en 2560x1440), por eso se prueban varios aspectos
+    (16:9, 1:1, 3:4, 4:3). Si no está claro, None (cae a centrado, seguro).
     """
     h, w = len(g), len(g[0])
     # Gradientes precalculados: vgrad[y][x] = |g[y][x]-g[y][x-1]|,
@@ -414,49 +426,65 @@ def _detect_corner_box(g, grads, med, cfg):
     best = None
     for corner in ("top-left", "top-right"):
         for bw in range(int(0.15 * w), int(0.42 * w) + 1, 2):
-            bh = int(bw * 9 / 16)
-            if bh > int(h * 0.45) or bh < 8:
-                continue
-            # Borde vertical interior: buscar el x con más gradiente
-            # cerca del esperado (derecha de la caja en TL, izquierda en TR).
-            exp_x = bw if corner == "top-left" else w - bw
-            v_best = (0.0, 0.0, exp_x)
-            for x in range(max(1, exp_x - 4), min(w - 1, exp_x + 4) + 1):
-                vals = [vgrad[y][x] for y in range(0, bh)]
-                sc, ct = _edge_score(vals)
-                if sc > v_best[0]:
-                    v_best = (sc, ct, x)
-            # Borde horizontal interior: buscar el y con más gradiente
-            # cerca del borde inferior esperado.
-            exp_y = bh - 1
-            h_best = (0.0, 0.0, exp_y)
-            for y in range(max(1, exp_y - 4), min(h - 1, exp_y + 4) + 1):
-                xs = range(0, bw) if corner == "top-left" else range(w - bw, w)
-                vals = [hgrad[y][x] for x in xs]
-                sc, ct = _edge_score(vals)
-                if sc > h_best[0]:
-                    h_best = (sc, ct, y)
-            v_score, v_cont, edge_x = v_best
-            h_score, h_cont, edge_y = h_best
-            if corner == "top-left":
-                x0, x1 = 0, edge_x
-            else:
-                x0, x1 = edge_x, w - 1
-            y0, y1 = 0, edge_y
-            bw_real, bh_real = x1 - x0 + 1, y1 - y0 + 1
-            _, std = _region_stats(g, x0, y0, x1, y1)
-            area_frac = (bw_real * bh_real) / (w * h)
-            if (min(v_score, h_score) >= cfg["pip_border_min"]
-                    and min(v_score, h_score) >= cfg["pip_border_ratio"] * max(med, 1.0)
-                    and min(v_cont, h_cont) >= 0.75
-                    and std >= cfg["pip_min_std"]
-                    and 0.10 <= area_frac <= 0.35):
-                score = min(v_score, h_score)
+            for (aw, ah) in ((16, 9), (1, 1), (3, 4), (4, 3)):
+                bh = int(bw * ah / aw)
+                if bh > int(h * 0.45) or bh < 8:
+                    continue
+                _found = _corner_box_edges(g, vgrad, hgrad, corner, bw, bh,
+                                           med, cfg)
+                if _found is None:
+                    continue
+                score, box = _found
                 if best is None or score > best[0]:
-                    best = (score, [x0, y0, bw_real, bh_real], corner)
+                    best = (score, box, corner)
     if best is None:
         return None
     return best[1] + [best[2]]
+
+
+def _corner_box_edges(g, vgrad, hgrad, corner, bw, bh, med, cfg):
+    """Puntaje y caja de una webcam candidata (bw x bh) en una esquina.
+
+    Devuelve (puntaje, [x0, y0, bw_real, bh_real]) o None. Separa la
+    búsqueda de bordes del bucle de aspectos para no repetirla.
+    """
+    h, w = len(g), len(g[0])
+    # Borde vertical interior: buscar el x con más gradiente
+    # cerca del esperado (derecha de la caja en TL, izquierda en TR).
+    exp_x = bw if corner == "top-left" else w - bw
+    v_best = (0.0, 0.0, exp_x)
+    for x in range(max(1, exp_x - 4), min(w - 1, exp_x + 4) + 1):
+        vals = [vgrad[y][x] for y in range(0, bh)]
+        sc, ct = _edge_score(vals)
+        if sc > v_best[0]:
+            v_best = (sc, ct, x)
+    # Borde horizontal interior: buscar el y con más gradiente
+    # cerca del borde inferior esperado.
+    exp_y = bh - 1
+    h_best = (0.0, 0.0, exp_y)
+    for y in range(max(1, exp_y - 4), min(h - 1, exp_y + 4) + 1):
+        xs = range(0, bw) if corner == "top-left" else range(w - bw, w)
+        vals = [hgrad[y][x] for x in xs]
+        sc, ct = _edge_score(vals)
+        if sc > h_best[0]:
+            h_best = (sc, ct, y)
+    v_score, v_cont, edge_x = v_best
+    h_score, h_cont, edge_y = h_best
+    if corner == "top-left":
+        x0, x1 = 0, edge_x
+    else:
+        x0, x1 = edge_x, w - 1
+    y0, y1 = 0, edge_y
+    bw_real, bh_real = x1 - x0 + 1, y1 - y0 + 1
+    _, std = _region_stats(g, x0, y0, x1, y1)
+    area_frac = (bw_real * bh_real) / (w * h)
+    if (min(v_score, h_score) >= cfg["pip_border_min"]
+            and min(v_score, h_score) >= cfg["pip_border_ratio"] * max(med, 1.0)
+            and min(v_cont, h_cont) >= 0.75
+            and std >= cfg["pip_min_std"]
+            and 0.10 <= area_frac <= 0.35):
+        return min(v_score, h_score), [x0, y0, bw_real, bh_real]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -885,6 +913,147 @@ def _interp_knots(knots, t):
     return knots[-1][1]
 
 
+def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
+    """Caja de la webcam a partir de la CARA del streamer.
+
+    La detección por bordes de esquina falla cuando la caja no toca
+    el borde superior (la de IlloJuan está a ~29% del alto: x 60-460,
+    y 412-820 en 2560x1440) y el escaneo por regiones estables falla
+    cuando el streamer se mueve mucho hablando. Pero la cara SÍ se
+    detecta siempre con Haar en la misma zona: se muestrea la cara
+    en 5 instantes, se exige que esté en la misma región en >= 3
+    (una cara del juego se mueve con la cámara y no se queda quieta)
+    y se refinan los 4 bordes de la caja buscando el gradiente más
+    fuerte alrededor de la cara. Si un borde no se encuentra, se
+    usa la expansión calibrada (caja ~2,8x la cara, IlloJuan:
+    cara 140x140 -> caja 400x408).
+
+    Devuelve [x0, y0, w, h] en px del vídeo original, o None si no
+    hay detector OpenCV o no hay cara estable.
+    """
+    times = [t for t in (2, 7, 12, 17, 22) if t < duration]
+    if len(times) < 3:
+        # Clip corto: 5 instantes repartidos por la duración, para
+        # tener >= 3 muestras de cara aunque dure pocos segundos.
+        times = sorted({round(duration * f, 2)
+                        for f in (0.1, 0.3, 0.5, 0.7, 0.9)})
+    if not times:
+        times = [min(2, duration / 2)]
+    faces = []
+    for t in times:
+        found = _detect_faces_at(video_path, start_offset + t,
+                                 src_w, src_h, cfg)
+        if found:
+            faces.append((float(t), found))
+    if not faces:
+        return None
+    # Cara seguida: la mayor de cada muestra; centro mediano.
+    picks = []
+    for (t, fl) in faces:
+        biggest = max(fl, key=lambda b: b[2] * b[3])
+        picks.append((t, biggest))
+    cxs = sorted(x + w // 2 for (_t, (x, _y, w, _h)) in picks)
+    cys = sorted(y + h // 2 for (_t, (_x, y, _w, h)) in picks)
+    mcx, mcy = cxs[len(cxs) // 2], cys[len(cys) // 2]
+    kept = [(t, b) for (t, b) in picks
+            if abs(b[0] + b[2] // 2 - mcx) <= 0.25 * src_w
+            and abs(b[1] + b[3] // 2 - mcy) <= 0.25 * src_h]
+    if len(kept) < 3:
+        return None
+    t_med, (fx, fy, fw, fh) = kept[len(kept) // 2]
+    # Refinado de bordes en gris a 640x360.
+    tw, th = 640, 360
+    b = _gray_bytes(video_path, start_offset + t_med, tw, th)
+    if b is None:
+        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
+    g = [list(b[y * tw:(y + 1) * tw]) for y in range(th)]
+    sx, sy = tw / src_w, th / src_h
+    fx0, fy0 = fx * sx, fy * sy
+    fx1, fy1 = (fx + fw) * sx, (fy + fh) * sy
+    fwc, fhc = fx1 - fx0, fy1 - fy0
+
+    def _v_edge(x_lo, x_hi, y_lo, y_hi):
+        best, best_x = 0.0, None
+        for x in range(max(1, int(x_lo)), min(tw - 1, int(x_hi)) + 1):
+            s = sum(abs(g[y][x] - g[y][x - 1])
+                    for y in range(max(0, int(y_lo)), min(th, int(y_hi))))
+            if s > best:
+                best, best_x = s, x
+        return best_x, best
+
+    def _h_edge(y_lo, y_hi, x_lo, x_hi):
+        best, best_y = 0.0, None
+        for y in range(max(1, int(y_lo)), min(th - 1, int(y_hi)) + 1):
+            s = sum(abs(g[y][x] - g[y - 1][x])
+                    for x in range(max(0, int(x_lo)), min(tw, int(x_hi))))
+            if s > best:
+                best, best_y = s, y
+        return best_y, best
+
+    # Umbral relativo: el borde debe ser >= 2x el gradiente mediano
+    # de su banda de búsqueda; si no, expansión.
+    pad_x, pad_y = 1.5 * fwc, 1.5 * fhc
+    lx, ls = _v_edge(fx0 - pad_x, fx0, fy0 - 10, fy1 + 10)
+    rx, rs = _v_edge(fx1, fx1 + pad_x, fy0 - 10, fy1 + 10)
+    ty, ts = _h_edge(fy0 - pad_y, fy0, fx0 - 10, fx1 + 10)
+    by, bs = _h_edge(fy1, fy1 + pad_y, fx0 - 10, fx1 + 10)
+    med_v = sorted(abs(g[y][x] - g[y][x - 1])
+                   for y in range(int(fy0), int(fy1))
+                   for x in range(1, tw)) or [0]
+    med_v = med_v[len(med_v) // 2] * max(1, int(fy1 - fy0))
+    x0 = (lx / sx) if (lx is not None and ls >= 2 * med_v) else None
+    x1 = (rx / sx) if (rx is not None and rs >= 2 * med_v) else None
+    y0 = (ty / sy) if (ty is not None and ts >= 2 * med_v) else None
+    y1 = (by / sy) if (by is not None and bs >= 2 * med_v) else None
+    if x0 is None or x1 is None or y0 is None or y1 is None:
+        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
+    x0, y0 = max(0, int(x0)), max(0, int(y0))
+    x1, y1 = min(src_w, int(x1)), min(src_h, int(y1))
+    if x1 - x0 < fw or y1 - y0 < fh:
+        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
+    return [x0, y0, x1 - x0, y1 - y0]
+
+
+def _face_box_expanded(fx, fy, fw, fh, src_w, src_h, factor=2.8):
+    """Caja de webcam = cara expandida ~2,8x alrededor de su centro."""
+    cx, cy = fx + fw // 2, fy + fh // 2
+    w, h = int(fw * factor), int(fh * factor)
+    x0 = max(0, cx - w // 2)
+    y0 = max(0, cy - h // 2)
+    x1 = min(src_w, x0 + w)
+    y1 = min(src_h, y0 + h)
+    return [x0, y0, x1 - x0, y1 - y0]
+
+
+def _split_params(box_sample, cfg):
+    """Params del layout split a partir de la caja de la webcam.
+
+    box_sample: [x0, y0, w, h] en el fotograma de muestra (160x90).
+    Devuelve params con la caja, la ventana de juego (game_x0, en
+    muestra) y las alturas de los paneles. El juego ocupa la mayor
+    parte (1320 px) y la cámara abajo (600 px); si la caja de la
+    cámara es muy ancha (> 45% del frame, el juego no se vería) la
+    cámara se achica a 480 px y el juego crece a 1440 px. La cámara
+    nunca se superpone al juego: va debajo, no encima.
+    """
+    game_h = int(cfg.get("split_game_h", 1320))
+    cam_h = int(cfg.get("split_cam_h", 600))
+    bx0, _by0, bw, _bh = box_sample[:4]
+    bx1 = bx0 + bw
+    if bw / SAMPLE_W > float(cfg.get("split_cam_max_w_frac", 0.45)):
+        cam_h = int(cfg.get("split_cam_small_h", 480))
+        game_h = OUT_H - cam_h
+    gw_s = SAMPLE_H * OUT_W / game_h  # ancho de la ventana de juego, en muestra
+    cam_cx = bx0 + bw / 2
+    if cam_cx < SAMPLE_W / 2:  # cámara a la izquierda: juego a su derecha
+        game_x0 = min(bx1 + 2, SAMPLE_W - gw_s)
+    else:  # cámara a la derecha: juego a su izquierda
+        game_x0 = max(0.0, bx0 - gw_s - 2)
+    game_x0 = max(0.0, min(float(game_x0), SAMPLE_W - gw_s))
+    return {"box": [float(v) for v in box_sample[:4]],
+            "game_x0": float(game_x0), "game_h": game_h, "cam_h": cam_h}
+
+
 def _scan_frames(video_path, duration, start_offset, cfg):
     """Muestrea fotogramas cada scan_every_s y los clasifica por tramo.
 
@@ -1202,11 +1371,41 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None):
     for r in merged:
         r["start"] = float(r["start"])
         r["end"] = float(r["end"])
+    # Split vertical (regla 2026-11-16): webcam+gameplay NUNCA va en
+    # PiP grande en el centro ni en recorte centrado que siga la
+    # cara. Un tramo "pip" se convierte a "split" con su caja, y un
+    # tramo "center" con webcam detectada por la cara también. El
+    # PiP solo queda si se fuerza explícito (--layout pip).
+    src_size = None
+    for r in merged:
+        if r["layout"] == "pip" and r["params"].get("box"):
+            r["params"] = _split_params(r["params"]["box"], cfg)
+            r["layout"] = "split"
+            r["reason"] += (" | split vertical: juego arriba, cámara "
+                            "abajo (sin PiP en el centro)")
+        elif r["layout"] == "center":
+            if src_size is None:
+                try:
+                    src_size = _probe_size(video_path)
+                except Exception:
+                    src_size = None
+            if src_size is not None:
+                sw, sh = src_size
+                fbox = _face_cam_box(
+                    video_path, r["end"] - r["start"],
+                    start_offset + r["start"], sw, sh, cfg)
+                if fbox is not None:
+                    box_s = [fbox[0] * SAMPLE_W / sw, fbox[1] * SAMPLE_H / sh,
+                             fbox[2] * SAMPLE_W / sw, fbox[3] * SAMPLE_H / sh]
+                    r["params"] = _split_params(box_s, cfg)
+                    r["layout"] = "split"
+                    r["reason"] += (f" | webcam por cara en "
+                                    f"{[int(v) for v in fbox]} -> split "
+                                    f"vertical: juego arriba, cámara abajo")
     # Arreglo 6: params del tramo = MEDIANA de sus muestras, no la
     # última (una lectura ruidosa de split contaminaba todo el
     # tramo: Coker daba 68 en vez de 80) + seguimiento dentro del
     # tramo (divisor en stack, cara en center).
-    src_size = None
     for r in merged:
         plist = r.pop("_params_list", None)
         if r["layout"] == "stack" and plist:
@@ -1312,6 +1511,10 @@ def _scale_to_sample(params, src_w, src_h):
         out["box"] = [round(x0 * sx), round(y0 * sy),
                       round(bw * sx), round(bh * sy)]
         out["corner"] = params["box"][4] if len(params["box"]) > 4 else "top-right"
+    if "game_x0" in params:  # split: ventana de juego (x en muestra)
+        out["game_x0"] = round(float(params["game_x0"]) * sx)
+        out["game_h"] = int(params.get("game_h", 1320))
+        out["cam_h"] = int(params.get("cam_h", 600))
     return out
 
 
@@ -1319,6 +1522,28 @@ def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
                          crop="center"):
     """Devuelve (filtro, ) que transforma [vin] en [vout] 1080x1920."""
     p = _scale_to_sample(params, src_w, src_h)
+    if layout == "split":
+        # Split vertical (regla 2026-11-16): juego ARRIBA (panel
+        # game_h, la mayor parte) y cámara ABAJO (panel cam_h), sin
+        # superponerse nunca. El juego se recorta vertical evitando
+        # la caja de la cámara; la cámara se ajusta por contenido
+        # sobre su propio frame difuminado (como en stack).
+        bx, by, bw, bh = p["box"]
+        game_h = p.get("game_h", 1320)
+        cam_h = p.get("cam_h", 600)
+        gw = int(src_h * OUT_W / game_h)
+        gx0 = min(max(p.get("game_x0", (src_w - gw) // 2), 0), src_w - gw)
+        blur = int(cfg.get("blur_radius", 20))
+        return (f"[{vin}]split=2[sp_g][sp_c];"
+                f"[sp_g]crop={gw}:{src_h}:{gx0}:0,"
+                f"scale={OUT_W}:{game_h},setsar=1[sp_gv];"
+                f"[sp_c]crop={bw}:{bh}:{bx}:{by},split=2[sp_cb][sp_cf];"
+                f"[sp_cb]scale={OUT_W}:{cam_h}:force_original_aspect_ratio=increase,"
+                f"crop={OUT_W}:{cam_h},boxblur={blur}:2[sp_cbg];"
+                f"[sp_cf]scale={OUT_W}:{cam_h}:force_original_aspect_ratio=decrease,"
+                f"setsar=1[sp_cfg];"
+                f"[sp_cbg][sp_cfg]overlay=(W-w)/2:(H-h)/2[sp_cv];"
+                f"[sp_gv][sp_cv]vstack,format=yuv420p[{vout}]")
     if layout == "stack":
         x0, y0, bw, bh = p.get("band", [0, 0, src_w, src_h])
         split = p.get("split_x", src_w // 2)
@@ -1529,6 +1754,14 @@ def _crop_rects_for_frame(src_w, src_h, layout, params, cfg, t=None):
     (Arreglo 6); sin t, el estático de params."""
     p = _scale_to_sample(params, src_w, src_h)
     track = (params or {}).get("track")
+    if layout == "split":
+        game_h = p.get("game_h", 1320)
+        gw = int(src_h * OUT_W / game_h)
+        gx0 = min(max(p.get("game_x0", (src_w - gw) // 2), 0), src_w - gw)
+        rects = [("gameplay", gx0, 0, gw, src_h)]
+        if "box" in p:
+            rects.append(("facecam", *p["box"]))
+        return rects
     if layout == "stack":
         x0, y0, bw, bh = p.get("band", [0, 0, src_w, src_h])
         split = p.get("split_x", src_w // 2)
