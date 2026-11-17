@@ -1270,6 +1270,44 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     return {"action": mapped, "reason": action["reason"]}
 
 
+# Plataformas a las que se propaga un clip publicado en YouTube
+# (fan-out). El orden es el de PLATFORMS sin youtube_shorts.
+FANOUT_TARGETS = ("tiktok", "instagram_reels", "facebook_reels")
+
+
+def fan_out(queue, item, cfg=None):
+    """Propaga un clip publicado en YouTube a las otras 3
+    plataformas (fan-out).
+
+    Encola el mismo clip en TikTok, Instagram y Facebook con los
+    mismos metadatos (streamer, moment_key, red_flags, game,
+    vod_id), solo si no tienen ítem ya. NO publica nada por sí
+    mismo y NO toca el ítem de YouTube: cada plataforma pasa por
+    sus propias puertas (política, topes, breaker, auditoría) en
+    su pasada del bucle. Con fanout.enabled: false en config, no
+    hace nada. Devuelve las plataformas encoladas.
+    """
+    if cfg is not None:
+        enabled = (cfg.get("fanout") or {}).get("enabled", True)
+        if not enabled:
+            return []
+    enqueued = []
+    for platform in FANOUT_TARGETS:
+        if queue._find(item["clip"], platform) is not None:
+            continue
+        new_item = queue.enqueue(
+            item["clip"], platform, streamer=item.get("streamer"),
+            moment_key=item.get("moment_key"),
+            red_flags=item.get("red_flags"), game=item.get("game"),
+            vod_id=item.get("vod_id"))
+        queue.add_note(
+            new_item,
+            f"fan-out desde youtube_shorts "
+            f"({item.get('platform_id') or 'sin id'})")
+        enqueued.append(platform)
+    return enqueued
+
+
 def _record_counter(counter_state, event, clip, platform, path=None):
     """6.7: registra published_ok/published_fail en counter.py y
     guarda el estado. Solo se llama en modo gradual."""
@@ -1301,7 +1339,8 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
     stop = stop_event or threading.Event()
     stats = {"published": 0, "retained": 0, "discarded": 0, "draft": 0,
              "failed": 0, "quarantined": 0, "limited": 0, "paused": 0,
-             "breaker_tripped": 0, "archived": 0}
+             "breaker_tripped": 0, "archived": 0, "processing": 0,
+             "fanout": 0}
     while True:
         for platform in PLATFORMS:
             # 6B.2: archivado automático: clip con 3+ días sin subir
@@ -1338,6 +1377,17 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
                         path=counter_path)
                 if action == "published":
                     _breaker.record_success(platform)
+                    # Fan-out: publicado en YouTube -> se encolan las
+                    # otras 3 plataformas en la misma pasada (cada
+                    # una pasa por sus propias puertas). El fallo de
+                    # una nunca revierte el publicado de YouTube.
+                    if platform == "youtube_shorts":
+                        targets = fan_out(queue, item, cfg=cfg)
+                        stats["fanout"] += len(targets)
+                        if targets and notify_fn:
+                            notify_fn("fan-out",
+                                      f"{item['clip']} -> "
+                                      f"{', '.join(targets)}")
                     # 9.1: el clip publicado entra en métricas (vistas
                     # a 24/48 h y 7 d). Nunca rompe el bucle.
                     try:

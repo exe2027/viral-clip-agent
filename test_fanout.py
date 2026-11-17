@@ -19,7 +19,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from clipagent.config import DEFAULT_CONFIG
-from clipagent.publish import PublishQueue, publish_one
+from clipagent.publish import (PublishQueue, publish_loop, publish_one)
 
 CHILE = datetime.timezone(datetime.timedelta(hours=-3))
 NOW = datetime.datetime(2026, 11, 17, 20, 0, tzinfo=CHILE)
@@ -76,8 +76,9 @@ def _clip(tmp, platform="tiktok", virality=80, seo=95):
 
 
 def _patches():
-    """Parches comunes: lista blanca, topes, cuenta no nueva, hora
-    y paquete manual (no escribe en el repo en los tests)."""
+    """Parches comunes: lista blanca, topes, cuenta no nueva, hora,
+    paquete manual (no escribe en el repo en los tests) y breaker
+    (no toca circuit_breaker.json)."""
     return [
         mock.patch("clipagent.publish.check_whitelist",
                    return_value=(True, "en lista blanca")),
@@ -89,6 +90,12 @@ def _patches():
         mock.patch("clipagent.publish.DirectPublisher.publish_draft",
                    return_value={"ok": True,
                                  "draft_dir": "drafts/c1_X"}),
+        mock.patch("clipagent.breaker.is_tripped",
+                   return_value=(False, "")),
+        mock.patch("clipagent.breaker.record_success",
+                   return_value=None),
+        mock.patch("clipagent.breaker.record_failure",
+                   return_value={"tripped": False}),
     ]
 
 
@@ -265,6 +272,161 @@ class TestProcessing(unittest.TestCase):
             self.assertEqual(
                 fake.publish_video.call_args[1]["resume_publish_id"],
                 "pub1")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestFanOutLoop(unittest.TestCase):
+    def _setup_loop(self, tmp, tiktok_result=None):
+        """Cola con un ítem de YouTube + parches del bucle.
+
+        get_publisher: YouTube simulado; el resto, DirectPublisher
+        real con adaptadores simulados."""
+        clips = [{"file": "c1.mp4", "virality": 80, "chat": 8.0,
+                  "seo": {"youtube_shorts": 95, "tiktok": 95,
+                          "instagram_reels": 95,
+                          "facebook_reels": 95}}]
+        clips_dir = _manifest(tmp, clips)
+        q = PublishQueue(os.path.join(tmp, "pq.json"))
+        yt_item = q.enqueue(os.path.join(clips_dir, "c1.mp4"),
+                            "youtube_shorts", streamer="illojuan",
+                            vod_id="v1", moment_key=["v1", 8])
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["autopublish"]["mode"] = "full"
+        cfg["platform_accounts"]["instagram_reels"] = {
+            "ig_user_id": "1784"}
+        cfg["platform_accounts"]["facebook_reels"] = {
+            "page_id": "555"}
+        fake_yt = mock.Mock()
+
+        def _yt_publish(clip_path, live=False, **kwargs):
+            if not live:
+                return {"ok": False,
+                        "reason": "dry-run por defecto: pasa --live "
+                                  "para subir de verdad"}
+            return {"ok": True, "video_id": "yt1",
+                    "url": "https://www.youtube.com/shorts/yt1"}
+        fake_yt.publish.side_effect = _yt_publish
+
+        from clipagent.publish import DirectPublisher
+        def _get_publisher(platform, queue=None):
+            if platform == "youtube_shorts":
+                return fake_yt
+            return DirectPublisher(platform, queue)
+
+        tk = _fake_adapter(publish_video=tiktok_result or {
+            "ok": True, "mode": "api", "post_id": "tt1"})
+        ig = _fake_adapter(publish_reel={
+            "ok": True, "mode": "api", "media_id": "ig9"})
+        fb = _fake_adapter(publish_reel={
+            "ok": True, "mode": "api", "post_id": "fb1"})
+        patches = _patches() + [
+            mock.patch("clipagent.publish.get_publisher",
+                       side_effect=_get_publisher),
+            mock.patch("clipagent.platforms.TikTokAdapter",
+                       return_value=tk),
+            mock.patch("clipagent.platforms.InstagramAdapter",
+                       return_value=ig),
+            mock.patch("clipagent.platforms.FacebookAdapter",
+                       return_value=fb),
+            mock.patch("clipagent.public_url.get_public_url",
+                       return_value=("https://x/c1.mp4", None)),
+        ]
+        return q, yt_item, cfg, patches
+
+    def test_youtube_publica_y_las_otras_tres_tambien(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, _yt, cfg, patches = self._setup_loop(tmp)
+            notes = []
+            for p in patches:
+                p.start()
+                self.addCleanup(p.stop)
+            stats = publish_loop(
+                q, live=True, once=True, cfg=cfg,
+                metrics_path=os.path.join(tmp, "metrics.db"),
+                notify_fn=lambda e, d: notes.append((e, d)))
+            self.assertEqual(stats["published"], 4, stats)
+            self.assertEqual(stats["fanout"], 3, stats)
+            for platform in ("youtube_shorts", "tiktok",
+                             "instagram_reels", "facebook_reels"):
+                item = q._find(
+                    os.path.join(tmp, "runs", "v1", "clips", "c1.mp4"),
+                    platform)
+                self.assertIsNotNone(item, platform)
+                self.assertEqual(item["state"], "published", platform)
+            self.assertTrue(any(e == "fan-out" for e, _ in notes))
+
+    def test_fallo_en_una_no_bloquea_las_otras(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, _yt, cfg, patches = self._setup_loop(
+                tmp, tiktok_result={
+                    "ok": False, "mode": "draft",
+                    "reason": "sin token de TikTok en tokens/"})
+            for p in patches:
+                p.start()
+                self.addCleanup(p.stop)
+            stats = publish_loop(
+                q, live=True, once=True, cfg=cfg,
+                metrics_path=os.path.join(tmp, "metrics.db"))
+            self.assertEqual(stats["published"], 3, stats)
+            self.assertEqual(stats["draft"], 1, stats)
+            clip = os.path.join(tmp, "runs", "v1", "clips", "c1.mp4")
+            self.assertEqual(
+                q._find(clip, "tiktok")["state"], "draft")
+            self.assertIn(
+                "sin token",
+                q._find(clip, "tiktok")["history"][-1]["note"])
+            self.assertEqual(
+                q._find(clip, "instagram_reels")["state"], "published")
+            self.assertEqual(
+                q._find(clip, "facebook_reels")["state"], "published")
+
+    def test_fanout_no_duplica_si_el_item_ya_existe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, _yt, cfg, patches = self._setup_loop(tmp)
+            clip = os.path.join(tmp, "runs", "v1", "clips", "c1.mp4")
+            q.enqueue(clip, "tiktok", streamer="illojuan", vod_id="v1",
+                      moment_key=["v1", 8])
+            for p in patches:
+                p.start()
+                self.addCleanup(p.stop)
+            stats = publish_loop(
+                q, live=True, once=True, cfg=cfg,
+                metrics_path=os.path.join(tmp, "metrics.db"))
+            self.assertEqual(stats["published"], 4, stats)
+            self.assertEqual(stats["fanout"], 2, stats)
+            tk_items = [i for i in q.data["items"]
+                        if i["platform"] == "tiktok"]
+            self.assertEqual(len(tk_items), 1)
+
+    def test_fanout_desactivado_por_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, _yt, cfg, patches = self._setup_loop(tmp)
+            cfg["fanout"]["enabled"] = False
+            for p in patches:
+                p.start()
+                self.addCleanup(p.stop)
+            stats = publish_loop(
+                q, live=True, once=True, cfg=cfg,
+                metrics_path=os.path.join(tmp, "metrics.db"))
+            self.assertEqual(stats["published"], 1, stats)
+            self.assertEqual(stats["fanout"], 0, stats)
+            self.assertEqual(len(q.data["items"]), 1)
+
+    def test_en_dry_run_no_hay_fanout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, _yt, cfg, patches = self._setup_loop(tmp)
+            for p in patches:
+                p.start()
+                self.addCleanup(p.stop)
+            stats = publish_loop(
+                q, live=False, once=True, cfg=cfg,
+                metrics_path=os.path.join(tmp, "metrics.db"))
+            self.assertEqual(stats["published"], 0, stats)
+            self.assertEqual(stats["fanout"], 0, stats)
+            self.assertEqual(len(q.data["items"]), 1)
 
 
 if __name__ == "__main__":
