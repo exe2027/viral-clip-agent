@@ -225,6 +225,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     vod_start_time TEXT,
     subtitles_failed INTEGER NOT NULL DEFAULT 0,
     allowlist_bypass INTEGER NOT NULL DEFAULT 0,
+    -- 6B.3: mejor prioridad conocida del VOD (0 = sin puntuar).
+    -- El worker procesa por score, no FIFO (ver next_queued).
+    score REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -243,12 +246,30 @@ CREATE INDEX IF NOT EXISTS idx_job_log_job ON job_log (job_id);
 
 
 class Queue:
+    # 6B.3: envejecimiento contra la inanición: un job viejo suma
+    # puntos hasta alcanzar a los de score alto. 2 puntos por día,
+    # tope 7 días (+14): un VOD de hace una semana sin puntuar
+    # (0+14) pasa por delante de uno nuevo con score 10, pero no de
+    # uno con 86. Los pesos del puntaje no cambian (fórmulas
+    # intocables); esto solo ordena la cola de jobs.
+    AGE_BONUS_PER_DAY = 2
+    AGE_BONUS_MAX_DAYS = 7
+
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate_score_column()
         self.conn.commit()
+
+    def _migrate_score_column(self):
+        """Bases viejas: añade la columna `score` si no existe."""
+        cols = [r[1] for r in self.conn.execute(
+            "PRAGMA table_info(jobs)").fetchall()]
+        if "score" not in cols:
+            self.conn.execute(
+                "ALTER TABLE jobs ADD COLUMN score REAL NOT NULL DEFAULT 0")
 
     def close(self):
         self.conn.close()
@@ -359,12 +380,47 @@ class Queue:
                   f"(disco libre: {free:.1f} GB)")
         return job_id
 
+    def effective_score(self, job):
+        """Score efectivo de un job: score + bono por antigüedad.
+
+        Sin score conocido (0) manda la antigüedad: los viejos no
+        mueren de hambre. Con score alto, un job nuevo sigue primero.
+        """
+        try:
+            created = datetime.fromisoformat(
+                str(job.get("created_at") or "").replace("Z", "+00:00"))
+            age_days = max(0, (datetime.now(created.tzinfo) - created).days)
+        except ValueError:
+            age_days = 0
+        bonus = min(age_days, self.AGE_BONUS_MAX_DAYS) * self.AGE_BONUS_PER_DAY
+        return (job.get("score") or 0) + bonus
+
+    def set_score(self, job_id: int, score: float):
+        """Guarda la mejor prioridad conocida de un VOD (6B.3).
+
+        Hoy el score llega a 0 (sin puntuar) al encolar: el watcher
+        aún no pre-puntúa el chat antes de encolar (eso exigiría
+        descargar el chat en el watcher). La API queda para ese
+        pre-puntaje y para ajustes manuales.
+        """
+        self.conn.execute("UPDATE jobs SET score = ?, updated_at = ? "
+                          "WHERE id = ?", (float(score), self._now(), job_id))
+        self.conn.commit()
+
     def next_queued(self):
-        """El job más antiguo en 'queued' (FIFO)."""
-        row = self.conn.execute(
-            "SELECT * FROM jobs WHERE state = 'queued' ORDER BY id ASC LIMIT 1"
-        ).fetchone()
-        return self._row_to_dict(row) if row else None
+        """El siguiente job: mayor score efectivo (6B.3), no FIFO.
+
+        Orden: score + bono por antigüedad; en empate, el más antiguo.
+        Sin scores conocidos todos empatan a 0 y manda la antigüedad:
+        FIFO con envejecimiento.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM jobs WHERE state = 'queued'").fetchall()
+        if not rows:
+            return None
+        jobs = [self._row_to_dict(r) for r in rows]
+        jobs.sort(key=lambda j: (-self.effective_score(j), j["id"]))
+        return jobs[0]
 
     def requeue_stale_processing(self):
         """Jobs en 'processing' de un worker que murió (crash/reinicio).

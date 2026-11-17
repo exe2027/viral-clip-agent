@@ -530,7 +530,12 @@ def select_top_peaks(scores, top_n: int = 5, min_separation: int = 60):
             selected.append((timestamp, score))
             if len(selected) == top_n:
                 break
-    return sorted(selected)  # en orden cronológico para cortar
+    # 6B.3: en orden de score (mayor primero), no cronológico: el
+    # worker corta primero los candidatos de mayor prioridad; los
+    # de score bajo quedan al final (o no se cortan, --top-n es un
+    # máximo). Cada clip baja su propio segmento, así que el orden
+    # de corte no afecta al resultado, solo a qué se hace primero.
+    return sorted(selected, key=lambda x: x[1], reverse=True)
 
 
 def get_video_duration(video_path: str):

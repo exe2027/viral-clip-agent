@@ -2,7 +2,8 @@
 """
 worker.py — el único worker de viral-clip-agent (bloque 1 del tribunal).
 
-Saca jobs de la cola FIFO (jobqueue.py), uno a la vez, y ejecuta
+Saca jobs de la cola por score con envejecimiento (jobqueue.py, 6B.3),
+uno a la vez, y ejecuta
 ``auto_clips.py`` (sin LLM, sin tokens) con el link del job. Cuando
 termina, el clip + manifiesto quedan en ``ready_for_review``: nada se
 publica desde aquí.
