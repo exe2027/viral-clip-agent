@@ -1060,8 +1060,10 @@ def main(argv=None):
         print(f"En cuarentena: {args.clip} [{args.platform}] — {args.reason}")
         return 0
     if args.cmd == "loop":
+        from .notify import notify
         stats = publish_loop(queue, live=args.live, once=args.once,
-                             interval_s=args.interval_minutes * 60)
+                             interval_s=args.interval_minutes * 60,
+                             notify_fn=notify)
         print(json.dumps(stats, indent=2, ensure_ascii=False))
         return 0
     return 0
