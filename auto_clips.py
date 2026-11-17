@@ -385,7 +385,8 @@ def filter_candidates(peaks, detail, rank_map, median_score):
 
     ``peaks``: [(peak_ts, score)] de select_top_peaks (--top-n ya es
     un máximo, no una cuota). Devuelve (seleccionados, descartados):
-    seleccionados = [(peak_ts, score, multiple)] en orden cronológico;
+    seleccionados = [(peak_ts, score, multiple)] en orden de score
+    (mayor primero, 6B.3);
     descartados = [{"peak", "score", "multiple", "rank", "motivos"}].
     La mediana tiene suelo 1.0: con mediana 0 un pico con puntos
     queda a score/1 x (si no, por división por cero ningún pico
@@ -894,6 +895,57 @@ def main() -> int:
     # con el hook del LLM. Sin LLM, el manifiesto queda igual.
     llm_candidates = []
     llm_inputs = {}
+    # 7.4: facecam del VOD, UNA vez, en runs/<vod>/layout.json.
+    # Si config trae facecam_box, manda siempre (no se detecta). Si
+    # layout.json ya existe, se reutiliza. Si no, se detecta del
+    # vídeo completo (--video) o del primer segmento (en el bucle).
+    vod_layout = None
+    vod_box = None
+
+    def _vod_layout_detect(source, dur, source_label):
+        """Detecta la facecam, guarda layout.json y fija vod_box."""
+        nonlocal vod_layout, vod_box
+        from clipagent.render import detect_vod_facecam, save_vod_layout
+        base_cfg = get_layout_config() if get_layout_config else {}
+        det = detect_vod_facecam(source, dur, base_cfg)
+        vod_layout = {"vod_id": vod_id, "facecam_box": det["facecam_box"],
+                      "method": det["method"], "samples": det["samples"],
+                      "hits": det["hits"], "source": source_label}
+        save_vod_layout(out_dir, vod_layout)
+        vod_box = det["facecam_box"]
+        if vod_box:
+            print(f"Layout del VOD: facecam detectada {vod_box} "
+                  f"({det['hits']}/{det['samples']} muestras).")
+        else:
+            print("Layout del VOD: sin facecam estable; "
+                  "cada clip decide su layout solo.")
+        return vod_layout
+
+    try:
+        from clipagent.render import load_vod_layout, save_vod_layout
+        vod_layout = load_vod_layout(out_dir)
+        if vod_layout is not None:
+            vod_box = vod_layout.get("facecam_box")
+            print(f"Layout del VOD: reutilizado de layout.json "
+                  f"({vod_layout.get('method')}).")
+        elif (cfg or {}).get("facecam_box"):
+            vod_box = list((cfg or {})["facecam_box"])
+            vod_layout = {"vod_id": vod_id, "facecam_box": vod_box,
+                          "method": "config", "samples": 0, "hits": 0,
+                          "source": "config.yaml"}
+            save_vod_layout(out_dir, vod_layout)
+            print("Layout del VOD: facecam_box de config.yaml (manda).")
+        elif args.video and video_path and os.path.isfile(video_path):
+            _dur = None
+            try:
+                from clipagent.precise_cut import get_video_duration as _gvd
+                _dur = _gvd(video_path)
+            except Exception:
+                _dur = None
+            _vod_layout_detect(video_path, _dur, "video")
+    except Exception as e:  # noqa: BLE001 - el layout nunca tumba el job
+        print(f"Layout del VOD: no se pudo preparar ({e}); "
+              "cada clip decide su layout solo.", file=sys.stderr)
     if platform == "kick" and kick_meta:
         manifest["kick"] = {"channel": kick_meta["channel"],
                             "title": kick_meta["title"],
@@ -972,6 +1024,19 @@ def main() -> int:
             except Exception as e:
                 print(f"[{idx}] Falló la descarga del segmento Twitch: {e}", file=sys.stderr)
                 continue
+        # 7.4: facecam del VOD, una sola vez (del primer segmento).
+        # El box detectado vale para todos los clips; si config trae
+        # facecam_box, ese manda (la detección ya lo respeta).
+        if vod_layout is None and cut_source \
+                and os.path.isfile(cut_source):
+            try:
+                _det_dur = seg_len if source_is_segment else (duration or seg_len)
+                _vod_layout_detect(
+                    cut_source, _det_dur,
+                    "segmento" if source_is_segment else "video")
+            except Exception as e:  # noqa: BLE001 - nunca tumba el job
+                print(f"Layout del VOD: detección falló ({e}); "
+                      "cada clip decide su layout solo.", file=sys.stderr)
         # Bloque 6 (--audio-check / recorte preciso): segunda señal de
         # audio y recorte preciso por frase, SOLO sobre la ventana ya
         # descargada (el segmento del pico, que empieza en clip_start
@@ -1086,6 +1151,11 @@ def main() -> int:
         try:
             if layout_mod:
                 layout_cfg = get_layout_config() if get_layout_config else {}
+                # 7.4: el box del VOD (detectado una vez o de config)
+                # manda sobre la detección por clip; config manda
+                # sobre el detectado.
+                if vod_box and not layout_cfg.get("facecam_box"):
+                    layout_cfg["facecam_box"] = vod_box
                 layout_decision = cut_clip_with_layout(
                     cut_source, cut_start, cut_dur, out_file,
                     crf=args.crf, preset=args.preset, crop=args.crop,
@@ -1109,6 +1179,35 @@ def main() -> int:
             # (que empieza en clip_start en ambos casos: segmento o
             # VOD entero con --video).
             clip_start_abs = clip_start + precise_info["start"]
+        # 7.3: dedup antes de empaquetar. El `start` del manifiesto
+        # es ABSOLUTO en el VOD (antes era cut_start, relativo al
+        # segmento: dos picos distintos colisionaban en moment_key).
+        # Si el clip duplica a otro (ventana solapada o misma huella
+        # de 3 frames), va a descartados y no se empaqueta ni se
+        # encola; el archivo huérfano se borra para no gastar disco.
+        _fp = None
+        try:
+            from clipagent.dedup import clip_fingerprint, find_duplicate
+            _fp = clip_fingerprint(out_file, cut_dur)
+            _dup_reason, _dup_entry = find_duplicate(
+                out_file, cut_dur, clip_start_abs,
+                os.path.dirname(out_dir), vod_id,
+                manifest_clips=manifest["clips"])
+            if _dup_reason:
+                print(f"    Dedup: duplicado ({_dup_reason}); "
+                      "no se empaqueta ni se encola.", file=sys.stderr)
+                manifest["descartados"].append({
+                    "peak": peak_ts, "score": score, "multiple": multiple,
+                    "motivos": [f"duplicado: {_dup_reason}"]})
+                write_manifest_atomic(out_dir, manifest)
+                try:
+                    os.remove(out_file)
+                except OSError:
+                    pass
+                continue
+        except Exception as e:  # noqa: BLE001 - el dedup nunca tumba el job
+            print(f"    Dedup: no se pudo comprobar ({e}); se sigue.",
+                  file=sys.stderr)
         payoff_ts_clip = peak_ts - clip_start_abs
         streamer, game, game_source = None, None, ""
         if platform == "kick" and kick_meta:
@@ -1253,7 +1352,7 @@ def main() -> int:
                 "lang": "es"})
         clip_entry = {
             "n": idx, "file": f"clips/{fname}", "peak": peak_ts,
-            "start": cut_start, "duration": cut_dur, "score": score,
+            "start": clip_start_abs, "duration": cut_dur, "score": score,
             "risas": d["risas"], "hype": d["hype"],
             "title_es": title_es, "desc_es": desc_es,
             "title_en": title_en, "desc_en": desc_en,
@@ -1270,6 +1369,9 @@ def main() -> int:
         }
         if audio_info is not None:
             clip_entry["audio"] = audio_info
+        if _fp is not None:
+            # Huella de 3 frames (7.3) para el dedup de otras corridas.
+            clip_entry["fingerprint"] = [f"{h:016x}" for h in _fp]
         if precise_info is not None:
             clip_entry["precise_cut"] = precise_info
         if layout_decision is not None:
