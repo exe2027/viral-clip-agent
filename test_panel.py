@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -111,7 +112,7 @@ class TestPanelToggle(unittest.TestCase):
                         "    language: es\n"
                         "    estado: concedido\n"
                         "    enabled: false\n")
-            with unittest.mock.patch(
+            with mock.patch(
                     "clipagent.streamers.BASE_DIR", tmp):
                 names = [i["usuario"]
                          for i in watcher.load_influencers()]
@@ -149,15 +150,56 @@ class TestPublishDisabledStreamer(unittest.TestCase):
                              moment_key=["v1", 8], streamer="illojuan")
             cfg = copy.deepcopy(DEFAULT_CONFIG)
             cfg["autopublish"]["mode"] = "full"
-            with unittest.mock.patch(
+            with mock.patch(
                     "clipagent.streamers.BASE_DIR", tmp), \
-                    unittest.mock.patch(
+                    mock.patch(
                         "clipagent.streamers.get_streamer",
                         return_value={"name": "illojuan",
                                       "enabled": False}):
                 r = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r["action"], "retained")
             self.assertIn("desactivado", r["reason"])
+
+
+class TestPanelOverride(unittest.TestCase):
+    def test_override_de_usuario_queda_en_el_manifiesto(self):
+        import json
+        from clipagent.panel import register_override_for_clip
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = os.path.join(tmp, "runs", "v1")
+            clips_dir = os.path.join(run_dir, "clips")
+            os.makedirs(clips_dir, exist_ok=True)
+            clip_path = os.path.join(clips_dir, "c1.mp4")
+            with open(clip_path, "wb") as f:
+                f.write(b"x")
+            manifest = {"vod_id": "v1", "seo_overrides": [],
+                        "clips": [{"peak": 100, "start": 80,
+                                   "file": "clips/c1.mp4",
+                                   "viral_score": {"total": 80},
+                                   "seo_scores": {
+                                       "youtube_shorts": {"score": 85}},
+                                   "viral": {"viral_multiple": 8.0}}]}
+            with open(os.path.join(run_dir, "manifest.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(manifest, f)
+            ok, msg = register_override_for_clip(
+                clip_path, "youtube_shorts", "título revisado a mano")
+            self.assertTrue(ok, msg)
+            with open(os.path.join(run_dir, "manifest.json"),
+                      encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(len(saved["seo_overrides"]), 1)
+            self.assertEqual(saved["seo_overrides"][0]["platform"],
+                             "youtube_shorts")
+            self.assertEqual(saved["seo_overrides"][0]["score"], 85)
+            self.assertIn("revisado a mano",
+                          saved["seo_overrides"][0]["motivo"])
+
+    def test_override_sin_clip_devuelve_false(self):
+        from clipagent.panel import register_override_for_clip
+        ok, _ = register_override_for_clip("/no/existe.mp4",
+                                           "youtube_shorts", "x")
+        self.assertFalse(ok)
 
 
 if __name__ == "__main__":

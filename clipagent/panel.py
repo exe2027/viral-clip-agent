@@ -88,6 +88,35 @@ def _esc(text):
     return html.escape(str(text or ""))
 
 
+def register_override_for_clip(clip_path, platform, motivo):
+    """6B.5: registra un override de USUARIO en el manifiesto.
+
+    Es la ÚNICA forma de registrar un override: ningún código
+    automático lo hace (la política solo lo lee). El override
+    permite publicar un clip con SEO 70-89 en esa plataforma;
+    con SEO < 70 sigue siendo bloqueo duro.
+    Devuelve (ok, mensaje).
+    """
+    import json
+    from .publish import load_clip_package
+    from .seo_score import register_override
+    clip, manifest = load_clip_package(clip_path)
+    if clip is None:
+        return False, "sin entrada en el manifiesto"
+    score = ((clip.get("seo_scores") or {}).get(platform) or {}).get("score")
+    record = register_override(
+        manifest, platform, score,
+        motivo or "revisado a mano en el panel")
+    run_dir = os.path.dirname(os.path.dirname(os.path.abspath(clip_path)))
+    manifest_path = os.path.join(run_dir, "manifest.json")
+    tmp = manifest_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, manifest_path)
+    return True, (f"override registrado en {platform} "
+                  f"(SEO {score}): {record['motivo']}")
+
+
 def _render(data):
     svc = data["service"]
     rows_platforms = "".join(
@@ -125,6 +154,13 @@ def _render(data):
         f"<tr><td>{_esc(i['platform'])}</td>"
         f"<td>{_esc(i['clip'])}</td>"
         f"<td>{_esc((i.get('history') or [{}])[-1].get('note', ''))}</td>"
+        f"<td><form method='post' action='/override'>"
+        f"<input type='hidden' name='clip' value='{_esc(i['clip'])}'>"
+        f"<input type='hidden' name='platform' "
+        f"value='{_esc(i['platform'])}'>"
+        f"<input name='motivo' size='24' "
+        f"placeholder='motivo del override'>"
+        f"<button>Override (publicar con SEO 70-89)</button></form></td>"
         f"</tr>" for i in data["retained"])
     rows_err = "".join(
         f"<tr><td>#{e['job_id']}</td><td>{_esc(e['ts'])}</td>"
@@ -157,8 +193,10 @@ def _render(data):
 <table border="1"><tr><th>Plataforma</th><th>Clip</th>
 <th>Publicado</th></tr>{rows_pub}</table>
 <h2>Retenidos con motivo</h2>
+<p>El override lo registra solo el usuario desde aquí (6B.5): ningún
+automatismo lo hace. Con SEO &lt; 70 sigue siendo bloqueo duro.</p>
 <table border="1"><tr><th>Plataforma</th><th>Clip</th>
-<th>Motivo</th></tr>{rows_ret}</table>
+<th>Motivo</th><th>Override</th></tr>{rows_ret}</table>
 <h2>Errores recientes</h2>
 <table border="1"><tr><th>Job</th><th>Fecha</th><th>Evento</th>
 <th>Detalle</th></tr>{rows_err}</table>
@@ -213,6 +251,10 @@ class _Handler(BaseHTTPRequestHandler):
         elif self.path == "/resume":
             from .breaker import reset
             reset(get("platform"))
+        elif self.path == "/override":
+            ok, msg = register_override_for_clip(
+                get("clip"), get("platform"), get("motivo"))
+            print(f"[panel] override {get('clip')!r}: {msg}")
         self._redirect()
 
 

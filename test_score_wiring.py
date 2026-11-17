@@ -204,6 +204,44 @@ class TestHardFilters(unittest.TestCase):
             self.assertEqual(r["action"], "retained")
             self.assertIn("SEO 89", r["reason"])
 
+    def test_seo_89_con_override_de_usuario_si_se_publica(self):
+        # 6B.5: el override SOLO lo registra el usuario (desde el
+        # panel); con él registrado, el mismo clip se publica.
+        from unittest import mock
+        from clipagent.publish import publish_one
+        from clipagent.seo_score import register_override
+        with tempfile.TemporaryDirectory() as tmp:
+            q, item, cfg = self._setup(tmp, 80, 89)
+            run_dir = os.path.join(tmp, "runs", "v1")
+            with open(os.path.join(run_dir, "manifest.json"),
+                      encoding="utf-8") as f:
+                manifest = json.load(f)
+            register_override(manifest, "youtube_shorts", 89,
+                              "revisado a mano en el panel")
+            with open(os.path.join(run_dir, "manifest.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(manifest, f)
+            fake_pub = mock.Mock()
+            fake_pub.publish.return_value = {
+                "ok": True, "video_id": "xyz",
+                "url": "https://www.youtube.com/shorts/xyz"}
+            with mock.patch("clipagent.publish.get_publisher",
+                           return_value=fake_pub):
+                r = publish_one(q, item, cfg=cfg, live=True)
+            self.assertEqual(r["action"], "published", r)
+
+    def test_sin_override_automatico_en_el_manifiesto(self):
+        # 6B.5: tras retener un SEO 89, el manifiesto NO gana ningún
+        # override solo: ningún automatismo los registra.
+        from clipagent.publish import publish_one
+        with tempfile.TemporaryDirectory() as tmp:
+            q, item, cfg = self._setup(tmp, 80, 89)
+            publish_one(q, item, cfg=cfg, live=True)
+            with open(os.path.join(tmp, "runs", "v1", "manifest.json"),
+                      encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest.get("seo_overrides"), [])
+
     def test_seo_69_es_bloqueo_duro(self):
         from clipagent.publish import publish_one
         with tempfile.TemporaryDirectory() as tmp:
