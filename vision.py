@@ -49,30 +49,14 @@ TIMEOUT_S = 30
 
 
 def load_dotenv(path=None):
-    """Carga ``.env`` (raíz del repo o cwd) sin pisar el entorno real."""
-    candidates = []
-    if path:
-        candidates.append(Path(path))
-    candidates.append(Path(__file__).resolve().parent / ".env")
-    candidates.append(Path.cwd() / ".env")
-    for candidate in candidates:
-        if not candidate.is_file():
-            continue
-        try:
-            lines = candidate.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
-        return candidate
-    return None
+    """Carga ``.env`` sin pisar el entorno real.
+
+    Delegado en clipagent.credentials (Fase 3.1): la única puerta
+    de acceso a secretos. Se mantiene este nombre por compatibilidad.
+    """
+    from clipagent.credentials import load_dotenv as _load_dotenv
+    result = _load_dotenv(str(path) if path is not None else None)
+    return Path(result) if result else None
 
 
 def get_api_key():

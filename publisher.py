@@ -658,14 +658,26 @@ class YouTubePublisher:
     """
 
     SCOPE = "https://www.googleapis.com/auth/youtube.upload"
-    CLIENT_SECRETS = os.path.join(BASE_DIR, "client_secrets.json")
-    TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
+    # Rutas de credenciales: SOLO a través de clipagent.credentials
+    # (Fase 3.1). El token vive en tokens/youtube_shorts.json; el
+    # token.json de la raíz es legado y se migra al leerlo.
+    CLIENT_SECRETS = None  # se resuelve en __init__ vía credentials
+    TOKEN_FILE = None
 
     def __init__(self, queue=None):
         self.queue = queue or PublishQueue()
+        from clipagent import credentials as _creds
+        self.CLIENT_SECRETS = _creds.client_secrets_path()
+        self.TOKEN_FILE = _creds.token_path("youtube_shorts")
+
+    def _token_present(self):
+        """True si hay token en tokens/ o legado en la raíz."""
+        from clipagent import credentials as _creds
+        return (_creds.load_token("youtube_shorts") is not None
+                or os.path.isfile(_creds.legacy_token_path()))
 
     def status(self):
-        creds = os.path.isfile(self.TOKEN_FILE)
+        creds = self._token_present()
         secrets = os.path.isfile(self.CLIENT_SECRETS)
         return {"platform": "youtube_shorts",
                 "oauth_configured": secrets and creds,
@@ -723,6 +735,10 @@ class YouTubePublisher:
         except ImportError:
             return {"ok": False,
                     "reason": "falta google-api-python-client: pip install google-api-python-client google-auth-oauthlib"}
+        from clipagent import credentials as _creds
+        # Migra el token.json legado a tokens/ si hace falta; la
+        # ruta que se usa es siempre la del almacén único (3.1).
+        _creds.migrate_legacy_youtube_token()
         creds = Credentials.from_authorized_user_file(self.TOKEN_FILE, [self.SCOPE])
         youtube = build("youtube", "v3", credentials=creds)
         package = package or load_clip_package(clip_path)[0]

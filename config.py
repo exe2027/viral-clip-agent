@@ -194,37 +194,13 @@ def _parse_simple_yaml(text):
 
 
 def load_dotenv(path=None):
-    """Carga un .env (raíz del repo o la ruta dada) sin pisar el entorno.
+    """Carga un .env sin pisar el entorno real.
 
-    Solo rellena variables que aún no existen en el entorno: un
-    export real siempre manda sobre el .env. Los secretos viven
-    aquí o en el entorno, nunca en config.yaml (versionado).
+    Delegado en clipagent.credentials (Fase 3.1): la única puerta
+    de acceso a secretos. Se mantiene este nombre por compatibilidad.
     """
-    candidates = []
-    if path:
-        candidates.append(path)
-    candidates.append(os.path.join(os.getcwd(), ".env"))
-    candidates.append(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), ".env"))
-    for candidate in candidates:
-        if not os.path.isfile(candidate):
-            continue
-        try:
-            with open(candidate, encoding="utf-8") as f:
-                lines = f.read().splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
-        return candidate
-    return None
+    from clipagent.credentials import load_dotenv as _load_dotenv
+    return _load_dotenv(path)
 
 
 def load_config(path=None):
