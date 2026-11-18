@@ -347,3 +347,9 @@ archivo y test por regla). Resumen:
   2/máx 3, nuevas 1/día, Zernio 15/día + 5 borradores, 2 h entre
   publicaciones; escalado automático nueva → establecida (30 días
   desde la 1ª publicación + 10 publicaciones sin sanciones).
+- **Puerta de render PRE-CORTE**: el clip SOLO se corta/renderiza si
+  ya pasa las puertas con el paquete provisional (viralidad estimada
+  >= 45 pre-corte — calibrado: p3220 estima 46,3 vs real 53,8;
+  p2010 44,5 — y SEO >= 90 en al menos una plataforma). Si no pasa,
+  se descarta SIN descargar el segmento ni renderizar. El 50 REAL
+  sigue vigente en la puerta de publicación.

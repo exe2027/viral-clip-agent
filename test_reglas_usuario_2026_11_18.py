@@ -37,6 +37,12 @@ anteriores que siguen vigentes, con su punto de aplicación:
    plataforma, cuentas nuevas 1/día).
 10. Todo $0, gratis. Panel en Cloudflare avc-em9.pages.dev, login
     por usuario, cada tenant ve solo lo suyo.
+11. Puerta de render PRE-CORTE (hoy): el clip SOLO se corta/
+    renderiza si ya pasa las puertas con el paquete provisional
+    (viralidad estimada >= 45 pre-corte — calibrado, no 50 — y SEO
+    >= 90 en al menos una plataforma); si no pasa, se descarta SIN
+    descargar el segmento ni renderizar. El 50 REAL sigue en la
+    puerta de publicación.
 """
 import os
 import sys
@@ -218,6 +224,26 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
         import auto_clips
         self.assertTrue(callable(auto_clips.download_chat_window))
         self.assertTrue(callable(auto_clips.download_twitch_segment))
+
+    def test_puerta_de_render_pre_corte(self):
+        # Regla 11 (hoy): el clip solo se corta si ya pasa las
+        # puertas con el paquete provisional. El umbral pre-corte es
+        # 45 (calibrado: p3220 estima 46,3 vs real 53,8; p2010 44,5);
+        # el 50 REAL sigue en la puerta de publicación.
+        from clipagent.policy import render_gate
+        from clipagent.workers import PRE_CORTE_VIRAL_MIN
+        self.assertEqual(PRE_CORTE_VIRAL_MIN, 45)
+        seo_bueno = {"youtube_shorts": 92, "tiktok": 94,
+                     "instagram_reels": 94, "facebook_reels": 94}
+        # p3220 estimado pasa la puerta pre-corte; p2010 no.
+        self.assertTrue(render_gate(
+            46.3, seo_bueno, viral_min=PRE_CORTE_VIRAL_MIN)["pasa"])
+        self.assertFalse(render_gate(
+            44.5, seo_bueno, viral_min=PRE_CORTE_VIRAL_MIN)["pasa"])
+        # Y con el umbral real (50) la estimación de p3220 no
+        # pasaría: por eso el 50 solo se aplica en publicación.
+        self.assertFalse(render_gate(46.3, seo_bueno)["pasa"])
+        self.assertTrue(render_gate(53.8, seo_bueno)["pasa"])
 
 
 class TestReglasCeroCostoYPanel(unittest.TestCase):

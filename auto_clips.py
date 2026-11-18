@@ -1227,6 +1227,51 @@ def main() -> int:
         if audio_peaks:
             examples = [tx for ts, _, tx in audio_peaks if ts == peak_ts][:1]
         print(f"[{idx}/{len(peaks)}] {fmt_ts(peak_ts)} ({score} pts) -> {fname}")
+        # Puerta de render PRE-CORTE (regla del usuario 2026-11-18):
+        # el clip SOLO se corta/renderiza si ya pasa las puertas con
+        # el paquete provisional (viralidad estimada >= 45 pre-corte,
+        # SEO >= 90 en al menos una plataforma). Si no pasa, a
+        # descartados SIN descargar el segmento ni cortar nada: no se
+        # gasta render en clips que no se van a usar. La puerta nunca
+        # tumba el job: si no se puede evaluar, se corta igual y se
+        # avisa. Los clips reutilizados del checkpoint (arriba) no
+        # pasan por aquí: ya están renderizados, no se gasta nada.
+        from clipagent.workers import gate_peak_for_render
+        _g_streamer, _g_game, _g_src = None, None, ""
+        if platform == "kick" and kick_meta:
+            _g_streamer = kick_meta.get("channel")
+            _g_game = kick_meta.get("category")
+            _g_src = "categoría de Kick"
+        else:
+            try:
+                _g_streamer, _g_game, _g_src = chat_stream_info(
+                    chat_path, peak_ts)
+            except Exception as e:  # noqa: BLE001 - sin juego no hay
+                print(f"    Puerta de render: sin juego/streamer ({e}); "
+                      "se sigue sin puerta.", file=sys.stderr)
+                _g_streamer, _g_game = None, None
+        _g_game = normalize_game_name(_g_game) if _g_game else None
+        _gate = None
+        try:
+            _gate = gate_peak_for_render(
+                chat_path, peak_ts, score, multiple, d, median_score,
+                list(scores.values()), lang=args.lang, game=_g_game,
+                streamer=_g_streamer, vod_id=vod_id, game_source=_g_src,
+                clip_start=clip_start, duration=clip_dur, n=idx,
+                reel_patterns=reel_patterns)
+        except Exception as e:  # noqa: BLE001 - la puerta nunca
+            print(f"    Puerta de render: no evaluada ({e}); se corta "
+                  "igual.", file=sys.stderr)
+        if _gate is not None and not _gate["pasa"]:
+            print(f"    Puerta de render: NO pasa ({_gate['motivo']}); "
+                  "se descarta sin cortar.", file=sys.stderr)
+            manifest["descartados"].append({
+                "peak": peak_ts, "score": score, "multiple": multiple,
+                "viral_estimate": _gate.get("viral_estimate"),
+                "seo_pre_corte": _gate.get("seo"),
+                "motivos": [f"puerta de render: {_gate['motivo']}"]})
+            write_manifest_atomic(out_dir, manifest)
+            continue
         # Fuente del corte: Twitch y Kick bajan solo el segmento de este
         # pico (pre-roll + clip, ~80 s), nunca el VOD entero. Con
         # --video local, Twitch corta del archivo entero como antes.

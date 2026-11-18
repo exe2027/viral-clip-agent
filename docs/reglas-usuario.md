@@ -10,6 +10,7 @@
 | Regla | Desde | Dónde se impone | Test |
 |---|---|---|---|
 | Clips **40–60 s**, nunca < 40 ni > 60, nunca 30 s exacto, rango 25–35 prohibido | 2026-11-18 (reemplaza mínimo 36 s de 2026-11-17) | `clipagent/config.py` RULES_MIN_DURATION_S=40, `config.yaml` clips/rules, `precise_cut.py`, `validate.py`, `workers.py`, `policy.py`; panel `worker/src/jobs.ts` publishGate, `index.ts` validadores, front `durationBand` + texto Editor | `test_reglas_usuario_2026_11_17.py`, `test_reglas_usuario_2026_11_18.py`, `worker/test/jobs.test.ts` |
+| **Puerta de render PRE-CORTE**: el clip SOLO se corta/renderiza si ya pasa las puertas (viralidad estimada + SEO pre-corte >= 90 en al menos una plataforma); si no pasa, se descarta SIN descargar ni renderizar. Umbral pre-corte de viralidad **45 (calibrado, no 50)**: la estimación usa defaults conservadores 5,0 y subestima ~7 puntos (p3220 estima 46,3 vs real 53,8; p2010 44,5). Con 50, p3220 se descartaría. El 50 REAL sigue en publicación. SEO pre-corte con el paquete provisional (ficha sin clip + títulos del chat, juego normalizado); sin juego conocido o sin título, el SEO queda sin medir y decide solo la viralidad | 2026-11-18 | `clipagent/policy.py` render_gate (puerta 50/90, max SEO), `clipagent/workers.py` PRE_CORTE_VIRAL_MIN=45 + pre_corte_package + gate_peak_for_render + detect_peaks (descarta) + _h_corte (re-verifica) + advance_pipeline (pasa scores al corte), `auto_clips.py` (puerta antes de descargar el segmento); panel: POST /api/clips rechaza score < 50 y SEO máx. < 90 (cuando vienen seo_scores) | `test_render_gate.py` (p3220 real pasa, p2010 no, plano 44,0 no) |
 | Hype por **ráfaga** v2: velocidad msgs/10 s, msgs/60 s y msgs/s contra baseline rodante (mediana 5 min); ratio pico/baseline; señales risas, emotes hype, repetición por usuarios distintos | 2026-11-18 | `clipagent/ingest.py` score_windows (hype_score 0–10 por ventana), `clipagent/detect.py` chat_component (bonus +0,25×hype_score antes de topes), `clipagent/workers.py` detect_peaks (hype guardado por pico) | `test_hype_v2.py` (ráfaga de 60 msgs/10 s supera a 120 repartidos) |
 | **10 streamers activos, todos GTA VI**: Rubius, IlloJuan (REACTIVADO 2026-11-18 15:30, estuvo pausado 13:34–15:30), AuronPlay, Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi, Westcol — platform twitch, language es, estado concedido, fecha_permiso 2026-11-18 (IlloJuan 2026-11-16), publish_platforms 4 plataformas, enabled true. clip_02 de IlloJuan sigue publish_blocked por subtítulos sin verificar (no publicar) | 2026-11-18 15:30 (reemplaza "Rubius prioritario, IlloJuan PAUSADO" de las 13:33) | `streamers.yaml` (10 entradas, game "GTA VI"); watcher vigila enabled; panel D1 influencers active=1 + game "GTA VI" (tenant sebastian) | `test_streamers.py::test_diez_activos_todos_gta_vi`, `test_reglas_usuario_2026_11_18.py` |
 | Sin override de p2010 (viralidad 44,5 < 50) | 2026-11-18 | `priority.publish_status` (viralidad < 50 descarta incluso con override SEO) | `test_reglas_usuario_2026_11_18.py` |
@@ -80,6 +81,11 @@
   fondo); MarginV mínimo 680 → 200 (referencia 230); miniaturas
   estilo GTA 6; clip p3220 de Rubius (48 s, viralidad 53,8,
   SEO 92/94/94/94) re-renderizado así y a la Cola web.
+- 2026-11-18: puerta de render PRE-CORTE (viralidad estimada >= 45
+  pre-corte — calibrado: p3220 estima 46,3 vs real 53,8; p2010 44,5
+  — y SEO pre-corte >= 90 en al menos una plataforma); si no pasa,
+  se descarta sin descargar ni renderizar. El 50 real sigue en
+  publicación. Medido: SEO pre-corte p3220 89/91/92/92.
 - 2026-11-18 15:05: REGLA DE ORO automatizado 100% desde la web
   (Iniciar → todo solo, puede desloguearse).
 - 2026-11-18: Ajustes del panel editables desde la web (D1 por

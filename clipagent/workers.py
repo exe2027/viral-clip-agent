@@ -170,15 +170,45 @@ def detect_peaks(chat_path, top_n=5, lang="both"):
                               "rank": rank_map.get(peak_ts),
                               "motivos": [f"categoría {cat!r}: no es GTA VI"]})
             continue
-        kept.append((peak_ts, score, multiple, cat, game))
+        kept.append((peak_ts, score, multiple, cat, game, _streamer))
     selected = [(p[0], p[1], p[2]) for p in kept]
-    _peak_cat = {(p[0]): (p[3], p[4]) for p in kept}
+    _peak_cat = {(p[0]): (p[3], p[4], p[5]) for p in kept}
     peaks = []
     for peak_ts, score, multiple in selected:
         viral = score_clip(detail[peak_ts], multiple,
                            rank=rank_map.get(peak_ts))
         d = detail[peak_ts]
-        cat, game = _peak_cat.get(peak_ts, (None, None))
+        cat, game, streamer = _peak_cat.get(peak_ts, (None, None, None))
+        # Puerta de render PRE-CORTE (regla del usuario 2026-11-18):
+        # el pico solo se corta si ya pasa las puertas con el paquete
+        # provisional. Si no pasa, a descartados SIN render. Si la
+        # puerta no se puede evaluar (error), el pico pasa con el
+        # error registrado: la puerta nunca tumba la detección; la
+        # puerta de publicación lo vuelve a medir todo.
+        gate = None
+        try:
+            gate = gate_peak_for_render(
+                chat_path, peak_ts, score, multiple, d, median,
+                list(scores.values()), lang=lang, game=game,
+                streamer=streamer, category=cat,
+                n=rank_map.get(peak_ts) or 1)
+        except Exception as e:  # noqa: BLE001 - ver comentario arriba
+            gate = {"pasa": True,
+                    "motivo": f"puerta de render no evaluada ({e}); "
+                              "se corta igual",
+                    "viral_estimate": float(viral.get("total") or 0.0),
+                    "seo": {}, "seo_medido": False, "estados": {},
+                    "plataformas_publicables": [],
+                    "pre_corte_title": None, "gate_error": str(e)}
+        if not gate["pasa"]:
+            discarded.append({"peak": peak_ts, "score": score,
+                              "multiple": multiple,
+                              "rank": rank_map.get(peak_ts),
+                              "viral_estimate": gate["viral_estimate"],
+                              "seo_pre_corte": gate["seo"],
+                              "motivos": [f"puerta de render: "
+                                          f"{gate['motivo']}"]})
+            continue
         peaks.append({
             "start": int(peak_ts),
             "score": float(score),
@@ -189,6 +219,18 @@ def detect_peaks(chat_path, top_n=5, lang="both"):
             "category": cat,
             "game": game,
             "category_ok": (is_gta6(cat) if cat is not None else None),
+            # Puerta de render pre-corte: título provisional, SEO
+            # pre-corte y decisión, para que el corte y el panel la
+            # re-verifiquen sin recalcular.
+            "render_gate": {"pasa": gate["pasa"],
+                            "motivo": gate["motivo"],
+                            "viral_estimate": gate["viral_estimate"],
+                            "seo_medido": gate["seo_medido"],
+                            "plataformas_publicables":
+                                gate["plataformas_publicables"]},
+            "seo_scores": gate["seo"],
+            "pre_corte_title": gate["pre_corte_title"],
+            "render_gate_error": gate.get("gate_error"),
             # Hype por ráfaga (regla 2026-11-18, v2): velocidad del
             # chat en la ventana y su pico contra el baseline
             # rodante, guardado por pico (valor, ventana, baseline,
@@ -213,6 +255,138 @@ def detect_peaks(chat_path, top_n=5, lang="both"):
         "n_windows": len(scores),
         "chat_path": chat_path,
     }
+
+
+# Puerta de render PRE-CORTE (regla del usuario 2026-11-18): el clip
+# SOLO se corta/renderiza si ya pasa las puertas. La viralidad y el
+# SEO se miden ANTES del corte con el paquete PROVISIONAL (ficha del
+# momento sin clip + títulos desde el chat, sin layout): el SEO sale
+# con el mapper real (score_package_seo) y la viralidad es la
+# estimación pre-corte (score_clip sin human ni audio).
+#
+# CALIBRACIÓN MEDIDA 2026-11-18 (no inventada; ver tests):
+# - p3220 (Rubius, clip bueno, listo para encolar): viralidad real
+#   53,8 (con human 5-7 + audio) pero estimación pre-corte 46,3;
+#   SEO pre-corte 89/91/92/92 (máx. 92) vs 92/94/94/94 real.
+# - p2010 (Rubius, descartado, viralidad 44,5): estimación = real
+#   44,5 (sin human); SEO 92/94/94/94.
+# La estimación pre-corte usa defaults conservadores 5,0 en los 5
+# componentes humanos y subestima ~7 puntos la viralidad real de un
+# clip bueno. Por eso el umbral PRE-CORTE es 45, no 50: con 50, p3220
+# (46,3) se descartaría sin render. El 50 REAL sigue vigente en la
+# puerta de publicación (policy.evaluate / publishGate del panel):
+# nada se publica sin viralidad >= 50 y SEO >= 90 de verdad.
+# El SEO pre-corte subestima ~3 puntos por lo visible (coherencia 80
+# sin layout, en vez de 100); el umbral SEO pre-corte SÍ es 90 y la
+# puerta pide el MÁXIMO >= 90 (al menos una plataforma publicable).
+# Si el usuario confirma 50 pre-corte, cambiar PRE_CORTE_VIRAL_MIN
+# a 50 sabiendo que p3220 se habría descartado.
+PRE_CORTE_VIRAL_MIN = 45
+
+
+def pre_corte_package(chat_path, peak_ts, score, multiple, detail,
+                      median_score, all_scores, lang="es", game=None,
+                      streamer=None, vod_id=None, game_source="",
+                      clip_start=None, duration=None, category=None,
+                      n=1, reel_patterns=None):
+    """Paquete PROVISIONAL sin vídeo: ficha del momento (sin clip,
+    con las citas del chat) + títulos + SEO por plataforma.
+
+    Usa los mismos constructores que el flujo post-corte
+    (build_moment_card con clip_path=None, package_clip,
+    score_package_seo) con el juego normalizado y los ejemplos del
+    chat: sin el juego normalizado los títulos no nombran GTA 6 y
+    el SEO sale sistemáticamente bajo. Solo sirve para la puerta de
+    render; el paquete DEFINITIVO se construye tras el corte con la
+    ficha, el layout y lo visible.
+    Devuelve (package, seo_scores) con seo_scores {plataforma:
+    {"score": n, ...}}.
+    """
+    from .ingest import sample_messages
+    from .metadata import package_clip, score_package_seo
+    from .moment_card import build_moment_card
+    d = detail or {}
+    start = (max(0.0, float(clip_start)) if clip_start is not None
+             else max(0.0, float(peak_ts) - CLIP_PRE_S))
+    dur = float(duration) if duration else float(CLIP_DURATION_S)
+    risas = d.get("risas", 0)
+    hype = d.get("hype", 0)
+    card = build_moment_card(
+        clip_path=None, chat_path=chat_path,
+        streamer=streamer or "", game=game,
+        game_source=game_source or
+        "categoría del capítulo (pre-corte)",
+        language=lang if lang in ("es", "en") else "es",
+        peak_ts_vod=peak_ts, clip_start_vod=start,
+        clip_duration_s=dur, score=score, risas=risas, hype=hype,
+        median_score=median_score, vod_id=vod_id, category=category)
+    examples = sample_messages(chat_path, int(peak_ts), window_size=60)
+    pkg = package_clip(
+        n, peak_ts, score, risas, hype, median_score=median_score,
+        all_scores=all_scores, lang=lang, examples=examples,
+        moment_card=card, game=game, streamer=streamer, vod_id=vod_id,
+        register=False, visible=None, layout=None,
+        reel_patterns=reel_patterns)
+    seo = score_package_seo(pkg, game_verified=bool(game),
+                            visible=None,
+                            lang=lang if lang in ("es", "en") else "es")
+    return pkg, seo
+
+
+def gate_peak_for_render(chat_path, peak_ts, score, multiple, detail,
+                         median_score, all_scores, lang="es", game=None,
+                         streamer=None, vod_id=None, game_source="",
+                         clip_start=None, duration=None, category=None,
+                         n=1, reel_patterns=None, cfg=None):
+    """Puerta de render de UN pico, antes de descargar o cortar nada.
+
+    1. Viralidad ESTIMADA pre-corte (score_clip sin human ni audio).
+    2. Paquete provisional + SEO pre-corte (solo si el juego es
+       conocido y hay título: sin juego no se puede medir el SEO y
+       la puerta decide solo por viralidad, anotándolo).
+    3. Puerta 50/90 de policy.render_gate con viral_min pre-corte
+       (PRE_CORTE_VIRAL_MIN, calibrado, ver comentario arriba) y
+       seo_gate 90.
+    Devuelve {"pasa", "motivo", "viral_estimate", "seo",
+    "seo_medido", "estados", "plataformas_publicables",
+    "pre_corte_title"}.
+    """
+    from .detect import score_clip
+    from .policy import render_gate
+    viral = score_clip(detail, multiple)
+    viral_estimate = float(viral.get("total") or 0.0)
+    seo, seo_medido, title = {}, False, None
+    error = None
+    try:
+        pkg, seo_full = pre_corte_package(
+            chat_path, peak_ts, score, multiple, detail, median_score,
+            all_scores, lang=lang, game=game, streamer=streamer,
+            vod_id=vod_id, game_source=game_source,
+            clip_start=clip_start, duration=duration,
+            category=category, n=n, reel_patterns=reel_patterns)
+        title = pkg.get("best_title")
+        seo = {p: r.get("score") for p, r in (seo_full or {}).items()}
+        # Sin juego conocido o sin título que pase el check, el SEO
+        # provisional no es fiable: no se descarta por él.
+        seo_medido = bool(game) and title is not None
+    except Exception as e:  # noqa: BLE001 - la puerta nunca tumba
+        error = str(e)      # la detección; el SEO queda sin medir.
+    gate = render_gate(viral_estimate, seo if seo_medido else {},
+                       cfg=cfg, viral_min=PRE_CORTE_VIRAL_MIN)
+    motivo = gate["motivo"]
+    if error:
+        motivo += f" (SEO pre-corte no evaluado: {error})"
+    if not seo_medido and not error:
+        motivo += ("; SEO sin medir pre-corte (juego sin verificar "
+                   "o sin título provisional)")
+    return {"pasa": bool(gate["pasa"]), "motivo": motivo,
+            "viral_estimate": viral_estimate,
+            "seo": seo, "seo_medido": seo_medido,
+            "estados": gate["estados"],
+            "plataformas_publicables":
+                gate["plataformas_publicables"],
+            "pre_corte_title": title,
+            "gate_error": error}
 
 
 def _do_cut(video, start_sec, duration, output, layout_mode="auto",
@@ -436,6 +610,22 @@ def _h_picos(store, job, cfg):
 def _h_corte(store, job, cfg):
     payload = job["payload"]
     _require(payload, "video", "start_sec", "duration", "output")
+    # Puerta de render PRE-CORTE (regla del usuario 2026-11-18):
+    # si el job trae los scores del paso picos, se re-verifica la
+    # puerta ANTES de cortar; si no pasa, NO se renderiza nada (el
+    # job falla permanente con el motivo, sin gastar ffmpeg). Sin
+    # scores en el payload, el corte es explícito/manual (tests,
+    # re-corte a mano) y se hace igual.
+    viral = payload.get("viral_total")
+    seo = payload.get("seo_scores")
+    if viral is not None and seo is not None:
+        from .policy import render_gate
+        gate = render_gate(viral, seo, cfg=cfg,
+                           viral_min=PRE_CORTE_VIRAL_MIN)
+        if not gate["pasa"]:
+            raise StepError(
+                f"puerta de render: {gate['motivo']} (sin render)",
+                kind="permanent")
     return cut_clip(payload["video"], float(payload["start_sec"]),
                     float(payload["duration"]), payload["output"],
                     layout_mode=payload.get("layout_mode", "auto"),
@@ -653,6 +843,11 @@ def advance_pipeline(store, job, result, cfg=None):
                       "output": out,
                       "peak_start": peak["start"],
                       "viral_total": peak.get("viral_total"),
+                      # Puerta de render: los scores del pico viajan
+                      # al job de corte para que _h_corte re-verifique
+                      # antes de renderizar.
+                      "seo_scores": peak.get("seo_scores"),
+                      "pre_corte_title": peak.get("pre_corte_title"),
                       "chat_multiple": peak.get("multiple")})
             created.append(store.enqueue(
                 f"{job['clip_id']}:p{int(peak['start'])}", "corte",

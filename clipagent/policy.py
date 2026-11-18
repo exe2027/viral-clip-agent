@@ -272,3 +272,98 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
             "band": band, "checks": checks,
             "improved_pkg": improved_pkg,
             "improved_seo": improved_seo}
+
+
+def render_gate(viral_total, seo_scores, seo_override=False, cfg=None,
+                viral_min=None, seo_gate=None):
+    """Puerta de RENDER (regla del usuario 2026-11-18): el clip SOLO
+    se corta/renderiza si ya pasa las puertas (viralidad >= viral_min
+    y SEO >= seo_gate en al menos una plataforma).
+
+    Es la misma puerta que la de publicación (``publish_status`` por
+    plataforma, umbrales de ``load_scoring_config``: 50/90 por
+    defecto), aplicada ANTES de gastar render: primero se detecta el
+    pico y se puntúa, y solo si pasa se corta y se renderiza. Si no
+    pasa, se descarta sin render.
+
+    El clip se corta si se puede publicar en AL MENOS UNA plataforma
+    (max SEO >= puerta): la puerta por plataforma sigue vigente en
+    publicación (``evaluate`` / publishGate del panel), que frena las
+    demás. Si el usuario quería las 4 plataformas >= 90, el cambio
+    es una línea (max -> min); preguntar antes de cambiarlo.
+
+    ``seo_scores``: {plataforma: score} o {plataforma: {"score": n}}.
+    Si viene vacío o sin ningún score (SEO sin medir: sin juego
+    verificado o sin título provisional), la puerta decide SOLO por
+    viralidad y lo anota (``seo_medido: False``): sin título no se
+    puede medir el SEO, y no se descarta un clip por un SEO que no
+    se pudo medir. La puerta de publicación lo vuelve a medir con
+    el paquete definitivo.
+
+    Devuelve {"pasa", "motivo", "viral_total", "seo", "estados",
+    "plataformas_publicables", "seo_medido"}.
+    """
+    gate_seo, gate_viral = load_scoring_config(cfg)
+    if seo_gate is None:
+        seo_gate = gate_seo
+    if viral_min is None:
+        viral_min = gate_viral
+    viral = None if viral_total is None else float(viral_total)
+    scores = {}
+    for platform, entry in (seo_scores or {}).items():
+        if isinstance(entry, dict):
+            value = entry.get("score")
+        else:
+            value = entry
+        if value is not None:
+            try:
+                scores[platform] = float(value)
+            except (TypeError, ValueError):
+                continue
+    estados = {}
+    publicables = []
+    for platform, score in scores.items():
+        status, why = publish_status(viral if viral is not None else 0,
+                                     score, seo_override=seo_override,
+                                     seo_gate=seo_gate,
+                                     viral_min=viral_min)
+        estados[platform] = {"status": status, "reason": why}
+        if status in ("publicable", "publicable_override"):
+            publicables.append(platform)
+    seo_medido = bool(scores)
+    if viral is None:
+        return {"pasa": False,
+                "motivo": "sin viralidad: no se puede puntuar el pico",
+                "viral_total": None, "seo": scores, "estados": estados,
+                "plataformas_publicables": publicables,
+                "seo_medido": seo_medido}
+    if viral < viral_min:
+        return {"pasa": False,
+                "motivo": f"viralidad {viral:.1f} < {viral_min}: "
+                          "descartado sin render",
+                "viral_total": viral, "seo": scores, "estados": estados,
+                "plataformas_publicables": publicables,
+                "seo_medido": seo_medido}
+    if not seo_medido:
+        return {"pasa": True,
+                "motivo": f"viralidad {viral:.1f} >= {viral_min}; SEO sin "
+                          "medir pre-corte (sin juego verificado o sin "
+                          "título provisional): se verifica en publicación",
+                "viral_total": viral, "seo": scores, "estados": estados,
+                "plataformas_publicables": publicables,
+                "seo_medido": False}
+    if not publicables:
+        best = max(scores.values())
+        return {"pasa": False,
+                "motivo": f"SEO máximo {best:.0f} < {seo_gate} en las 4 "
+                          "plataformas: descartado sin render",
+                "viral_total": viral, "seo": scores, "estados": estados,
+                "plataformas_publicables": publicables,
+                "seo_medido": True}
+    return {"pasa": True,
+            "motivo": f"viralidad {viral:.1f} >= {viral_min} y SEO "
+                      f"{max(scores.values()):.0f} >= {seo_gate} en "
+                      f"{', '.join(sorted(publicables))}",
+            "viral_total": viral, "seo": scores, "estados": estados,
+            "plataformas_publicables": publicables,
+            "seo_medido": True}
