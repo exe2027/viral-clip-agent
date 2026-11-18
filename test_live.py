@@ -253,5 +253,86 @@ class TestSession(unittest.TestCase):
                                              tmp), peaks)
 
 
+class TestDetectorHype(unittest.TestCase):
+    """Puerta live por ráfaga de hype (2026-11-18).
+
+    El múltiplo 3x sobre la mediana es inalcanzable en un chat
+    siempre caliente (VOD Rubius: máx. 1,68x en score). La puerta
+    nueva emite por hype_ratio >= 1,3 + score >= 14 + hype_score
+    >= 1,0, y la salvaguarda emite la mejor ventana al final si
+    no hubo ningún pico.
+    """
+
+    def _hot_chat(self, detector, t0, seconds=300, per_sec=10,
+                  burst_at=None, burst_n=0, burst_texts=None,
+                  burst_unique=True):
+        """Chat caliente constante (10 msgs/s, como Rubius) + ráfaga
+        opcional encima de la base. Con burst_unique=False el texto
+        de la ráfaga se repite idéntico (spam de emotes)."""
+        n = 0
+        for s in range(seconds):
+            for k in range(per_sec):
+                detector.add_message(
+                    f"u{n % 500}", f"qué buen directo {n}",
+                    t0 + s + k * 0.1)
+                n += 1
+        if burst_at is not None:
+            texts = burst_texts or ["jajaja no lo puedo creer"]
+            for i in range(burst_n):
+                text = texts[i % len(texts)]
+                if burst_unique:
+                    text = f"{text} {i}"
+                detector.add_message(f"b{i}", text,
+                                     t0 + burst_at + (i % 10))
+
+    def test_chat_caliente_con_rafaga_emite_por_hype(self):
+        detector = LivePeakDetector(t0=1000.0)
+        burst_texts = ["jajaja qué risa", "WTF qué acaba de pasar",
+                       "no lo puedo creer", "qué locura esto",
+                       "vamos qué pasada"]
+        # Ráfaga: 45 msgs extra en 10 s (ratio ~1,45) sobre una base
+        # de 100/10 s: el múltiplo queda ~2,2 (< 3,0), solo la
+        # puerta hype puede emitir.
+        self._hot_chat(detector, 1000.0, burst_at=200, burst_n=45,
+                       burst_texts=burst_texts)
+        peaks = detector.tick()
+        self.assertGreaterEqual(len(peaks), 1)
+        self.assertEqual(peaks[0][3].get("live_gate"), "hype")
+        self.assertGreaterEqual(peaks[0][3].get("hype_ratio", 0), 1.3)
+
+    def test_chat_caliente_sin_rafaga_no_emite(self):
+        detector = LivePeakDetector(t0=1000.0)
+        self._hot_chat(detector, 1000.0)
+        self.assertEqual(detector.tick(), [])
+        self.assertEqual(detector.best_fallback(), [])
+
+    def test_salvaguarda_mejor_ventana_si_no_hay_pico(self):
+        detector = LivePeakDetector(t0=1000.0)
+        # Ráfaga moderada: ratio ~1,2 (< 1,3) pero score alto: no
+        # pasa por tick, pero la salvaguarda emite la mejor ventana.
+        self._hot_chat(detector, 1000.0, burst_at=200, burst_n=20,
+                       burst_texts=["jajaja qué risa"])
+        self.assertEqual(detector.tick(), [])
+        fallback = detector.best_fallback()
+        self.assertEqual(len(fallback), 1)
+        self.assertEqual(fallback[0][3].get("live_gate"), "fallback")
+
+    def test_emote_spam_no_pasa_por_rafaga(self):
+        detector = LivePeakDetector(t0=1000.0)
+        # 200 emotes idénticos en 10 s: la ventana puntúa alto,
+        # pero es emote-only sin risas ni hype -> anti-spam.
+        self._hot_chat(detector, 1000.0, burst_at=200, burst_n=200,
+                       burst_texts=["🔥"], burst_unique=False)
+        self.assertEqual(detector.tick(), [])
+        self.assertEqual(detector.best_fallback(), [])
+
+    def test_calentamiento_no_emite_antes_de_120s(self):
+        detector = LivePeakDetector(t0=1000.0)
+        for i in range(30):
+            detector.add_message(f"u{i}", "jajaja qué risa",
+                                 1000.0 + 50 + (i % 10))
+        self.assertEqual(detector.tick(), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

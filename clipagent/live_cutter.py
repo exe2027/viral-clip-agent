@@ -645,6 +645,27 @@ class LiveCutterSession(LiveSession):
                             lang="es")
         final_clip = burned if os.path.isfile(burned) else raw_clip
         blocked = bool(sub.get("publish_blocked"))
+        # 6b. Frases hype del streamer en su propia voz (2026-11-18):
+        # la revisión ya las midió sobre la misma transcripción; si
+        # no hubo revisión, se leen del .transcript.json del subtítulo.
+        # Solo se registran (no tocan viralidad, SEO ni puertas).
+        streamer_hype = {"count": 0, "distinct": 0, "phrases": []}
+        if reviewed is not None and reviewed.get("streamer_hype"):
+            streamer_hype = reviewed["streamer_hype"]
+        else:
+            try:
+                from .streamer_hype import (find_streamer_hype,
+                                            transcript_text)
+                tpath = sub.get("transcript")
+                if not tpath and sub.get("srt"):
+                    tpath = os.path.splitext(sub["srt"])[0] \
+                        + ".transcript.json"
+                if tpath and os.path.isfile(tpath):
+                    with open(tpath, encoding="utf-8") as f:
+                        streamer_hype = find_streamer_hype(
+                            transcript_text(json.load(f)))
+            except Exception:  # noqa: BLE001 - señal opcional
+                pass
         # 7. Título validado + paquete SEO + prioridad (intocable).
         # Si hubo revisión, la viralidad post-corte usa sus valores
         # REALES (human Gemini + audio medido), no la estimación.
@@ -710,6 +731,7 @@ class LiveCutterSession(LiveSession):
             "burst_score": detail.get("burst_score"),
             "hype_score": detail.get("hype_score"),
             "hype_ratio": detail.get("hype_ratio"),
+            "streamer_hype": streamer_hype,
             "title": title, "clip": final_clip,
             "package_path": pkg["package_path"],
             "subtitles_complete": not blocked,
@@ -753,6 +775,10 @@ class LiveCutterSession(LiveSession):
                 _reason += (f" — revisión {_review.get('revision')}: "
                             f"{record.get('viral_auto')} -> "
                             f"{_review.get('viral_revisado')}")
+            _sh = record.get("streamer_hype") or {}
+            if _sh.get("count"):
+                _reason += (" — streamer: "
+                            + ", ".join(_sh.get("phrases") or []))
             payload = {
                 "title": record["title"],
                 "start_sec": record["start_sec"],

@@ -126,12 +126,17 @@ class TestReglas20261118Streamers(unittest.TestCase):
         self.assertIsNotNone(illojuan)
         self.assertTrue(illojuan.get("enabled", True),
                         "IlloJuan REACTIVADO 2026-11-18 15:30: enabled=true")
-        # El watcher vigila a los 10 activos (ver test_streamers).
+        # El watcher vigila a los activos (ver test_streamers): los
+        # 10 ES de la orden 15:30 + 8 EN añadidos después
+        # (418586a, 2026-11-18: KaiCenat, IShowSpeed, N3ON, xQc,
+        # TheBurntPeanut, Burn, Kaysan, WillNeff), todos GTA VI.
         from watcher import load_influencers
         watched = {i["usuario"] for i in load_influencers()}
         self.assertEqual(watched, {
             "illojuan", "rubius", "auronplay", "ibai", "thegrefg",
             "xokas", "djmariio", "knekro", "rdjavi", "westcol",
+            "kaicenat", "ishowspeed", "n3on", "xqc",
+            "theburntpeanut", "burn", "kaysan", "willneff",
         })
 
 

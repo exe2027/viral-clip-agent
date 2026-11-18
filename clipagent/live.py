@@ -3,8 +3,9 @@
 Twitch por IRC (stdlib, sin dependencias) y Kick por WebSocket
 Pusher (cliente WebSocket mínimo en stdlib, sin librerías nuevas).
 El chat en vivo alimenta el mismo scoring que el VOD
-(ingest.score_windows + detect.filter_passed): cuando una ventana
-pasa el filtro, se registra el pico en
+(ingest.score_windows + puerta live por múltiplo 3x o ráfaga de
+hype v2, con salvaguarda anti-cero al final de la sesión): cuando
+una ventana pasa la puerta, se registra el pico en
 runs/live/<streamer>_<fecha>/live_peaks.json y se avisa por
 Telegram. Cooldown y tope de clips por directo y por streamer
 (config `live:`).
@@ -40,6 +41,47 @@ KICK_CHANNEL_URL = "https://kick.com/api/v2/channels/{slug}"
 DEFAULT_COOLDOWN_MINUTES = 10
 DEFAULT_MAX_CLIPS_PER_STREAM = 5
 MIN_SEPARATION_S = 60
+
+# Puerta live por RÁFAGA de hype (2026-11-18, autorizado por el usuario).
+# Calibración medida en el VOD de Rubius 2932415021 (chat_full.json):
+# el múltiplo 3x sobre la mediana de la sesión es inalcanzable en un
+# chat siempre caliente (máx. 1,68x en score, 2,23x en puntos crudos;
+# 3220: 1,19x, 7775: 1,87x) y el detector live emitía 0 picos en 10 min
+# incluso en la ventana que termina en 3220 y en la de 7775
+# (reproducido en simulación con el chat real). La ráfaga hype v2
+# (msgs/10 s contra la mediana de los 5 min previos, ingest.py)
+# sí separa los momentos: 7775 llega a 1,86x, 3220 a 1,18x.
+# Puerta: hype_ratio >= 1,3 + score >= 14 + hype_score >= 1,0.
+# En las 3 ventanas de 10 min medidas: 3220 -> 6 ventanas (la 1ª
+# con score >= 14 es a 2685s, 14,6 pts), 7775 -> 47, 2010 (floja,
+# viralidad 44,5 y rechazada en VOD) -> 0. El múltiplo >= 3x se
+# conserva como vía alternativa (chat frío con pico enorme).
+# La viralidad (fórmula INTOCABLE), el SEO, la prioridad, los
+# filtros duros (viralidad >= 50, SEO >= 90), la duración 40-60 s,
+# los subtítulos y el layout RDJavi NO cambian: esto solo decide
+# QUÉ ventana se corta en vivo; el resto del pipeline la filtra
+# igual (viral_auto < 40 se descarta sin render).
+LIVE_HYPE_RATIO_MIN = 1.3
+LIVE_HYPE_SCORE_MIN = 1.0
+LIVE_SCORE_MIN = 14.0
+# Salvaguarda anti-cero (misma idea que el pre-filtro VOD): si la
+# sesión termina sin ningún pico, se emite la MEJOR ventana por
+# score si llega al piso relajado (hype_ratio >= 1,2, score >= 13).
+# Un chat muerto no llega: el score exige puntos reales. La
+# viralidad posterior sigue pudiendo descartarla antes del render.
+LIVE_FALLBACK_HYPE_RATIO_MIN = 1.2
+LIVE_FALLBACK_SCORE_MIN = 13.0
+# Calentamiento: sin 120 s de chat no hay baseline (la mediana de
+# los 5 min previos cae al global de pocas ventanas y la primera
+# ventana de la sesión parece un pico enorme). Medido en la
+# simulación del VOD: sin esto, la ventana rel=0 de la sesión
+# 7775 emitía a los 90 s por múltiplo 3,35x; con 120 s, el primer
+# pico es rel=130s (15,1 pts, hype 3,39x), un momento real.
+LIVE_WARMUP_S = 120
+# Un pico necesita 60 s de chat ANTES que él para ser una ráfaga
+# (sin antes, la ventana inicial de la sesión no tiene baseline y
+# parece un pico por arte de cálculo, no por el chat).
+LIVE_MIN_PEAK_TS_S = 60
 
 
 # ---------------------------------------------------------------------------
@@ -407,59 +449,152 @@ class LivePeakDetector:
     """Picos en vivo con el mismo scoring que el VOD.
 
     Cada tick re-puntúa el chat acumulado (score_windows) y emite
-    las ventanas nuevas que pasan el filtro previo (múltiplo >= 3x).
+    las ventanas nuevas que pasan la puerta live: múltiplo >= 3x
+    sobre la mediana (chat frío) O ráfaga de hype
+    (hype_ratio >= 1,3 + score >= 14 + hype_score >= 1,0, chat
+    caliente). El anti-spam (sin mensajes, solo emote-spam) frena
+    en ambas vías. No hay filtro top-5 en vivo: en directo no se
+    conoce el ranking final y el cooldown (1 clip / 10 min) ya
+    limita la emisión.
     `t0` es el inicio del directo (los ts son segundos desde t0).
     """
 
-    def __init__(self, t0=None, window_size=10):
+    def __init__(self, t0=None, window_size=10,
+                 hype_ratio_min=LIVE_HYPE_RATIO_MIN,
+                 hype_score_min=LIVE_HYPE_SCORE_MIN,
+                 score_min=LIVE_SCORE_MIN,
+                 fallback_hype_ratio_min=LIVE_FALLBACK_HYPE_RATIO_MIN,
+                 fallback_score_min=LIVE_FALLBACK_SCORE_MIN):
         self.t0 = t0 or time.time()
         self.window_size = window_size
         self.messages = []
         self.emitted = set()
+        self.hype_ratio_min = hype_ratio_min
+        self.hype_score_min = hype_score_min
+        self.score_min = score_min
+        self.fallback_hype_ratio_min = fallback_hype_ratio_min
+        self.fallback_score_min = fallback_score_min
 
     def add_message(self, user, text, ts=None):
         self.messages.append((user, text, (ts or time.time()) - self.t0))
 
-    def tick(self):
-        """Picos nuevos [(ts, score, multiple, detail)]. Nunca levanta."""
+    def _scores(self):
+        """(scores, detail, mediana) del chat acumulado, o vacíos.
+
+        Nunca levanta: un tick sin puntuación devuelve vacío.
+        """
         if len(self.messages) < 5:
-            return []
-        from .detect import MIN_MULTIPLE, filter_passed
+            return {}, {}, 1.0
         from .ingest import score_windows
         import statistics
         path = _chat_json_path(self.messages)
         try:
             scores, detail = score_windows(path)
         except Exception:  # noqa: BLE001 - el tick nunca tumba la sesión
-            return []
+            return {}, {}, 1.0
         finally:
             try:
                 os.remove(path)
             except OSError:
                 pass
         if not scores:
+            return {}, {}, 1.0
+        return scores, detail, max(statistics.median(scores.values()), 1.0)
+
+    @staticmethod
+    def _anti_spam_ok(d):
+        """Anti-spam duro para ambas vías: con mensajes y no solo
+        emote-spam sin risas ni hype (mismo criterio que
+        detect.filter_passed)."""
+        d = d or {}
+        if (d.get("msgs") or 0) <= 0:
+            return False
+        if ((d.get("emote_ratio") or 0.0) > 0.6
+                and (d.get("risas") or 0) + (d.get("hype") or 0) == 0):
+            return False
+        return True
+
+    def _gate(self, score, multiple, d):
+        """(pasa, vía) de la puerta live para una ventana.
+
+        Vía "multiple": múltiplo >= 3x (chat frío, como antes).
+        Vía "hype": ráfaga hype v2 + score alto (chat caliente).
+        """
+        from .detect import MIN_MULTIPLE
+        if not self._anti_spam_ok(d):
+            return False, None
+        if multiple >= MIN_MULTIPLE:
+            return True, "multiple"
+        if ((d.get("hype_ratio") or 0.0) >= self.hype_ratio_min
+                and score >= self.score_min
+                and (d.get("hype_score") or 0.0) >= self.hype_score_min):
+            return True, "hype"
+        return False, None
+
+    def tick(self):
+        """Picos nuevos [(ts, score, multiple, detail)]. Nunca levanta."""
+        # Sin 120 s de chat no hay baseline fiable: no se emite.
+        if not self.messages or max(m[2] for m in self.messages) < LIVE_WARMUP_S:
             return []
-        median = max(statistics.median(scores.values()), 1.0)
-        ranked = sorted(scores.items(), key=lambda kv: kv[1],
-                        reverse=True)
-        rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
+        scores, detail, median = self._scores()
+        if not scores:
+            return []
         peaks = []
         for ts, score in scores.items():
+            if ts < LIVE_MIN_PEAK_TS_S:
+                continue
             if ts in self.emitted:
                 continue
             if any(abs(ts - e) < MIN_SEPARATION_S for e in self.emitted):
                 continue
             multiple = score / median
-            if multiple < MIN_MULTIPLE:
-                continue
-            pasa, _motivos = filter_passed(
-                detail.get(ts, {}), multiple, rank=rank_map.get(ts))
+            pasa, via = self._gate(score, multiple, detail.get(ts, {}))
             if not pasa:
                 continue
             self.emitted.add(ts)
-            peaks.append((ts, round(score, 1), round(multiple, 2),
-                          detail.get(ts, {})))
+            d = dict(detail.get(ts, {}))
+            d["live_gate"] = via
+            peaks.append((ts, round(score, 1), round(multiple, 2), d))
         return sorted(peaks)
+
+    def best_fallback(self):
+        """Mejor ventana no emitida si llega al piso relajado.
+
+        Salvaguarda anti-cero al final de la sesión: la ventana de
+        mayor score con hype_ratio >= 1,2 y score >= 13, con el
+        anti-spam en vigor. Devuelve el pico [(ts, score, multiple,
+        detail)] o []. No emite nada en un chat muerto (el score
+        exige puntos reales) y la viralidad posterior puede
+        descartarlo antes del render.
+        """
+        scores, detail, median = self._scores()
+        if not scores:
+            return []
+        best = None
+        for ts, score in scores.items():
+            if ts < LIVE_MIN_PEAK_TS_S:
+                continue
+            if ts in self.emitted:
+                continue
+            if any(abs(ts - e) < MIN_SEPARATION_S for e in self.emitted):
+                continue
+            d = detail.get(ts, {}) or {}
+            if not self._anti_spam_ok(d):
+                continue
+            if ((d.get("hype_ratio") or 0.0)
+                    < self.fallback_hype_ratio_min):
+                continue
+            if score < self.fallback_score_min:
+                continue
+            if best is None or score > best[1]:
+                best = (ts, score, score / median, d)
+        if best is None:
+            return []
+        ts, score, multiple, d = best
+        self.emitted.add(ts)
+        d = dict(d)
+        d["live_gate"] = "fallback"
+        return [(ts, round(score, 1), round(multiple, 2), d)]
 
 
 class LiveLimits:
@@ -578,6 +713,7 @@ class LiveSession:
         thread.start()
         start = time.time()
         last_tick = 0.0
+        peaks_at_start = len(self.peaks)
         try:
             while time.time() - start < duration_s:
                 try:
@@ -593,6 +729,15 @@ class LiveSession:
                     last_tick = time.time()
                     for peak in self.detector.tick():
                         self._on_peak(peak, notify)
+            # Salvaguarda anti-cero: si la sesión no emitió ningún
+            # pico, se intenta la mejor ventana por score (piso
+            # relajado). El recorder guarda 12 min, así que la
+            # ventana sigue siendo cortable; el hilo de corte y el
+            # recorder siguen vivos aquí (se paran en run_live,
+            # después de que run() devuelva).
+            if len(self.peaks) == peaks_at_start:
+                for peak in self.detector.best_fallback():
+                    self._on_peak(peak, notify)
         finally:
             stop.set()
             close = getattr(source, "close", None)

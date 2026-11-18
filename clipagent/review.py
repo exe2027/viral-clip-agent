@@ -193,7 +193,9 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
               "human": None, "human_reasons": None, "audio": None,
               "seo": {}, "seo_medido": False, "pre_corte_title": None,
               "revision": "gemini", "pasa": False, "motivo": "",
-              "transcript_words": 0, "frames_n": 0}
+              "transcript_words": 0, "frames_n": 0,
+              "streamer_hype": {"count": 0, "distinct": 0,
+                                "phrases": []}}
     # 1. SEO provisional (sin vídeo) + título para el juez.
     try:
         median_score = None
@@ -222,6 +224,10 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
             window_path, language=lang if lang in ("es", "en")
             else None)
         text = _transcript_text(transcript)
+        # Frases hype del streamer en su propia voz (2026-11-18):
+        # quedan registradas en la revisión; no tocan la puerta.
+        from .streamer_hype import find_streamer_hype
+        result["streamer_hype"] = find_streamer_hype(text)
         full = audio_verdict(window_path, chat_score=score,
                              peak_rel=REVIEW_PEAK_REL_S,
                              transcript=transcript, lang=lang)
