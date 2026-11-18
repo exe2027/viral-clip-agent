@@ -585,18 +585,14 @@ def chat_stream_info(chat_path: str, peak_ts: float):
     game_source = ""
     vid = data.get("video") or {}
     if isinstance(vid, dict):
-        for ch in vid.get("chapters") or []:
-            if not isinstance(ch, dict):
-                continue
-            try:
-                start = (ch.get("startMilliseconds") or 0) / 1000.0
-                length = (ch.get("lengthMilliseconds") or 0) / 1000.0
-            except (TypeError, ValueError):
-                continue
-            if start <= peak_ts < start + length:
-                game = ch.get("gameDisplayName") or ch.get("description")
-                game_source = f"capítulo de Twitch: {game}"
-                break
+        # Capítulo donde cae el pico (clipagent.category: Helix no
+        # expone capítulos; el chat.json trae video.chapters con
+        # gameDisplayName, el mismo dato del reproductor de Twitch).
+        from clipagent.category import category_at
+        cat = category_at(vid.get("chapters") or [], peak_ts)
+        if cat:
+            game = cat
+            game_source = f"capítulo de Twitch: {game}"
         if game is None:
             game = vid.get("game")
             if game:

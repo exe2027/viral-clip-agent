@@ -336,6 +336,44 @@ class TwitchHelix:
                     "Authorization": f"Bearer {self.token}"})
             raise
 
+    def live_category(self, login):
+        """Categoría ACTUAL del directo (Helix oficial).
+
+        GET /helix/streams?user_login=<login> (game_name/game_id).
+        Devuelve {"game_name", "game_id", "live", "source"}; si no
+        está en vivo, live=False y game_name="" (sin asumir).
+        """
+        streams = self._get("/streams", {"user_login": login}).get("data") or []
+        if not streams:
+            return {"game_name": "", "game_id": "", "live": False,
+                    "source": "helix /streams (offline)"}
+        s = streams[0]
+        return {"game_name": s.get("game_name") or "",
+                "game_id": s.get("game_id") or "",
+                "live": True,
+                "source": "helix /streams?user_login"}
+
+    def channel_category(self, login):
+        """Categoría del canal (Helix oficial).
+
+        GET /helix/users?login= -> id, luego GET
+        /helix/channels?broadcaster_id=<id> (game_name/game_id).
+        Es la categoría que Twitch muestra en el canal (la del
+        directo en curso o la última).
+        """
+        users = self._get("/users", {"login": login}).get("data") or []
+        if not users:
+            raise WatcherError(f"Twitch Helix: no existe el usuario {login!r}.")
+        user_id = users[0]["id"]
+        channels = self._get("/channels", {"broadcaster_id": user_id}).get("data") or []
+        if not channels:
+            return {"game_name": "", "game_id": "",
+                    "source": "helix /channels (sin datos)"}
+        c = channels[0]
+        return {"game_name": c.get("game_name") or "",
+                "game_id": c.get("game_id") or "",
+                "source": "helix /channels?broadcaster_id"}
+
     def check(self, login):
         """Devuelve (live_dict_o_None, [vods])."""
         users = self._get("/users", {"login": login}).get("data") or []

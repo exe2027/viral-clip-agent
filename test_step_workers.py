@@ -17,7 +17,8 @@ import pytest  # noqa: E402
 
 from clipagent.jobs import StepJobs  # noqa: E402
 from clipagent import workers  # noqa: E402
-from clipagent.workers import (StepError, bridge_legacy_queue,  # noqa: E402
+from clipagent.workers import (StepError, advance_pipeline,  # noqa: E402
+                              bridge_legacy_queue,
                               enqueue_pipeline, run_step,
                               run_supervisor, workers_status)
 
@@ -226,7 +227,10 @@ def test_pipeline_advances_vod_to_picos_to_corte(store, tmp_path,
                for c in cortes)
 
 
-def test_pipeline_stops_at_empaquetar(store, tmp_path):
+def test_pipeline_empaquetar_autoencola_tiktok(store, tmp_path):
+    # 2026-11-18 (100% automático): al terminar empaquetar, la
+    # cadena auto-encola publicar en TikTok (mode api). El resto
+    # de puertas las aplica publish_one al ejecutar ese job.
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"v" * 10)
     job = store.enqueue("c1", "empaquetar", payload={
@@ -234,7 +238,43 @@ def test_pipeline_stops_at_empaquetar(store, tmp_path):
         "out_path": str(tmp_path / "clip.package.json")})
     done = run_step(store, job["id"], cfg={})
     assert done["estado"] == "done"
-    assert store.list_jobs(paso="publicar") == []  # publicar es manual
+    pubs = store.list_jobs(paso="publicar")
+    assert len(pubs) == 1
+    assert pubs[0]["plataforma"] == "tiktok"
+    assert pubs[0]["payload"]["mode"] == "api"
+    assert pubs[0]["payload"]["clip"] == str(clip)
+
+
+def test_pipeline_empaquetar_bloqueado_no_autoencola(store, tmp_path):
+    # Puerta dura: subtítulos incompletos (publish_blocked) -> la
+    # cadena se detiene y NO se encola publicar.
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"v" * 10)
+    job = store.enqueue("c1", "empaquetar", payload={
+        "clip": str(clip), "title": "GTA 6: jugada increíble",
+        "out_path": str(tmp_path / "clip.package.json"),
+        "publish_blocked": True})
+    done = run_step(store, job["id"], cfg={})
+    assert done["estado"] == "done"
+    assert store.list_jobs(paso="publicar") == []
+
+
+def test_subtitulos_lleva_publish_blocked_a_empaquetar(store, tmp_path):
+    # El flag publish_blocked viaja en el payload de subtitulos
+    # a empaquetar (si no viajara, la puerta de empaquetar no lo
+    # vería nunca).
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"v" * 10)
+    job = store.enqueue("c1", "subtitulos", payload={
+        "video": str(clip)})
+    created = advance_pipeline(store, job, {
+        "video": str(clip), "burned": str(clip),
+        "publish_blocked": True,
+        "needs_human_transcription": True,
+        "srt": str(tmp_path / "clip.srt")})
+    assert len(created) == 1
+    assert created[0]["paso"] == "empaquetar"
+    assert created[0]["payload"]["publish_blocked"] is True
 
 
 def test_supervisor_once_processes_chain(store, tmp_path, monkeypatch):

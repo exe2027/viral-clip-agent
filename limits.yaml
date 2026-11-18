@@ -45,7 +45,7 @@ tiktok:
   max_per_day: 3
   source_url: "https://developers.tiktok.com/doc/content-posting-api-get-started"
   reviewed: null
-  note: "Flujo Direct Post verificado 2026-11-17 en la doc oficial (creator_info -> init FILE_UPLOAD -> PUT por chunks 5-64 MB -> status/fetch; init 6 peticiones/min). Sin auditoría de la app, TikTok solo permite publicar en privado (error unaudited_client_can_only_post_to_private_accounts) y el sistema cae a draft. Tope diario de la plataforma SIN verificar (guías secundarias dicen ~15/día): plan/max son topes internos del proyecto, no un límite de TikTok."
+  note: "Direct Post PROPIO (app sin auditar): creator_info -> init FILE_UPLOAD -> PUT por chunks 5-64 MB -> status/fetch; init 6 peticiones/min. Sin auditoría de la app, TikTok solo permite publicar en privado (error unaudited_client_can_only_post_to_private_accounts) y el sistema cae a draft. VÍA ACTIVA desde 2026-11-18: Zernio (app TikTok for Business auditada de Zernio): POST /v1/posts con publishNow true, PUBLIC_TO_EVERYONE, pre-chequeo dryRun; publica en PÚBLICO sin auditoría propia (verificado en docs.zernio.com 2026-11-18). Tope diario de la plataforma vía Zernio: 15 vídeos/cuenta/24 h (rolling). plan/max son topes internos del proyecto, más estrictos."
 
 instagram_reels:
   plan_per_day: 2
@@ -63,5 +63,6 @@ facebook_reels:
 
 # Frenos internos del proyecto (no son límites de plataforma).
 min_spacing_hours: 2
-publish_window: [18, 24]
+# publish_window ELIMINADO 2026-11-18 (decisión del usuario:
+# sin franja horaria, se publica a cualquier hora).
 new_account_daily: 1

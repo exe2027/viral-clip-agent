@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Pruebas de ZernioAdapter (clipagent/platforms.py): TikTok por
-Zernio API, draft-first. Todo con transporte falso; nada toca la
-red de verdad. Sin clave o sin cuenta -> draft, nunca error.
+Zernio API, publicación DIRECTA en público desde 2026-11-18
+(pre-chequeo dryRun + draft=False, publishNow True). Todo con
+transporte falso; nada toca la red de verdad. Sin clave o sin
+cuenta -> draft, nunca error.
 """
 import os
 import sys
@@ -23,6 +25,24 @@ def _fake(responses):
         calls.append((method, url, body))
         for key, (status, payload) in responses.items():
             if key in url:
+                return status, payload
+        return 404, {"error": {"code": "not_found", "message": "?"}}
+    request_fn.calls = calls
+    return request_fn
+
+
+def _fake_seq(responses):
+    """request_fn con respuestas EN ORDEN (una por llamada):
+    cada entrada (trozo de URL, status, payload) se consume al
+    usarse. Guarda (método, url, headers, body) en fn.calls."""
+    calls = []
+    queue = list(responses)
+
+    def request_fn(method, url, headers, body):
+        calls.append((method, url, headers, body))
+        for i, (key, status, payload) in enumerate(queue):
+            if key in url:
+                queue.pop(i)
                 return status, payload
         return 404, {"error": {"code": "not_found", "message": "?"}}
     request_fn.calls = calls
@@ -150,6 +170,94 @@ class TestZernio(unittest.TestCase):
         self.assertTrue(body["publishNow"])
         self.assertFalse(body["isDraft"])
         self.assertNotIn("draft", body["tiktokSettings"])
+
+    def test_create_post_devuelve_url_publica(self):
+        with unittest.mock.patch.dict(os.environ, self._env()):
+            fn = _fake({"/v1/posts": (201, {
+                "id": "post-3",
+                "platformPostUrl":
+                    "https://www.tiktok.com/@elclipdegta6/video/123"})})
+            r = pl.ZernioAdapter(self.base, fn).create_post(
+                "https://x/v.mp4", "título", draft=False)
+        self.assertTrue(r["ok"])
+        self.assertEqual(
+            r["platform_post_url"],
+            "https://www.tiktok.com/@elclipdegta6/video/123")
+
+    def test_can_publish_dry_run_real(self):
+        # Pre-chequeo REAL (dryRun: true en POST /v1/posts): no
+        # crea nada, devuelve canPublish.
+        with unittest.mock.patch.dict(os.environ, self._env()):
+            fn = _fake({"/v1/posts": (200, {
+                "dryRun": True, "canPublish": True,
+                "tiktok": [{"canPublish": True}]})})
+            r = pl.ZernioAdapter(self.base, fn).can_publish(
+                "https://x/v.mp4", "título")
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["can_publish"])
+        self.assertEqual(len(fn.calls), 1)
+        self.assertTrue(fn.calls[0][2]["dryRun"])
+
+    def test_can_publish_false(self):
+        with unittest.mock.patch.dict(os.environ, self._env()):
+            fn = _fake({"/v1/posts": (200, {
+                "dryRun": True, "canPublish": False,
+                "tiktok": [{"canPublish": False}]})})
+            r = pl.ZernioAdapter(self.base, fn).can_publish(
+                "https://x/v.mp4", "título")
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["can_publish"])
+
+    def test_publish_public_happy(self):
+        # presign -> PUT -> dryRun ok -> POST publishNow:
+        # público, con URL y clave de idempotencia.
+        with unittest.mock.patch.dict(os.environ, self._env()):
+            fn = _fake_seq([
+                ("media/presign", 200, {
+                    "uploadUrl": "https://presigned.example/upload",
+                    "publicUrl": "https://media.zernio.com/temp/v.mp4"}),
+                ("presigned.example", 200, {}),
+                ("/v1/posts", 200, {
+                    "dryRun": True, "canPublish": True}),
+                ("/v1/posts", 201, {
+                    "id": "post-9",
+                    "platformPostUrl":
+                        "https://www.tiktok.com/@elclipdegta6"
+                        "/video/999"}),
+            ])
+            ad = pl.ZernioAdapter(self.base, fn)
+            r = ad.publish_public(self.clip, "título #gta6")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["mode"], "api")
+        self.assertFalse(r["draft"])
+        self.assertEqual(r["post_id"], "post-9")
+        self.assertEqual(
+            r["platform_post_url"],
+            "https://www.tiktok.com/@elclipdegta6/video/999")
+        self.assertEqual(len(fn.calls), 4)
+        create_body = fn.calls[3][3]
+        self.assertTrue(create_body["publishNow"])
+        self.assertFalse(create_body["isDraft"])
+        self.assertNotIn("draft", create_body["tiktokSettings"])
+        self.assertIn("Idempotency-Key", fn.calls[3][2])
+
+    def test_publish_public_bloqueado_por_dryrun(self):
+        # dryRun dice que no: queda en borrador y NO se llama al
+        # POST de crear.
+        with unittest.mock.patch.dict(os.environ, self._env()):
+            fn = _fake_seq([
+                ("media/presign", 200, {
+                    "uploadUrl": "https://presigned.example/upload",
+                    "publicUrl": "https://media.zernio.com/temp/v.mp4"}),
+                ("presigned.example", 200, {}),
+                ("/v1/posts", 200, {
+                    "dryRun": True, "canPublish": False}),
+            ])
+            ad = pl.ZernioAdapter(self.base, fn)
+            r = ad.publish_public(self.clip, "título #gta6")
+        self.assertEqual(r["mode"], "draft")
+        self.assertIn("no puede publicar", r["reason"])
+        self.assertEqual(len(fn.calls), 3)
 
 
 if __name__ == "__main__":

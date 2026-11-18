@@ -137,12 +137,11 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
         return _deny("retenido",
                      f"sin score SEO para {platform} en el manifiesto")
 
-    # 0. Duración (reglas del usuario 2026-11-17): ningún clip por
-    # debajo de 36 s ("muy poco", el de 21 s publicado en test), ninguno
-    # dentro del rango prohibido 25-35 s (regla de oro: ningún clip de
-    # 30 s) y ninguno por encima del tope duro de 60 s. Un clip corto
-    # no se publica aunque pase viralidad y SEO: se retiene para
-    # re-cortarlo más largo.
+    # 0. Duración (reglas del usuario 2026-11-18): ningún clip por
+    # debajo de 40 s, ninguno dentro del rango prohibido 25-35 s
+    # (regla de oro: ningún clip de 30 s) y ninguno por encima del
+    # tope duro de 60 s. Un clip corto no se publica aunque pase
+    # viralidad y SEO: se retiene para re-cortarlo más largo.
     duration = clip.get("duration")
     if duration is not None:
         try:
@@ -153,6 +152,23 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
         checks.append(f"duración: {duration} s")
         if not ok_dur:
             return _deny("retenido", why_dur)
+
+    # 0.5. Categoría GTA VI (regla del usuario 2026-11-18): un clip
+    # solo es válido si la categoría en la que streamea el
+    # influencer es GTA VI (Grand Theft Auto VI). La categoría es el
+    # capítulo del VOD donde cae el pico (clip["category"]), o el
+    # juego (clip["game"] / parámetro game). Un momento de Just
+    # Chatting u otro juego se descarta; sin categoría verificada
+    # no se puede confirmar GTA VI y se retiene.
+    from .category import effective_category, is_gta6
+    cat = effective_category(clip, game)
+    if cat and not is_gta6(cat):
+        return _deny("descartado",
+                     f"categoría {cat!r}: no es GTA VI")
+    if not cat:
+        return _deny("retenido",
+                     "sin categoría verificada: no se puede confirmar "
+                     "que el clip sea GTA VI")
 
     # 1. Filtros duros de puntaje (6B.2 / 6B.5).
     status, why = publish_status(virality, seo, seo_override=seo_override,

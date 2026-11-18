@@ -63,11 +63,13 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB_PATH = os.path.join(HERE, "queue.db")
 
 #: Pasos del pipeline. ``publicar`` es un paso por PLATAFORMA (un job
-#: por clip y plataforma) y NUNCA se crea solo: lo crea la aprobación
-#: humana (ver ``clipagent.workers.enqueue_publish``).
+#: por clip y plataforma); lo crea la aprobación humana (ver
+#: ``clipagent.workers.enqueue_publish``) o, desde 2026-11-18, la
+#: cadena automática para TikTok al terminar ``empaquetar``.
 STEPS = ("vod", "picos", "corte", "subtitulos", "empaquetar", "publicar")
 #: Orden automático del pipeline (sin intervención por clip). Al
-#: terminar ``empaquetar`` la cadena se detiene: publicar es manual.
+#: terminar ``empaquetar`` se auto-encola publicar en TikTok
+#: (mode api); el resto de plataformas sigue manual.
 PIPELINE = ("vod", "picos", "corte", "subtitulos", "empaquetar")
 PLATFORMS = ("youtube_shorts", "tiktok", "instagram_reels",
              "facebook_reels")

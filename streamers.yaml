@@ -26,3 +26,19 @@ streamers:
     evidencia_url: ""
     publish_platforms: [youtube, tiktok, instagram, facebook]
     notas: "Primer influencer del monitor. Permiso ya dado por el usuario (2026-11-16)."
+    # PAUSADO por el usuario el 2026-11-18 13:34 -03: NO IlloJuan ahora,
+    # foco 100% Rubius GTA 6. enabled=false: el watcher no lo vigila y
+    # no se publican sus clips nuevos (ver streamers.py: enabled).
+    # El clip_02 sigue además bloqueado por subtítulos sin verificar.
+    enabled: false
+  - name: rubius
+    platform: twitch
+    channel_url: "https://www.twitch.tv/rubius"
+    game: "GTA 6"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Autorizado por el usuario el 2026-11-18 para publicar clips de GTA 6 en las 4 cuentas ES (lanzamiento, directo 2932415021). Antes solo pruebas locales, sin publicar. Streamer prioritario desde 2026-11-18 (IlloJuan pausado)."
+    enabled: true

@@ -205,7 +205,7 @@ puesto; no asumas que está bien.
 6.4 Circuit breaker por plataforma: N fallos seguidos, rechazo por
     copyright/contenido o strike => pausa SOLO esa plataforma, notifica y no
     reintenta a ciegas. Reanudar es una acción explícita en el panel.
-6.5 Ritmo: topes diarios, espaciado y franja horaria (Chile) desde
+6.5 Ritmo: topes diarios y espaciado (SIN franja horaria desde el 2026-11-18: da lo mismo la hora) desde
     limits.yaml; cuentas nuevas con ritmo reducido la primera semana.
 6.6 Notificaciones opcionales por Telegram, SOLO informativas ("publicado",
     "plataforma pausada", "falló X"). Nunca piden permiso.

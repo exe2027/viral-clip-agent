@@ -11,19 +11,23 @@ Reglas del tribunal (Bloque 7) que implementa este módulo:
     Facebook son draft-first: se genera el paquete listo para subir
     a mano y NUNCA se publica directo sin auditoría aprobada.
     (2026-11-18: TikTok va por Zernio — ZernioAdapter, presign +
-    PUT + POST /v1/posts — con isDraft True por defecto: el post
-    queda como borrador en Zernio, nunca sale en público sin
-    revisión. El adaptador directo de TikTok ya no se usa para
-    publicar.)
-  * Sin fila en verde en la auditoría, esa cuenta queda en draft-first.
+    PUT + POST /v1/posts — con publicación DIRECTA en público:
+    pre-chequeo dryRun y draft=False, publishNow True, por la app
+    TikTok for Business auditada de Zernio. La auditoría propia
+    NO hace falta para esta vía. El adaptador directo de TikTok
+    ya no se usa para publicar.)
+  * Sin fila en verde en la auditoría, esa cuenta queda en draft-first
+    (salvo TikTok por Zernio, ver arriba).
   * La lista blanca se verifica EN EL MOMENTO de publicar, no solo al
     detectar: si el streamer ya no está en la lista, no se publica.
     (2026-11-16: estar en la lista que sube el usuario = permiso ya
     dado; no hay ficha de permiso que registrar.)
   * Rechazos: error de formato -> 1 reintento; copyright/contenido ->
     cuarentena y revisión humana, nunca reintento ciego.
-  * Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h, franja
-    tarde/noche de Chile (18:00-23:59 America/Santiago).
+  * Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h.
+    SIN franja horaria desde el 2026-11-18 (decisión del usuario:
+    da lo mismo la hora, solo se sube; los topes diarios y el
+    espaciamiento siguen vigentes como defensa anti-ban).
   * --dry-run es el modo por defecto: sin credenciales no hace nada
     real, solo valida el paquete y reporta qué bloquearía la subida.
 
@@ -87,8 +91,10 @@ WHITELIST_FALLBACK = os.path.join(BASE_DIR, "allowed_streamers.yaml")
 DRAFTS_DIR = os.path.join(BASE_DIR, "drafts")
 
 # ---------------------------------------------------------------------------
-# Topes y franja (Bloque 7). Se leen de limits.yaml (Fase 2.4); los
+# Topes (Bloque 7). Se leen de limits.yaml (Fase 2.4); los
 # valores de abajo son solo el fallback si falta ese archivo.
+# SIN franja horaria desde el 2026-11-18 (decisión del usuario):
+# la hora ya no frena la publicación.
 # Los topes por plataforma son prudencia con cuentas nuevas (ver
 # README: "Cuentas nuevas: 1 publicación por día por plataforma"
 # la primera semana; estos topes son el techo una vez calentada la
@@ -108,7 +114,6 @@ _DEFAULT_LIMITS = {
     "instagram_reels": {"plan_per_day": 2, "max_per_day": 3},
     "facebook_reels": {"plan_per_day": 2, "max_per_day": 3},
     "min_spacing_hours": 2,
-    "publish_window": [18, 24],
     "new_account_daily": 1,
 }
 
@@ -117,9 +122,10 @@ def load_limits(path=None):
     """Límites de plataforma desde limits.yaml (o el fallback).
 
     Devuelve un dict con una entrada por plataforma (plan_per_day,
-    max_per_day, y en YouTube la cuota) más min_spacing_hours,
-    publish_window y new_account_daily. Si falta el archivo o
-    PyYAML, devuelve los valores por defecto del código.
+    max_per_day, y en YouTube la cuota) más min_spacing_hours y
+    new_account_daily. Si falta el archivo o PyYAML, devuelve los
+    valores por defecto del código. (publish_window se eliminó el
+    2026-11-18: sin franja horaria, por decisión del usuario.)
     """
     limits = {k: dict(v) if isinstance(v, dict) else v
               for k, v in _DEFAULT_LIMITS.items()}
@@ -135,7 +141,7 @@ def load_limits(path=None):
         entry = data.get(platform)
         if isinstance(entry, dict):
             limits[platform].update(entry)
-    for key in ("min_spacing_hours", "publish_window", "new_account_daily"):
+    for key in ("min_spacing_hours", "new_account_daily"):
         if key in data:
             limits[key] = data[key]
     return limits
@@ -149,7 +155,10 @@ DAILY_LIMITS = {
     for p in PLATFORMS
 }
 MIN_SPACING_HOURS = int(_LIMITS["min_spacing_hours"])
-PUBLISH_WINDOW = tuple(_LIMITS["publish_window"])
+# PUBLISH_WINDOW ELIMINADO el 2026-11-18 (decisión del usuario: sin
+# franja horaria). Se mantiene el nombre como None para que un
+# import viejo falle de forma visible en vez de silenciosa.
+PUBLISH_WINDOW = None
 NEW_ACCOUNT_DAILY = int(_LIMITS["new_account_daily"])
 
 # YouTube Data API v3 — cuota (ver limits.yaml y el historial
@@ -605,7 +614,8 @@ def check_limits(queue, platform):
     - Tope diario (plan) y techo (YT: bucket de videos.insert,
       100 llamadas/día; el resto, topes internos de limits.yaml).
     - Espaciamiento mínimo 2 h desde la última subida.
-    - Franja 18:00-23:59 Chile.
+    - SIN franja horaria desde el 2026-11-18 (decisión del usuario:
+      da lo mismo la hora, solo se sube).
     """
     plan, maximum = DAILY_LIMITS[platform]
     today = queue.published_today(platform)
@@ -621,10 +631,7 @@ def check_limits(queue, platform):
         if gap < MIN_SPACING_HOURS:
             return False, (f"espaciamiento: última subida hace {gap:.1f} h, "
                            f"mínimo {MIN_SPACING_HOURS} h")
-    hour = _now_chile().hour
-    if not (PUBLISH_WINDOW[0] <= hour < PUBLISH_WINDOW[1]):
-        return False, (f"fuera de franja: son las {hour:02d}:00 Chile, "
-                       f"la franja es {PUBLISH_WINDOW[0]:02d}:00-{PUBLISH_WINDOW[1]:02d}:00")
+    # SIN franja (2026-11-18): la hora ya no frena la publicación.
     return True, f"dentro de topes ({len(today)}/{plan} hoy, plan {plan}/día)"
 
 
@@ -940,14 +947,20 @@ class DirectPublisher:
     """TikTok / Instagram / Facebook: publicación directa por API.
 
     TikTok va por Zernio (ZernioAdapter: presign + PUT + POST
-    /v1/posts, draft-first, isDraft True por defecto: nada sale en
-    público sin revisión). Instagram usa contenedor -> publicar y
-    Facebook Reels en 3 fases. Sin clave, sin IDs de cuenta o sin
-    URL pública, devuelve mode "draft" con el motivo explícito y
-    genera además el paquete manual (nunca finge una publicación).
-    Los fallos transitorios (5xx, rate limit) y los procesados
-    pendientes (mode "processing") se retoman en el siguiente
-    ciclo con los datos de reanudación guardados en el ítem.
+    /v1/posts, publicación DIRECTA en público desde 2026-11-18:
+    pre-chequeo dryRun y draft=False, publishNow True,
+    PUBLIC_TO_EVERYONE por la app TikTok for Business auditada
+    de Zernio — la auditoría propia NO hace falta para esta vía).
+    Solo cae a borrador si faltan clave/cuenta/URL, si el
+    pre-chequeo dice que no se puede publicar, o si la API
+    falla. Instagram usa contenedor -> publicar y Facebook
+    Reels en 3 fases. Sin clave, sin IDs de cuenta o sin URL
+    pública, devuelve mode "draft" con el motivo explícito y
+    genera además el paquete manual (nunca finge una
+    publicación). Los fallos transitorios (5xx, rate limit) y
+    los procesados pendientes (mode "processing") se retoman en
+    el siguiente ciclo con los datos de reanudación guardados
+    en el ítem.
     """
 
     def __init__(self, platform, queue=None, base_dir=None,
@@ -1026,10 +1039,13 @@ class DirectPublisher:
             # (TikTokAdapter, Content Posting API con app sin
             # auditar) ya no se usa para publicar. ZernioAdapter
             # lee ZERNIO_API_KEY y ZERNIO_TIKTOK_ACCOUNT_ID del
-            # entorno; draft=True por defecto (draft-first): el
-            # post queda como borrador en Zernio, nunca en público.
+            # entorno; publish_public() pre-chequea con dryRun y
+            # publica en PÚBLICO (draft=False, publishNow True)
+            # por la app TikTok for Business auditada de Zernio.
+            # Solo cae a borrador si falta algo o el pre-chequeo
+            # dice que no se puede publicar.
             from .platforms import ZernioAdapter
-            return ZernioAdapter(self.base_dir, fn).publish_video(
+            return ZernioAdapter(self.base_dir, fn).publish_public(
                 clip_path, caption)
         if self.platform == "instagram_reels":
             from . import platform_accounts as _pa

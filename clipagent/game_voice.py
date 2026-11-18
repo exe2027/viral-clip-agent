@@ -29,7 +29,7 @@ Aquí, sin Groq y sin Claude Code de pago ($0, local):
     para el estilo propio y para excluir los tramos de juego de la
     comprobación final de subtítulos del streamer.
 
-Regla del proyecto que se mantiene: layout juego arriba / cámara
+Regla del proyecto que se mantiene: layout streamer arriba / gameplay
 abajo (split); el modo "game" solo pone el juego a pantalla
 completa DURANTE el tramo de voz del juego, y vuelve a split al
 terminar (ver render.apply_game_voice).

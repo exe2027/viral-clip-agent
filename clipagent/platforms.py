@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 from . import credentials as _creds
 
@@ -409,8 +410,9 @@ class TikTokAdapter:
 class ZernioAdapter:
     """Publicación vía Zernio API (agregador; TikTok por su vía).
 
-    Docs oficiales (verificado 2026-11-18, https://zernio.com/llms.txt
-    y https://docs.zernio.com/platforms/tiktok):
+    Docs oficiales (verificado 2026-11-18, https://zernio.com/llms.txt,
+    https://docs.zernio.com/platforms/tiktok y
+    https://docs.zernio.com/posts/create-post):
     - Base: https://zernio.com/api/v1, Bearer ZERNIO_API_KEY.
     - Media: POST /v1/media/presign {filename, contentType} ->
       {uploadUrl, publicUrl}; PUT de los bytes a uploadUrl.
@@ -419,17 +421,31 @@ class ZernioAdapter:
       tiktokSettings: {...}, isDraft, publishNow}.
     - tiktokSettings exige content_preview_confirmed y
       express_consent_given en true; en cuentas conectadas por la
-      app TikTok for Business el video solo puede ser
-      PUBLIC_TO_EVERYONE: para cualquier otra audiencia se manda
-      tiktokSettings.draft: true (y aquí isDraft: true).
-    - dryRun NO existe en POST /v1/posts (solo en el bulk-upload
-      por CSV, ?dryRun): el dry_run de este adaptador es LOCAL —
-      valida archivo/clave/cuenta y devuelve el payload que se
-      mandaría, sin tocar la red.
+      app TikTok for Business (todas las conexiones nuevas) el
+      video directo es SOLO PUBLIC_TO_EVERYONE: cualquier otro
+      nivel se rechaza, y la única ruta no-pública es el borrador
+      al Creator Inbox (tiktokSettings.draft: true).
+    - dryRun: true (campo del body, solo TikTok, verificado
+      2026-11-18 en la doc de Create post) pre-chequea si el post
+      podría publicarse bajo los límites diarios sin crear nada
+      ni reclamar slot. En cuentas Business siempre devuelve
+      canPublish: true (confirma que el body está bien formado).
+      (Corrección: el dry_run LOCAL de este adaptador existía
+      porque antes se creía que POST /v1/posts no tenía dryRun;
+      la doc actual sí lo tiene y se usa en can_publish.)
+    - publishNow: true publica en la misma petición y devuelve
+      platformPostUrl. Idempotency-Key (UUID por post lógico)
+      hace seguros los reintentos.
 
-    Draft-first para TikTok (app sin auditar): por defecto
-    draft=True, así nada sale en público sin revisión. Sin clave
-    o sin cuenta -> draft con el motivo (R5: nunca rompe el resto).
+    Publicación DIRECTA en público (2026-11-18, orden del
+    usuario: 100% automático): publish_public() sube el video,
+    pre-chequea con dryRun y publica con draft=False
+    (publishNow True, isDraft False). Solo cae a borrador si
+    faltan clave/cuenta/URL, si el dryRun dice que no se puede
+    publicar, o si la API falla. La auditoría propia de TikTok
+    NO hace falta para esta vía: la app auditada es la de
+    Zernio (TikTok for Business). Sin clave o sin cuenta ->
+    draft con el motivo (R5: nunca rompe el resto).
     La clave se lee de ZERNIO_API_KEY y la cuenta de
     ZERNIO_TIKTOK_ACCOUNT_ID (entorno o .env, vía credentials).
     """
@@ -508,12 +524,62 @@ class ZernioAdapter:
             return _error_result(status, resp)
         return {"ok": True, "mode": "api", "public_url": public_url}
 
+    def _idempotency_key(self, video_url, title, account):
+        """UUID determinista por post lógico (cuenta + URL + título):
+        reintentar con la misma clave devuelve el post original en
+        Zernio en vez de duplicarlo (ventana 24 h)."""
+        raw = f"zernio:{account}:{video_url}:{title}"
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
+
+    def can_publish(self, video_url, title, account_id=None):
+        """Pre-chequeo REAL con Zernio: POST /v1/posts con
+        dryRun: true (solo TikTok). No crea nada, no reclama slot
+        y se puede repetir. Devuelve {"ok", "can_publish", ...}.
+        En cuentas Business (la nuestra) siempre es true si el
+        body está bien formado; en cuentas de developer app
+        TikTok, false cuando se alcanzó el tope diario."""
+        key = self._key()
+        if not key:
+            return {"ok": False, "can_publish": False,
+                    "reason": "sin ZERNIO_API_KEY en el entorno "
+                              "(secreto ZERNIO_API_KEY)"}
+        account = account_id or self._account()
+        if not account:
+            return {"ok": False, "can_publish": False,
+                    "reason": "sin cuenta de TikTok en Zernio "
+                              "(ZERNIO_TIKTOK_ACCOUNT_ID)"}
+        if not (video_url or "").startswith("https://"):
+            return {"ok": False, "can_publish": False,
+                    "reason": "Zernio exige una URL HTTPS pública "
+                              "del video (mediaItems.url)"}
+        payload = self._post_payload(video_url, title, account,
+                                     draft=False)
+        payload["dryRun"] = True
+        status, resp = _http(
+            "POST", f"{self.API}/posts", self._auth(), payload,
+            request_fn=self.request_fn)
+        if status == 200:
+            can = resp.get("canPublish")
+            if can is None:
+                tiktok = resp.get("tiktok")
+                if isinstance(tiktok, list) and tiktok:
+                    can = tiktok[0].get("canPublish")
+            if can is None:
+                can = True
+            return {"ok": True, "can_publish": bool(can),
+                    "detail": resp}
+        err = _error_result(status, resp)
+        err["can_publish"] = False
+        return err
+
     def create_post(self, video_url, title, account_id=None,
                     draft=True, dry_run=False):
         """POST /v1/posts con un video ya subido (URL pública).
 
         dry_run=True no toca la red: valida clave/cuenta/URL y
         devuelve el payload que se mandaría (mode "dry-run").
+        draft=False publica en público en la misma petición
+        (publishNow True); la respuesta trae platformPostUrl.
         """
         key = self._key()
         if not key:
@@ -530,19 +596,30 @@ class ZernioAdapter:
         if dry_run:
             return {"ok": True, "mode": "dry-run",
                     "reason": "dry-run local: no se llamó a la API "
-                              "de Zernio (POST /v1/posts no tiene "
-                              "dryRun en la documentación)",
+                              "de Zernio; para el pre-chequeo real "
+                              "contra Zernio usar can_publish() "
+                              "(dryRun: true en POST /v1/posts)",
                     "payload": payload}
+        headers = dict(self._auth())
+        headers["Idempotency-Key"] = self._idempotency_key(
+            video_url, title, account)
         status, resp = _http(
-            "POST", f"{self.API}/posts", self._auth(), payload,
+            "POST", f"{self.API}/posts", headers, payload,
             request_fn=self.request_fn)
         if status in (200, 201) and resp.get("id"):
             return {"ok": True, "mode": "api",
                     "post_id": resp["id"],
                     "draft": draft,
+                    "platform_post_url": resp.get("platformPostUrl"),
                     "detail": resp}
         if status in (200, 201):
+            post = resp.get("post") if isinstance(
+                resp.get("post"), dict) else {}
             return {"ok": True, "mode": "api", "draft": draft,
+                    "post_id": resp.get("postId") or post.get("id"),
+                    "platform_post_url":
+                        resp.get("platformPostUrl")
+                        or post.get("platformPostUrl"),
                     "detail": resp}
         return _error_result(status, resp)
 
@@ -550,8 +627,11 @@ class ZernioAdapter:
                       draft=True, dry_run=False):
         """Video completo por Zernio: presign + PUT + POST /v1/posts.
 
-        draft=True (por defecto): queda como borrador en Zernio,
-        no sale en público. dry_run=True: valida todo sin red.
+        draft=True (por defecto en este primitivo): queda como
+        borrador en Zernio, no sale en público. draft=False:
+        publica en público (publishNow True) — es lo que usa
+        publish_public() tras el pre-chequeo. dry_run=True:
+        valida todo sin red.
         """
         if dry_run:
             if not self._key():
@@ -571,6 +651,40 @@ class ZernioAdapter:
             return up
         return self.create_post(up["public_url"], title,
                                 account_id=account_id, draft=draft)
+
+    def publish_public(self, clip_path, title, account_id=None):
+        """Publicación DIRECTA en público por Zernio (vía
+        automática 2026-11-18): presign + PUT, pre-chequeo dryRun
+        contra Zernio y POST /v1/posts con draft=False
+        (publishNow True, PUBLIC_TO_EVERYONE por la app TikTok
+        for Business de Zernio).
+
+        Si el pre-chequeo dice que no se puede publicar, o falta
+        clave/cuenta, devuelve mode "draft" con el motivo y NO
+        publica nada. Si Zernio publica, devuelve ok + post_id +
+        platform_post_url (URL pública del video en TikTok).
+        """
+        if not self._key():
+            return _draft("sin ZERNIO_API_KEY en el entorno "
+                          "(secreto ZERNIO_API_KEY)")
+        if not (account_id or self._account()):
+            return _draft("sin cuenta de TikTok en Zernio "
+                          "(ZERNIO_TIKTOK_ACCOUNT_ID)")
+        if not os.path.isfile(clip_path):
+            return {"ok": False, "reason":
+                    f"archivo no existe: {clip_path}"}
+        up = self.upload_media(clip_path)
+        if not up.get("ok"):
+            return up
+        pre = self.can_publish(up["public_url"], title,
+                               account_id=account_id)
+        if not pre.get("ok") or not pre.get("can_publish"):
+            return _draft(
+                "Zernio dice que TikTok no puede publicar ahora: "
+                f"{pre.get('reason') or pre.get('detail') or 'sin motivo'}",
+                preflight=pre)
+        return self.create_post(up["public_url"], title,
+                                account_id=account_id, draft=False)
 
 
 class InstagramAdapter:

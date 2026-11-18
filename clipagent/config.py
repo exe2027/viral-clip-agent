@@ -57,18 +57,18 @@ DEFAULT_CONFIG = {
         "crop": "center",
         "crf": 23,
         "preset": "fast",
-        # REGLAS DE DURACIÓN (decisión del usuario 2026-11-17, ver
-        # rules: en config.yaml): el clip de 21 s publicado en test
-        # era "muy poco". Mínimo 36 s = primer segundo entero por
-        # encima del rango prohibido 25-35 (regla de oro: ningún clip
-        # de 30 s; el objetivo viejo de 30 s caía dentro del rango
-        # prohibido, así que el default era imposible de publicar).
+        # REGLAS DE DURACIÓN (decisión del usuario 2026-11-18, ver
+        # rules: en config.yaml; reemplaza el mínimo 36 s de 2026-11-17):
+        # entre 40 y 60 s, nunca menos de 40 ni más de 60. El clip de
+        # 21 s publicado en test era "muy poco" y el de 38 s (Rubius
+        # p2010) también queda fuera. El rango 25-35 sigue prohibido
+        # (regla de oro: ningún clip de 30 s).
         # Objetivo 40 s = 20 s pre-roll + 20 s tras el pico (payoff
         # a 20 s dentro del clip). Tope duro 60 s = máximo de un
         # Short de YouTube y tope del proyecto, nunca el default.
         "duration": 40,
         "target_duration_s": 40,
-        "min_duration_s": 36,
+        "min_duration_s": 40,
         "max_duration_s": 60,
         "hard_cap_s": 60,
         "forbidden_duration_range": [25, 35],
@@ -76,14 +76,17 @@ DEFAULT_CONFIG = {
         "pre_roll": 20,
         "window": 10,
         "min_separation": 60,
-        # Layout split vertical: juego arriba 1320 px, cámara abajo
+        # Layout split vertical RDJavi: streamer arriba, gameplay abajo
         # 600 px (1080x1920). Los subtítulos viven en la zona de
         # juego, nunca sobre la cámara (ver subtitle_styles).
         "split_game_h": 1320,
         "split_cam_h": 600,
     },
     "subtitles": {
-        "default_style": "karaoke",
+        # Estilo por defecto "ref" (referencia RDJavi, 2026-11-18):
+        # una línea centrada, letra chica 32 px, fina, blanca con
+        # contorno negro, sin fondo ni resaltado palabra por palabra.
+        "default_style": "ref",
         "subtitle_lang": "auto",  # auto | es | en
         "translate": True,        # traducir a inglés lo que no sea español
         # Regla del usuario 2026-11-17 22:10: SIEMPRE subtítulos,
@@ -92,11 +95,17 @@ DEFAULT_CONFIG = {
         "complete": True,
         "block_without_subtitles": True,
         "needs_human_transcription_on_no_speech": True,
-        # Zona de subtítulos (decisión del usuario 2026-11-17): siempre
-        # en la zona de juego, nunca sobre la cara del influencer / la
-        # webcam. MarginV mínimo = split_cam_h + safe_gap_px = 680.
+        # Zona de subtítulos (decisión del usuario 2026-11-17,
+        # geometría RDJavi 2026-11-18): siempre en la zona de juego,
+        # nunca sobre la cara del influencer / la webcam (arriba,
+        # 0-730 px) ni sobre la banda inferior (1770-1920 px). La
+        # posición de referencia es MarginV 230 (borde inferior del
+        # texto en y≈1690, 87-89%); el mínimo que deja el texto fuera
+        # de la banda es 200. burn_subtitles() lo impone como rango.
         "subtitle_zone": "gameplay",
         "subtitle_safe_gap_px": 80,
+        "subtitle_bottom_reserve_px": 50,
+        "subtitle_game_bottom_px": 1770,
     },
     # Política de traducción (regla del usuario, 2026-11-16):
     # es -> transcribe-only; cualquier otro idioma -> translate-to-en.
@@ -105,10 +114,18 @@ DEFAULT_CONFIG = {
         "others": "translate-to-en",
     },
     "subtitle_styles": {
-        # margin_v 680 en los tres estilos (decisión del usuario
-        # 2026-11-17): con Alignment=2 el texto queda en la zona de
-        # juego (borde inferior en y=1240), nunca sobre la webcam
-        # (1320-1920). burn_subtitles() lo impone como mínimo.
+        # Estilo "ref" (referencia RDJavi, 2026-11-18, default): una
+        # línea centrada en la parte baja del gameplay (MarginV 230,
+        # borde inferior en y≈1690), letra chica 32 px fina, blanca
+        # con contorno negro, sin fondo ni resaltado palabra por
+        # palabra, sin amarillo ni negrita. Los estilos viejos quedan
+        # disponibles pero ya no son el default.
+        "ref": {
+            "font_color": "#FFFFFF", "border_color": "#000000",
+            "border_width": 2, "fontsize": 32, "bold": False,
+            "margin_v": 230, "max_chars": 42, "max_duration": 3.0,
+            "box": False,
+        },
         "tiktok": {
             "font_color": "#FFFFFF", "border_color": "#000000",
             "border_width": 3, "fontsize": 48, "bold": True,
@@ -227,6 +244,15 @@ DEFAULT_CONFIG = {
         "instagram_reels": {"ig_user_id": ""},
         "facebook_reels": {"page_id": ""},
     },
+    # Panel web (regla del usuario: TODO ES PARA LA WEB, NADA
+    # LOCAL). El panel vive en Cloudflare (Pages + Worker + D1) y
+    # es la única superficie de operación: login por usuario, cada
+    # tenant ve solo lo suyo. Sin secretos aquí: las credenciales
+    # van en GitHub Secrets / D1 cifrado, nunca en config.
+    "panel": {
+        "base_url": "https://avc-em9.pages.dev",
+        "worker_url": "https://avc.vikingosfoodspa.workers.dev",
+    },
 }
 
 
@@ -235,9 +261,12 @@ DEFAULT_CONFIG = {
 # código cuando no hay config.yaml. Si una regla cambia, cambia en
 # los dos sitios. Las impone: precise_cut.py (duración), transcribe.py
 # (subtítulos), policy.py (puerta de publicación) y validate.py.
-#   * Duración: mínimo 36 s, objetivo 40 s, tope duro 60 s, prohibido
-#     25-35 s (regla de oro: ningún clip de 30 s). El clip de 21 s
-#     publicado en test el 2026-11-17 era "muy poco" (usuario).
+#   * Duración: entre 40 y 60 s (decisión del usuario 2026-11-18;
+#     reemplaza el mínimo 36 s de 2026-11-17), nunca menos de 40 ni
+#     más de 60; prohibido 25-35 s (regla de oro: ningún clip de
+#     30 s). El clip de 21 s publicado en test el 2026-11-17 era
+#     "muy poco" (usuario) y el de 38 s (Rubius p2010) también
+#     queda fuera por esta regla.
 #   * Pre-roll: 20 s de contexto antes del pico.
 #   * Subtítulos: siempre en la zona de juego, nunca sobre la cara
 #     del influencer / la webcam (split: juego 0-1320 px, cámara
@@ -245,7 +274,7 @@ DEFAULT_CONFIG = {
 #   * Nunca tapar minimapa ni HUD; layout split vertical.
 #   * Nunca afirmar un juego no verificado; nunca quemar subtítulos
 #     alucinados (manda la transcripción corregida por el usuario).
-RULES_MIN_DURATION_S = 36
+RULES_MIN_DURATION_S = 40
 RULES_TARGET_DURATION_S = 40
 RULES_HARD_CAP_S = 60
 RULES_FORBIDDEN_DURATION_RANGE = (25, 35)
@@ -253,14 +282,23 @@ RULES_PRE_ROLL_S = 20
 RULES_SPLIT_GAME_H = 1320
 RULES_SPLIT_CAM_H = 600
 RULES_SUBTITLE_SAFE_GAP_PX = 80
-RULES_SUBTITLE_MIN_MARGIN_V = (
-    RULES_SPLIT_CAM_H + RULES_SUBTITLE_SAFE_GAP_PX)  # 680
+# Geometría RDJavi (layout GTA 6 por defecto, 2026-11-18): la cámara
+# está ARRIBA (0-730 px) y el gameplay termina en 1770 px. El
+# MarginV mínimo deja el borde inferior del texto en y=1720 como
+# mucho (50 px de reserva sobre la banda inferior).
+RULES_RDJAVI_CAM_BOTTOM = 730
+RULES_RDJAVI_GAME_BOTTOM = 1770
+RULES_SUBTITLE_BOTTOM_RESERVE_PX = 50
+RULES_SUBTITLE_MIN_MARGIN_V = (1920 - RULES_RDJAVI_GAME_BOTTOM
+                               + RULES_SUBTITLE_BOTTOM_RESERVE_PX)  # 200
+RULES_SUBTITLE_REF_MARGIN_V = 230  # referencia RDJavi: texto en y≈1690
 
 
 def clip_duration_ok(duration_s, cfg=None):
     """(ok, motivo) para la duración de un clip según las reglas.
 
-    Rechaza: < mínimo (36 s, "muy poco"), dentro del rango prohibido
+    Rechaza: < 40 s (decisión del usuario 2026-11-18: entre 40 y
+    60 s, nunca menos de 40), dentro del rango prohibido
     25-35 s (regla de oro), o > tope duro 60 s.
     """
     if cfg is not None:
@@ -274,7 +312,7 @@ def clip_duration_ok(duration_s, cfg=None):
         fr = list(RULES_FORBIDDEN_DURATION_RANGE)
     if duration_s < min_d:
         return False, (f"duración {duration_s:.1f} s < mínimo {min_d} s "
-                       f"(regla del usuario 2026-11-17: clips muy cortos no)")
+                       f"(regla del usuario 2026-11-18: clips de 40-60 s)")
     if fr and float(fr[0]) <= duration_s <= float(fr[1]):
         return False, (f"duración {duration_s:.1f} s en el rango prohibido "
                        f"{fr[0]}-{fr[1]} s (regla de oro: ningún clip de 30 s)")
@@ -284,20 +322,21 @@ def clip_duration_ok(duration_s, cfg=None):
 
 
 def subtitle_min_margin_v(cfg=None):
-    """MarginV mínimo para que el subtítulo no tape la webcam.
+    """MarginV mínimo para que el subtítulo no baje a la banda inferior.
 
-    Layout split: juego 0-1320 px, cámara 1320-1920 px. Con
-    Alignment=2 el borde inferior del texto queda en 1920-MarginV;
-    para que quede dentro del juego con 80 px de hueco hacen falta
-    600 + 80 = 680 px.
+    Layout RDJavi (GTA 6 por defecto, 2026-11-18): streamer arriba
+    (0-730 px), gameplay 730-1770 px, banda inferior 1770-1920 px.
+    Con Alignment=2 el borde inferior del texto queda en
+    1920-MarginV; para que no pase de y=1720 (50 px de reserva
+    sobre la banda) hacen falta 1920 - 1770 + 50 = 200 px.
     """
     if cfg is not None:
-        clips = (cfg or {}).get("clips") or {}
         subs = (cfg or {}).get("subtitles") or {}
-        cam_h = int(clips.get("split_cam_h") or RULES_SPLIT_CAM_H)
-        gap = int(subs.get("subtitle_safe_gap_px")
-                  or RULES_SUBTITLE_SAFE_GAP_PX)
-        return cam_h + gap
+        reserve = int(subs.get("subtitle_bottom_reserve_px")
+                      or RULES_SUBTITLE_BOTTOM_RESERVE_PX)
+        game_bottom = int(subs.get("subtitle_game_bottom_px")
+                          or RULES_RDJAVI_GAME_BOTTOM)
+        return 1920 - game_bottom + reserve
     return RULES_SUBTITLE_MIN_MARGIN_V
 
 

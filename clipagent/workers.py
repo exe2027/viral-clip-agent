@@ -89,13 +89,13 @@ def step_compute_requirements():
 #: Reintento de un clip retenido por la política (límites, horario).
 RETAINED_RETRY_S = 24 * 3600
 #: Duración de un clip cortado a partir de un pico.
-#: REGLAS 2026-11-17 (usuario): 60 s es el TOPE DURO, no la duración;
+#: REGLAS 2026-11-18 (usuario): 60 s es el TOPE DURO, no la duración;
 #: el objetivo es 40 s (20 s pre-roll + 20 s tras el pico) y el mínimo
-#: es 36 s (primer segundo por encima del rango prohibido 25-35;
-#: el clip de 21 s publicado en test era "muy poco").
+#: es 40 s (nunca menos de 40; el clip de 38 s de Rubius p2010 queda
+#: fuera). El rango 25-35 sigue prohibido (regla de oro).
 CLIP_PRE_S = 20             # empieza 20 s antes del pico
 CLIP_DURATION_S = 40        # objetivo: 40 s por clip
-CLIP_MIN_DURATION_S = 36    # mínimo: ningún clip por debajo de 36 s
+CLIP_MIN_DURATION_S = 40    # mínimo: ningún clip por debajo de 40 s
 CLIP_MAX_DURATION_S = 60    # tope duro: ningún clip por encima de 60 s
 
 
@@ -153,16 +153,58 @@ def detect_peaks(chat_path, top_n=5, lang="both"):
                 enumerate(sorted(raw_peaks, key=lambda p: -p[1]))}
     selected, discarded = _auto.filter_candidates(
         raw_peaks, detail, rank_map, median)
+    # Categoría GTA VI (regla del usuario 2026-11-18): el pico solo
+    # vale si el capítulo del VOD donde cae es GTA VI. La categoría
+    # se lee del chat.json (capítulos de Twitch) y se guarda por
+    # pico; un pico en Just Chatting u otro juego se descarta aquí
+    # mismo, no en publicación. Sin capítulos, la categoría queda
+    # sin verificar (category_ok=None) y decide el gate de política.
+    from .category import chapter_category_from_chat, is_gta6
+    kept = []
+    for peak_ts, score, multiple in selected:
+        cat = chapter_category_from_chat(chat_path, peak_ts)
+        _streamer, game, _src = _auto.chat_stream_info(chat_path, peak_ts)
+        if cat is not None and not is_gta6(cat):
+            discarded.append({"peak": peak_ts, "score": score,
+                              "multiple": multiple,
+                              "rank": rank_map.get(peak_ts),
+                              "motivos": [f"categoría {cat!r}: no es GTA VI"]})
+            continue
+        kept.append((peak_ts, score, multiple, cat, game))
+    selected = [(p[0], p[1], p[2]) for p in kept]
+    _peak_cat = {(p[0]): (p[3], p[4]) for p in kept}
     peaks = []
     for peak_ts, score, multiple in selected:
         viral = score_clip(detail[peak_ts], multiple,
                            rank=rank_map.get(peak_ts))
+        d = detail[peak_ts]
+        cat, game = _peak_cat.get(peak_ts, (None, None))
         peaks.append({
             "start": int(peak_ts),
             "score": float(score),
             "multiple": float(multiple),
             "viral_total": viral.get("total"),
             "filter_passed": bool(viral.get("filter_passed")),
+            # Categoría GTA VI del capítulo donde cae el pico.
+            "category": cat,
+            "game": game,
+            "category_ok": (is_gta6(cat) if cat is not None else None),
+            # Hype por ráfaga (regla 2026-11-18, v2): velocidad del
+            # chat en la ventana y su pico contra el baseline
+            # rodante, guardado por pico (valor, ventana, baseline,
+            # ratio) para ordenar los picos y alimentar viralidad.
+            "burst_score": d.get("burst_score"),
+            "burst_z": d.get("burst_z"),
+            "burst_ratio": d.get("burst_ratio"),
+            "msgs_per_min": d.get("msgs_per_min"),
+            "msgs_per_60s": d.get("msgs_per_60s"),
+            "msgs_per_sec": d.get("msgs_per_sec"),
+            "hype_score": d.get("hype_score"),
+            "hype_window_s": d.get("hype_window_s"),
+            "hype_baseline": d.get("hype_baseline"),
+            "hype_ratio": d.get("hype_ratio"),
+            "hype_velocity_z": d.get("hype_velocity_z"),
+            "hype_components": d.get("hype_components"),
         })
     return {
         "peaks": peaks,
@@ -545,10 +587,12 @@ def enqueue_pipeline(store, clip_id, payload, prioridad=0.0):
 
 def enqueue_publish(store, clip_id, plataforma, clip_path, mode="draft",
                     prioridad=0.0, **extra):
-    """Crea UN job de publicar (clip + plataforma). Solo lo llama la
-    aprobación humana (panel/CLI): nunca se crea solo al terminar
-    ``empaquetar``. ``mode``: draft (borrador a mano), dry-run
-    (simulacro) o api (subida real por API)."""
+    """Crea UN job de publicar (clip + plataforma). Lo llama la
+    aprobación humana (panel/CLI) y, desde 2026-11-18, también
+    advance_pipeline automáticamente para TikTok al terminar
+    ``empaquetar`` (orden del usuario: 100% automático). ``mode``:
+    draft (borrador a mano), dry-run (simulacro) o api (subida
+    real por API)."""
     payload = {"clip": clip_path, "mode": mode}
     payload.update(extra)
     return store.enqueue(clip_id, "publicar", plataforma=plataforma,
@@ -563,12 +607,21 @@ def advance_pipeline(store, job, result, cfg=None):
       cortar: la cadena se detiene (no es un fallo).
     * corte -> subtitulos, subtitulos -> empaquetar: un job con el
       payload acumulado (el vídeo de salida pasa a ser la entrada).
-    * empaquetar -> nada: publicar es manual, no automático.
+    * empaquetar -> publicar (TikTok, mode api, AUTOMÁTICO desde
+      2026-11-18 por orden del usuario: 100% automático): solo
+      TikTok se auto-encola; YouTube/Instagram/Facebook siguen
+      manuales (panel). La puerta de subtítulos es dura: si el
+      clip viene con publish_blocked (sin voz verificable), NO
+      se encola nada. El resto de puertas (viralidad >= 50,
+      SEO >= 90, duración 40-60 s, topes diarios, lista blanca)
+      las aplica publish_one al ejecutar el job de publicar.
     Devuelve la lista de jobs creados.
     """
     paso = job["paso"]
     if paso not in PIPELINE:
         return []
+    if paso == "empaquetar":
+        return _advance_empaquetar_to_publish(store, job, result)
     idx = PIPELINE.index(paso)
     if idx + 1 >= len(PIPELINE):
         return []
@@ -587,9 +640,9 @@ def advance_pipeline(store, job, result, cfg=None):
         clips_dir = os.path.join(out_dir, "clips")
         for i, peak in enumerate(peaks, 1):
             start = max(0.0, float(peak["start"]) - CLIP_PRE_S)
-            # Regla 2026-11-17: la duración pedida se sujeta al rango
-            # [36, 60] s (mínimo 36, tope duro 60); un pedido corto se
-            # alarga hasta 36, nunca se deja un clip de 21 s.
+            # Regla 2026-11-18: la duración pedida se sujeta al rango
+            # [40, 60] s (mínimo 40, tope duro 60); un pedido corto se
+            # alarga hasta 40, nunca se deja un clip de 21 s ni de 38 s.
             dur = float(payload.get("duration", CLIP_DURATION_S))
             dur = max(CLIP_MIN_DURATION_S,
                       min(CLIP_MAX_DURATION_S, dur))
@@ -612,7 +665,8 @@ def advance_pipeline(store, job, result, cfg=None):
     merged = dict(payload)
     merged.update({k: v for k, v in (result or {}).items()
                    if k in ("output", "burned", "package_path", "srt",
-                            "video", "clip")})
+                            "video", "clip", "publish_blocked",
+                            "needs_human_transcription")})
     if paso == "corte":
         merged["video"] = (result or {}).get("output") or merged.get("video")
     if paso == "subtitulos":
@@ -625,6 +679,45 @@ def advance_pipeline(store, job, result, cfg=None):
                                  vod_job_id=job.get("vod_job_id")))
     store._log(job["id"], "pipeline_advance", f"{paso} -> {nxt}")
     return created
+
+
+def _advance_empaquetar_to_publish(store, job, result):
+    """empaquetar -> publicar (TikTok, mode api, automático).
+
+    Puerta dura de subtítulos: publish_blocked (sin voz
+    verificable, regla 2026-11-17 22:10) -> no se encola nada y
+    la cadena se detiene con motivo visible. Sin clip o sin
+    archivo -> tampoco. En el resto, el job de publicar en modo
+    api pasa por publish_one, que aplica el resto de puertas
+    (viralidad, SEO, duración, topes, lista blanca); si no las
+    pasa, queda retenido/descartado, nunca se publica.
+    Idempotente: store.enqueue no duplica por clave.
+    """
+    payload = dict(job["payload"] or {})
+    blocked = bool(payload.get("publish_blocked")
+                   or (result or {}).get("publish_blocked"))
+    if blocked:
+        store._log(job["id"], "pipeline_stop",
+                   "empaquetar: subtítulos incompletos "
+                   "(publish_blocked): no se auto-encola publicar")
+        return []
+    clip = (payload.get("clip") or (result or {}).get("clip")
+            or payload.get("video") or (result or {}).get("video"))
+    if not clip or not os.path.isfile(clip):
+        store._log(job["id"], "pipeline_stop",
+                   "empaquetar: sin clip en disco: no se auto-encola "
+                   "publicar")
+        return []
+    pub = store.enqueue(
+        job["clip_id"], "publicar", plataforma="tiktok",
+        payload={"clip": clip, "mode": "api",
+                 "streamer": payload.get("streamer"),
+                 "vod_id": payload.get("vod_id")},
+        prioridad=job.get("prioridad", 0),
+        vod_job_id=job.get("vod_job_id"))
+    store._log(job["id"], "pipeline_advance",
+               "empaquetar -> publicar (tiktok, mode api, automático)")
+    return [pub]
 
 
 def bridge_legacy_queue(store, queue, limit=1):

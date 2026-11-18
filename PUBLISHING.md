@@ -121,7 +121,7 @@ La cola persiste en `publish_queue.json`. Flujo:
 3. Aprobación del usuario → `approved` (con `scheduled_for` opcional).
 4. `publish()` → `published` (con `platform_id`) o `failed`.
 
-## Topes y franja
+## Topes (sin franja desde 2026-11-18)
 
 | Plataforma | Plan/día | Techo/día |
 |---|---|---|
@@ -132,8 +132,9 @@ La cola persiste en `publish_queue.json`. Flujo:
 
 - **Espaciamiento:** mínimo 2 h entre subidas en la misma plataforma
   (ideal 2-3 h).
-- **Franja:** 18:00–23:59 hora de Chile (tarde/noche). Fuera de
-  franja, `publish()` se niega.
+- **Franja:** SIN franja horaria desde el 2026-11-18 (decisión del
+  usuario: da lo mismo la hora, solo se sube). Los topes diarios y
+  el espaciamiento de 2 h siguen vigentes.
 - **Cuentas nuevas:** 1 publicación/día por plataforma la primera
   semana (ver README, "Supervivencia por plataforma"). Los topes de
   arriba son el techo una vez calentada la cuenta.

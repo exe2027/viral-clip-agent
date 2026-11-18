@@ -110,13 +110,15 @@ class TestCheckLimits(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("espaciamiento", msg)
 
-    def test_fuera_de_franja_bloquea(self):
+    def test_sin_franja_no_bloquea_a_las_10(self):
+        # Franja ELIMINADA 2026-11-18 (decisión del usuario: da lo
+        # mismo la hora, solo se sube). A las 10:00 check_limits pasa.
         q = _queue(self.tmp.name)
         with mock.patch.object(publisher, "_now_chile",
                                return_value=self._now(10)):
             ok, msg = check_limits(q, "tiktok")
-            self.assertFalse(ok)
-            self.assertIn("fuera de franja", msg)
+            self.assertTrue(ok, msg)
+            self.assertNotIn("fuera de franja", msg)
 
 
 if __name__ == "__main__":

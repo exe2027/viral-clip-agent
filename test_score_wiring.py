@@ -29,6 +29,7 @@ def _manifest(tmp, clips):
         entries.append({
             "peak": c.get("peak", 100), "start": c.get("start", 80),
             "file": f"clips/{c['file']}",
+            "category": "GTA VI",
             "viral_score": {"total": c["virality"]},
             "seo_scores": {p: {"score": s}
                            for p, s in c["seo"].items()},

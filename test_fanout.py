@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pruebas del fan-out: publicación directa en TikTok (por Zernio,
-draft-first), Instagram y Facebook (5a) y propagación desde
-YouTube (5b).
+en público desde 2026-11-18), Instagram y Facebook (5a) y
+propagación desde YouTube (5b).
 
 Los adaptadores se prueban con APIs simuladas en sus propios
 archivos (test_zernio, test_facebook_upload,
@@ -46,6 +46,7 @@ def _manifest(tmp, clips):
         entries.append({
             "peak": c.get("peak", 100), "start": c.get("start", 80),
             "file": f"clips/{c['file']}",
+            "category": "GTA VI",
             "viral_score": {"total": c["virality"]},
             "seo_scores": {p: {"score": s}
                            for p, s in c["seo"].items()},
@@ -69,7 +70,7 @@ def _clip(tmp, platform="tiktok", virality=80, seo=95):
     clips_dir = _manifest(tmp, clips)
     q = PublishQueue(os.path.join(tmp, "pq.json"))
     item = q.enqueue(os.path.join(clips_dir, "c1.mp4"), platform,
-                     streamer="illojuan", vod_id="v1",
+                     streamer="rubius", vod_id="v1",
                      moment_key=["v1", 8])
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg["autopublish"]["mode"] = "full"
@@ -112,7 +113,7 @@ class TestDirectPublisher(unittest.TestCase):
     def test_tiktok_publica_por_api(self):
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg = _clip(tmp, "tiktok")
-            fake = _fake_adapter(publish_video={
+            fake = _fake_adapter(publish_public={
                 "ok": True, "mode": "api", "post_id": "tt1"})
             with mock.patch("clipagent.platforms.ZernioAdapter",
                            return_value=fake):
@@ -125,12 +126,12 @@ class TestDirectPublisher(unittest.TestCase):
             # TikTok ya no usa el adaptador directo: la llamada fue
             # a Zernio (draft-first) y sin resume_publish_id.
             self.assertNotIn("resume_publish_id",
-                             fake.publish_video.call_args[1])
+                             fake.publish_public.call_args[1])
 
     def test_tiktok_sin_clave_zernio_queda_en_draft_con_motivo(self):
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg = _clip(tmp, "tiktok")
-            fake = _fake_adapter(publish_video={
+            fake = _fake_adapter(publish_public={
                 "ok": False, "mode": "draft",
                 "reason": "sin ZERNIO_API_KEY en el entorno "
                           "(secreto ZERNIO_API_KEY)"})
@@ -210,7 +211,7 @@ class TestDirectPublisher(unittest.TestCase):
 class TestReintentoTransitorio(unittest.TestCase):
     def _setup_error(self, tmp):
         q, item, cfg = _clip(tmp, "tiktok")
-        fake = _fake_adapter(publish_video={
+        fake = _fake_adapter(publish_public={
             "ok": False, "mode": "error", "status": 503,
             "reason": "Zernio caído (503)", "retryable": True})
         return q, item, cfg, fake
@@ -249,7 +250,7 @@ class TestReintentoTransitorio(unittest.TestCase):
 class TestProcessing(unittest.TestCase):
     def test_processing_guarda_publish_id_y_retoma(self):
         # Zernio no reanuda por publish_id (no hay resume en su
-        # API): el segundo ciclo vuelve a llamar a publish_video
+        # API): el segundo ciclo vuelve a llamar a publish_public
         # sin resume_publish_id. El publish_id, si viene, se guarda
         # igual en platform_data por el flujo genérico.
         with tempfile.TemporaryDirectory() as tmp:
@@ -264,7 +265,7 @@ class TestProcessing(unittest.TestCase):
                             "reason": "Zernio sigue procesando"}
                 return {"ok": True, "mode": "api", "post_id": "tt1"}
             fake = mock.Mock()
-            fake.publish_video.side_effect = video
+            fake.publish_public.side_effect = video
             with mock.patch("clipagent.platforms.ZernioAdapter",
                            return_value=fake):
                 for p in _patches():
@@ -278,12 +279,12 @@ class TestProcessing(unittest.TestCase):
                 r2 = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r2["action"], "published", r2)
             self.assertEqual(item["platform_id"], "tt1")
-            # ZernioAdapter.publish_video no acepta resume: la
+            # ZernioAdapter.publish_public no acepta resume: la
             # segunda llamada no lleva resume_publish_id.
-            self.assertEqual(fake.publish_video.call_count, 2)
+            self.assertEqual(fake.publish_public.call_count, 2)
             self.assertNotIn(
                 "resume_publish_id",
-                fake.publish_video.call_args[1])
+                fake.publish_public.call_args[1])
 
 
 if __name__ == "__main__":
@@ -303,7 +304,7 @@ class TestFanOutLoop(unittest.TestCase):
         clips_dir = _manifest(tmp, clips)
         q = PublishQueue(os.path.join(tmp, "pq.json"))
         yt_item = q.enqueue(os.path.join(clips_dir, "c1.mp4"),
-                            "youtube_shorts", streamer="illojuan",
+                            "youtube_shorts", streamer="rubius",
                             vod_id="v1", moment_key=["v1", 8])
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["autopublish"]["mode"] = "full"
@@ -328,7 +329,7 @@ class TestFanOutLoop(unittest.TestCase):
                 return fake_yt
             return DirectPublisher(platform, queue)
 
-        tk = _fake_adapter(publish_video=tiktok_result or {
+        tk = _fake_adapter(publish_public=tiktok_result or {
             "ok": True, "mode": "api", "post_id": "tt1"})
         ig = _fake_adapter(publish_reel={
             "ok": True, "mode": "api", "media_id": "ig9"})
@@ -400,7 +401,7 @@ class TestFanOutLoop(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             q, _yt, cfg, patches = self._setup_loop(tmp)
             clip = os.path.join(tmp, "runs", "v1", "clips", "c1.mp4")
-            q.enqueue(clip, "tiktok", streamer="illojuan", vod_id="v1",
+            q.enqueue(clip, "tiktok", streamer="rubius", vod_id="v1",
                       moment_key=["v1", 8])
             for p in patches:
                 p.start()

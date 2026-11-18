@@ -66,20 +66,18 @@ clips:
   crop: "center"          # center | left | right
   crf: 23
   preset: "fast"
-  # REGLAS DE DURACIÓN (decisión del usuario 2026-11-17, ver rules: abajo):
-  # el clip publicado de 21 s era "muy poco". El mínimo viejo (21 s)
-  # permitía clips cortos y el objetivo viejo (30 s) caía DENTRO del
-  # rango prohibido por la regla de oro (25-35 s): el default era
-  # imposible de publicar por la propia puerta del panel. Por eso:
-  # mínimo 36 s = primer segundo entero ESTRICTAMENTE por encima del
-  # rango prohibido 25-35 (el 35 es el borde mismo, no vale); objetivo
+  # REGLAS DE DURACIÓN (decisión del usuario 2026-11-18, ver rules: abajo;
+  # reemplaza el mínimo 36 s de 2026-11-17): entre 40 y 60 s, nunca menos
+  # de 40 ni más de 60. El clip publicado de 21 s era "muy poco" y el de
+  # 38 s (Rubius p2010) también queda fuera. El rango prohibido por la
+  # regla de oro (25-35 s) sigue vigente. Por eso: mínimo 40 s; objetivo
   # 40 s = 20 s de pre-roll + 20 s tras el pico (payoff a 20 s dentro
   # del clip); tope duro 60 s = máximo de un Short de YouTube y tope
   # del proyecto, nunca el default. refine_cut alarga (nunca recorta)
   # cualquier corte por debajo del mínimo, y policy.py lo retiene.
   duration: 40            # duración del clip en segundos (legado, = target)
   target_duration_s: 40   # objetivo del corte (default)
-  min_duration_s: 36      # mínimo útil: 36 s (por encima de 25-35)
+  min_duration_s: 40      # mínimo: 40 s (decisión del usuario 2026-11-18)
   max_duration_s: 60      # máximo del corte variable = tope duro 60 s
   hard_cap_s: 60          # tope duro absoluto, nunca se pasa
   forbidden_duration_range: [25, 35]  # regla de oro: ningún clip de 25-35 s
@@ -90,14 +88,17 @@ clips:
   chat_window_s: 120      # REGLA DEL USUARIO 2026-11-17 23:00: con --peak,
                           # del chat solo la ventana alrededor del momento
                           # (±120 s del pico), nunca el chat entero
-  # Layout split vertical (regla 2026-11-16): juego arriba, cámara
-  # abajo, sobre 1080x1920 (1320+600=1920). Los subtítulos viven en
-  # la zona de juego, nunca sobre la cámara (ver subtitles abajo).
-  split_game_h: 1320      # alto del panel de juego
-  split_cam_h: 600        # alto del panel de cámara (webcam abajo)
+  # Layout split vertical RDJavi (regla 2026-11-16, invertido
+  # 2026-11-18): streamer ARRIBA, gameplay ABAJO, sobre 1080x1920
+  # (ver sección layout: variante RDJavi por defecto para GTA 6).
+  # Los subtítulos viven en la zona de juego, nunca sobre la cámara
+  # (ver subtitles abajo). split_game_h/split_cam_h son del split
+  # simple (fallback "plain": cámara 600 arriba / juego 1320 abajo).
+  split_game_h: 1320      # alto del panel de juego (split simple)
+  split_cam_h: 600        # alto del panel de cámara (split simple)
 
 subtitles:
-  default_style: "karaoke" # tiktok | highlight | karaoke (karaoke = viral, palabra por palabra)
+  default_style: "ref" # ref (RDJavi, default) | tiktok | highlight | karaoke
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
   # REGLA DEL USUARIO 2026-11-17 22:10: SIEMPRE subtítulos, COMPLETOS.
@@ -108,16 +109,18 @@ subtitles:
   block_without_subtitles: true  # sin SRT quemado -> clip BLOQUEADO, no publicable
   needs_human_transcription_on_no_speech: true  # si Whisper no encuentra voz, lo revisa el usuario de oído, no se publica sin subtítulos ni se inventa texto
 
-  # ZONA DE SUBTÍTULOS (decisión del usuario 2026-11-17): los
-  # subtítulos NUNCA tapan la cara del influencer / la webcam.
-  # Layout split: juego arriba (0-1320 px), cámara abajo (1320-1920).
-  # Con Alignment=2 (abajo, centrado) MarginV es la distancia desde
-  # el borde inferior: el mínimo que deja el texto DENTRO del juego
-  # es split_cam_h + safe_gap_px = 600 + 80 = 680 (el borde inferior
-  # del texto queda en y=1240, 80 px por encima de la cámara).
-  # burn_subtitles() sube (nunca baja) el MarginV hasta ese mínimo.
+  # ZONA DE SUBTÍTULOS (decisión del usuario 2026-11-17, geometría
+  # RDJavi 2026-11-18): los subtítulos NUNCA tapan la cara del
+  # influencer / la webcam (arriba, 0-730 px) ni bajan a la banda
+  # inferior (1770-1920 px). Con Alignment=2 (abajo, centrado)
+  # MarginV es la distancia desde el borde inferior: la posición de
+  # referencia es 230 (borde inferior del texto en y≈1690, 87-89%,
+  # parte baja del gameplay); el mínimo es 200 (borde en y=1720).
+  # burn_subtitles() deja el MarginV dentro del rango seguro.
   subtitle_zone: "gameplay"  # gameplay | bottom (bottom = viejo, prohibido en split)
-  subtitle_safe_gap_px: 80    # hueco entre el texto y la cámara
+  subtitle_safe_gap_px: 80    # hueco entre el texto y la cámara (split simple)
+  subtitle_bottom_reserve_px: 50  # hueco entre el texto y la banda inferior
+  subtitle_game_bottom_px: 1770  # el gameplay termina en y=1770 (RDJavi)
 
   # VAD + anti-alucinación — v2.6 (bloque 5 de la revisión interna):
   # faster-whisper con vad_filter y umbrales que cortan las
@@ -256,11 +259,35 @@ subtitle_styles:
 layout:
   mode: "auto"          # auto | stack | split | pip | center
   # auto decide por fotogramas: dos cams -> stack (apiladas); una cam
-  # + gameplay -> split vertical (juego arriba ~69%, cámara abajo
-  # ~31%, sin superponerse: la cámara nunca tapa el juego; si el
-  # juego no se ve, la cámara se achica, nunca al revés); solo
+  # + gameplay -> split vertical RDJavi (streamer ARRIBA, gameplay
+  # ABAJO, por defecto para GTA 6 — el panel es solo GTA 6); solo
   # gameplay -> center. pip (webcam encima del juego) solo queda
   # como override manual explícito, no es el default.
+  # VARIANTE DEL SPLIT (2026-11-18): "auto" resuelve por juego: GTA 6
+  # -> "rdjavi" (reel de referencia de RDJavi, Df4sy4bxlmr, con
+  # branding Vice City: fondo desenfocado arriba 0-730, webcam
+  # centrada 580x590 en (250,190) con esquinas redondeadas y 50 px de
+  # solape, gameplay 730-1770, banda inferior 1770-1920 con barra
+  # atardecer rosa/violeta/naranja + handle del canal; subtítulos
+  # chicos en español en la parte baja del gameplay). "plain" es el
+  # split simple (cámara 600 arriba / juego 1320 abajo). "djmariio"
+  # (Df4uyMVjDwq) está APARCADO por orden del usuario 2026-11-18: si
+  # se pide, se resuelve a "rdjavi", no se usa como layout.
+  split_variant: "auto"  # auto | rdjavi | plain | djmariio (aparcado)
+  # DETECCIÓN DE ENCUADRE (2026-11-18): la caja de la webcam dice si
+  # el streamer muestra SOLO LA CARA (plano medio, RDJavi) o su SETUP
+  # en plano ancho (DJ Mariio). Se registra en el manifiesto; mientras
+  # DJ Mariio esté aparcado, el layout sigue siendo RDJavi.
+  framing_wide_aspect: 1.8       # aspecto >= 1.8 = plano ancho
+  framing_wide_width_frac: 0.6  # y ancho >= 60% del frame
+  # BRANDING GTA 6 / VICE CITY (2026-11-18): handle centrado en la
+  # banda inferior + barra atardecer en la costura gameplay/banda.
+  channel_handle: "@ELCLIPDEGTA6 | GTA VI"
+  sunset_colors: ["#FF2E88", "#7B2FFF", "#FF9E00"]  # rosa, violeta, naranja
+  # PUNCH-IN (2026-11-18): zoom cerrado puntual sobre la webcam en un
+  # momento de reacción (excepción del reel: la cámara es fija salvo
+  # ese momento). Tiempos relativos al tramo. null = sin punch-in.
+  punch_in: null
   sample_every_s: 5     # muestrear un fotograma cada N segundos
   min_segment_s: 3      # un tramo más corto se fusiona con el vecino
   pip_width: 480        # ancho de la webcam en PiP (px, sobre 1080)
@@ -419,22 +446,34 @@ platform_accounts:
   facebook_reels:
     page_id: ""
 
+# Panel web (regla del usuario: TODO ES PARA LA WEB, NADA LOCAL).
+# El panel vive en Cloudflare (Pages + Worker + D1) y es la única
+# superficie de operación: login por usuario, cada tenant ve solo
+# lo suyo. Sin secretos aquí: las credenciales van en GitHub
+# Secrets / D1 cifrado, nunca en config.
+panel:
+  base_url: "https://avc-em9.pages.dev"
+  worker_url: "https://avc.vikingosfoodspa.workers.dev"
+
 # REGLAS OBVIAS DEL PROYECTO (decisiones del usuario, 2026-11-16/17).
 # Antes estaban dispersas en docs, panel y varios .py; este bloque es
 # la única lista canónica en config. El código las impone (ver
 # clipagent/config.py RULES, precise_cut.py, transcribe.py y
 # policy.py); si una regla cambia, cambia aquí Y en el código.
 rules:
-  # Duración: ningún clip corto ni de 30 s (decisión 2026-11-17: el
-  # clip de 21 s publicado en test era "muy poco").
-  min_duration_s: 36        # mínimo: 36 s (por encima de 25-35)
+  # Duración: entre 40 y 60 s, nunca menos de 40 ni más de 60, nunca
+  # 30 s exacto (decisión 2026-11-18; reemplaza el mínimo 36 s de
+  # 2026-11-17: el clip de 21 s publicado en test era "muy poco" y
+  # el de 38 s (Rubius p2010) también queda fuera).
+  min_duration_s: 40        # mínimo: 40 s (decisión del usuario 2026-11-18)
   target_duration_s: 40     # objetivo: 40 s (20 pre-roll + 20 post-pico)
   hard_cap_s: 60            # tope duro: 60 s (máximo de un Short)
   forbidden_duration_range: [25, 35]  # regla de oro: ningún clip de 25-35 s
   pre_roll_s: 20            # 20 s de contexto antes del pico
-  # Layout split vertical (2026-11-16): juego arriba (1320 px),
-  # cámara abajo (600 px), sin superponerse; si el juego no se ve,
-  # la cámara se achica, nunca al revés. Nunca tapar minimapa ni HUD.
+  # Layout split vertical RDJavi (2026-11-16, invertido 2026-11-18):
+  # streamer arriba, gameplay abajo, sin superponerse (salvo los 50 px
+  # de solape de la webcam RDJavi); si el juego no se ve, la cámara se
+  # achica, nunca al revés. Nunca tapar minimapa ni HUD.
   layout_split: true
   never_cover_minimap_or_hud: true
   # Subtítulos (2026-11-17): siempre en la zona de juego, nunca
@@ -455,3 +494,8 @@ rules:
   subtitles_always: true
   subtitles_complete: true
   block_without_subtitles: true
+  # Categoría (regla 2026-11-18): solo vale GTA VI. El
+  # watcher/detector lee la categoría por API oficial (Helix
+  # /streams y /channels en Twitch, /api/v2/channels en Kick) y
+  # por capítulos del VOD; policy.py y el gate del panel la exigen.
+  category_gta6_only: true

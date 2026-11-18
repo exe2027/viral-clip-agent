@@ -29,6 +29,8 @@ KNOWN_TOP_KEYS = {
     "auto_approve", "scoring", "breaker", "metadata", "live",
     # Fan-out: se validan abajo.
     "fanout", "public_url", "platform_accounts",
+    # Panel web en Cloudflare (regla 2026-11-18: TODO ES PARA LA WEB).
+    "panel",
     # Señales de Uri (2026-11-17): solo diagnóstico, no puntaje.
     "signals",
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
@@ -183,15 +185,16 @@ def validate_config(cfg, source="config.yaml"):
                   "clips.max_duration_s",
                   f"debe cumplirse min <= objetivo <= max, "
                   f"es {minimum_d} <= {target} <= {maximum_d}")
-        # Reglas 2026-11-17 (usuario): el mínimo es 36 s (primer
-        # segundo por encima del rango prohibido 25-35) y el objetivo
-        # no puede caer dentro de ese rango (el objetivo viejo, 30 s,
-        # era imposible de publicar por la propia puerta del panel);
-        # el tope duro es 60 s (máximo de un Short).
-        if minimum_d <= 35:
+        # Reglas 2026-11-18 (usuario): entre 40 y 60 s, nunca menos
+        # de 40 ni más de 60 (reemplaza el mínimo 36 s de 2026-11-17);
+        # el objetivo no puede caer dentro del rango prohibido 25-35
+        # (el objetivo viejo, 30 s, era imposible de publicar por la
+        # propia puerta del panel); el tope duro es 60 s (máximo de
+        # un Short).
+        if minimum_d < 40:
             c.err("clips.min_duration_s",
-                  "debe ser > 35 s (mínimo 36 s, regla del usuario "
-                  "2026-11-17: el clip de 21 s era 'muy poco')")
+                  "debe ser 40 s (mínimo 40 s, regla del usuario "
+                  "2026-11-18: clips de 40-60 s)")
         if 25 <= target <= 35:
             c.err("clips.target_duration_s",
                   "no puede estar en 25-35 s (regla de oro: ningún "
@@ -202,13 +205,13 @@ def validate_config(cfg, source="config.yaml"):
     c.check(cfg, "clips.precise_cut", "bool")
     for k in ("pre_roll", "window", "min_separation"):
         c.check(cfg, f"clips.{k}", "int", minimum=0)
-    # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
+    # Reglas obvias del proyecto (decisiones del usuario 2026-11-18):
     # la lista canónica `rules:` debe coincidir con clips/subtitles.
     rules = c.check(cfg, "rules", "dict")
     if rules is not None:
-        c.check(cfg, "rules.min_duration_s", "int", minimum=36)
-        c.check(cfg, "rules.target_duration_s", "int", minimum=36)
-        c.check(cfg, "rules.hard_cap_s", "int", minimum=36, maximum=60)
+        c.check(cfg, "rules.min_duration_s", "int", minimum=40)
+        c.check(cfg, "rules.target_duration_s", "int", minimum=40)
+        c.check(cfg, "rules.hard_cap_s", "int", minimum=40, maximum=60)
         c.check(cfg, "rules.pre_roll_s", "int", minimum=20)
         c.check(cfg, "rules.subtitle_zone", "str",
                 choices={"gameplay"})

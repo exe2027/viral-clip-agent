@@ -11,13 +11,18 @@ fotogramas muestreados, antes de cortar:
 
   * Dos webcams lado a lado -> se APILAN verticalmente, una encima de la
     otra, llenando los 1080x1920 sin barras negras.
-  * Una webcam + gameplay -> SPLIT VERTICAL (regla 2026-11-16, corrección
-    del usuario al ver el clip de IlloJuan: el PiP grande en el centro
-    tapaba el juego y el recorte centrado seguía la cara, así que solo
-    se veía la cámara): el juego ARRIBA ocupando la mayor parte del
-    frame (~69%) y la cámara ABAJO, más chica (~31%), sin tapar
-    minimapa ni HUD (la cámara nunca se superpone al juego). Si el
-    juego no se ve, la cámara se ACHICA, nunca al revés.
+  * Una webcam + gameplay -> SPLIT VERTICAL (regla 2026-11-16,
+    INVERTIDO 2026-11-18 por el usuario tras ver los reels de
+    referencia de RDJavi (Df4sy4bxlmr) y DJ Mariio (Df4uyMVjDwq):
+    split-screen con el STREAMER ARRIBA y el GAMEPLAY ABAJO): la
+    cámara ARRIBA (~31%, 600 px) siguiendo al streamer (la caja de
+    la webcam detectada, con seguimiento por tramo) y el juego
+    ABAJO ocupando la mayor parte del frame (~69%, 1320 px), sin
+    tapar minimapa ni HUD (la cámara nunca se superpone al juego).
+    Si el juego no se ve, la cámara se ACHICA, nunca al revés.
+    Proporciones provisionales (600 arriba / 1320 abajo) hasta el
+    desglose fotograma a fotograma del reel que está viendo el
+    navegador: cuando llegue, se documentan las exactas aquí.
   * Solo gameplay, sin webcam -> recorte vertical centrado normal.
   * Si el layout cambia dentro del clip (p. ej. de cams a gameplay),
     el layout se adapta POR TRAMOS, no un recorte fijo para todo el clip.
@@ -165,7 +170,7 @@ Detección de vtuber / PNG tuber (2026-11-17, VOD Rubius 2931565552):
     margen (pelo/cuerpo) y debe tocar una esquina y medir 3-35%
     del fotograma. Si no cumple todo, no hay vtuber y el layout
     cae a center como antes. ``decide_layout`` convierte esa caja
-    en pip y luego en split (juego arriba, avatar abajo), igual
+    en pip y luego en split (streamer arriba, avatar abajo), igual
     que con una webcam humana; si la caja cambia dentro del clip
     (p. ej. gato abajo-izquierda y luego cámara humana
     arriba-izquierda), los tramos se parten por caja, no solo por
@@ -185,12 +190,30 @@ DEFAULTS = {
     "pip_width": 480,          # ancho de la webcam en PiP (px, sobre 1080)
     "pip_corner": "top-right", # top-right | top-left (nunca abajo: minimapa/HUD)
     "pip_margin": 24,          # margen de la webcam PiP al borde
-    # Split vertical (webcam+gameplay, regla 2026-11-16): juego arriba,
-    # cámara abajo. Alturas en px sobre 1080x1920 (1320+600=1920).
+    # Split vertical (webcam+gameplay, regla 2026-11-16, INVERTIDO
+    # 2026-11-18: streamer ARRIBA, juego ABAJO — reels de referencia
+    # RDJavi Df4sy4bxlmr y DJ Mariio Df4uyMVjDwq). Alturas en px
+    # sobre 1080x1920 (600+1320=1920).
     "split_game_h": 1320,      # alto del panel de juego (mayor parte)
     "split_cam_h": 600,        # alto del panel de cámara
     "split_cam_small_h": 480,  # cámara achicada si el juego no se ve
     "split_cam_max_w_frac": 0.45,  # caja de cam > 45% del ancho -> achicarla
+    # Variante del split (2026-11-18): "auto" (default) resuelve por
+    # juego: GTA 6 -> "rdjavi" (reel de referencia de RDJavi,
+    # Df4sy4bxlmr, personalizado Vice City). "plain" es el split
+    # simple (cámara 600 arriba / juego 1320 abajo). "djmariio"
+    # está APARCADO por orden del usuario 2026-11-18: si se pide,
+    # se resuelve a "rdjavi" con aviso, no se usa como layout.
+    "split_variant": "auto",   # auto | rdjavi | plain | djmariio (aparcado)
+    # Detección de encuadre de la webcam (2026-11-18): la caja
+    # detectada dice si el streamer muestra SOLO LA CARA (plano
+    # medio, RDJavi) o su SETUP en plano ancho (DJ Mariio). Se
+    # registra en el manifiesto (params["framing"]); mientras DJ
+    # Mariio esté aparcado, el layout sigue siendo RDJavi en los
+    # dos casos. Ancho = caja ancha Y que abarque gran parte del
+    # frame: aspecto >= 1.8 y ancho >= 60% del frame.
+    "framing_wide_aspect": 1.8,
+    "framing_wide_width_frac": 0.6,
     # Umbrales de detección (calibrados, ver docstring):
     "band_max_frac": 0.65,     # banda de contenido <= 65% del alto -> letterbox
     "seam_center_tol": 0.08,   # costura a <= 8% del ancho del centro
@@ -247,6 +270,109 @@ DEFAULTS = {
     "track_max_speed_frac": 0.03,  # velocidad máx. del centro: fracción del ancho / s
     "track_split_max_speed_frac": 0.01,  # el divisor casi no se mueve
 }
+
+# ---------------------------------------------------------------------------
+# Layout GTA 6 personalizado — variante RDJavi (reel de referencia
+# https://www.instagram.com/reel/Df4sy4bxlmr/, desglose fotograma a
+# fotograma del usuario, 2026-11-18). Es el layout POR DEFECTO para
+# GTA 6 (el panel es solo GTA 6). DJ Mariio (Df4uyMVjDwq) queda
+# APARCADO por orden del usuario 2026-11-18: no se usa como layout.
+# ---------------------------------------------------------------------------
+# Geometría exacta sobre el lienzo 1080x1920:
+RDJAVI_TOP_H = 730        # zona superior 0-730 (fondo desenfocado)
+RDJAVI_CAM_W = 580        # webcam nítida: ~54% del ancho
+RDJAVI_CAM_H = 590        # webcam nítida: ~31% de la altura, casi 1:1
+RDJAVI_CAM_X = 250        # centrada: (1080-580)/2
+RDJAVI_CAM_Y = 190        # margen superior ~10% (~190 px)
+RDJAVI_CAM_RADIUS = 24    # esquinas levemente redondeadas
+RDJAVI_GAME_Y0 = 730      # gameplay 730-1770 (1080x1040, ~55-56%)
+RDJAVI_GAME_H = 1040
+RDJAVI_BAND_Y0 = 1770     # banda inferior 1770-1920 (1080x150)
+RDJAVI_BAND_H = 150
+RDJAVI_CAM_OVERLAP = 50   # la webcam se superpone 25-50 px al gameplay
+# Branding propio del canal (Vice City: rosa/violeta/naranja atardecer):
+CHANNEL_HANDLE = "@ELCLIPDEGTA6 | GTA VI"
+SUNSET_BAR_H = 6          # barra atardecer en la costura gameplay/banda
+SUNSET_COLORS = ("#FF2E88", "#7B2FFF", "#FF9E00")  # rosa, violeta, naranja
+CHANNEL_HANDLE_FONTSIZE = 34
+CHANNEL_HANDLE_FONTFILE = ("/usr/share/fonts/truetype/dejavu/"
+                           "DejaVuSans-Bold.ttf")
+
+
+def detect_framing(box_sample, cfg=None):
+    """Encuadre de la webcam a partir de su caja detectada.
+
+    box_sample: [x0, y0, w, h] en el fotograma de muestra (160x90),
+    o None si no se detectó caja. Devuelve "face" (solo la cara,
+    plano medio cabeza y hombros, como RDJavi) o "setup" (el
+    streamer muestra su setup en plano ancho: habitación, PC,
+    luces, como DJ Mariio). Ancho = caja con aspecto >= 1.8 y que
+    abarque >= 60% del ancho del frame. Sin caja, "face" (default
+    GTA 6: RDJavi).
+    """
+    cfg = cfg or {}
+    if not box_sample:
+        return "face"
+    _x0, _y0, bw, bh = [float(v) for v in box_sample[:4]]
+    if bh <= 0:
+        return "face"
+    wide_aspect = float(cfg.get("framing_wide_aspect", 1.8))
+    wide_frac = float(cfg.get("framing_wide_width_frac", 0.6))
+    if bw / bh >= wide_aspect and bw / SAMPLE_W >= wide_frac:
+        return "setup"
+    return "face"
+
+
+def resolve_split_variant(cfg=None, framing=None):
+    """Variante del split para un clip de GTA 6.
+
+    "auto" (default) -> "rdjavi" siempre (GTA 6 es el único juego
+    del panel; RDJavi es el layout base por orden del usuario).
+    "rdjavi" -> "rdjavi". "plain" -> split simple. "djmariio" está
+    APARCADO (2026-11-18): se resuelve a "rdjavi" y se avisa, no se
+    usa como layout. El encuadre ("framing") se registra en el
+    manifiesto pero no cambia la variante mientras DJ Mariio esté
+    aparcado.
+    """
+    cfg = cfg or {}
+    variant = str(cfg.get("split_variant", "auto") or "auto").lower()
+    if variant == "djmariio":
+        print("Layout DJ Mariio aparcado por el usuario (2026-11-18): "
+              "se usa RDJavi.")
+        return "rdjavi"
+    if variant == "plain":
+        return "plain"
+    return "rdjavi"
+
+
+def _punch_crop_expr(normal, punched, punch):
+    """Valor de recorte con punch-in opcional (zoom puntual).
+
+    Sin punch devuelve el número tal cual. Con punch
+    {"t0", "t1", "zoom"} devuelve una expresión ffmpeg
+    if(between(t,t0,t1),punched,normal). Los tiempos son relativos
+    al TRAMO (los timestamps se resetean por tramo al cortar).
+    """
+    if not punch:
+        return str(int(normal))
+    t0 = float(punch.get("t0", 0.0))
+    t1 = float(punch.get("t1", t0))
+    return f"if(between(t,{t0},{t1}),{int(punched)},{int(normal)})"
+
+
+def _rounded_cam_alpha_expr(w, h, r):
+    """Expresión geq para esquinas redondeadas en la webcam RDJavi.
+
+    Alpha 0 en las esquinas fuera del círculo de radio r centrado
+    en cada esquina interior; 255 en el resto.
+    """
+    return (
+        f"if(lt(X,{r})*lt(Y,{r})*gt(hypot({r}-X,{r}-Y),{r}),0,"
+        f"if(lt(X,{r})*gt(Y,{h - r - 1})*gt(hypot({r}-X,Y-{h - r - 1}),{r}),0,"
+        f"if(gt(X,{w - r - 1})*lt(Y,{r})*gt(hypot(X-{w - r - 1},{r}-Y),{r}),0,"
+        f"if(gt(X,{w - r - 1})*gt(Y,{h - r - 1})*"
+        f"gt(hypot(X-{w - r - 1},Y-{h - r - 1}),{r}),0,255))))"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1370,11 +1496,19 @@ def _split_params(box_sample, cfg):
 
     box_sample: [x0, y0, w, h] en el fotograma de muestra (160x90).
     Devuelve params con la caja, la ventana de juego (game_x0, en
-    muestra) y las alturas de los paneles. El juego ocupa la mayor
-    parte (1320 px) y la cámara abajo (600 px); si la caja de la
-    cámara es muy ancha (> 45% del frame, el juego no se vería) la
-    cámara se achica a 480 px y el juego crece a 1440 px. La cámara
-    nunca se superpone al juego: va debajo, no encima.
+    muestra) y las alturas de los paneles. El streamer va ARRIBA
+    y el juego ABAJO; la variante por defecto para GTA 6 es RDJavi
+    (webcam centrada 580x590 sobre fondo desenfocado, gameplay
+    730-1770, banda inferior con branding Vice City). Si la caja de
+    la cámara es muy ancha (> 45% del frame, el juego no se vería)
+    la cámara se achica a 480 px y el juego crece a 1440 px (split
+    simple). La cámara nunca se superpone al juego salvo los 50 px
+    de solape de la webcam RDJavi sobre el gameplay. El encuadre
+    ("framing": face/setup) se detecta y se guarda en params; la
+    variante se resuelve con resolve_split_variant (DJ Mariio
+    aparcado: siempre RDJavi para GTA 6).
+    (Orden invertido 2026-11-18 por el usuario: antes juego arriba
+    y cámara abajo; referencia RDJavi Df4sy4bxlmr.)
     """
     game_h = int(cfg.get("split_game_h", 1320))
     cam_h = int(cfg.get("split_cam_h", 600))
@@ -1390,8 +1524,13 @@ def _split_params(box_sample, cfg):
     else:  # cámara a la derecha: juego a su izquierda
         game_x0 = max(0.0, bx0 - gw_s - 2)
     game_x0 = max(0.0, min(float(game_x0), SAMPLE_W - gw_s))
+    framing = detect_framing(box_sample, cfg)
     return {"box": [float(v) for v in box_sample[:4]],
-            "game_x0": float(game_x0), "game_h": game_h, "cam_h": cam_h}
+            "game_x0": float(game_x0), "game_h": game_h, "cam_h": cam_h,
+            "framing": framing,
+            "split_variant": resolve_split_variant(cfg, framing),
+            "punch_in": (cfg.get("punch_in")
+                         if isinstance(cfg.get("punch_in"), dict) else None)}
 
 
 def _scan_frames(video_path, duration, start_offset, cfg):
@@ -1588,7 +1727,7 @@ def apply_game_voice(segments, game_voice, duration, min_run=1.5):
     Idea de Uri (clipper-directos, layout.py): cuando habla el
     juego, el plano pasa a juego a pantalla completa; al terminar,
     vuelve el layout que había. Aquí el layout del proyecto es
-    juego arriba / cámara abajo (split), así que el tramo de voz
+    streamer arriba / gameplay abajo (split RDJavi), así que el tramo de voz
     del juego es "game" (juego a pantalla completa, mismo recorte
     que "center") y el resto conserva su layout.
 
@@ -1687,8 +1826,8 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
     ``game_voice`` (opcional): tramos de voz del juego (ver
     game_voice.py; también vale ``cfg["game_voice"]``). Los tramos
     que caen dentro pasan a layout "game" (juego a pantalla
-    completa); el resto conserva su layout (split: juego arriba,
-    cámara abajo).
+    completa); el resto conserva su layout (split RDJavi:
+    streamer arriba, gameplay abajo).
     """
     cfg = {**DEFAULTS, **(cfg or {})}
     # Voz del juego: también vale en los layouts forzados (el modo
@@ -1730,8 +1869,8 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                          "params": _split_params(box_s, cfg),
                          "reason": ("facecam_box explícito en config.yaml "
                                     f"{[int(v) for v in cfg['facecam_box'][:4]]} "
-                                    "-> split vertical: juego arriba, "
-                                    "cámara abajo (sin PiP en el centro)")}]
+                                    "-> split vertical RDJavi: streamer "
+                                    "arriba, gameplay abajo (sin PiP en el centro)")}]
             if game_voice:
                 segments = apply_game_voice(segments, game_voice, duration)
             return {"mode": "split", "segments": segments, "samples": []}
@@ -2050,32 +2189,124 @@ def _scale_to_sample(params, src_w, src_h):
     return out
 
 
+def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg):
+    """Grafo de filtros de la variante RDJavi (GTA 6, 1080x1920).
+
+    Replica el reel de referencia de RDJavi (Df4sy4bxlmr), desglose
+    exacto del usuario 2026-11-18:
+      * Zona superior 0-730: fondo desenfocado a ancho completo,
+        ampliado de la propia webcam (morado/magenta/rosa del setup).
+      * Webcam nítida centrada 580x590 en (250,190), casi cuadrada
+        1:1, esquinas redondeadas (r=24), plano medio cabeza y
+        hombros; su borde inferior (~40%) se superpone 50 px sobre
+        el gameplay. Sin cámara en esquina sobre el juego.
+      * Gameplay 730-1770 (1080x1040, recorte casi cuadrado 1:1,
+        sin marco), ancho completo.
+      * Franja inferior 1770-1920: banda difuminada que sigue el
+        color del gameplay, sin texto del juego.
+      * Branding propio GTA 6 / Vice City: barra atardecer
+        (rosa/violeta/naranja, 6 px) en la costura gameplay/banda y
+        handle del canal centrado en la banda, blanco con contorno
+        negro. Sin emojis, sin título grande, sin barra de progreso.
+      * Cortes duros entre ángulos del juego, sin fundidos (eso lo
+        da el corte, no este grafo). Cámara FIJA por tramo; punch-in
+        opcional vía params["punch_in"] (zoom puntual en reacción).
+    """
+    p = _scale_to_sample(params, src_w, src_h)
+    bx, by, bw, bh = p["box"]
+    blur = int(cfg.get("blur_radius", 20))
+    # Ventana de juego: recorte casi cuadrado del gameplay.
+    gw = int(src_h * OUT_W / RDJAVI_GAME_H)
+    gx0 = min(max(p.get("game_x0", (src_w - gw) // 2), 0), src_w - gw)
+    punch = (params or {}).get("punch_in")
+    zoom = float((punch or {}).get("zoom", 1.25)) if punch else 1.0
+    cw = _punch_crop_expr(bw, int(bw / zoom), punch)
+    ch = _punch_crop_expr(bh, int(bh / zoom), punch)
+    cx = _punch_crop_expr(bx, int(bx + (bw - bw / zoom) / 2), punch)
+    cy = _punch_crop_expr(by, int(by + (bh - bh / zoom) / 2), punch)
+    handle = str(cfg.get("channel_handle", CHANNEL_HANDLE))
+    fontfile = str(cfg.get("channel_handle_fontfile",
+                           CHANNEL_HANDLE_FONTFILE))
+    if os.path.exists(fontfile):
+        font_arg = f"fontfile={fontfile}"
+    else:  # sin el TTF en disco, nombre de fuente por fontconfig
+        font_arg = "font='DejaVu Sans'"
+    c0, c1, c2 = (c.lstrip("#") for c in SUNSET_COLORS)
+    alpha = _rounded_cam_alpha_expr(RDJAVI_CAM_W, RDJAVI_CAM_H,
+                                    RDJAVI_CAM_RADIUS)
+    return (
+        f"[{vin}]split=4[rj_bg][rj_c][rj_g][rj_bb];"
+        f"[rj_bg]crop={cw}:{ch}:{cx}:{cy},"
+        f"scale={OUT_W}:{RDJAVI_TOP_H}:force_original_aspect_ratio=increase,"
+        f"crop={OUT_W}:{RDJAVI_TOP_H},boxblur={blur}:2[rj_bgv];"
+        f"[rj_c]crop={cw}:{ch}:{cx}:{cy},"
+        f"scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H}:force_original_aspect_ratio=increase,"
+        f"crop={RDJAVI_CAM_W}:{RDJAVI_CAM_H},"
+        f"format=yuva420p,geq=lum_expr='p(0,0)':alpha_expr='{alpha}'[rj_cv];"
+        f"[rj_g]crop={gw}:{src_h}:{gx0}:0,"
+        f"scale={OUT_W}:{RDJAVI_GAME_H},setsar=1[rj_gv];"
+        f"[rj_bb]crop={gw}:{src_h}:{gx0}:0,"
+        f"scale={OUT_W}:{RDJAVI_BAND_H}:force_original_aspect_ratio=increase,"
+        f"crop={OUT_W}:{RDJAVI_BAND_H},boxblur={blur}:2,"
+        f"drawtext={font_arg}:text='{handle}':"
+        f"fontsize={CHANNEL_HANDLE_FONTSIZE}:fontcolor=white:"
+        f"borderw=2:bordercolor=black:x=(w-text_w)/2:"
+        f"y=({RDJAVI_BAND_H}-{CHANNEL_HANDLE_FONTSIZE})/2[rj_bbv];"
+        f"gradients=s={OUT_W}x{SUNSET_BAR_H}:c0=0x{c0}:c1=0x{c1}:c2=0x{c2}:"
+        f"x0=0:y0=0:x1={OUT_W}:y1=0:nb_colors=3[rj_bar];"
+        f"[rj_bgv][rj_gv]vstack[rj_mid];"
+        f"[rj_mid][rj_bbv]vstack[rj_base];"
+        f"[rj_base][rj_bar]overlay=0:{RDJAVI_BAND_Y0 - SUNSET_BAR_H}[rj_barred];"
+        f"[rj_barred][rj_cv]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y},"
+        f"format=yuv420p[{vout}]"
+    )
+
+
 def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
                          crop="center"):
     """Devuelve (filtro, ) que transforma [vin] en [vout] 1080x1920."""
     p = _scale_to_sample(params, src_w, src_h)
     if layout == "split":
-        # Split vertical (regla 2026-11-16): juego ARRIBA (panel
-        # game_h, la mayor parte) y cámara ABAJO (panel cam_h), sin
-        # superponerse nunca. El juego se recorta vertical evitando
-        # la caja de la cámara; la cámara se ajusta por contenido
-        # sobre su propio frame difuminado (como en stack).
+        # Split vertical (regla 2026-11-16, INVERTIDO 2026-11-18):
+        # STREAMER ARRIBA y JUEGO ABAJO, sin superponerse nunca.
+        # Variante por defecto para GTA 6: RDJavi (desglose exacto
+        # del reel de RDJavi, 2026-11-18): fondo desenfocado arriba
+        # (0-730), webcam nítida centrada 580x590 en (250,190) con
+        # esquinas redondeadas y 50 px de solape sobre el gameplay,
+        # gameplay 730-1770 (1080x1040), banda inferior 1770-1920
+        # (gameplay difuminado + barra atardecer Vice City + handle
+        # del canal). La cámara es FIJA por tramo; solo se mueve el
+        # streamer dentro del encuadre. Punch-in opcional (zoom
+        # puntual sobre la webcam en un momento de reacción) vía
+        # params["punch_in"] = {"t0", "t1", "zoom"} (tiempos
+        # relativos al tramo). Variante "plain": split simple
+        # (cámara 600 arriba / juego 1320 abajo).
+        variant = (params or {}).get("split_variant") or resolve_split_variant(cfg)
+        if variant == "rdjavi":
+            return _split_rdjavi_graph(vin, vout, params, src_w, src_h,
+                                       cfg)
         bx, by, bw, bh = p["box"]
         game_h = p.get("game_h", 1320)
         cam_h = p.get("cam_h", 600)
         gw = int(src_h * OUT_W / game_h)
         gx0 = min(max(p.get("game_x0", (src_w - gw) // 2), 0), src_w - gw)
         blur = int(cfg.get("blur_radius", 20))
+        punch = (params or {}).get("punch_in")
+        zoom = float((punch or {}).get("zoom", 1.25)) if punch else 1.0
+        cw = _punch_crop_expr(bw, int(bw / zoom), punch)
+        ch = _punch_crop_expr(bh, int(bh / zoom), punch)
+        cx = _punch_crop_expr(bx, int(bx + (bw - bw / zoom) / 2), punch)
+        cy = _punch_crop_expr(by, int(by + (bh - bh / zoom) / 2), punch)
         return (f"[{vin}]split=2[sp_g][sp_c];"
                 f"[sp_g]crop={gw}:{src_h}:{gx0}:0,"
                 f"scale={OUT_W}:{game_h},setsar=1[sp_gv];"
-                f"[sp_c]crop={bw}:{bh}:{bx}:{by},split=2[sp_cb][sp_cf];"
+                f"[sp_c]crop={cw}:{ch}:{cx}:{cy},split=2[sp_cb][sp_cf];"
                 f"[sp_cb]scale={OUT_W}:{cam_h}:force_original_aspect_ratio=increase,"
                 f"crop={OUT_W}:{cam_h},boxblur={blur}:2[sp_cbg];"
                 f"[sp_cf]scale={OUT_W}:{cam_h}:force_original_aspect_ratio=decrease,"
                 f"setsar=1[sp_cfg];"
                 f"[sp_cbg][sp_cfg]overlay=(W-w)/2:(H-h)/2[sp_cv];"
-                f"[sp_gv][sp_cv]vstack,format=yuv420p[{vout}]")
+                f"[sp_cv][sp_gv]vstack,format=yuv420p[{vout}]")
     if layout == "stack":
         x0, y0, bw, bh = p.get("band", [0, 0, src_w, src_h])
         split = p.get("split_x", src_w // 2)

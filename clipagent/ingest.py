@@ -361,10 +361,31 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
       Score final = z-score local + 0.5 × pendiente de subida
       (media de los 60 s previos, cap 2) + magnitud (puntos
       ajustados / 10, para que el tamaño absoluto siga pesando:
-      el z-score solo premiaba ráfagas pequeñas en tramos muertos).
+      el z-score solo premiaba ráfagas pequeñas en tramos muertos)
+      + 0,2 × hype_score v2 (máx. +2,0; ver HYPE v2 abajo).
       La desviación tiene suelo 1.0 para que en tramos muertos un
       soplo no dé z=50. Con VOD muy corto (<5 vecinos) se usa la
       media/desviación global.
+    - HYPE v2 POR RÁFAGA (regla del usuario 2026-11-18, mejorada el
+      mismo día): cada ventana lleva la VELOCIDAD del chat —
+      mensajes por 10 s, por 60 s (rodante, terminando al final de
+      la ventana) y por segundo — y su pico contra el BASELINE
+      RODANTE: la MEDIANA de los msgs/10 s de los 5 min previos
+      (sin contar la ventana misma; con menos de 3 ventanas previas,
+      la mediana global). Una ráfaga repentina pesa más que un chat
+      alto pero estable: lo que manda es el RATIO pico/baseline, no
+      el total. ``hype_score`` 0-10 por ventana:
+      velocidad 0-5 pts (ratio 1x -> 0, >= 4x -> 5) + señales 0-5
+      pts (risas hasta 1,5 + emotes de hype hasta 1,5 + repetición
+      del mismo texto por usuarios DISTINTOS hasta 2 — un canto del
+      chat, no spam: el mismo usuario repitiendo ya se descuenta
+      antes). El score de detección suma +0,2 × hype_score (máx.
+      +2,0); la fórmula de prioridad de la Cola (priority.py:
+      viralidad^0,5 × SEO^0,3 × chat_norm^0,2) NO cambia: el hype
+      ordena mejor la detección y alimenta el componente chat de
+      viralidad (detect.py), no toca los pesos de prioridad.
+      Los campos burst_* (media ±12 min, v1) se conservan por
+      compatibilidad. Sin baseline local, hype_* queda en None.
     - Con ``local_baseline=False`` los scores son los puntos
       suavizados ajustados por anti-spam; con ``anti_spam=False``
       además, son los puntos suavizados v2.4 tal cual (compatibilidad
@@ -468,6 +489,33 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
         detail[s]["adj_score"] = adj[s]
         detail[s]["z_local"] = None
         detail[s]["rise"] = None
+        # HYPE v2 (regla 2026-11-18): velocidad del chat en la
+        # ventana, en msgs/10 s, msgs/60 s (rodante, 60 s terminando
+        # al final de la ventana) y msgs/s. Los campos hype_* se
+        # rellenan abajo con el baseline rodante; sin baseline
+        # quedan en None (no se inventan).
+        detail[s]["msgs_per_10s"] = round(
+            detail[s]["msgs"] * 10.0 / window_size, 2)
+        detail[s]["msgs_per_min"] = round(
+            detail[s]["msgs"] * 60.0 / window_size, 2)
+        v60 = 0
+        for sec in range(s + window_size - 60,
+                         s + window_size):
+            b60 = per_sec.get(sec)
+            if b60:
+                v60 += b60["msgs"]
+        detail[s]["msgs_per_60s"] = v60
+        detail[s]["msgs_per_sec"] = round(
+            detail[s]["msgs"] / window_size, 2) if window_size else 0.0
+        detail[s]["burst_ratio"] = None
+        detail[s]["burst_z"] = None
+        detail[s]["burst_score"] = None
+        detail[s]["hype_score"] = None
+        detail[s]["hype_window_s"] = window_size
+        detail[s]["hype_baseline"] = None
+        detail[s]["hype_ratio"] = None
+        detail[s]["hype_velocity_z"] = None
+        detail[s]["hype_components"] = None
 
     if not local_baseline:
         return adj, detail
@@ -485,8 +533,23 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
     total_mean = pref[n] / n if n else 0.0
     total_var = max(pref2[n] / n - total_mean ** 2, 0.0) if n else 0.0
     total_std = math.sqrt(total_var)
+    # Baseline local también para la VELOCIDAD del chat (msgs por
+    # ventana): la ráfaga se mide contra la misma vecindad.
+    msgs_list = [float(detail[s]["msgs"]) for s in starts]
+    mpref = [0.0]
+    mpref2 = [0.0]
+    for v in msgs_list:
+        mpref.append(mpref[-1] + v)
+        mpref2.append(mpref2[-1] + v * v)
+    msgs_total_mean = mpref[n] / n if n else 0.0
+    msgs_total_var = max(mpref2[n] / n - msgs_total_mean ** 2, 0.0) if n else 0.0
+    msgs_total_std = math.sqrt(msgs_total_var)
     k = max(1, int(local_half_min * 60 / step))
     m = max(1, int(60 / step))
+    # HYPE v2: velocidad por ventana y nº de ventanas en 5 min
+    # (baseline rodante = mediana de los 5 min previos).
+    msgs10_list = [detail[s]["msgs_per_10s"] for s in starts]
+    w60 = max(1, int(300 / step))
     scores: dict[int, float] = {}
     for i, start in enumerate(starts):
         lo, hi = max(0, i - k), min(n - 1, i + k)
@@ -497,10 +560,20 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
             mean = ssum / cnt
             var = max(sq / cnt - mean ** 2, 0.0)
             std = math.sqrt(var)
+            msum = mpref[hi + 1] - mpref[lo] - msgs_list[i]
+            msq = mpref2[hi + 1] - mpref2[lo] - msgs_list[i] ** 2
+            msgs_mean = msum / cnt
+            msgs_var = max(msq / cnt - msgs_mean ** 2, 0.0)
+            msgs_std = math.sqrt(msgs_var)
         else:  # VOD muy corto: baseline global
             mean, std = total_mean, total_std
+            msgs_mean, msgs_std = msgs_total_mean, msgs_total_std
         std = max(std, 1.0)  # suelo: en tramos muertos no explota z
         z = (adj_list[i] - mean) / std
+        msgs_std = max(msgs_std, 1.0)
+        burst_z = (msgs_list[i] - msgs_mean) / msgs_std
+        burst_ratio = msgs_list[i] / max(msgs_mean, 1.0)
+        burst_score = round(min(max(burst_z, 0.0), 10.0), 2)
         if i > 0:
             plo = max(0, i - m)
             prev_cnt = i - plo
@@ -510,8 +583,55 @@ def score_windows(chat_path: str, window_size: int = 10, lang: str = "both", ste
             rise = 0.0
         detail[start]["z_local"] = round(z, 2)
         detail[start]["rise"] = round(rise, 2)
-        # z local + 0.5 × subida + magnitud (adj/10).
-        scores[start] = round(z + 0.5 * rise + adj_list[i] / 10.0, 2)
+        detail[start]["burst_ratio"] = round(burst_ratio, 2)
+        detail[start]["burst_z"] = round(burst_z, 2)
+        detail[start]["burst_score"] = burst_score
+        # HYPE v2: baseline rodante = mediana de los msgs/10 s de
+        # los 5 min previos (sin la ventana misma); con menos de 3
+        # ventanas previas, la mediana global. El ratio pico /
+        # baseline manda: una ráfaga repentina pesa más que un chat
+        # alto pero estable. La ráfaga no se infla su propio
+        # baseline (la mediana es robusta y la ventana misma no
+        # entra en el cálculo).
+        prior = [msgs10_list[j] for j in range(max(0, i - w60), i)]
+        if len(prior) >= 3:
+            baseline = statistics.median(prior)
+            std_prior = statistics.pstdev(prior) if len(prior) > 1 else 0.0
+        else:
+            baseline = statistics.median(msgs10_list) if msgs10_list else 0.0
+            std_prior = (statistics.pstdev(msgs10_list)
+                         if len(msgs10_list) > 1 else 0.0)
+        msgs10 = msgs10_list[i]
+        ratio = msgs10 / max(baseline, 1.0)
+        vel_z = (msgs10 - baseline) / max(std_prior, 1.0)
+        # Señales dentro de la ráfaga (0-5 pts): risas, emotes de
+        # hype y repetición del mismo texto por usuarios distintos
+        # (un canto del chat; el mismo usuario repitiendo ya se
+        # descuenta antes y el anti-spam v2 sigue penalizando el
+        # emote/repetición-spam en los puntos, no aquí).
+        d = detail[start]
+        m = d["msgs"] or 0
+        vel_pts = 5.0 * min(max(ratio - 1.0, 0.0) / 3.0, 1.0)
+        risas_pts = min((d["risas"] / m if m else 0.0), 0.5) * 3.0
+        hype_pts = min((d["hype"] / m if m else 0.0), 0.5) * 3.0
+        rep_pts = min(d["rep_ratio"], 0.5) * 4.0
+        hype_score = round(
+            min(vel_pts + risas_pts + hype_pts + rep_pts, 10.0), 2)
+        d["hype_score"] = hype_score
+        d["hype_baseline"] = round(baseline, 2)
+        d["hype_ratio"] = round(ratio, 2)
+        d["hype_velocity_z"] = round(vel_z, 2)
+        d["hype_components"] = {
+            "velocidad": round(vel_pts, 2),
+            "risas": round(risas_pts, 2),
+            "emotes_hype": round(hype_pts, 2),
+            "repeticion": round(rep_pts, 2),
+        }
+        # z local + 0.5 × subida + magnitud (adj/10) + hype v2
+        # (+0,2 × hype_score, máx. +2,0): la ráfaga ordena los
+        # picos. La fórmula de prioridad NO cambia.
+        scores[start] = round(
+            z + 0.5 * rise + adj_list[i] / 10.0 + 0.2 * hype_score, 2)
     return scores, detail
 
 
@@ -603,7 +723,7 @@ def main() -> int:
                    help="Paso de la ventana deslizante en segundos (default: ventana/2)")
     p.add_argument("--min-separation", type=int, default=60, help="Separación mínima entre picos (default: 60)")
     p.add_argument("--pre-roll", type=int, default=20, help="Segundos antes del pico (default: 20)")
-    p.add_argument("--duration", type=int, default=40, help="Duración de cada clip (default: 40, objetivo; mínimo 36 s y tope duro 60 s, reglas del usuario 2026-11-17)")
+    p.add_argument("--duration", type=int, default=40, help="Duración de cada clip (default: 40, objetivo; mínimo 40 s y tope duro 60 s, reglas del usuario 2026-11-18)")
     p.add_argument("--lang", choices=["es", "en", "both"], default="both",
                    help="Idioma a puntuar: es, en o both (default: both)")
     p.add_argument("--crop", choices=["center", "left", "right"], default="center",

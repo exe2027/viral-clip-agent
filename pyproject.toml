@@ -44,6 +44,12 @@ youtube = [
 # Sin él, el agente no puede abrir el navegador; los tests usan un
 # fake y no lo necesitan. Instalar en la PC del usuario + Chromium:
 #   pip install -e .[browser] && python -m playwright install chromium
+# Cortador en vivo (live_cutter.py): graba el directo por HLS con
+# streamlink + ffmpeg (sin streamlink no hay grabación; el resto del
+# cutter — detección, corte, subtítulos — sigue funcionando en replay).
+live = [
+    "streamlink>=6.0",
+]
 browser = [
     "playwright>=1.40",
 ]

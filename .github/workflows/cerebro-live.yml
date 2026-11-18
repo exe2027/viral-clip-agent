@@ -1,0 +1,91 @@
+# Cortador en vivo (cerebro-live)
+#
+# GitHub Actions como compute principal ($0): cada 30 min mira si
+# el streamer está en vivo y en GTA VI; si lo está, corre el
+# cortador en vivo 25 min (graba por segmentos, detecta picos por
+# ráfaga de chat, corta 40 s, subtitula, empaqueta y encola en la
+# Cola LIVE del panel). Sin publicar en público todavía (orden del
+# usuario 2026-11-18 14:37): las publicaciones quedan en draft.
+#
+# Secretos (entorno sebastian): TWITCH_CLIENT_ID, TWITCH_CLIENT_SECRET
+# (Helix, categoría en vivo), PANEL_USERNAME, PANEL_PASSWORD (login
+# del panel para encolar en la Cola; sin ellos el cutter sigue solo
+# con la cola del cerebro y lo registra).
+name: Cerebro — Live Cutter
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      streamer:
+        description: "Canal de Twitch a seguir"
+        required: false
+        default: "rubius"
+      minutes:
+        description: "Minutos de sesión por corrida"
+        required: false
+        default: "25"
+
+jobs:
+  live-cut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+      TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias (ffmpeg + streamlink + whisper)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          python -m pip install -q -e ".[whisper]" streamlink
+      - name: ¿En vivo y en GTA VI?
+        id: gate
+        run: |
+          python - <<'EOF'
+          import os
+          from watcher import twitch_client
+          streamer = os.environ.get("STREAMER", "rubius")
+          cfg = {"twitch_client_id": os.environ.get("TWITCH_CLIENT_ID", ""),
+                 "twitch_client_secret": os.environ.get("TWITCH_CLIENT_SECRET", "")}
+          client, mode = twitch_client(cfg)
+          try:
+              live, _vods = client.check(streamer)
+          except Exception as e:
+              print(f"sin lectura de directo: {e}")
+              live = None
+          game = (live or {}).get("game", "") if live else ""
+          from clipagent.category import is_gta6
+          ok = bool(live) and is_gta6(game)
+          print(f"en vivo: {bool(live)} / categoría: {game!r} / GTA VI: {ok} (vía {mode})")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"live={'true' if ok else 'false'}\n")
+          EOF
+        env:
+          STREAMER: ${{ inputs.streamer || 'rubius' }}
+      - name: Cortador en vivo (25 min)
+        if: steps.gate.outputs.live == 'true'
+        run: |
+          python -m clipagent live "${STREAMER}" --cut --minutes "${MINUTES}"
+        env:
+          STREAMER: ${{ inputs.streamer || 'rubius' }}
+          MINUTES: ${{ inputs.minutes || '25' }}
+      - name: Sin directo en GTA VI (nada que cortar)
+        if: steps.gate.outputs.live != 'true'
+        run: |
+          echo "El streamer no está en vivo en GTA VI: sin sesión de corte."
+      - name: Guardar estado (picos y clips de la sesión)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-cutter-${{ github.run_id }}
+          path: |
+            runs/live/
+          if-no-files-found: ignore
+          retention-days: 7

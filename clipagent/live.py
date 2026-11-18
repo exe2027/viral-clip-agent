@@ -244,6 +244,50 @@ class MinimalWebSocket:
         self._sock = None
 
 
+def kick_channel_category(slug, request_fn=None):
+    """Categoría ACTUAL de un canal de Kick, o None si no se puede.
+
+    GET https://kick.com/api/v2/channels/<slug> (API pública de
+    Kick, sin autenticación). La categoría vive en
+    data.livestream.categories[0].name (en vivo) o en
+    data.livestream.category / data.category como respaldo.
+    Sin directo en curso, la categoría es "" (no se asume GTA VI).
+    """
+    import urllib.request
+    url = KICK_CHANNEL_URL.format(slug=slug)
+    try:
+        if request_fn is not None:
+            status, payload = request_fn("GET", url, {}, None)
+        else:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                status, payload = resp.status, json.loads(
+                    resp.read().decode("utf-8", "ignore") or "{}")
+    except Exception:  # noqa: BLE001 - Kick detrás de Cloudflare, etc.
+        return None
+    if status != 200:
+        return None
+    try:
+        data = (payload or {}).get("data") or {}
+        live = data.get("livestream") or {}
+        cats = live.get("categories") or []
+        if isinstance(cats, list) and cats:
+            first = cats[0]
+            if isinstance(first, dict):
+                return first.get("name") or first.get("slug") or None
+            if isinstance(first, str):
+                return first
+        cat = live.get("category") or data.get("category")
+        if isinstance(cat, dict):
+            return cat.get("name") or cat.get("slug") or None
+        if isinstance(cat, str):
+            return cat or None
+        return ""
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def resolve_kick_chatroom_id(slug, request_fn=None):
     """ID numérico del chatroom de Kick, o None si no se puede.
 

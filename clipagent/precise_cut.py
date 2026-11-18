@@ -52,10 +52,11 @@ import sys
 
 
 DEFAULT_MAX_DURATION = 60
-DEFAULT_MIN_DURATION = 36   # decisión del usuario 2026-11-17: el clip
-# de 21 s publicado en test era "muy poco". 36 s = primer segundo
-# entero por encima del rango prohibido 25-35 (regla de oro: ningún
-# clip de 30 s); el objetivo es 40 s y el tope duro 60 s.
+DEFAULT_MIN_DURATION = 40   # decisión del usuario 2026-11-18: entre
+# 40 y 60 s, nunca menos de 40 (reemplaza el mínimo 36 s de 2026-11-17;
+# el clip de 38 s de Rubius p2010 también queda fuera). El rango
+# prohibido 25-35 (regla de oro: ningún clip de 30 s) sigue vigente;
+# el objetivo es 40 s y el tope duro 60 s.
 DEFAULT_TARGET_DURATION = 40
 FORBIDDEN_DURATION_RANGE = (25, 35)  # regla de oro, inclusivo
 DEFAULT_PRE_ROLL = 2.5      # inicio 2-3 s antes del disparador
@@ -72,7 +73,7 @@ def enforce_min_duration(start, end, segment_duration,
     Si el corte afinado por frase queda corto, se alarga el fin hasta
     min_duration; si el segmento se acaba, se retrocede el inicio.
     Un corte de 25-35 s (rango prohibido, regla de oro) también se
-    alarga hasta 36 s. Si el segmento entero es más corto que el
+    alarga hasta 40 s. Si el segmento entero es más corto que el
     mínimo, se devuelve lo que hay y el motivo lo dice: ese clip no
     debe publicarse (lo retiene policy.py).
     Devuelve (start, end, nota_o_None).
@@ -84,7 +85,7 @@ def enforce_min_duration(start, end, segment_duration,
         if end - start < min_duration:
             start = max(0.0, end - min_duration)
         extended = True
-    # Tope duro: un corte fijo de 40 s con --max-duration 36 también se
+    # Tope duro: un corte fijo de 40 s con --max-duration 40 también se
     # recorta hasta el tope (la config garantiza min <= max, ver
     # validate.py, así que el tope nunca baja del mínimo).
     if end - start > max_duration:
@@ -94,7 +95,7 @@ def enforce_min_duration(start, end, segment_duration,
                             f"llega al mínimo de {min_duration} s")
     if extended:
         return start, end, (f"alargado a {min_duration} s (mínimo, regla "
-                            f"del usuario 2026-11-17)")
+                            f"del usuario 2026-11-18)")
     return start, end, None
 PHRASE_GAP = 0.5            # hueco entre palabras que separa frases
 SILENCE_NOISE_DB = -40      # umbral de silencio para silencedetect
@@ -169,8 +170,8 @@ def refine_cut(segment_duration, peak_rel, transcript=None, silences=None,
     Devuelve dict {start, end, duration, method, reason}.
     method: 'phrase' (por palabra+silencio) o 'fixed' (caída).
 
-    REGLA 2026-11-17: ningún corte sale de aquí por debajo del mínimo
-    (36 s) ni dentro del rango prohibido 25-35 s: el corte afinado se
+    REGLA 2026-11-18: ningún corte sale de aquí por debajo del mínimo
+    (40 s) ni dentro del rango prohibido 25-35 s: el corte afinado se
     ALARGA hasta el mínimo (nunca se recorta el momento), y el tope
     duro es 60 s.
     """
@@ -223,7 +224,7 @@ def refine_cut(segment_duration, peak_rel, transcript=None, silences=None,
     # (el inicio manda: es donde empieza el momento).
     if end - start > max_duration:
         end = start + max_duration
-    # Mínimo 36 s (regla 2026-11-17): una frase corta no deja un clip
+    # Mínimo 40 s (regla 2026-11-18): una frase corta no deja un clip
     # de 5 s ni de 21 s; se alarga el fin (o se retrocede el inicio
     # si el segmento se acaba) hasta el mínimo.
     start, end, note = enforce_min_duration(
@@ -286,9 +287,8 @@ def main() -> int:
                         "decisión del usuario 2026-11-17)")
     p.add_argument("--min-duration", type=float, default=DEFAULT_MIN_DURATION,
                    help="Duración mínima del corte en segundos (default: "
-                        "36, decisión del usuario 2026-11-17: el clip de "
-                        "21 s era 'muy poco'; por debajo se alarga, nunca "
-                        "se deja corto)")
+                        "40, decisión del usuario 2026-11-18: entre 40 y "
+                        "60 s; por debajo se alarga, nunca se deja corto)")
     p.add_argument("--lang", default=None, help="Idioma para transcribir (es, en...)")
     p.add_argument("--layout", choices=["auto", "stack", "pip", "center"],
                    default=None, help="Forzar layout (default: auto)")

@@ -38,7 +38,10 @@ class TestSingleList(unittest.TestCase):
         self.assertNotIn("coker", load_allowlist())
         from watcher import load_influencers
         watched = {i["usuario"] for i in load_influencers()}
-        self.assertEqual(watched, {"illojuan"})
+        # Decisión del usuario 2026-11-18: Rubius es el prioritario e
+        # IlloJuan está PAUSADO (enabled=false en streamers.yaml).
+        self.assertEqual(watched, {"rubius"})
+        self.assertNotIn("illojuan", watched)
         from clipagent.publish import load_whitelist
         self.assertIn("illojuan", load_whitelist())
 

@@ -158,39 +158,62 @@ DEFAULT_ESCALATE_MAX_REPEATS = 3
 DEFAULT_LANGUAGE_CHUNK_S = 30
 SAMPLE_RATE = 16000
 
-# REGLA DE SUBTÍTULOS (decisión del usuario 2026-11-17): los subtítulos
-# NUNCA tapan la cara del influencer / la webcam. Layout split sobre
-# 1080x1920: juego arriba (0-1320 px), cámara abajo (1320-1920 px).
-# Con Alignment=2 (abajo, centrado) MarginV es la distancia desde el
-# borde inferior, así que el texto solo queda dentro del juego si
-# MarginV >= alto de la cámara (600) + hueco (80) = 680. El MarginV
-# viejo (140) dejaba el texto en y~1780, encima de la cara.
+# REGLA DE SUBTÍTULOS (decisión del usuario 2026-11-17, geometría
+# actualizada 2026-11-18 por el layout RDJavi): los subtítulos NUNCA
+# tapan la cara del influencer / la webcam. Layout RDJavi sobre
+# 1080x1920: streamer ARRIBA (zona de cámara 0-730 px), gameplay
+# ABAJO (730-1770 px), banda inferior 1770-1920 px. Con Alignment=2
+# (abajo, centrado) MarginV es la distancia desde el borde inferior:
+# la posición de referencia es el borde inferior del texto en
+# y≈1690 (87-89%, MarginV 230), una línea centrada, letra chica
+# 30-35 px, blanca con contorno negro, sin fondo ni resaltado.
+# El texto no puede subir a la zona de cámara (borde superior del
+# texto < 730) ni bajar a la banda inferior (borde inferior > 1720).
 FRAME_W, FRAME_H = 1080, 1920
-SPLIT_GAME_H = 1320   # alto del panel de juego (zona de subtítulos)
-SPLIT_CAM_H = 600     # alto del panel de cámara (nunca tapar)
+SPLIT_GAME_H = 1320   # alto del panel de juego del split simple (fallback)
+SPLIT_CAM_H = 600     # alto del panel de cámara del split simple (fallback)
+# Geometría RDJavi (layout GTA 6 por defecto, 2026-11-18):
+RDJAVI_CAM_BOTTOM = 730    # la cámara ocupa 0-730 px (fondo + webcam)
+RDJAVI_GAME_BOTTOM = 1770  # el gameplay termina en 1770 px
+SUBTITLE_REF_MARGIN_V = 230  # posición de referencia: texto en y≈1690
+SUBTITLE_BOTTOM_RESERVE_PX = 50  # hueco entre el texto y la banda inferior
+SUBTITLE_MIN_MARGIN_V = (FRAME_H - RDJAVI_GAME_BOTTOM
+                         + SUBTITLE_BOTTOM_RESERVE_PX)  # 200
 SUBTITLE_SAFE_GAP_PX = 80
-SUBTITLE_MIN_MARGIN_V = SPLIT_CAM_H + SUBTITLE_SAFE_GAP_PX  # 680
 
 
-def subtitles_overlap_webcam(margin_v, fontsize=56, frame_h=FRAME_H,
-                             split_game_h=SPLIT_GAME_H):
-    """True si con ese MarginV el texto invadiría la zona de la cámara.
+def _text_height(fontsize):
+    """Alto aproximado de una línea de subtítulo (1,25x el tamaño)."""
+    return int(round(float(fontsize) * 1.25))
 
-    Alignment=2: el borde inferior del texto queda en frame_h-margin_v.
-    Si ese borde pasa de split_game_h (1320), el texto tapa la webcam.
-    Con MarginV 140 el borde queda en 1780 (dentro de la cámara);
-    con 680 queda en 1240 (dentro del juego, 80 px por encima).
+
+def subtitles_overlap_webcam(margin_v, fontsize=32, frame_h=FRAME_H,
+                             cam_bottom=RDJAVI_CAM_BOTTOM,
+                             game_bottom=RDJAVI_GAME_BOTTOM):
+    """True si con ese MarginV el texto invadiría la zona de la cámara
+    (arriba) o la banda inferior (abajo).
+
+    Alignment=2: el borde inferior del texto queda en frame_h-margin_v
+    y el superior, una línea más arriba. Con MarginV 230 (referencia
+    RDJavi) el borde queda en 1690 (parte baja del gameplay, 87-89%);
+    con 140 queda en 1780 (dentro de la banda inferior); con 1400
+    queda en 520, con el borde superior dentro de la cámara.
     """
     text_bottom = frame_h - margin_v
-    return text_bottom > split_game_h
+    text_top = text_bottom - _text_height(fontsize)
+    if text_top < cam_bottom:
+        return True
+    return text_bottom > game_bottom - SUBTITLE_BOTTOM_RESERVE_PX
 
 
-def effective_subtitle_margin_v(margin_v, config=None):
-    """MarginV efectivo: sube (nunca baja) hasta el mínimo seguro.
+def effective_subtitle_margin_v(margin_v, config=None, fontsize=32):
+    """MarginV efectivo: dentro del rango seguro [mínimo, máximo].
 
-    Lee clips.split_cam_h y subtitles.subtitle_safe_gap_px de la
-    config si la hay; si no, usa 600 + 80 = 680. Un estilo viejo con
-    MarginV 140 se corrige solo a 680 en burn_subtitles().
+    Mínimo 200: el borde inferior del texto no baja de y=1720 (no
+    invade la banda inferior). Máximo: el borde superior del texto
+    no sube a la zona de cámara (730 px). Un estilo viejo con
+    MarginV 140 se corrige solo a 200 en burn_subtitles(); uno con
+    MarginV 1400 baja al máximo. La posición de referencia es 230.
     """
     minimum = SUBTITLE_MIN_MARGIN_V
     if config is not None:
@@ -199,7 +222,8 @@ def effective_subtitle_margin_v(margin_v, config=None):
             minimum = subtitle_min_margin_v(config)
         except Exception:
             pass
-    return max(int(margin_v), int(minimum))
+    maximum = FRAME_H - RDJAVI_CAM_BOTTOM - _text_height(fontsize)
+    return min(max(int(margin_v), int(minimum)), int(maximum))
 
 
 def load_user_corrected_transcript(run_dir, clip_stem):
@@ -1119,19 +1143,24 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
             box, bold, active_word_color = False, True, None
     else:
         box, bold, active_word_color = False, True, None
-    # REGLA 2026-11-17: el subtítulo nunca tapa la cara del influencer
-    # / la webcam. El MarginV efectivo sube (nunca baja) hasta el
-    # mínimo seguro (cámara 600 + hueco 80 = 680): un estilo viejo con
-    # MarginV 140 se corrige solo. Vale para karaoke (ASS) y para SRT
-    # (force_style), porque el clamp va antes de las dos ramas.
+    # REGLA 2026-11-17, geometría RDJavi 2026-11-18: el subtítulo
+    # nunca tapa la cara del influencer / la webcam (arriba, 0-730)
+    # ni baja a la banda inferior (borde inferior > 1720). El
+    # MarginV efectivo queda dentro del rango seguro [200, máximo]:
+    # un estilo viejo con MarginV 140 sube solo a 200 y uno con
+    # MarginV 1400 baja al máximo. La posición de referencia es 230
+    # (texto en y≈1690, parte baja del gameplay). Vale para karaoke
+    # (ASS) y para SRT (force_style), porque el clamp va antes de
+    # las dos ramas.
     try:
         _margin_cfg = cfg if style else config
-    except NameError:  # sin style no existe cfg: manda config o 680
+    except NameError:  # sin style no existe cfg: manda config o 200
         _margin_cfg = config
-    _safe_mv = effective_subtitle_margin_v(margin_v, _margin_cfg)
-    if margin_v < _safe_mv:
+    _safe_mv = effective_subtitle_margin_v(margin_v, _margin_cfg,
+                                           fontsize=fontsize)
+    if margin_v != _safe_mv:
         print(f"MarginV {margin_v} -> {_safe_mv}: el subtítulo no puede "
-              f"tapar la webcam (regla del usuario 2026-11-17)")
+              f"tapar la webcam ni bajar a la banda (regla del usuario)")
         margin_v = _safe_mv
     if (style or "").lower() == "karaoke":
         # Karaoke real: SRT -> ASS con \k por palabra. El ASS se

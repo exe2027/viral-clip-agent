@@ -87,6 +87,23 @@ def build_parser():
                         choices=["twitch", "kick"])
     p_live.add_argument("--minutes", type=int, default=60,
                         help="duración de la sesión (por defecto 60)")
+    p_live.add_argument("--cut", action="store_true",
+                        help="cortador en vivo: graba, corta 40 s, "
+                        "subtitula y encola en la Cola LIVE del panel")
+    p_live.add_argument("--auto-publish", action="store_true",
+                        help="con --cut: publicar por API lo publicable "
+                        "(por defecto solo Cola + draft, sin público)")
+    p_replay = sub.add_parser(
+        "live-replay",
+        help="Replay de un VOD como si fuera en vivo (mismo cutter)")
+    p_replay.add_argument("--chat", required=True,
+                          help="chat.json del VOD (con capítulos)")
+    p_replay.add_argument("--video", required=True,
+                          help="segmento o VOD descargado")
+    p_replay.add_argument("--video-offset", type=float, default=0.0,
+                          help="segundo absoluto del VOD donde empieza "
+                          "--video (por defecto 0)")
+    p_replay.add_argument("--streamer", default="rubius")
     p_watch = sub.add_parser("watch", help="Vigila VODs nuevos")
     p_watch.add_argument("--once", action="store_true", default=True)
     p_watch.add_argument("--loop", action="store_true")
@@ -286,6 +303,27 @@ def main(argv=None):
         print(json.dumps(report(args.db), indent=2, ensure_ascii=False))
         return 0
     if args.command == "live":
+        if getattr(args, "cut", False):
+            from .live_cutter import run_live_cut
+            from .panel_bridge import PanelBridge
+            bridge = PanelBridge.from_env()
+            if bridge is None:
+                print("Sin PANEL_USERNAME/PANEL_PASSWORD: el cutter "
+                      "sigue solo con la cola del cerebro.")
+            result = run_live_cut(
+                args.streamer, platform=args.platform,
+                minutes=args.minutes, bridge=bridge,
+                auto_publish=bool(getattr(args, "auto_publish",
+                                          False)))
+            print(f"Picos detectados: {len(result['peaks'])}")
+            print(f"Clips cortados: {len(result['clips'])}")
+            for clip in result["clips"]:
+                print(f"  - {clip['peak_ts']:.0f}s "
+                      f"({clip['category']}): {clip['title']}")
+            print(f"Descartados: {len(result['skipped'])}")
+            for skip in result["skipped"]:
+                print(f"  - {skip.get('ts')}: {skip.get('reason')}")
+            return 0
         from .config import load_config
         from .live import (KickPusherClient, LiveLimits, LiveSession,
                            TwitchIRCClient)
@@ -316,6 +354,26 @@ def main(argv=None):
         for peak in peaks:
             print(f"  - {peak['ts']:.0f}s: {peak['score']} pts "
                   f"({peak['multiple']}x)")
+        return 0
+    if args.command == "live-replay":
+        from .jobs import StepJobs
+        from .live_cutter import CategoryGate, LiveCutterSession
+        gate = CategoryGate(mode="vod", chat_path=args.chat)
+        session = LiveCutterSession(
+            args.streamer, platform="twitch",
+            stream_id="replay", gate=gate, store=StepJobs(":memory:"),
+            dry_run=True)
+        peaks, clips, skipped = session.replay(
+            args.chat, args.video, video_offset=args.video_offset)
+        print(f"Picos detectados: {len(peaks)}")
+        print(f"Clips cortados: {len(clips)}")
+        for clip in clips:
+            print(f"  - {clip['peak_ts']:.0f}s "
+                  f"({clip['category']}): {clip['title']} "
+                  f"-> {clip['clip']}")
+        print(f"Descartados: {len(skipped)}")
+        for skip in skipped:
+            print(f"  - {skip.get('ts')}: {skip.get('reason')}")
         return 0
     if args.command == "publish":
         from .publish import main as publish_main
@@ -445,7 +503,8 @@ def main(argv=None):
                                        prioridad=args.prioridad)
                 print(f"Cadena encolada: step job #{job['id']} "
                       f"(vod, {job['clip_id']}). El supervisor avanza "
-                      "solo hasta empaquetar; publicar es manual.")
+                      "solo hasta empaquetar; TikTok se auto-publica "
+                      "desde ahí, el resto es manual.")
                 return 0
             if args.action == "publish":
                 if not args.clip:

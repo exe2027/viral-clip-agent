@@ -260,9 +260,13 @@ def build_moment_card(clip_path, chat_path, srt_path=None, transcript_path=None,
                       streamer="", game=None, game_source="", language="es",
                       peak_ts_vod=None, clip_start_vod=None, clip_duration_s=60,
                       score=None, risas=0, hype=0, median_score=None,
-                      vod_id=None, clip_start_fallback=None):
+                      vod_id=None, clip_start_fallback=None, category=None):
     """Construye la ficha del momento. ``game`` None = juego desconocido.
 
+    ``category``: categoría cruda del capítulo del VOD donde cae el
+    pico (ej. "Grand Theft Auto VI", "Just Chatting"). Regla del
+    usuario 2026-11-18: el clip solo vale si la categoría es GTA VI;
+    la ficha la guarda para que el gate de publicación la exija.
     ``peak_ts_vod`` / ``clip_start_vod`` en segundos del VOD. Si no se
     pasan, el payoff queda en None y la ficha lo marca (evidence low).
     """
@@ -361,10 +365,13 @@ def build_moment_card(clip_path, chat_path, srt_path=None, transcript_path=None,
         evidence_tokens += _tokens(quote_streamer["text"])
 
     game_label = game or "desconocido"
+    from .category import is_gta6
     return {
         "clip_file": str(clip_path) if clip_path else None,
         "vod_id": vod_id,
         "streamer": streamer or "desconocido",
+        "category": category,  # capítulo del VOD donde cae el pico
+        "category_ok": (is_gta6(category) if category is not None else None),
         "game": game,                      # None = no se sabe, no se asume
         "game_label": game_label,
         "game_source": game_source or "no indicada (juego no verificado)",
@@ -416,6 +423,7 @@ def main():
     p.add_argument("--transcript")
     p.add_argument("--streamer", default="")
     p.add_argument("--game", default=None, help="Juego real (metadato del VOD). Omitir = desconocido.")
+    p.add_argument("--category", default=None, help="Categoría cruda del capítulo del VOD donde cae el pico (ej. 'Grand Theft Auto VI'). Regla 2026-11-18: solo vale GTA VI.")
     p.add_argument("--game-source", default="")
     p.add_argument("--lang", default="es")
     p.add_argument("--peak", type=float, default=None, help="Peak en s del VOD")
@@ -433,6 +441,7 @@ def main():
         clip_path=args.clip, chat_path=args.chat, srt_path=args.srt,
         transcript_path=args.transcript, streamer=args.streamer,
         game=args.game, game_source=args.game_source, language=args.lang,
+        category=args.category,
         peak_ts_vod=args.peak, clip_start_vod=args.start,
         clip_duration_s=args.duration, score=args.score,
         risas=args.risas, hype=args.hype, median_score=args.median,

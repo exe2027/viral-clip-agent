@@ -33,7 +33,9 @@ class TestLimits(unittest.TestCase):
         self.assertEqual(publisher.YOUTUBE_MAX_UPLOADS_BY_QUOTA, 100)
         self.assertEqual(publisher.DAILY_LIMITS["youtube_shorts"], (3, 5))
         self.assertEqual(publisher.MIN_SPACING_HOURS, 2)
-        self.assertEqual(publisher.PUBLISH_WINDOW, (18, 24))
+        # Franja ELIMINADA 2026-11-18 (decisión del usuario: sin
+        # franja horaria, se publica a cualquier hora).
+        self.assertIsNone(publisher.PUBLISH_WINDOW)
         self.assertEqual(publisher.NEW_ACCOUNT_DAILY, 1)
 
     def test_reviewed_null_en_lo_no_verificado(self):

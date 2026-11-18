@@ -25,6 +25,9 @@ def base_cfg(**over):
 
 def clip(virality=80, seo=95, audio_decision=None, multiple=8.0):
     c = {"peak": 100, "start": 80, "file": "clips/clip_01.mp4",
+         # Categoría verificada (capítulo GTA VI del VOD) — regla
+         # del usuario 2026-11-18: sin categoría GTA VI no se publica.
+         "category": "Grand Theft Auto VI",
          "viral_score": {"total": virality, "band": "prioritario"},
          "seo_scores": {"youtube_shorts": {"score": seo},
                         "tiktok": {"score": seo}},
@@ -90,6 +93,40 @@ class TestEvaluate(unittest.TestCase):
         r = policy.evaluate(clip(), "youtube_shorts", cfg=base_cfg(),
                             game=None)
         self.assertEqual(r["decision"], "publicar")
+
+    def test_categoria_just_chatting_descarta(self):
+        # Regla 2026-11-18: solo vale GTA VI. Just Chatting no es
+        # un juego ni GTA VI: el clip se descarta, aunque el chat
+        # explote.
+        c = clip()
+        c["category"] = "Just Chatting"
+        r = policy.evaluate(c, "youtube_shorts", cfg=base_cfg())
+        self.assertEqual(r["decision"], "descartado")
+        self.assertIn("GTA VI", r["reason"])
+
+    def test_categoria_otro_juego_descarta(self):
+        c = clip()
+        c["category"] = "Fortnite"
+        r = policy.evaluate(c, "youtube_shorts", cfg=base_cfg())
+        self.assertEqual(r["decision"], "descartado")
+        self.assertIn("GTA VI", r["reason"])
+
+    def test_sin_categoria_verificada_retiene(self):
+        # Sin categoría no se puede confirmar GTA VI: se retiene
+        # hasta verificar, no se publica a ciegas.
+        c = clip()
+        del c["category"]
+        r = policy.evaluate(c, "youtube_shorts", cfg=base_cfg())
+        self.assertEqual(r["decision"], "retenido")
+        self.assertIn("categor", r["reason"])
+
+    def test_categoria_gta_vi_alias_valen(self):
+        for cat in ("GTA VI", "GTA 6", "gta6",
+                    "Grand Theft Auto VI", "Grand Theft Auto 6"):
+            c = clip()
+            c["category"] = cat
+            r = policy.evaluate(c, "youtube_shorts", cfg=base_cfg())
+            self.assertEqual(r["decision"], "publicar", cat)
 
     def test_banda_minima(self):
         cfg = base_cfg()

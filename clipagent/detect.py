@@ -132,8 +132,17 @@ def chat_component(detail, multiple: float):
 
     ``detail`` es el detail[ventana] de clips_chat_v2.score_windows
     (msgs, risas, hype, users, emote_ratio, rep_ratio,
-    penalty_factor, motivo_penalizacion). Devuelve
-    (valor, razones, topes_aplicados).
+    penalty_factor, motivo_penalizacion, hype_score, hype_ratio,
+    hype_baseline). Devuelve (valor, razones, topes_aplicados).
+
+    HYPE v2 (2026-11-18): si la ventana trae ``hype_score`` (ráfaga
+    medida contra el baseline rodante), suma un bonus de
+    +0,25 × hype_score (máx. +2,5) ANTES de aplicar los topes: una
+    ráfaga con risas/hype/repetición sube el componente chat, pero
+    los topes anti-spam siguen mandando (sin risas ni hype el tope
+    de 3/10 sigue frenando aunque haya velocidad). Sin hype_score
+    (manifiestos viejos) el bonus es 0 y el resultado es idéntico
+    al de siempre.
     """
     base = _chat_base(multiple)
     razones = [f"múltiplo {multiple:.1f}x sobre la mediana -> base {base:.1f}"]
@@ -143,6 +152,14 @@ def chat_component(detail, multiple: float):
     risas = (detail or {}).get("risas") or 0
     hype = (detail or {}).get("hype") or 0
     users = (detail or {}).get("users") or 0
+    hype_score = (detail or {}).get("hype_score")
+    if isinstance(hype_score, (int, float)) and hype_score > 0:
+        bonus = round(0.25 * float(hype_score), 2)
+        value = value + bonus
+        razones.append(
+            f"hype v2 +{bonus:.1f} (hype_score {hype_score:.1f}/10, "
+            f"ratio {(detail or {}).get('hype_ratio')}x sobre baseline "
+            f"{(detail or {}).get('hype_baseline')} msgs/10 s)")
     if msgs <= 0:
         return 0.0, ["sin mensajes en la ventana"], ["sin mensajes"]
     laugh_hype = (risas + hype) / msgs
@@ -162,7 +179,7 @@ def chat_component(detail, multiple: float):
         razones.append(
             f"anti-spam: {', '.join((detail or {}).get('motivo_penalizacion') or [])} "
             f"(factor x{(detail or {}).get('penalty_factor', 1.0)})")
-    return round(value, 2), razones, topes
+    return round(min(value, 10.0), 2), razones, topes
 
 
 def filter_passed(detail, multiple: float, rank=None):
