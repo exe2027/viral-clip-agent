@@ -19,7 +19,7 @@ class TestSingleList(unittest.TestCase):
         self.assertIn("illojuan", names)
         illo = streamers.get_streamer("illojuan", entries)
         self.assertEqual(illo["platform"], "twitch")
-        self.assertEqual(illo["game"], "GTA 6")
+        self.assertEqual(illo["game"], "GTA VI")
         self.assertEqual(illo["language"], "es")
         self.assertEqual(illo["estado"], "concedido")
         self.assertEqual(illo["fecha_permiso"], "2026-11-16")
@@ -38,12 +38,55 @@ class TestSingleList(unittest.TestCase):
         self.assertNotIn("coker", load_allowlist())
         from watcher import load_influencers
         watched = {i["usuario"] for i in load_influencers()}
-        # Decisión del usuario 2026-11-18: Rubius es el prioritario e
-        # IlloJuan está PAUSADO (enabled=false en streamers.yaml).
-        self.assertEqual(watched, {"rubius"})
-        self.assertNotIn("illojuan", watched)
+        # Decisión del usuario 2026-11-18 15:30: 10 streamers activos
+        # (Rubius + IlloJuan reactivado + 8 nuevos), todos GTA VI.
+        # IlloJuan estuvo pausado 13:34-15:30, ya no.
+        self.assertEqual(watched, {
+            "illojuan", "rubius", "auronplay", "ibai", "thegrefg",
+            "xokas", "djmariio", "knekro", "rdjavi", "westcol",
+        })
+        self.assertIn("illojuan", watched)
         from clipagent.publish import load_whitelist
         self.assertIn("illojuan", load_whitelist())
+
+    def test_diez_activos_todos_gta_vi(self):
+        """Orden 2026-11-18 15:30: los 10 con categoría GTA VI, en
+        streamers.yaml (repo) y en el panel (D1, tenant sebastian).
+        El gate de categoría (clipagent/category.is_gta6, panel
+        isGtaViGame) acepta 'GTA VI' / 'GTA 6' / 'Grand Theft Auto
+        VI'; aquí se fija el valor canónico 'GTA VI'."""
+        from clipagent.category import is_gta6
+        entries = streamers.load_streamers()
+        esperado = {
+            "illojuan": "2026-11-16",
+            "rubius": "2026-11-18",
+            "auronplay": "2026-11-18",
+            "ibai": "2026-11-18",
+            "thegrefg": "2026-11-18",
+            "xokas": "2026-11-18",
+            "djmariio": "2026-11-18",
+            "knekro": "2026-11-18",
+            "rdjavi": "2026-11-18",
+            "westcol": "2026-11-18",
+        }
+        self.assertEqual(len(entries), 10)
+        for name, fecha in esperado.items():
+            with self.subTest(streamer=name):
+                e = streamers.get_streamer(name, entries)
+                self.assertIsNotNone(e, f"falta {name} en streamers.yaml")
+                self.assertTrue(e.get("enabled", True), f"{name} activo")
+                self.assertEqual(e["platform"], "twitch")
+                self.assertEqual(e["game"], "GTA VI")
+                self.assertTrue(is_gta6(e["game"]))
+                self.assertEqual(e["language"], "es")
+                self.assertEqual(e["estado"], "concedido")
+                self.assertEqual(e["fecha_permiso"], fecha)
+                canal = {"djmariio": "https://www.twitch.tv/djMariio"}.get(
+                    name, f"https://www.twitch.tv/{name}")
+                self.assertEqual(e["channel_url"], canal)
+                self.assertEqual(e["publish_platforms"],
+                                 ["youtube", "tiktok", "instagram",
+                                  "facebook"])
 
     def test_respaldo_listas_viejas(self):
         with tempfile.TemporaryDirectory() as tmp:

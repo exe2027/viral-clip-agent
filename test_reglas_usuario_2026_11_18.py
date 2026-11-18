@@ -11,8 +11,11 @@ anteriores que siguen vigentes, con su punto de aplicación:
 2. Hype por ráfaga v2 (hoy, ver test_hype_v2.py): velocidad por 10 s
    y 60 s contra baseline rodante (mediana 5 min); la ráfaga pesa
    más que el total.
-3. Rubius prioritario, IlloJuan PAUSADO (hoy): no publicar ni
-   encolar clip_02. Sin override de p2010 (viralidad 44,5 < 50).
+3. Rubius prioritario; IlloJuan pausado 13:34 y REACTIVADO 15:30
+   (hoy): 10 streamers activos (Rubius + IlloJuan + 8 nuevos), todos
+   con categoría GTA VI. clip_02 sigue publish_blocked por
+   subtítulos sin verificar (no publicar). Sin override de p2010
+   (viralidad 44,5 < 50).
 4. SIN franja horaria (hoy 14:25): da lo mismo la hora, solo se
    sube. Topes diarios y espaciamiento 2 h siguen vigentes.
 5. Layout split vertical (2026-11-16): juego arriba, cámara abajo
@@ -102,7 +105,12 @@ class TestReglas20261118Duracion(unittest.TestCase):
 
 
 class TestReglas20261118Streamers(unittest.TestCase):
-    def test_rubius_prioritario_illojuan_pausado(self):
+    def test_diez_streamers_activos_todos_gta_vi(self):
+        # Orden del usuario 2026-11-18 15:30: 8 nuevos (AuronPlay,
+        # Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi, Westcol)
+        # + Rubius + IlloJuan REACTIVADO 15:30 (pausado 13:34).
+        # Todos con categoría GTA VI (ver test_streamers para el
+        # detalle campo por campo).
         rubius = get_streamer("rubius")
         self.assertIsNotNone(rubius)
         self.assertEqual(rubius["estado"], "concedido")
@@ -110,13 +118,15 @@ class TestReglas20261118Streamers(unittest.TestCase):
         self.assertTrue(is_allowed("rubius"))
         illojuan = get_streamer("illojuan")
         self.assertIsNotNone(illojuan)
-        self.assertFalse(illojuan.get("enabled", True),
-                         "IlloJuan PAUSADO 2026-11-18: enabled=false")
-        # El watcher solo vigila enabled (ver test_streamers).
+        self.assertTrue(illojuan.get("enabled", True),
+                        "IlloJuan REACTIVADO 2026-11-18 15:30: enabled=true")
+        # El watcher vigila a los 10 activos (ver test_streamers).
         from watcher import load_influencers
         watched = {i["usuario"] for i in load_influencers()}
-        self.assertEqual(watched, {"rubius"})
-        self.assertNotIn("illojuan", watched)
+        self.assertEqual(watched, {
+            "illojuan", "rubius", "auronplay", "ibai", "thegrefg",
+            "xokas", "djmariio", "knekro", "rdjavi", "westcol",
+        })
 
 
 class TestReglas20261118SinFranja(unittest.TestCase):
@@ -175,6 +185,9 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
         self.assertEqual(cfg["split_cam_h"], 600)
         # Caja normal: juego 1320, cámara 600.
         p = _split_params([10, 10, 40, 20], DEFAULT_CONFIG["clips"])
+        # Variante por defecto para GTA 6: RDJavi; encuadre cara.
+        self.assertEqual(p["split_variant"], "rdjavi")
+        self.assertEqual(p["framing"], "face")
         self.assertEqual(p["game_h"], 1320)
         self.assertEqual(p["cam_h"], 600)
         # Caja muy ancha (> 45% del frame, el juego no se vería):
@@ -194,8 +207,10 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
             effective_subtitle_margin_v,
             subtitles_overlap_webcam,
         )
-        self.assertFalse(subtitles_overlap_webcam(680))
-        self.assertEqual(effective_subtitle_margin_v(140), 680)
+        # Estilo RDJavi total (2026-11-18): referencia 230, mínimo 200.
+        self.assertFalse(subtitles_overlap_webcam(230))
+        self.assertEqual(effective_subtitle_margin_v(140), 200)
+        self.assertEqual(effective_subtitle_margin_v(230), 230)
 
     def test_solo_segmento_y_chat_en_ventana(self):
         cfg = load_config()["clips"]

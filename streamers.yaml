@@ -19,26 +19,115 @@ streamers:
   - name: illojuan
     platform: twitch
     channel_url: "https://www.twitch.tv/illojuan"
-    game: "GTA 6"
+    game: "GTA VI"
     language: es
     estado: concedido
     fecha_permiso: "2026-11-16"
     evidencia_url: ""
     publish_platforms: [youtube, tiktok, instagram, facebook]
     notas: "Primer influencer del monitor. Permiso ya dado por el usuario (2026-11-16)."
-    # PAUSADO por el usuario el 2026-11-18 13:34 -03: NO IlloJuan ahora,
-    # foco 100% Rubius GTA 6. enabled=false: el watcher no lo vigila y
-    # no se publican sus clips nuevos (ver streamers.py: enabled).
-    # El clip_02 sigue además bloqueado por subtítulos sin verificar.
-    enabled: false
+    # PAUSADO por el usuario el 2026-11-18 13:34 -03 y REACTIVADO por
+    # el usuario el 2026-11-18 15:30 -03 ("AGREGA A ILLOJUAN TAMBIÉN").
+    # enabled=true: el watcher lo vigila y sus clips nuevos se pueden
+    # publicar. El clip_02 sigue ADEMÁS bloqueado por subtítulos sin
+    # verificar (publish_blocked): NO publicarlo.
+    enabled: true
   - name: rubius
     platform: twitch
     channel_url: "https://www.twitch.tv/rubius"
-    game: "GTA 6"
+    game: "GTA VI"
     language: es
     estado: concedido
     fecha_permiso: "2026-11-18"
     evidencia_url: ""
     publish_platforms: [youtube, tiktok, instagram, facebook]
-    notas: "Autorizado por el usuario el 2026-11-18 para publicar clips de GTA 6 en las 4 cuentas ES (lanzamiento, directo 2932415021). Antes solo pruebas locales, sin publicar. Streamer prioritario desde 2026-11-18 (IlloJuan pausado)."
+    notas: "Autorizado por el usuario el 2026-11-18 para publicar clips de GTA 6 en las 4 cuentas ES (lanzamiento, directo 2932415021). Antes solo pruebas locales, sin publicar. Streamer prioritario desde 2026-11-18; desde 2026-11-18 15:30 hay 10 streamers activos (IlloJuan reactivado + 8 nuevos)."
+    enabled: true
+  - name: auronplay
+    platform: twitch
+    channel_url: "https://www.twitch.tv/auronplay"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
+    enabled: true
+  - name: ibai
+    platform: twitch
+    channel_url: "https://www.twitch.tv/ibai"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
+    enabled: true
+  - name: thegrefg
+    platform: twitch
+    channel_url: "https://www.twitch.tv/thegrefg"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
+    enabled: true
+  - name: xokas
+    platform: twitch
+    channel_url: "https://www.twitch.tv/xokas"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
+    enabled: true
+  - name: djmariio
+    platform: twitch
+    channel_url: "https://www.twitch.tv/djMariio"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "DjMaRiiO. Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI. (Su layout DJ Mariio queda aparcado por orden del usuario; el layout por defecto es RDJavi.)"
+    enabled: true
+  - name: knekro
+    platform: twitch
+    channel_url: "https://www.twitch.tv/knekro"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
+    enabled: true
+  - name: rdjavi
+    platform: twitch
+    channel_url: "https://www.twitch.tv/rdjavi"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "RDJavi. Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI. Handle verificado 2026-11-18: en directo en Twitch (twitch.tv/rdjavi, GTA 6, ~39k espectadores) y en Kick (kick.com/rdjavi). Referencia del layout RDJavi del canal."
+    enabled: true
+  - name: westcol
+    platform: twitch
+    channel_url: "https://www.twitch.tv/westcol"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
     enabled: true
