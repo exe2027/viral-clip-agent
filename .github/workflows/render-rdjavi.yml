@@ -72,6 +72,9 @@ jobs:
 
       - name: Render RDJavi (un solo pase)
         run: |
+          # clips/ no viene en el checkout (esta en .gitignore): crearla,
+          # porque rdjavi.py escribe ahi bg.png y su fotograma temporal.
+          mkdir -p "$(dirname "${{ inputs.out }}")"
           START=$(date +%s)
           python3 -m clipagent.rdjavi \
             --segment "${{ inputs.segment }}" \
