@@ -86,6 +86,12 @@ DEFAULT_CONFIG = {
         "default_style": "karaoke",
         "subtitle_lang": "auto",  # auto | es | en
         "translate": True,        # traducir a inglés lo que no sea español
+        # Regla del usuario 2026-11-17 22:10: SIEMPRE subtítulos,
+        # COMPLETOS. Sin subtítulos quemados el clip no se publica.
+        "required": True,
+        "complete": True,
+        "block_without_subtitles": True,
+        "needs_human_transcription_on_no_speech": True,
         # Zona de subtítulos (decisión del usuario 2026-11-17): siempre
         # en la zona de juego, nunca sobre la cara del influencer / la
         # webcam. MarginV mínimo = split_cam_h + safe_gap_px = 680.

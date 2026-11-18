@@ -88,11 +88,16 @@ VAD + anti-alucinación + puerta "sin voz" + escalado — v2.6
     compression_ratio_threshold 2,4, logprob_threshold -1,0,
     condition_on_previous_text=False (sin contexto previo no se
     encadenan alucinaciones).
-  * Puerta "sin voz": si el clip tiene <5 palabras por cada 60 s o
-    la voz cubre <10% de la duración, NO se genera SRT ni se quema
-    nada: el clip queda marcado "solo gameplay/música" en el
-    transcript JSON (no_speech=true) y el proceso termina con
-    código 0, sin fallar. El clip sigue su camino sin subtítulos.
+  * Puerta "sin voz" (REGLA DEL USUARIO 2026-11-17 22:10: SIEMPRE
+    subtítulos, COMPLETOS): si el clip tiene <5 palabras por cada
+    60 s o la voz cubre <10% de la duración, NO se genera SRT ni se
+    quema nada, PERO el clip queda BLOQUEADO para publicar
+    (no_speech=true, needs_human_transcription=true,
+    publish_blocked=true) hasta que el usuario lo transcriba de
+    oído. Nunca se publica sin subtítulos y nunca se quema texto
+    alucinado. El proceso termina con código 0 (el paso de
+    transcripción en sí no falla), el bloqueo vive en el transcript
+    y en subtitle_clip().
   * Escalado condicional tiny -> base: SOLO si salta un umbral
     objetivo (repetición >=3 veces, <8 palabras/min con voz,
     logprob medio bajo, idioma con prob. <0,5). Nunca base por
@@ -507,11 +512,14 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
         un umbral objetivo (ver check_escalation), se repite con
         base y se guarda el motivo en
         transcript["escalation_reasons"]. Nunca base por defecto.
-      * Puerta "sin voz": si el resultado final tiene <5 palabras
-        por cada 60 s o la voz cubre <10% de la duración,
-        transcript["no_speech"]=True y
+      * Puerta "sin voz" (regla 2026-11-17 22:10): si el resultado
+        final tiene <5 palabras por cada 60 s o la voz cubre <10%
+        de la duración, transcript["no_speech"]=True,
+        transcript["needs_human_transcription"]=True y
+        transcript["publish_blocked"]=True,
         transcript["audio_note"]="solo gameplay/música": main() no
-        genera SRT ni quema nada y termina con código 0.
+        genera SRT ni quema nada y termina con código 0, pero el
+        clip queda bloqueado para publicar hasta revisión humana.
       * Siempre se guardan source_language, probabilidad y task.
 
     Nota: no se pasa el vídeo (ni un archivo de audio) directamente a
@@ -677,9 +685,11 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
             transcript, info_lang = base_transcript, detected
         else:
             info_lang = detected
-        # Puerta "sin voz" (v2.6): <5 palabras por cada 60 s o habla
-        # <10% de la duración -> no hay voz que subtitular. No es un
-        # error: el clip sigue como "solo gameplay/música".
+        # Puerta "sin voz" (v2.6 + regla 2026-11-17 22:10: SIEMPRE
+        # subtítulos): <5 palabras por cada 60 s o habla <10% de la
+        # duración -> no hay voz que subtitular, pero el clip queda
+        # BLOQUEADO para publicar hasta que el usuario lo transcriba
+        # de oído. No es un error del paso, es un bloqueo de salida.
         min_words = max(3, round(sub_cfg.get(
             "no_speech_min_words", DEFAULT_NO_SPEECH_MIN_WORDS)
             * duration / 60.0))
@@ -689,13 +699,18 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
         ratio = transcript["speech_ratio"]
         if word_count < min_words or ratio < min_ratio:
             transcript["no_speech"] = True
+            transcript["needs_human_transcription"] = True
+            transcript["publish_blocked"] = True
             transcript["audio_note"] = "solo gameplay/música"
             print(f"SIN VOZ: {word_count} palabras "
                   f"(mín. {min_words}) | habla {ratio * 100:.0f}% "
                   f"(mín. {min_ratio * 100:.0f}%) -> sin SRT, sin quemar; "
-                  f"clip marcado como solo gameplay/música.")
+                  f"clip BLOQUEADO para publicar: necesita "
+                  f"transcripción humana.")
         else:
             transcript["no_speech"] = False
+            transcript["needs_human_transcription"] = False
+            transcript["publish_blocked"] = False
             transcript["audio_note"] = "con voz"
         info = type("Info", (), {"language": info_lang})()
         return transcript, info
@@ -1387,12 +1402,13 @@ def main() -> int:
         with open(args.transcript, "w", encoding="utf-8") as f:
             json.dump(transcript, f, ensure_ascii=False, indent=2)
 
-    # Puerta "sin voz" (v2.6): no hay SRT ni quemado, y NO es un
-    # error: el clip queda marcado como "solo gameplay/música" en
-    # el transcript y sigue su camino sin subtítulos.
+    # Puerta "sin voz" (v2.6 + regla 2026-11-17 22:10): no hay SRT
+    # ni quemado, y NO es un error del paso, pero el clip queda
+    # BLOQUEADO para publicar hasta transcripción humana.
     if transcript.get("no_speech"):
         print(f"Clip sin voz ({transcript.get('audio_note')}): "
-              f"sin SRT ni quemado. Código 0.")
+              f"sin SRT ni quemado. BLOQUEADO para publicar: "
+              f"necesita transcripción humana. Código 0.")
         return 0
 
     duration = get_duration(args.video)

@@ -219,12 +219,23 @@ def validate_config(cfg, source="config.yaml"):
             c.err("rules.target_duration_s",
                   "debe coincidir con clips.target_duration_s")
 
-    # subtitles
+    # subtitles (regla 2026-11-17 22:10: SIEMPRE subtítulos
+    # completos; sin subtítulos el clip no se publica)
     c.check(cfg, "subtitles", "dict")
     c.check(cfg, "subtitles.default_style", "str")
     c.check(cfg, "subtitles.subtitle_lang", "str",
             choices=SUBTITLE_LANGS)
     c.check(cfg, "subtitles.translate", "bool")
+    c.check(cfg, "subtitles.required", "bool")
+    c.check(cfg, "subtitles.complete", "bool")
+    c.check(cfg, "subtitles.block_without_subtitles", "bool")
+    subs = cfg.get("subtitles") or {}
+    if subs.get("required") is not True:
+        c.err("subtitles.required",
+              "debe ser true: siempre subtítulos (regla 2026-11-17)")
+    if subs.get("block_without_subtitles") is not True:
+        c.err("subtitles.block_without_subtitles",
+              "debe ser true: sin subtítulos no se publica")
     c.check(cfg, "subtitle_policy", "dict")
     for k in ("es", "others"):
         c.check(cfg, f"subtitle_policy.{k}", "str",

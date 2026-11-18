@@ -5,7 +5,9 @@ orquestador Go puede llamar a este comando sin tocar vídeo/IA).
 Transcribe con faster-whisper (local, tiny por defecto), genera el
 SRT y opcionalmente lo quema en el vídeo. Idempotente: si el SRT ya
 existe, se reutiliza sin re-transcribir. Si el clip no tiene voz,
-termina OK marcado como no_speech (no es un fallo).
+termina OK marcado como no_speech (no es un fallo del paso), pero
+con publish_blocked (regla 2026-11-17 22:10: SIEMPRE subtítulos
+completos, sin subtítulos no se publica; lo revisa el usuario).
 
 Uso:
     python subtitular.py clip.mp4 [--srt clip.srt] [--burn clip_subs.mp4]

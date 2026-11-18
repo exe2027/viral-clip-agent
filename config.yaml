@@ -97,6 +97,13 @@ subtitles:
   default_style: "karaoke" # tiktok | highlight | karaoke (karaoke = viral, palabra por palabra)
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
+  # REGLA DEL USUARIO 2026-11-17 22:10: SIEMPRE subtítulos, COMPLETOS.
+  # Todo clip lleva subtítulos quemados de TODO lo que dice el
+  # influencer, no solo del pico. Sin subtítulos no se publica.
+  required: true              # subtítulos obligatorios en todo clip
+  complete: true              # transcribir el clip entero, no solo el pico
+  block_without_subtitles: true  # sin SRT quemado -> clip BLOQUEADO, no publicable
+  needs_human_transcription_on_no_speech: true  # si Whisper no encuentra voz, lo revisa el usuario de oído, no se publica sin subtítulos ni se inventa texto
 
   # ZONA DE SUBTÍTULOS (decisión del usuario 2026-11-17): los
   # subtítulos NUNCA tapan la cara del influencer / la webcam.
@@ -116,10 +123,13 @@ subtitles:
   no_speech_threshold: 0.6    # segmento con prob. no-speech mayor -> se descarta
   compression_ratio_threshold: 2.4  # texto demasiado repetitivo -> se descarta
   logprob_threshold: -1.0     # segmento con logprob menor -> se descarta
-  # Puerta "sin voz": si el clip tiene menos palabras que el mínimo
-  # (por cada 60 s) o la voz cubre menos del 10% de la duración, NO
-  # se genera SRT ni se quema nada: el clip queda marcado como
-  # "solo gameplay/música" en el transcript y sigue su camino.
+  # Puerta "sin voz" (REGLA 2026-11-17 22:10: ya NO es vía libre):
+  # si el clip tiene menos palabras que el mínimo (por cada 60 s)
+  # o la voz cubre menos del 10% de la duración, NO se genera SRT
+  # ni se quema nada, PERO el clip queda BLOQUEADO para publicar
+  # (needs_human_transcription=true, publish_blocked=true) hasta
+  # que el usuario lo transcriba de oído. Nunca se publica sin
+  # subtítulos y nunca se quema texto alucinado.
   no_speech_min_words: 5      # palabras mínimas por cada 60 s de clip
   no_speech_min_ratio: 0.10   # cobertura mínima de habla (0,10 = 10%)
   # Escalado condicional tiny -> base (SOLO si salta un umbral
@@ -436,3 +446,9 @@ rules:
   # (*.transcript_corrected.json en el run) o no quemar nada.
   never_burn_hallucinated_subtitles: true
   user_corrected_transcript_wins: true
+  # Subtítulos SIEMPRE y COMPLETOS (regla 2026-11-17 22:10):
+  # todo clip lleva subtítulos quemados de todo lo que dice el
+  # influencer; sin subtítulos no se publica.
+  subtitles_always: true
+  subtitles_complete: true
+  block_without_subtitles: true

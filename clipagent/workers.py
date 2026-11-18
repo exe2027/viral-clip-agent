@@ -221,9 +221,11 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
                   lang=None, model="tiny", chat_lang=None):
     """Transcribe + SRT (+ quemado opcional). Idempotente: si el SRT
     ya existe, se reutiliza sin re-transcribir. Si el clip no tiene
-    voz, termina OK marcado ``no_speech`` (no es un fallo: el clip
-    sigue sin subtítulos). El estilo sale del payload o de
-    config.yaml (subtitles.default_style)."""
+    voz, termina OK marcado ``no_speech`` (no es un fallo del paso),
+    PERO con ``needs_human_transcription=True`` y
+    ``publish_blocked=True`` (regla 2026-11-17 22:10: SIEMPRE
+    subtítulos completos, sin subtítulos no se publica). El estilo
+    sale del payload o de config.yaml (subtitles.default_style)."""
     if not os.path.isfile(video):
         raise StepError(f"vídeo no existe: {video}", kind="permanent")
     cfg = cfg or {}
@@ -231,7 +233,9 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
     style = style or ((cfg.get("subtitles") or {}).get("default_style")
                       or "karaoke")
     result = {"video": video, "srt": srt, "style": style,
-              "burn": burn, "no_speech": False, "reused_srt": False}
+              "burn": burn, "no_speech": False, "reused_srt": False,
+              "needs_human_transcription": False,
+              "publish_blocked": False}
     transcript = None
     transcript_path = os.path.splitext(srt)[0] + ".transcript.json"
     if os.path.isfile(srt) and os.path.getsize(srt) > 0:
@@ -252,6 +256,8 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
         result["transcript"] = transcript_path
         if transcript.get("no_speech"):
             result["no_speech"] = True
+            result["needs_human_transcription"] = True
+            result["publish_blocked"] = True
             return result
         from .transcribe import generate_srt
         sub_cfg = (cfg.get("subtitles") or {})
@@ -260,6 +266,8 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
             corrections=sub_cfg.get("gta6_corrections"))
         if not ok:
             result["no_speech"] = True
+            result["needs_human_transcription"] = True
+            result["publish_blocked"] = True
             return result
     if burn:
         from .transcribe import burn_subtitles
@@ -267,6 +275,10 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
         result["burned"] = burn
     if transcript is not None:
         result["no_speech"] = bool(transcript.get("no_speech"))
+        result["needs_human_transcription"] = bool(
+            transcript.get("needs_human_transcription"))
+        result["publish_blocked"] = bool(
+            transcript.get("publish_blocked"))
         result["words"] = transcript.get("word_count")
     return result
 
