@@ -43,7 +43,8 @@ def main() -> int:
     workers._do_transcribe = lambda *a, **k: (
         {"no_speech": True, "word_count": 0, "speech_ratio": 0.0}, None)
     try:
-        import tempfile, os
+        import os
+        import tempfile
         with tempfile.TemporaryDirectory() as td:
             video = os.path.join(td, "clip.mp4")
             open(video, "wb").write(b"fake")
