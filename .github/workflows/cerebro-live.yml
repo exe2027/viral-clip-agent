@@ -14,29 +14,42 @@
 #    Además PANEL_USERNAME/PANEL_PASSWORD ni existían como
 #    secretos: se crearon con el login de servicio del panel.
 #
+# MEDIDO 2026-11-18 19:31-19:40Z: la corrida 44381513042 (detect
+# OK, 6 streamers en vivo en GTA VI) fue CANCELADA a los ~9 min
+# por el siguiente trigger, porque `cancel-in-progress: true` y
+# una corrida dura ~11-13 min (setup + sesión 8 min) con
+# triggers cada 10 min: con cancelación, NINGUNA corrida termina
+# nunca. Por eso el ciclo es */15 con sesiones de 10 min
+# (~13,5 min por corrida < 15 min) y `cancel-in-progress: false`
+# (las corridas encolan, nunca se cancelan entre sí: hay DOS
+# fuentes de triggers — cron + dispatch panel-live del Worker —
+# y la cancelación mataría cualquier corrida en curso). El Worker
+# además NO dispara si ya hay una corrida en curso/en cola
+# (throttle 15 min por tenant).
+#
 # Diseño actual (2026-11-18):
-# - cron */10: barrido de TODOS los enabled de streamers.yaml
+# - cron */15: barrido de TODOS los enabled de streamers.yaml
 #   (ES + EN, Twitch y Kick) en cada ciclo. El Worker cron */5
 #   dispara además `panel-live-<tenant>` mientras running=1
-#   (throttle 10 min por tenant en D1), así el monitoreo sigue
+#   (throttle 15 min por tenant en D1), así el monitoreo sigue
 #   aunque el usuario cierre sesión.
 # - job `detect` (~1 min): clipagent.live_scan lee en vivo +
 #   categoría GTA VI por API oficial (Helix / Kick API v2).
 #   YouTube no tiene watcher en vivo todavía: se salta con nota.
 # - job `cut` (matrix, un job por streamer en vivo, max 4 en
-#   paralelo): `python -m clipagent live <name> --cut --minutes 8`.
-#   Cada sesión re-verifica vivo + GTA VI (CategoryGate) y encola
-#   en la Cola LIVE del panel vía PanelBridge. Sin publicar en
-#   público todavía (orden 2026-11-18 14:37): quedan en draft.
-# - concurrency: un barrido nuevo cancela el anterior; las
-#   sesiones duran `minutes` (8 por defecto, cabe en el ciclo).
+#   paralelo): `python -m clipagent live <name> --cut --minutes 10`.
+#   Cada sesión re-verifica vivo + GTA VI (CategoryGate), aplica
+#   la puerta pre-render + revisión de los mejores picos
+#   (clipagent.review) y encola en la Cola LIVE del panel vía
+#   PanelBridge. Sin publicar en público todavía (orden
+#   2026-11-18 14:37): quedan en draft.
 # - cerebro-sebastian (VOD, 09:00) NO se toca: es el barrido
 #   diario de VODs, no el monitoreo en vivo.
 name: Cerebro — Live Cutter
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/15 * * * *"
   repository_dispatch:
     types: [panel-live-sebastian, panel-live-colega]
   workflow_dispatch:
@@ -48,11 +61,11 @@ on:
       minutes:
         description: "Minutos de sesión por streamer en vivo"
         required: false
-        default: "8"
+        default: "10"
 
 concurrency:
   group: cerebro-live
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -113,7 +126,7 @@ jobs:
         run: |
           python -m clipagent live "${{ matrix.target.name }}" \
             --platform "${{ matrix.target.platform }}" \
-            --cut --minutes "${{ inputs.minutes || '8' }}"
+            --cut --minutes "${{ inputs.minutes || '10' }}"
       - name: Guardar estado (picos y clips de la sesión)
         if: always()
         uses: actions/upload-artifact@v4

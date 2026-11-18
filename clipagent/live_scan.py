@@ -7,7 +7,7 @@ corría cada 30 min pero solo para rubius por defecto, 25 min por
 corrida. Nadie miraba a todos los influencers a la vez.
 
 Este módulo es el barrido que usa cerebro-live en cada ciclo (cron
-*/10 + dispatch panel-live del Worker mientras running=1): lee TODOS
+*/15 + dispatch panel-live del Worker mientras running=1): lee TODOS
 los enabled de streamers.yaml (ES + EN, Twitch y Kick), mira si
 están en vivo y en GTA VI (Helix / Kick API v2), y devuelve la
 lista de los que SÍ están en vivo en GTA VI para cortarlos EN
