@@ -83,10 +83,10 @@ DEFAULT_CONFIG = {
         "split_cam_h": 600,
     },
     "subtitles": {
-        # Estilo por defecto "ref" (referencia RDJavi, 2026-11-18):
-        # una línea centrada, letra chica 32 px, fina, blanca con
-        # contorno negro, sin fondo ni resaltado palabra por palabra.
-        "default_style": "ref",
+        # Estilo por defecto "karaoke" (decisión del usuario
+        # 2026-11-18 19:17): palabra por palabra, palabra activa
+        # amarilla y resto blanco, 56 px negrita con contorno negro.
+        "default_style": "karaoke",
         "subtitle_lang": "auto",  # auto | es | en
         "translate": True,        # traducir a inglés lo que no sea español
         # Regla del usuario 2026-11-17 22:10: SIEMPRE subtítulos,
@@ -139,8 +139,9 @@ DEFAULT_CONFIG = {
             "box": True,
         },
         "karaoke": {
-            "font_color": "#FFFF00", "border_color": "#000000",
-            "border_width": 3, "fontsize": 56, "bold": True,
+            "font_color": "#FFFFFF", "active_word_color": "#FFFF00",
+            "border_color": "#000000",
+            "border_width": 4, "fontsize": 56, "bold": True,
             "margin_v": 230, "max_chars": 8, "max_duration": 1.0,
             "box": False,
         },

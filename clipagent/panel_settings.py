@@ -16,7 +16,7 @@ de siempre); con ellas, los Ajustes mandan sobre config.yaml.
 
 Campos (mismos nombres en D1, en el Worker y aquí):
   layout: "rdjavi" | "plain" (default "rdjavi" para GTA 6)
-  subtitle_style: "ref" | "karaoke" (default "ref", simple RDJavi)
+  subtitle_style: "ref" | "karaoke" | "tiktok" | "highlight" (default "karaoke", 2026-11-18)
   min_duration_s / max_duration_s: 40 / 60
   min_virality: 50, min_seo: 90
   youtube_plan_per_day: 3, youtube_max_per_day: 5

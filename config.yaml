@@ -98,7 +98,7 @@ clips:
   split_cam_h: 600        # alto del panel de cámara (split simple)
 
 subtitles:
-  default_style: "ref" # ref (RDJavi, default) | tiktok | highlight | karaoke
+  default_style: "karaoke" # karaoke (default 2026-11-18) | ref | tiktok | highlight
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
   # REGLA DEL USUARIO 2026-11-17 22:10: SIEMPRE subtítulos, COMPLETOS.
@@ -253,7 +253,7 @@ subtitle_styles:
     active_word_color: "#FFFF00" # palabra activa: amarillo
     border_color: "#000000"
     border_width: 4
-    fontsize: 64
+    fontsize: 56
     bold: true
     margin_v: 230
     max_chars: 8
