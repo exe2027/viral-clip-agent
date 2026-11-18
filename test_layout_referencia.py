@@ -16,7 +16,6 @@ Geometría RDJavi sobre 1080x1920:
     chica 32 px fina blanca con contorno negro, sin fondo ni
     resaltado palabra por palabra (estilo "ref").
 """
-import os
 import shutil
 import subprocess
 import unittest
