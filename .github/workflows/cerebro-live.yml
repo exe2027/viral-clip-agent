@@ -122,6 +122,10 @@ jobs:
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
           PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
           PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          # Sin esta key la revisión de picos no tiene juez Gemini y
+          # cae siempre al fallback pre-corte (medido 2026-11-18 en
+          # el clip de djmariio: "sin GEMINI_API_KEY").
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # URL DIRECTA del Worker, NO el front de Pages: Pages
           # corta las llamadas API desde Actions (RemoteDisconnected
           # / 405 vacíos; medido 2026-11-18: login 200 por el Worker
