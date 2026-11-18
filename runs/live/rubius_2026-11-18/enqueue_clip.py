@@ -17,7 +17,12 @@ import json
 import os
 import sys
 
-sys.path.insert(0, "/home/hatch/workspace/gta6-clips/viral-clip-agent")
+# Raiz del repo = 4 niveles sobre este script (runs/live/<sesion>/).
+# Antes era una ruta fija de la VM local (/home/hatch/...), que no
+# existe en el runner de GitHub Actions (REAL TEST, intento 1).
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, _REPO)
 from clipagent.panel_bridge import PanelBridge, PanelError
 
 PLATFORMS = ["youtube_shorts", "tiktok", "instagram_reels",
