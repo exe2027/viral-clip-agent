@@ -293,6 +293,28 @@ class TestProcessPeakReview(unittest.TestCase):
         self.assertEqual(len(session._reviewed_peaks), 1)
         cut.assert_called_once()
 
+    def test_revision_queda_en_el_log_del_job(self):
+        # Antes la revisión solo vivía en live_cuts.json: en la
+        # salida de la corrida no se veía si un pico pasó por
+        # revisión ni con qué resultado.
+        import io
+        from contextlib import redirect_stdout
+        review_ok = {"pasa": True, "motivo": "revisión ok",
+                     "viral_revisado": 53.8, "human": {"hook": 8},
+                     "audio": {"stats": {}, "words": 40},
+                     "revision": "gemini", "seo": {}}
+        self._patch_process(44.5, review_ok)
+        session = self._session(44.5)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            record = session.process_peak(self._peak())
+        self.assertIsNotNone(record)
+        out = buf.getvalue()
+        self.assertIn("REVISIÓN pico 3220s", out)
+        self.assertIn("gemini", out)
+        self.assertIn("44.5 -> revisado 53.8", out)
+        self.assertIn("PASA", out)
+
     def test_pico_44_revision_falla_no_renderiza(self):
         review_no = {"pasa": False, "motivo": "viral 46 < 50",
                      "viral_revisado": 46.0, "human": {"hook": 4},

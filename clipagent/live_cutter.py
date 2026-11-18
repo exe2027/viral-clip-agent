@@ -127,8 +127,14 @@ class CategoryGate:
             return "", f"sin lectura ({e})"
 
     def _kick_live_category(self):
-        from .live import kick_channel_category
-        cat = kick_channel_category(self.streamer)
+        # Como en Twitch: sin lectura, categoría vacía + motivo
+        # "sin lectura (...)" (el caller distingue error de API de
+        # directo terminado: solo el primero debe fallar la corrida).
+        try:
+            from .live import kick_channel_category
+            cat = kick_channel_category(self.streamer)
+        except Exception as e:  # noqa: BLE001 - sin lectura, no se corta
+            return "", f"sin lectura ({e})"
         return cat or "", "kick api/v2/channels"
 
     def refresh(self, force=False):
@@ -609,6 +615,15 @@ class LiveCutterSession(LiveSession):
                 streamer=self.streamer, cfg=self.cfg)
             reviewed["peak_ts"] = peak_ts
             self._reviewed_peaks.append(reviewed)
+            # La revisión queda también en el log del job (antes
+            # solo vivía en live_cuts.json y no se veía en la
+            # salida de la corrida).
+            print(f"REVISIÓN pico {peak_ts:.0f}s: "
+                  f"{reviewed.get('revision')} — viral auto "
+                  f"{viral_auto:.1f} -> revisado "
+                  f"{reviewed.get('viral_revisado')} — "
+                  f"{'PASA' if reviewed['pasa'] else 'descartado'} "
+                  f"({reviewed.get('motivo')})")
             if not reviewed["pasa"]:
                 self.skipped.append(
                     {"ts": peak_ts,
@@ -820,9 +835,21 @@ class LiveCutterSession(LiveSession):
         # ¿Está en vivo y en GTA VI? (Helix / Kick API.)
         ok, category, source = self.gate.check()
         if self.gate.mode == "live" and not ok:
-            raise RuntimeError(
-                f"no se corta: categoría {category!r} ({source}) "
-                "no es GTA VI (o sin directo en vivo)")
+            # Directo terminado (o cambiado de juego) entre el
+            # detect y el corte: lectura OK con categoría vacía o
+            # no GTA VI. Es normal (caso xqc 2026-11-18: el Kick
+            # devolvió categoría '' al empezar el corte) -> salida
+            # limpia (exit 0, sin picos), no fallo del job. Solo
+            # un error de lectura ("sin lectura ...") sigue siendo
+            # un fallo real y se eleva.
+            if source.startswith("sin lectura"):
+                raise RuntimeError(
+                    f"no se corta: sin lectura de categoría "
+                    f"({source})")
+            print(f"Directo terminado o fuera de GTA VI antes de "
+                  f"cortar (categoría {category!r} vía {source}): "
+                  f"sin sesión, salida limpia.")
+            return []
         if self.recorder is None:
             self.recorder = StreamRecorder(self.streamer,
                                            platform=self.platform)
