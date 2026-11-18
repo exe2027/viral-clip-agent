@@ -1,0 +1,1957 @@
+{
+  "vod_id": "2932415021",
+  "platform": "twitch",
+  "source_url": "2932415021",
+  "lang": "es",
+  "chat": {
+    "scope": "window",
+    "peak": 3220.0,
+    "window_s": 120,
+    "window": [
+      3100,
+      3340
+    ],
+    "file": "runs/2932415021-p3220/chat_w3100-3340.json"
+  },
+  "seo_overrides": [],
+  "clips": [
+    {
+      "n": 1,
+      "file": "clips/clip_01_t53m20s_s14.3_r7h4.mp4",
+      "peak": 3220,
+      "start": 3200,
+      "duration": 48,
+      "score": 14.3,
+      "risas": 7,
+      "hype": 4,
+      "title_es": "GTA 6: El chat: \"Cinema\"",
+      "desc_es": "El chat se murió de risa en GTA 6",
+      "title_en": "They couldn't believe it 😂 GTA 6",
+      "desc_en": "Chat lost it in GTA 6 — best moment",
+      "hashtags_es": "#GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames #gaming",
+      "hashtags_en": "#GTA6 #GTA6Clips #GTA #RockstarGames #gaming #clips",
+      "chat_examples": [
+        "se ve espectacular",
+        "Nooo",
+        "Que velocidad con la que escriben jaja"
+      ],
+      "viral": {
+        "n": 1,
+        "viral_multiple": 1.09,
+        "formula": "the-reveal",
+        "formula_desc": "The Reveal — promete algo concreto y lo muestra.",
+        "titles": [
+          {
+            "title": "GTA 6: El chat: \"Cinema\"",
+            "issues": [],
+            "warnings": [],
+            "check_ok": true,
+            "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+          },
+          {
+            "title": "GTA 6: El chat no paraba de reírse",
+            "issues": [],
+            "warnings": [],
+            "check_ok": true,
+            "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+          },
+          {
+            "title": "7 risas en 10 segundos",
+            "issues": [],
+            "warnings": [],
+            "check_ok": true,
+            "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+          },
+          {
+            "title": "El chat se murió de risa con esto",
+            "issues": [],
+            "warnings": [],
+            "check_ok": true,
+            "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+          },
+          {
+            "title": "GTA 6: El momento que el chat clippeó",
+            "issues": [],
+            "warnings": [],
+            "check_ok": true,
+            "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+          },
+          {
+            "title": "GTA 6: Mira por qué reaccionó el chat",
+            "issues": [],
+            "warnings": [],
+            "check_ok": true,
+            "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+          },
+          {
+            "title": "Rubius hizo reír al chat",
+            "issues": [],
+            "warnings": [],
+            "check_ok": true,
+            "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+          }
+        ],
+        "best_title": "GTA 6: El chat: \"Cinema\"",
+        "title_issues": [],
+        "needs_human_review": false,
+        "visible": "cams+gameplay",
+        "visible_reason": "layout split: juego arriba y cámara abajo, se ven ambos",
+        "title_validation": {
+          "ok": true,
+          "reasons": [],
+          "warnings": [],
+          "title": "GTA 6: El chat: \"Cinema\"",
+          "visible": "cams+gameplay",
+          "degraded_title": null
+        },
+        "title_degraded": false,
+        "title_degrade_reason": null,
+        "thumbnail_subject": "gameplay",
+        "reaction_context": null,
+        "moment_card": {
+          "clip_file": "runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4.mp4",
+          "vod_id": "2932415021",
+          "streamer": "Rubius",
+          "game": "GTA 6",
+          "game_label": "GTA 6",
+          "game_source": "capítulo de Twitch: Grand Theft Auto VI",
+          "language": "es",
+          "peak_ts_vod": 3220.0,
+          "clip_start_vod": 3200.0,
+          "clip_duration_s": 48,
+          "payoff_ts_clip": 20.0,
+          "payoff_ts_vod": 3220.0,
+          "score": 14.3,
+          "risas": 7,
+          "hype": 4,
+          "chat_msgs_peak_10s": 100,
+          "chat_msgs_clip": 467,
+          "unique_users_peak_30s": 491,
+          "viral_multiple": 1.09,
+          "dominant_reaction": "risas",
+          "what": null,
+          "what_key": null,
+          "what_evidence": "sin evidencia: no se sabe qué pasa",
+          "what_counts": [],
+          "quote_streamer": null,
+          "quote_chat": {
+            "text": "Cinema",
+            "count": 5
+          },
+          "chat_top": [
+            {
+              "text": "cinema",
+              "count": 5
+            },
+            {
+              "text": "xd",
+              "count": 3
+            },
+            {
+              "text": "r3",
+              "count": 2
+            },
+            {
+              "text": "goty",
+              "count": 2
+            },
+            {
+              "text": "ju",
+              "count": 2
+            },
+            {
+              "text": "akrian94 subscribed with prime",
+              "count": 1
+            },
+            {
+              "text": "la x",
+              "count": 1
+            },
+            {
+              "text": "eoooo",
+              "count": 1
+            },
+            {
+              "text": "holaaaa",
+              "count": 1
+            },
+            {
+              "text": "gigantee",
+              "count": 1
+            }
+          ],
+          "transcript_text": "",
+          "transcript_segments": 0,
+          "language_detected": null,
+          "evidence": "low",
+          "evidence_notes": [
+            "sin transcripción del clip (sin SRT ni transcript.json)",
+            "ninguna acción del léxico aparece >= 2 veces en chat/transcripción"
+          ],
+          "evidence_tokens": [
+            "0",
+            "1",
+            "120",
+            "13",
+            "16",
+            "176",
+            "1o",
+            "2",
+            "25",
+            "3",
+            "30",
+            "300k",
+            "309k",
+            "36",
+            "3d",
+            "4",
+            "40",
+            "43",
+            "44",
+            "4k",
+            "5",
+            "aaamoooo",
+            "abajo",
+            "absolut",
+            "ad",
+            "agua",
+            "ajajjajajaja",
+            "ajihsadjikajksdas",
+            "ajjajajaja",
+            "ajjajajajjajajaja",
+            "ajsjdjakjdaj",
+            "akmanycomiendo",
+            "akrian94",
+            "al",
+            "al3x",
+            "alienpls",
+            "alt",
+            "amo",
+            "anbumilo",
+            "anos",
+            "aplasta",
+            "aqui",
+            "arriba",
+            "at",
+            "aura",
+            "auronrisitas",
+            "bajo",
+            "banear",
+            "barbaridadddd",
+            "bertuchigamer",
+            "bizarrenatasha",
+            "bluffing",
+            "bofff",
+            "bolivia",
+            "bratchat",
+            "bro",
+            "brocolikiller28",
+            "brooo",
+            "caes",
+            "calmate",
+            "camara",
+            "carga",
+            "carmelopd",
+            "caso",
+            "cerca",
+            "chabon",
+            "ci",
+            "cielo",
+            "cielooooo",
+            "cine",
+            "cinema",
+            "circulo",
+            "circulooooo",
+            "claphands",
+            "clappi",
+            "classic",
+            "clips",
+            "codeaste",
+            "comenzo",
+            "condados",
+            "configuracion",
+            "consecutive",
+            "consola",
+            "control",
+            "controles",
+            "cosas",
+            "cosigooo",
+            "creo",
+            "criss",
+            "cruz",
+            "currently",
+            "dale",
+            "darkryan721",
+            "deja",
+            "derecho",
+            "dibujadoooo",
+            "dijiste",
+            "dime",
+            "dinodance",
+            "dios",
+            "diosssss",
+            "directo",
+            "distqancia",
+            "drqueque",
+            "eldanotwitch",
+            "elixiglr",
+            "eljerryamd",
+            "enorme",
+            "enormeeeeeee",
+            "enrique",
+            "eoooo",
+            "era",
+            "erdiavlo",
+            "eres",
+            "esc",
+            "escriben",
+            "esooooo",
+            "espectacular",
+            "espera",
+            "estuve",
+            "estuvo",
+            "eu",
+            "f3",
+            "f4",
+            "f5",
+            "ff",
+            "fffff",
+            "finally",
+            "flecha",
+            "focus",
+            "followage",
+            "fortnite",
+            "forzando",
+            "fpv",
+            "genial",
+            "gg",
+            "gggg",
+            "gigante",
+            "gigantee",
+            "glitchnrg",
+            "go",
+            "goat",
+            "god",
+            "godd",
+            "goldplz",
+            "goood",
+            "goty",
+            "gotyy",
+            "gotyyyy",
+            "graficos",
+            "gta6",
+            "guapo",
+            "hacia",
+            "hahah",
+            "hahhaah",
+            "hay",
+            "her",
+            "hermosa",
+            "hermoso",
+            "hermosoooooooooo",
+            "heyguys",
+            "historica",
+            "hol",
+            "holaaaa",
+            "hommie",
+            "horrible",
+            "hostiaaaaa",
+            "ibas",
+            "iguana",
+            "incleibleeeeeeeeeeeeeeeeeeeee",
+            "increible",
+            "inmenso",
+            "ironmousewah",
+            "itshappening",
+            "itspauljj",
+            "izquierda",
+            "j",
+            "jaja",
+            "jajaja",
+            "jajajaaajja",
+            "jajajaj",
+            "jajajaja",
+            "jajajajaj",
+            "jajajajaja",
+            "jajajajajaaja",
+            "jajajajajajaa",
+            "jajajajajajaaja",
+            "jajajajajajaj",
+            "jajajajajajaja",
+            "jajajajajajjajaja",
+            "jajajajajjajajaja",
+            "jajajajjajaja",
+            "jajajakakaka",
+            "jajajjaja",
+            "jajajjajaa",
+            "jajajjajaj",
+            "jajajjajajja",
+            "jajsjdhajajajsjqja",
+            "jakfhasjfhajsfhas",
+            "jasjkdkjasdjk",
+            "jcjdjsjwjjss",
+            "jdjsjgjajja",
+            "jdkasjdka",
+            "jimenez0308",
+            "jjajaj",
+            "jjajjaajja",
+            "jkajajjaja",
+            "joder",
+            "johanalopez6",
+            "josesinho",
+            "joskfslkfjlkasd",
+            "joystick",
+            "jsdasjdajdajsdajda",
+            "jsjaja",
+            "jsjsjsjsjs",
+            "jsjssskk",
+            "ju",
+            "juegazoooo",
+            "juego",
+            "juegos",
+            "jugando",
+            "jugar",
+            "jugo",
+            "kek",
+            "kitsu",
+            "l3",
+            "ladytitania",
+            "larpeada",
+            "lee",
+            "lets",
+            "liedosub",
+            "life",
+            "limon",
+            "lindo",
+            "llo",
+            "lmao",
+            "lo",
+            "lococervera",
+            "locura",
+            "locuuuraaa",
+            "lokura",
+            "lol",
+            "lollllllll",
+            "lolo",
+            "lool",
+            "luisgrant",
+            "luisjumper",
+            "lukita98",
+            "lul",
+            "lynett25",
+            "madre",
+            "manana",
+            "manten",
+            "manteniendo",
+            "mapa",
+            "mapaaaaaaaaaaaa",
+            "marcosomg223",
+            "mariana",
+            "marrkkis",
+            "masivo",
+            "matiijerez91",
+            "me",
+            "mecorro",
+            "medio",
+            "mejor",
+            "mhm",
+            "mia",
+            "michaelgamers5",
+            "mierda",
+            "mikelcre",
+            "minecraft",
+            "mio",
+            "mira",
+            "mmmmm",
+            "moisesalazar",
+            "mongalvan",
+            "month",
+            "months",
+            "n",
+            "na",
+            "ni",
+            "nice",
+            "nine1",
+            "nmad97",
+            "nooo",
+            "normalmente",
+            "nose",
+            "novato",
+            "nsksksk",
+            "ohh",
+            "oli",
+            "omaigaaaaad",
+            "omegalul",
+            "omg",
+            "ominetti",
+            "oogd97",
+            "oooo",
+            "ooooh",
+            "ostias",
+            "owao",
+            "owo",
+            "paaaaaaazm",
+            "pad",
+            "pagman",
+            "panel",
+            "parece",
+            "paro",
+            "pasa",
+            "pdo",
+            "perosna",
+            "perrolol",
+            "persona",
+            "pfff",
+            "pfffff",
+            "pisale",
+            "pog",
+            "poissoned",
+            "popcat",
+            "popnemo",
+            "precioso",
+            "prime",
+            "primera",
+            "primero",
+            "ps5",
+            "puede",
+            "puta",
+            "py",
+            "q",
+            "qjierosub",
+            "quiero",
+            "r1",
+            "r3",
+            "rdr2",
+            "re",
+            "recien",
+            "regala",
+            "regrese",
+            "rexmanchas",
+            "rey",
+            "riflehn",
+            "rockstar",
+            "rompecabezas",
+            "rub",
+            "rubbcomo",
+            "rubbdrive",
+            "rubbfuma",
+            "rubbh",
+            "rubbjam",
+            "rubbkekw",
+            "rubbpog",
+            "rubias",
+            "rubios",
+            "rubius",
+            "rubiuuuuus",
+            "salvajada",
+            "same",
+            "saulz34",
+            "seemsgood",
+            "select",
+            "selectt",
+            "senton",
+            "sexoooooooooo",
+            "shaggy",
+            "sigma",
+            "sii",
+            "siuuu",
+            "siuuuu",
+            "smanson88",
+            "smn3312",
+            "sostenido",
+            "sparked",
+            "spoiler",
+            "start",
+            "streak",
+            "streams",
+            "sub",
+            "subscribed",
+            "superb211chillll",
+            "sx",
+            "t",
+            "ta",
+            "taconn",
+            "tacoon",
+            "tacos",
+            "tactil",
+            "tal",
+            "tampoco",
+            "te",
+            "tenes",
+            "thiarerivas",
+            "tiene",
+            "tier",
+            "tirate",
+            "tkm",
+            "touch",
+            "triangulo",
+            "tristancoli",
+            "trolleado",
+            "true",
+            "tu",
+            "turbo",
+            "uff",
+            "ufffff",
+            "uo",
+            "uriel",
+            "uyuyuyuyy",
+            "v",
+            "vale",
+            "vamos",
+            "van",
+            "ve",
+            "velocidad",
+            "veo",
+            "ver",
+            "vhay",
+            "vista",
+            "vkeyser",
+            "voteyea",
+            "vp",
+            "wao",
+            "wapo",
+            "watch",
+            "watched",
+            "willyogxx",
+            "wooooooooooooooooooo",
+            "woops",
+            "wowers",
+            "wowww",
+            "wwwwwwww",
+            "x",
+            "xd",
+            "xdd",
+            "xddd",
+            "xddddd",
+            "xdddddd",
+            "xdnxd",
+            "xdx",
+            "yonose",
+            "york",
+            "zeyt96"
+          ]
+        },
+        "game": "GTA 6",
+        "game_label": "GTA 6",
+        "thumbnail_text": "LA REACCIÓN",
+        "hook_first_line": "Mira por qué el chat se murió de risa acá.",
+        "length_issues": [],
+        "onscreen_first_2s": "LA REACCIÓN",
+        "loop_point": "Y por eso todos lo clippearon.",
+        "description_first_2_lines": "GTA 6: el momento al que reaccionó el chat.\nClip completo en vertical, sin contexto necesario.\n\n🎬 Clip de Rubius en directo.\n¿Te lo esperabas? Suscríbete para más clips.",
+        "tags": [
+          "GTA 6",
+          "GTA VI",
+          "clips GTA 6",
+          "GTA 6 gameplay",
+          "Rockstar Games",
+          "clips gaming",
+          "stream clips"
+        ],
+        "search_queries": [
+          "gta 6 mejores momentos",
+          "gta 6 clips graciosos"
+        ],
+        "self_contained": true,
+        "chat_examples": [
+          "se ve espectacular",
+          "Nooo",
+          "Que velocidad con la que escriben jaja"
+        ],
+        "retention_note": "Hook en los primeros 15 s: confirma el título, sube la pregunta y muestra el payoff. Si el clip arranca lento, recorta el pre-roll.",
+        "platforms": {
+          "youtube_shorts": {
+            "platform": "YouTube Shorts",
+            "title": "GTA 6: El chat: \"Cinema\"",
+            "caption": "GTA 6: El chat: \"Cinema\"\n\nGTA 6: el momento al que reaccionó el chat.\nClip completo en vertical, sin contexto necesario.\n\n🎬 Clip de Rubius en directo.\n¿Te lo esperabas? Suscríbete para más clips.\n\n#GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames",
+            "hashtags": [
+              "#GTA6",
+              "#GTA6Clips",
+              "#ElClipDeGTA6",
+              "#GTA",
+              "#RockstarGames"
+            ],
+            "tags": [
+              "GTA 6",
+              "GTA VI",
+              "clips GTA 6",
+              "GTA 6 gameplay",
+              "Rockstar Games",
+              "clips gaming",
+              "stream clips"
+            ],
+            "thumbnail": "frame del pico (por API no hay miniatura personalizada fiable)",
+            "thumbnail_text": "LA REACCIÓN",
+            "subtitles": "SRT aparte (captions.insert) + quemados en el video",
+            "duration_rule": "hasta 60 s (nuestros clips), Shorts admite más",
+            "daily_limit": "~100 subidas/día por proyecto",
+            "publish_mode": "API oficial (videos.insert) — 100% automatizable",
+            "metric": "visto vs deslizado, duración media vista, CTR"
+          },
+          "tiktok": {
+            "platform": "TikTok",
+            "title": null,
+            "caption": "GTA 6: El chat: \"Cinema\" #GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames",
+            "hashtags": [
+              "#GTA6",
+              "#GTA6Clips",
+              "#ElClipDeGTA6",
+              "#GTA",
+              "#RockstarGames"
+            ],
+            "tags": [],
+            "thumbnail": "sin miniatura propia por API — manda el primer frame",
+            "thumbnail_text": null,
+            "subtitles": "QUEMADOS obligatorios (no acepta SRT por API)",
+            "duration_rule": "hasta 10 min, nuestros 60 s bien",
+            "daily_limit": "~15/día por creador",
+            "publish_mode": "borrador por API hasta pasar auditoría (1-4 sem.); Direct Post solo tras auditoría",
+            "metric": "% finalización, compartidos, guardados, replays"
+          },
+          "instagram_reels": {
+            "platform": "Instagram Reels",
+            "title": null,
+            "caption": "GTA 6: el momento al que reaccionó el chat.\n\n#GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames",
+            "hashtags": [
+              "#GTA6",
+              "#GTA6Clips",
+              "#ElClipDeGTA6",
+              "#GTA",
+              "#RockstarGames"
+            ],
+            "tags": [],
+            "thumbnail": "SÍ admite portada (cover_url) — usar el texto de miniatura",
+            "thumbnail_text": "LA REACCIÓN",
+            "subtitles": "QUEMADOS obligatorios (no acepta SRT por API)",
+            "duration_rule": "hasta 90 s en Reels clásicos, nuestros 60 s bien",
+            "daily_limit": "~50 publicaciones/24 h por cuenta",
+            "publish_mode": "Graph API (contenedor → publicar) — requiere cuenta Profesional + Página de FB",
+            "metric": "reproducciones, % finalización, compartidos por DM, guardados"
+          },
+          "facebook_reels": {
+            "platform": "Facebook Reels",
+            "title": "GTA 6: El chat: \"Cinema\"",
+            "caption": "GTA 6: El chat: \"Cinema\"\n\nGTA 6: el momento al que reaccionó el chat.\n\n#GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames",
+            "hashtags": [
+              "#GTA6",
+              "#GTA6Clips",
+              "#ElClipDeGTA6",
+              "#GTA",
+              "#RockstarGames"
+            ],
+            "tags": [],
+            "thumbnail": "frame del pico (sin miniatura personalizada)",
+            "thumbnail_text": null,
+            "subtitles": "QUEMADOS obligatorios (no acepta SRT por API)",
+            "duration_rule": "3-90 s OBLIGATORIO — nuestros 60 s caben justo",
+            "daily_limit": "30 Reels/24 h por Página",
+            "publish_mode": "Graph API a Página, nunca a perfil personal",
+            "metric": "reproducciones, % finalización, compartidos"
+          }
+        },
+        "reel_study": {
+          "sample_n": 4,
+          "top_hook_type": "statement",
+          "top_cta_type": "none",
+          "median_engagement_rate": 0.0728,
+          "notes": [
+            "muestra pequeña (4 reels, mínimo orientativo 5): los patrones son orientativos",
+            "engagement muy disperso entre autores: comparar siempre con los seguidores de cada autor, no en absoluto"
+          ],
+          "hook_templates": [
+            {
+              "hook_type": "statement",
+              "template": "GTA 6: {what} — el chat reaccionó en vivo",
+              "lang": "es"
+            },
+            {
+              "hook_type": "promise",
+              "template": "Mira por qué el chat explotó con {what}",
+              "lang": "es"
+            }
+          ],
+          "suggested_titles": [
+            {
+              "title": "GTA 6: El chat: \"Cinema\"",
+              "issues": [],
+              "warnings": [],
+              "check_ok": true,
+              "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+            },
+            {
+              "title": "GTA 6: El chat no paraba de reírse",
+              "issues": [],
+              "warnings": [],
+              "check_ok": true,
+              "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+            },
+            {
+              "title": "7 risas en 10 segundos",
+              "issues": [],
+              "warnings": [],
+              "check_ok": true,
+              "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+            },
+            {
+              "title": "El chat se murió de risa con esto",
+              "issues": [],
+              "warnings": [],
+              "check_ok": true,
+              "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+            },
+            {
+              "title": "GTA 6: El momento que el chat clippeó",
+              "issues": [],
+              "warnings": [],
+              "check_ok": true,
+              "check_reason": "pasa: juego veraz, sustantivo con evidencia, payoff dentro del clip, sin superlativos sin respaldo"
+            }
+          ],
+          "source": "reel_study.py (patrones de reels virales, no copia)"
+        }
+      },
+      "viral_score": {
+        "total": 53.8,
+        "components": {
+          "hook": {
+            "value": 6.0,
+            "estimated": false,
+            "reason": "Primer fotograma ya espectacular (lancha, puente, agua turquesa, avion en el cielo) + cara de asombro de Rubius a los 20 s; el gancho hablado ('no me creo que estemos aqui, viendo esto') llega a los 16 s, tarde para los 3 s ideales."
+          },
+          "claridad": {
+            "value": 7.0,
+            "estimated": false,
+            "reason": "Momento autoexplicativo en segundos: streamer asombrado por el mundo de GTA 6 en lancha + chat 'cinema / goty / espectacular / hermoso'. No necesita contexto previo."
+          },
+          "novedad": {
+            "value": 6.0,
+            "estimated": false,
+            "reason": "Dia 1 de lanzamiento, imagenes que nadie habia visto; pero la escena de la lancha es contenido temprano que todo jugador vera. Novedad real pero no exclusiva."
+          },
+          "loop": {
+            "value": 5.0,
+            "estimated": false,
+            "reason": "Cierre lineal ('Importante, importante' sobre el focus); sin callback al inicio ni punto de loop natural."
+          },
+          "packaging": {
+            "value": 6.0,
+            "estimated": false,
+            "reason": "Titulo validado 'GTA 6: El chat: \"Cinema\"' + miniatura 'LA REACCION' + layout split + subtitulos quemados; el titulo es generico (palabra del chat, no de Rubius)."
+          },
+          "chat": {
+            "value": 2.56,
+            "estimated": false,
+            "reason": "múltiplo 1.1x sobre la mediana -> base 1.1; hype v2 +1.5 (hype_score 5.9/10, ratio 118.0x sobre baseline 0.0 msgs/10 s); (risas+hype)/msgs 9% < 10% -> máx. 4/10"
+          },
+          "audio": {
+            "value": 5.0,
+            "estimated": false,
+            "reason": "audio poco dinámico: std 4.7 dB; 172 palabras transcritas (+1)"
+          }
+        },
+        "band": "revisar",
+        "beta": false,
+        "beta_note": null,
+        "chat_multiple": 1.09,
+        "filter_passed": false,
+        "filter_reasons": [
+          "puesto 13 del VOD (solo top-5)",
+          "múltiplo 1.1x < 3x la mediana"
+        ],
+        "audio_weight": 1.0
+      },
+      "signals": {
+        "unique_users_per_10s": 109,
+        "laugh_hype_ratio": 0.093,
+        "rms_peak_delta_db": 10.5,
+        "silence_before_s": 0,
+        "exclamations_per_min": 8.8,
+        "faces_1fps": [
+          {
+            "t": 0,
+            "faces": 0
+          },
+          {
+            "t": 1,
+            "faces": 0
+          },
+          {
+            "t": 2,
+            "faces": 1
+          },
+          {
+            "t": 3,
+            "faces": 0
+          },
+          {
+            "t": 4,
+            "faces": 0
+          },
+          {
+            "t": 5,
+            "faces": 0
+          },
+          {
+            "t": 6,
+            "faces": 0
+          },
+          {
+            "t": 7,
+            "faces": 0
+          },
+          {
+            "t": 8,
+            "faces": 0
+          },
+          {
+            "t": 9,
+            "faces": 0
+          },
+          {
+            "t": 10,
+            "faces": 0
+          },
+          {
+            "t": 11,
+            "faces": 0
+          },
+          {
+            "t": 12,
+            "faces": 0
+          },
+          {
+            "t": 13,
+            "faces": 0
+          },
+          {
+            "t": 14,
+            "faces": 0
+          },
+          {
+            "t": 15,
+            "faces": 0
+          },
+          {
+            "t": 16,
+            "faces": 0
+          },
+          {
+            "t": 17,
+            "faces": 0
+          },
+          {
+            "t": 18,
+            "faces": 0
+          },
+          {
+            "t": 19,
+            "faces": 0
+          },
+          {
+            "t": 20,
+            "faces": 0
+          },
+          {
+            "t": 21,
+            "faces": 0
+          },
+          {
+            "t": 22,
+            "faces": 0
+          },
+          {
+            "t": 23,
+            "faces": 0
+          },
+          {
+            "t": 24,
+            "faces": 0
+          },
+          {
+            "t": 25,
+            "faces": 0
+          },
+          {
+            "t": 26,
+            "faces": 0
+          },
+          {
+            "t": 27,
+            "faces": 0
+          },
+          {
+            "t": 28,
+            "faces": 0
+          },
+          {
+            "t": 29,
+            "faces": 0
+          },
+          {
+            "t": 30,
+            "faces": 1
+          },
+          {
+            "t": 31,
+            "faces": 0
+          },
+          {
+            "t": 32,
+            "faces": 0
+          },
+          {
+            "t": 33,
+            "faces": 0
+          },
+          {
+            "t": 34,
+            "faces": 0
+          },
+          {
+            "t": 35,
+            "faces": 0
+          },
+          {
+            "t": 36,
+            "faces": 0
+          },
+          {
+            "t": 37,
+            "faces": 0
+          },
+          {
+            "t": 38,
+            "faces": 0
+          },
+          {
+            "t": 39,
+            "faces": 0
+          },
+          {
+            "t": 40,
+            "faces": 0
+          },
+          {
+            "t": 41,
+            "faces": 0
+          },
+          {
+            "t": 42,
+            "faces": 0
+          },
+          {
+            "t": 43,
+            "faces": 0
+          },
+          {
+            "t": 44,
+            "faces": 0
+          },
+          {
+            "t": 45,
+            "faces": 0
+          },
+          {
+            "t": 46,
+            "faces": 0
+          },
+          {
+            "t": 47,
+            "faces": 0
+          }
+        ],
+        "peak_coincidence_s": {
+          "chat_peak": 20.0,
+          "audio_peak": 16.0,
+          "transcript_peak": 39.0,
+          "max_gap_s": 19.0,
+          "coinciden": false
+        },
+        "payoff_position_s": 20.0,
+        "hook_words_0_3s": 8,
+        "heatmap_peak_s": null,
+        "heatmap_score": null,
+        "heatmap_available": null,
+        "motion_pct": 100.0,
+        "motion_flag": "en_movimiento",
+        "motion_flag_reason": "100.0% de segundos con movimiento (> 10%)",
+        "game_voice": null,
+        "game_voice_estimated": null
+      },
+      "seo_scores": {
+        "youtube_shorts": {
+          "platform": "youtube_shorts",
+          "score": 92,
+          "components": {
+            "title": {
+              "value": 78,
+              "notes": [
+                "keyword 'GTA 6' en los primeros 40 caracteres (+40)",
+                "largo muy corto 24 car. (+8)",
+                "1 palabras en MAYÚSCULAS (<=2) (+15)",
+                "título con sustancia (>= 4 palabras) (+15)"
+              ]
+            },
+            "description": {
+              "value": 100,
+              "notes": [
+                "hook + keyword en los primeros 120 car. (+40)",
+                "CTA/pregunta al final (+30)",
+                "descripción con cuerpo (169 car.) (+15)",
+                "keyword x1 (<=3, sin stuffing) (+15)"
+              ]
+            },
+            "tags": {
+              "value": 100,
+              "notes": [
+                "7 tags (5-15) (+40)",
+                "mezcla amplio + nicho (+30)",
+                "tag del juego/canal presente (+30)"
+              ]
+            },
+            "thumbnail": {
+              "value": 100,
+              "notes": [
+                "miniatura de 2 palabras (<=3) (+40)",
+                "no repite el título (+30)",
+                "2 palabras en MAYÚSCULAS (<=2) (+30)"
+              ]
+            },
+            "coherence": {
+              "value": 100.0,
+              "notes": [
+                "juego verificado y gameplay visible: 100"
+              ]
+            }
+          },
+          "blocks": [],
+          "status": "publicable",
+          "can_publish": true
+        },
+        "tiktok": {
+          "platform": "tiktok",
+          "score": 94,
+          "components": {
+            "title": {
+              "value": 78,
+              "notes": [
+                "keyword 'GTA 6' en los primeros 40 caracteres (+40)",
+                "largo muy corto 24 car. (+8)",
+                "1 palabras en MAYÚSCULAS (<=2) (+15)",
+                "título con sustancia (>= 4 palabras) (+15)"
+              ]
+            },
+            "description": {
+              "value": 100,
+              "notes": [
+                "hook + keyword en los primeros 120 car. (+40)",
+                "CTA/pregunta al final (+30)",
+                "descripción con cuerpo (169 car.) (+15)",
+                "keyword x1 (<=3, sin stuffing) (+15)"
+              ]
+            },
+            "tags": {
+              "value": 100,
+              "notes": [
+                "5 hashtags en caption (3-5) (+40)",
+                "mezcla amplio + nicho (+30)",
+                "tag del juego/canal presente (+30)"
+              ]
+            },
+            "thumbnail": {
+              "value": 100,
+              "notes": [
+                "miniatura de 2 palabras (<=3) (+40)",
+                "no repite el título (+30)",
+                "2 palabras en MAYÚSCULAS (<=2) (+30)"
+              ]
+            },
+            "coherence": {
+              "value": 100.0,
+              "notes": [
+                "juego verificado y gameplay visible: 100"
+              ]
+            }
+          },
+          "blocks": [],
+          "status": "publicable",
+          "can_publish": true
+        },
+        "instagram_reels": {
+          "platform": "instagram_reels",
+          "score": 94,
+          "components": {
+            "title": {
+              "value": 78,
+              "notes": [
+                "keyword 'GTA 6' en los primeros 40 caracteres (+40)",
+                "largo muy corto 24 car. (+8)",
+                "1 palabras en MAYÚSCULAS (<=2) (+15)",
+                "título con sustancia (>= 4 palabras) (+15)"
+              ]
+            },
+            "description": {
+              "value": 100,
+              "notes": [
+                "hook + keyword en los primeros 120 car. (+40)",
+                "CTA/pregunta al final (+30)",
+                "descripción con cuerpo (169 car.) (+15)",
+                "keyword x1 (<=3, sin stuffing) (+15)"
+              ]
+            },
+            "tags": {
+              "value": 100,
+              "notes": [
+                "5 hashtags en caption (3-5) (+40)",
+                "mezcla amplio + nicho (+30)",
+                "tag del juego/canal presente (+30)"
+              ]
+            },
+            "thumbnail": {
+              "value": 100,
+              "notes": [
+                "miniatura de 2 palabras (<=3) (+40)",
+                "no repite el título (+30)",
+                "2 palabras en MAYÚSCULAS (<=2) (+30)"
+              ]
+            },
+            "coherence": {
+              "value": 100.0,
+              "notes": [
+                "juego verificado y gameplay visible: 100"
+              ]
+            }
+          },
+          "blocks": [],
+          "status": "publicable",
+          "can_publish": true
+        },
+        "facebook_reels": {
+          "platform": "facebook_reels",
+          "score": 94,
+          "components": {
+            "title": {
+              "value": 78,
+              "notes": [
+                "keyword 'GTA 6' en los primeros 40 caracteres (+40)",
+                "largo muy corto 24 car. (+8)",
+                "1 palabras en MAYÚSCULAS (<=2) (+15)",
+                "título con sustancia (>= 4 palabras) (+15)"
+              ]
+            },
+            "description": {
+              "value": 100,
+              "notes": [
+                "hook + keyword en los primeros 120 car. (+40)",
+                "CTA/pregunta al final (+30)",
+                "descripción con cuerpo (169 car.) (+15)",
+                "keyword x1 (<=3, sin stuffing) (+15)"
+              ]
+            },
+            "tags": {
+              "value": 100,
+              "notes": [
+                "5 hashtags en caption (3-5) (+40)",
+                "mezcla amplio + nicho (+30)",
+                "tag del juego/canal presente (+30)"
+              ]
+            },
+            "thumbnail": {
+              "value": 100,
+              "notes": [
+                "miniatura de 2 palabras (<=3) (+40)",
+                "no repite el título (+30)",
+                "2 palabras en MAYÚSCULAS (<=2) (+30)"
+              ]
+            },
+            "coherence": {
+              "value": 100.0,
+              "notes": [
+                "juego verificado y gameplay visible: 100"
+              ]
+            }
+          },
+          "blocks": [],
+          "status": "publicable",
+          "can_publish": true
+        }
+      },
+      "game_voice": [],
+      "motion": {
+        "available": true,
+        "motion_pct": 100.0,
+        "mean_diff": 24.09,
+        "motion_per_second": [
+          0.0,
+          92.09,
+          13.71,
+          7.25,
+          9.7,
+          18.37,
+          29.09,
+          21.17,
+          17.41,
+          22.14,
+          17.53,
+          23.44,
+          31.21,
+          12.29,
+          25.96,
+          39.79,
+          17.28,
+          10.28,
+          21.04,
+          15.09,
+          20.45,
+          25.55,
+          21.93,
+          19.57,
+          46.28,
+          46.1,
+          23.16,
+          21.92,
+          40.65,
+          32.97,
+          17.87,
+          19.74,
+          27.27,
+          18.62,
+          14.88,
+          19.94,
+          17.65,
+          30.64,
+          40.77,
+          12.7,
+          11.96,
+          12.09,
+          15.99,
+          14.96,
+          13.62,
+          18.36,
+          51.21,
+          30.5
+        ],
+        "seconds": 48,
+        "threshold": 3.0,
+        "reason": "47/47 segundos con movimiento (>3.0) -> 100.0%"
+      },
+      "moment_card": {
+        "clip_file": "runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4.mp4",
+        "vod_id": "2932415021",
+        "streamer": "Rubius",
+        "game": "GTA 6",
+        "game_label": "GTA 6",
+        "game_source": "capítulo de Twitch: Grand Theft Auto VI",
+        "language": "es",
+        "peak_ts_vod": 3220.0,
+        "clip_start_vod": 3200.0,
+        "clip_duration_s": 48,
+        "payoff_ts_clip": 20.0,
+        "payoff_ts_vod": 3220.0,
+        "score": 14.3,
+        "risas": 7,
+        "hype": 4,
+        "chat_msgs_peak_10s": 100,
+        "chat_msgs_clip": 467,
+        "unique_users_peak_30s": 491,
+        "viral_multiple": 1.09,
+        "dominant_reaction": "risas",
+        "what": null,
+        "what_key": null,
+        "what_evidence": "sin evidencia: no se sabe qué pasa",
+        "what_counts": [],
+        "quote_streamer": null,
+        "quote_chat": {
+          "text": "Cinema",
+          "count": 5
+        },
+        "chat_top": [
+          {
+            "text": "cinema",
+            "count": 5
+          },
+          {
+            "text": "xd",
+            "count": 3
+          },
+          {
+            "text": "r3",
+            "count": 2
+          },
+          {
+            "text": "goty",
+            "count": 2
+          },
+          {
+            "text": "ju",
+            "count": 2
+          },
+          {
+            "text": "akrian94 subscribed with prime",
+            "count": 1
+          },
+          {
+            "text": "la x",
+            "count": 1
+          },
+          {
+            "text": "eoooo",
+            "count": 1
+          },
+          {
+            "text": "holaaaa",
+            "count": 1
+          },
+          {
+            "text": "gigantee",
+            "count": 1
+          }
+        ],
+        "transcript_text": "",
+        "transcript_segments": 0,
+        "language_detected": null,
+        "evidence": "low",
+        "evidence_notes": [
+          "sin transcripción del clip (sin SRT ni transcript.json)",
+          "ninguna acción del léxico aparece >= 2 veces en chat/transcripción"
+        ],
+        "evidence_tokens": [
+          "0",
+          "1",
+          "120",
+          "13",
+          "16",
+          "176",
+          "1o",
+          "2",
+          "25",
+          "3",
+          "30",
+          "300k",
+          "309k",
+          "36",
+          "3d",
+          "4",
+          "40",
+          "43",
+          "44",
+          "4k",
+          "5",
+          "aaamoooo",
+          "abajo",
+          "absolut",
+          "ad",
+          "agua",
+          "ajajjajajaja",
+          "ajihsadjikajksdas",
+          "ajjajajaja",
+          "ajjajajajjajajaja",
+          "ajsjdjakjdaj",
+          "akmanycomiendo",
+          "akrian94",
+          "al",
+          "al3x",
+          "alienpls",
+          "alt",
+          "amo",
+          "anbumilo",
+          "anos",
+          "aplasta",
+          "aqui",
+          "arriba",
+          "at",
+          "aura",
+          "auronrisitas",
+          "bajo",
+          "banear",
+          "barbaridadddd",
+          "bertuchigamer",
+          "bizarrenatasha",
+          "bluffing",
+          "bofff",
+          "bolivia",
+          "bratchat",
+          "bro",
+          "brocolikiller28",
+          "brooo",
+          "caes",
+          "calmate",
+          "camara",
+          "carga",
+          "carmelopd",
+          "caso",
+          "cerca",
+          "chabon",
+          "ci",
+          "cielo",
+          "cielooooo",
+          "cine",
+          "cinema",
+          "circulo",
+          "circulooooo",
+          "claphands",
+          "clappi",
+          "classic",
+          "clips",
+          "codeaste",
+          "comenzo",
+          "condados",
+          "configuracion",
+          "consecutive",
+          "consola",
+          "control",
+          "controles",
+          "cosas",
+          "cosigooo",
+          "creo",
+          "criss",
+          "cruz",
+          "currently",
+          "dale",
+          "darkryan721",
+          "deja",
+          "derecho",
+          "dibujadoooo",
+          "dijiste",
+          "dime",
+          "dinodance",
+          "dios",
+          "diosssss",
+          "directo",
+          "distqancia",
+          "drqueque",
+          "eldanotwitch",
+          "elixiglr",
+          "eljerryamd",
+          "enorme",
+          "enormeeeeeee",
+          "enrique",
+          "eoooo",
+          "era",
+          "erdiavlo",
+          "eres",
+          "esc",
+          "escriben",
+          "esooooo",
+          "espectacular",
+          "espera",
+          "estuve",
+          "estuvo",
+          "eu",
+          "f3",
+          "f4",
+          "f5",
+          "ff",
+          "fffff",
+          "finally",
+          "flecha",
+          "focus",
+          "followage",
+          "fortnite",
+          "forzando",
+          "fpv",
+          "genial",
+          "gg",
+          "gggg",
+          "gigante",
+          "gigantee",
+          "glitchnrg",
+          "go",
+          "goat",
+          "god",
+          "godd",
+          "goldplz",
+          "goood",
+          "goty",
+          "gotyy",
+          "gotyyyy",
+          "graficos",
+          "gta6",
+          "guapo",
+          "hacia",
+          "hahah",
+          "hahhaah",
+          "hay",
+          "her",
+          "hermosa",
+          "hermoso",
+          "hermosoooooooooo",
+          "heyguys",
+          "historica",
+          "hol",
+          "holaaaa",
+          "hommie",
+          "horrible",
+          "hostiaaaaa",
+          "ibas",
+          "iguana",
+          "incleibleeeeeeeeeeeeeeeeeeeee",
+          "increible",
+          "inmenso",
+          "ironmousewah",
+          "itshappening",
+          "itspauljj",
+          "izquierda",
+          "j",
+          "jaja",
+          "jajaja",
+          "jajajaaajja",
+          "jajajaj",
+          "jajajaja",
+          "jajajajaj",
+          "jajajajaja",
+          "jajajajajaaja",
+          "jajajajajajaa",
+          "jajajajajajaaja",
+          "jajajajajajaj",
+          "jajajajajajaja",
+          "jajajajajajjajaja",
+          "jajajajajjajajaja",
+          "jajajajjajaja",
+          "jajajakakaka",
+          "jajajjaja",
+          "jajajjajaa",
+          "jajajjajaj",
+          "jajajjajajja",
+          "jajsjdhajajajsjqja",
+          "jakfhasjfhajsfhas",
+          "jasjkdkjasdjk",
+          "jcjdjsjwjjss",
+          "jdjsjgjajja",
+          "jdkasjdka",
+          "jimenez0308",
+          "jjajaj",
+          "jjajjaajja",
+          "jkajajjaja",
+          "joder",
+          "johanalopez6",
+          "josesinho",
+          "joskfslkfjlkasd",
+          "joystick",
+          "jsdasjdajdajsdajda",
+          "jsjaja",
+          "jsjsjsjsjs",
+          "jsjssskk",
+          "ju",
+          "juegazoooo",
+          "juego",
+          "juegos",
+          "jugando",
+          "jugar",
+          "jugo",
+          "kek",
+          "kitsu",
+          "l3",
+          "ladytitania",
+          "larpeada",
+          "lee",
+          "lets",
+          "liedosub",
+          "life",
+          "limon",
+          "lindo",
+          "llo",
+          "lmao",
+          "lo",
+          "lococervera",
+          "locura",
+          "locuuuraaa",
+          "lokura",
+          "lol",
+          "lollllllll",
+          "lolo",
+          "lool",
+          "luisgrant",
+          "luisjumper",
+          "lukita98",
+          "lul",
+          "lynett25",
+          "madre",
+          "manana",
+          "manten",
+          "manteniendo",
+          "mapa",
+          "mapaaaaaaaaaaaa",
+          "marcosomg223",
+          "mariana",
+          "marrkkis",
+          "masivo",
+          "matiijerez91",
+          "me",
+          "mecorro",
+          "medio",
+          "mejor",
+          "mhm",
+          "mia",
+          "michaelgamers5",
+          "mierda",
+          "mikelcre",
+          "minecraft",
+          "mio",
+          "mira",
+          "mmmmm",
+          "moisesalazar",
+          "mongalvan",
+          "month",
+          "months",
+          "n",
+          "na",
+          "ni",
+          "nice",
+          "nine1",
+          "nmad97",
+          "nooo",
+          "normalmente",
+          "nose",
+          "novato",
+          "nsksksk",
+          "ohh",
+          "oli",
+          "omaigaaaaad",
+          "omegalul",
+          "omg",
+          "ominetti",
+          "oogd97",
+          "oooo",
+          "ooooh",
+          "ostias",
+          "owao",
+          "owo",
+          "paaaaaaazm",
+          "pad",
+          "pagman",
+          "panel",
+          "parece",
+          "paro",
+          "pasa",
+          "pdo",
+          "perosna",
+          "perrolol",
+          "persona",
+          "pfff",
+          "pfffff",
+          "pisale",
+          "pog",
+          "poissoned",
+          "popcat",
+          "popnemo",
+          "precioso",
+          "prime",
+          "primera",
+          "primero",
+          "ps5",
+          "puede",
+          "puta",
+          "py",
+          "q",
+          "qjierosub",
+          "quiero",
+          "r1",
+          "r3",
+          "rdr2",
+          "re",
+          "recien",
+          "regala",
+          "regrese",
+          "rexmanchas",
+          "rey",
+          "riflehn",
+          "rockstar",
+          "rompecabezas",
+          "rub",
+          "rubbcomo",
+          "rubbdrive",
+          "rubbfuma",
+          "rubbh",
+          "rubbjam",
+          "rubbkekw",
+          "rubbpog",
+          "rubias",
+          "rubios",
+          "rubius",
+          "rubiuuuuus",
+          "salvajada",
+          "same",
+          "saulz34",
+          "seemsgood",
+          "select",
+          "selectt",
+          "senton",
+          "sexoooooooooo",
+          "shaggy",
+          "sigma",
+          "sii",
+          "siuuu",
+          "siuuuu",
+          "smanson88",
+          "smn3312",
+          "sostenido",
+          "sparked",
+          "spoiler",
+          "start",
+          "streak",
+          "streams",
+          "sub",
+          "subscribed",
+          "superb211chillll",
+          "sx",
+          "t",
+          "ta",
+          "taconn",
+          "tacoon",
+          "tacos",
+          "tactil",
+          "tal",
+          "tampoco",
+          "te",
+          "tenes",
+          "thiarerivas",
+          "tiene",
+          "tier",
+          "tirate",
+          "tkm",
+          "touch",
+          "triangulo",
+          "tristancoli",
+          "trolleado",
+          "true",
+          "tu",
+          "turbo",
+          "uff",
+          "ufffff",
+          "uo",
+          "uriel",
+          "uyuyuyuyy",
+          "v",
+          "vale",
+          "vamos",
+          "van",
+          "ve",
+          "velocidad",
+          "veo",
+          "ver",
+          "vhay",
+          "vista",
+          "vkeyser",
+          "voteyea",
+          "vp",
+          "wao",
+          "wapo",
+          "watch",
+          "watched",
+          "willyogxx",
+          "wooooooooooooooooooo",
+          "woops",
+          "wowers",
+          "wowww",
+          "wwwwwwww",
+          "x",
+          "xd",
+          "xdd",
+          "xddd",
+          "xddddd",
+          "xdddddd",
+          "xdnxd",
+          "xdx",
+          "yonose",
+          "york",
+          "zeyt96"
+        ]
+      },
+      "visible": "cams+gameplay",
+      "visible_reason": "layout split: juego arriba y cámara abajo, se ven ambos",
+      "legacy_titles": {
+        "es": {
+          "raw": "No se lo creyeron 😂 GTA 6",
+          "final": "GTA 6: El chat: \"Cinema\"",
+          "degraded": false,
+          "reason": "pasa: juego veraz, sin promesas de gameplay que no se ve"
+        },
+        "en": {
+          "raw": "They couldn't believe it 😂 GTA 6",
+          "final": "They couldn't believe it 😂 GTA 6",
+          "degraded": false,
+          "reason": "pasa: juego veraz, sin promesas de gameplay que no se ve"
+        }
+      },
+      "audio": {
+        "decision": "confirmar",
+        "reason": "audio dinámico: std 4.7 dB, rango 14.6 dB, 172 palabras transcritas",
+        "stats": {
+          "seconds": 80,
+          "mean_dbfs": -21.1,
+          "max_dbfs": -14.6,
+          "min_dbfs": -29.3,
+          "std_db": 4.7,
+          "range_db": 14.6,
+          "steady_frac": 0.15,
+          "active_seconds": 80
+        },
+        "words": 172,
+        "transcription_bonus": 0.1,
+        "transcription_bonus_reason": "voz cerca del pico (47 palabras, sin risa/hype)"
+      },
+      "fingerprint": [
+        "78000000000000000000200000000000000000000091ff80fc97c1ffc06f9d",
+        "ff0fffffffffffffff3dff1f3f3e0fe00fc003000000f402e0070007000300",
+        "ffffffffffffeaaf00afffffff3f021f00070001000000fc00e0030007000300"
+      ],
+      "layout": {
+        "mode": "auto",
+        "segments": [
+          {
+            "layout": "split",
+            "start": 0.0,
+            "end": 48.0,
+            "params": {
+              "box": [
+                10.75,
+                2.0,
+                24.25,
+                20.75
+              ],
+              "game_x0": 37.0,
+              "game_h": 1320,
+              "cam_h": 600
+            },
+            "reason": "sin franja apilada (banda 90/90) ni caja de webcam; costura máx. 24 en x=11 | escaneo: 0 cams (celdas estables izq 26% / der 38%; sin rostros en región estable (cv2)) | webcam por cara en [172, 32, 388, 332] -> split vertical: juego arriba, cámara abajo"
+          }
+        ]
+      },
+      "human_scores": {
+        "reviewer": "revisor (agente): fotogramas + transcripcion base + chat",
+        "scores": {
+          "claridad": {
+            "reason": "Momento autoexplicativo en segundos: streamer asombrado por el mundo de GTA 6 en lancha + chat 'cinema / goty / espectacular / hermoso'. No necesita contexto previo.",
+            "value": 7
+          },
+          "hook": {
+            "reason": "Primer fotograma ya espectacular (lancha, puente, agua turquesa, avion en el cielo) + cara de asombro de Rubius a los 20 s; el gancho hablado ('no me creo que estemos aqui, viendo esto') llega a los 16 s, tarde para los 3 s ideales.",
+            "value": 6
+          },
+          "loop": {
+            "reason": "Cierre lineal ('Importante, importante' sobre el focus); sin callback al inicio ni punto de loop natural.",
+            "value": 5
+          },
+          "novedad": {
+            "reason": "Dia 1 de lanzamiento, imagenes que nadie habia visto; pero la escena de la lancha es contenido temprano que todo jugador vera. Novedad real pero no exclusiva.",
+            "value": 6
+          },
+          "packaging": {
+            "reason": "Titulo validado 'GTA 6: El chat: \"Cinema\"' + miniatura 'LA REACCION' + layout split + subtitulos quemados; el titulo es generico (palabra del chat, no de Rubius).",
+            "value": 6
+          }
+        },
+        "note": "Puntuacion del revisor, no del usuario. El usuario revisa clip + ficha antes de aprobar la publicacion y puede ajustar estos valores."
+      }
+    }
+  ],
+  "descartados": [],
+  "status": "ok",
+  "heatmap": {
+    "available": false,
+    "source": "youtube_heatmap",
+    "peaks": [],
+    "reason": "no es una URL de YouTube (el heatmap solo existe ahí)"
+  }
+}

@@ -1,0 +1,71 @@
+# Encolar + PUBLICAR un clip ya producido en la Cola del panel AVC.
+# REAL TEST (2026-11-18): la v3 karaoke 3220 se publica de inmediato
+# en las 4 cuentas ES. Si falla una plataforma, el loop es: ver el
+# error exacto en el log, corregirlo en el Worker/panel, redeplegar
+# y reintentar. NUNCA publicar la version simple como atajo.
+#
+# Por qué existe: PANEL_SESSION_TOKEN / PANEL_USERNAME+PASSWORD viven
+# solo como secretos del entorno `sebastian` de GitHub y la API no los
+# devuelve; la única forma segura de encolar/publicar sin pedir
+# credenciales en chat es correrlo DENTRO del runner, donde los
+# secretos se inyectan como variables de entorno y nunca salen en logs.
+#
+# Flujo (verificado en worker/src/index.ts + gate.ts):
+#   1. enqueue_clip.py: POST /api/clips + PUT del MP4 a R2 (no publica).
+#   2. publish_clip.py: POST /preview-seen (sin esto el gate frena),
+#      POST /publish (publishGate por plataforma: SEO>=90, 40-60 s,
+#      GTA VI, topes diarios por plataforma+idioma, espaciamiento 2 h).
+#      Las que pasan se encolan como jobs; el Worker (cron */5) las
+#      ejecuta y cada 'posted' lleva su evidence_url (link publico).
+#   3. Poll de GET /api/jobs hasta posted/failed/draft (max 14 min).
+#
+# Uso: Actions > Enqueue clip > Run workflow
+#   run_dir:    carpeta del run con manifest.json
+#   video_path: MP4 final con subtitulos quemados (la v3 karaoke)
+#   subtitle_style: tiktok | highlight | karaoke (default karaoke)
+#
+# Nota: se llama a la URL DIRECTA del Worker, NO al front de Pages:
+# Pages corta las llamadas API desde Actions (medido 2026-11-18).
+# El MP4 y el manifest.json van commiteados con -f porque runs/ esta
+# en .gitignore (mismo patron que seg_1080p30.mp4 y subs_karaoke.ass).
+name: Enqueue clip
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_dir:
+        description: "Carpeta del run con manifest.json"
+        default: "runs/2932415021-p3220"
+      video_path:
+        description: "MP4 final con subtitulos quemados"
+        default: "runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4_rdjavi_subs_C_v3_karaoke.mp4"
+      subtitle_style:
+        description: "Estilo de subtitulo (tiktok | highlight | karaoke)"
+        default: "karaoke"
+
+jobs:
+  enqueue-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: sebastian
+    env:
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+      PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+      SUBTITLE_STYLE: ${{ inputs.subtitle_style }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Encolar v3 (sin publicar todavia)
+        run: |
+          set -euo pipefail
+          python3 runs/live/rubius_2026-11-18/enqueue_clip.py \
+            "${{ inputs.run_dir }}" "${{ inputs.video_path }}" \
+            | tee /tmp/enqueue.log
+          grep -oP 'CLIP CREADO EN LA COLA: id = \K[0-9]+' /tmp/enqueue.log \
+            > /tmp/clip_id.txt
+          echo "CLIP_ID=$(cat /tmp/clip_id.txt)"
+      - name: Publicar en las 4 cuentas + verificar
+        run: |
+          python3 runs/live/rubius_2026-11-18/publish_clip.py \
+            "$(cat /tmp/clip_id.txt)" --wait-min=14

@@ -131,6 +131,31 @@ class PanelBridge:
         self._ensure_login()
         return self._request("GET", "/api/clips").get("clips") or []
 
+    def get_clip(self, clip_id):
+        """GET /api/clips/:id."""
+        self._ensure_login()
+        return self._request("GET", f"/api/clips/{clip_id}").get("clip") or {}
+
+    def preview_seen(self, clip_id):
+        """POST /api/clips/:id/preview-seen: levanta el freno de
+        publishGate ('falta ver el preview en el Editor')."""
+        self._ensure_login()
+        return self._request("POST", f"/api/clips/{clip_id}/preview-seen")
+
+    def publish_clip(self, clip_id):
+        """POST /api/clips/:id/publish: encola jobs por plataforma
+        (las que pasan publishGate). NO publica en el acto: el
+        Worker (cron */5) ejecuta los jobs y cada 'posted' lleva su
+        evidence_url. Devuelve {jobs, blocked}."""
+        self._ensure_login()
+        return self._request("POST", f"/api/clips/{clip_id}/publish")
+
+    def list_jobs(self, state=None, limit=50):
+        """GET /api/jobs (vista del usuario)."""
+        self._ensure_login()
+        q = f"?limit={limit}" + (f"&state={state}" if state else "")
+        return self._request("GET", f"/api/jobs{q}").get("jobs") or []
+
     def health(self):
         """GET /api/health (sin auth)."""
         return self._request("GET", "/api/health")
