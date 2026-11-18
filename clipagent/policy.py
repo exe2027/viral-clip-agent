@@ -158,17 +158,21 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
     # influencer es GTA VI (Grand Theft Auto VI). La categoría es el
     # capítulo del VOD donde cae el pico (clip["category"]), o el
     # juego (clip["game"] / parámetro game). Un momento de Just
-    # Chatting u otro juego se descarta; sin categoría verificada
-    # no se puede confirmar GTA VI y se retiene.
+    # Chatting u otro juego se descarta.
+    # Sin categoría verificada NO se retiene aquí: el gate de
+    # categoría vive en el corte (detect_peaks, live cutter y el
+    # gate `game` de POST /api/clips del panel); en publicación un
+    # clip sin categoría es un clip heredado/en cola, no una prueba
+    # de que no sea GTA VI. Retenerlo aquí rompía la cola de
+    # publicación (streamer desactivado, topes, contadores) antes
+    # de llegar a sus propias puertas.
     from .category import effective_category, is_gta6
     cat = effective_category(clip, game)
     if cat and not is_gta6(cat):
         return _deny("descartado",
                      f"categoría {cat!r}: no es GTA VI")
     if not cat:
-        return _deny("retenido",
-                     "sin categoría verificada: no se puede confirmar "
-                     "que el clip sea GTA VI")
+        checks.append("categoría: sin verificar (gate en el corte)")
 
     # 1. Filtros duros de puntaje (6B.2 / 6B.5).
     status, why = publish_status(virality, seo, seo_override=seo_override,

@@ -27,6 +27,12 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 RUBIUS_CHAT = os.path.join(REPO, "runs", "2932415021", "chat.json")
 RUBIUS_SEG = os.path.join(
     REPO, "runs", "2932415021-p2010", "segments", "seg_01_t33m10s.mp4")
+# Fixture con los mismos capítulos del VOD real (Just Chatting
+# 0-167 s, GTA VI desde 167 s). `runs/` está en .gitignore y no
+# existe en CI: los tests de capítulos usan este fixture, no el
+# chat real.
+FIXTURE_CHAT = os.path.join(
+    REPO, "tests", "fixtures", "chat_rubius_capitulos.json")
 
 
 class FakeTwitchClient:
@@ -68,9 +74,10 @@ class TestCategoryGate(unittest.TestCase):
         self.assertFalse(ok)
 
     def test_vod_capitulos_reales(self):
-        # Chat real de Rubius VOD 2932415021: Just Chatting 0-167 s,
-        # GTA VI desde 167 s.
-        gate = CategoryGate(mode="vod", chat_path=RUBIUS_CHAT)
+        # Capítulos del VOD real de Rubius 2932415021 (fixture con
+        # los mismos capítulos): Just Chatting 0-167 s, GTA VI
+        # desde 167 s.
+        gate = CategoryGate(mode="vod", chat_path=FIXTURE_CHAT)
         ok, cat, _src = gate.check(2010)
         self.assertTrue(ok)
         self.assertEqual(cat, "Grand Theft Auto VI")
@@ -191,7 +198,7 @@ class TestProcessPeakReal(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = StepJobs(os.path.join(tmp, "queue.db"))
             try:
-                gate = CategoryGate(mode="vod", chat_path=RUBIUS_CHAT)
+                gate = CategoryGate(mode="vod", chat_path=FIXTURE_CHAT)
                 session = LiveCutterSession(
                     "rubius", platform="twitch",
                     stream_id="2932415021", gate=gate, store=store,
@@ -229,7 +236,7 @@ class TestProcessPeakReal(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = StepJobs(os.path.join(tmp, "queue.db"))
             try:
-                gate = CategoryGate(mode="vod", chat_path=RUBIUS_CHAT)
+                gate = CategoryGate(mode="vod", chat_path=FIXTURE_CHAT)
                 session = LiveCutterSession(
                     "rubius", platform="twitch",
                     stream_id="2932415021", gate=gate, store=store,
