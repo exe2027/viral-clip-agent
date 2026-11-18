@@ -10,6 +10,11 @@ Reglas del tribunal (Bloque 7) que implementa este módulo:
     API (YouTube Data API v3, videos.insert). TikTok, Instagram y
     Facebook son draft-first: se genera el paquete listo para subir
     a mano y NUNCA se publica directo sin auditoría aprobada.
+    (2026-11-18: TikTok va por Zernio — ZernioAdapter, presign +
+    PUT + POST /v1/posts — con isDraft True por defecto: el post
+    queda como borrador en Zernio, nunca sale en público sin
+    revisión. El adaptador directo de TikTok ya no se usa para
+    publicar.)
   * Sin fila en verde en la auditoría, esa cuenta queda en draft-first.
   * La lista blanca se verifica EN EL MOMENTO de publicar, no solo al
     detectar: si el streamer ya no está en la lista, no se publica.
@@ -934,10 +939,11 @@ class DraftFirstPublisher:
 class DirectPublisher:
     """TikTok / Instagram / Facebook: publicación directa por API.
 
-    Usa los adaptadores de clipagent.platforms (TikTok Direct Post
-    con FILE_UPLOAD, Instagram contenedor -> publicar, Facebook
-    Reels en 3 fases). Sin token, sin IDs de cuenta o sin URL
-    pública, devuelve mode "draft" con el motivo explícito y
+    TikTok va por Zernio (ZernioAdapter: presign + PUT + POST
+    /v1/posts, draft-first, isDraft True por defecto: nada sale en
+    público sin revisión). Instagram usa contenedor -> publicar y
+    Facebook Reels en 3 fases. Sin clave, sin IDs de cuenta o sin
+    URL pública, devuelve mode "draft" con el motivo explícito y
     genera además el paquete manual (nunca finge una publicación).
     Los fallos transitorios (5xx, rate limit) y los procesados
     pendientes (mode "processing") se retoman en el siguiente
@@ -978,13 +984,12 @@ class DirectPublisher:
         return title, caption
 
     def _resume_id(self, item):
-        """ID de reanudación guardado en el ítem (publish_id de
-        TikTok o container_id de Instagram), o None."""
+        """ID de reanudación guardado en el ítem (container_id de
+        Instagram), o None. TikTok por Zernio no reanuda: no hay
+        publish_id que retomar."""
         if not item:
             return None
         data = item.get("platform_data") or {}
-        if self.platform == "tiktok":
-            return data.get("publish_id")
         if self.platform == "instagram_reels":
             return data.get("container_id")
         return None
@@ -1017,11 +1022,15 @@ class DirectPublisher:
         fn = request_fn if request_fn is not None else self.request_fn
         _title, caption = self._package_texts(clip_path)
         if self.platform == "tiktok":
-            from .platforms import TikTokAdapter
-            return TikTokAdapter(self.base_dir, fn).publish_video(
-                clip_path, caption,
-                resume_publish_id=self._resume_id(item),
-                sleep_fn=sleep_fn)
+            # TikTok por Zernio (2026-11-18): el adaptador directo
+            # (TikTokAdapter, Content Posting API con app sin
+            # auditar) ya no se usa para publicar. ZernioAdapter
+            # lee ZERNIO_API_KEY y ZERNIO_TIKTOK_ACCOUNT_ID del
+            # entorno; draft=True por defecto (draft-first): el
+            # post queda como borrador en Zernio, nunca en público.
+            from .platforms import ZernioAdapter
+            return ZernioAdapter(self.base_dir, fn).publish_video(
+                clip_path, caption)
         if self.platform == "instagram_reels":
             from . import platform_accounts as _pa
             from .platforms import InstagramAdapter

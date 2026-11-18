@@ -58,11 +58,10 @@ jobs:
       IG_USER_ID: ${{ secrets.IG_USER_ID }}
       FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
       CLIP_PUBLIC_BASE_URL: ${{ secrets.CLIP_PUBLIC_BASE_URL }}
-      # Zernio (TikTok por agregador, draft-first): la clave ya
-      # existe como secreto del entorno `sebastian`; la cuenta
-      # (ZERNIO_TIKTOK_ACCOUNT_ID) hay que crearla como secreto
-      # con el ID de la cuenta de TikTok conectada en Zernio.
-      # Sin ellas, ZernioAdapter cae a draft con el motivo.
+      # Zernio (TikTok por agregador, draft-first): la clave y la
+      # cuenta existen como secretos del entorno `sebastian`
+      # (ZERNIO_API_KEY, ZERNIO_TIKTOK_ACCOUNT_ID). Sin ellas,
+      # ZernioAdapter cae a draft con el motivo.
       ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
       ZERNIO_TIKTOK_ACCOUNT_ID: ${{ secrets.ZERNIO_TIKTOK_ACCOUNT_ID }}
     steps:

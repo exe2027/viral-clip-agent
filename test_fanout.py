@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Pruebas del fan-out: publicación directa en TikTok, Instagram y
-Facebook (5a) y propagación desde YouTube (5b).
+"""Pruebas del fan-out: publicación directa en TikTok (por Zernio,
+draft-first), Instagram y Facebook (5a) y propagación desde
+YouTube (5b).
 
 Los adaptadores se prueban con APIs simuladas en sus propios
-archivos (test_tiktok_direct, test_facebook_upload,
+archivos (test_zernio, test_facebook_upload,
 test_instagram_publish); aquí se prueba el cableado: DirectPublisher
 + publish_one + publish_loop, con los adaptadores simulados.
 """
@@ -113,7 +114,7 @@ class TestDirectPublisher(unittest.TestCase):
             q, item, cfg = _clip(tmp, "tiktok")
             fake = _fake_adapter(publish_video={
                 "ok": True, "mode": "api", "post_id": "tt1"})
-            with mock.patch("clipagent.platforms.TikTokAdapter",
+            with mock.patch("clipagent.platforms.ZernioAdapter",
                            return_value=fake):
                 for p in _patches():
                     p.start()
@@ -121,14 +122,19 @@ class TestDirectPublisher(unittest.TestCase):
                 r = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r["action"], "published", r)
             self.assertEqual(item["platform_id"], "tt1")
+            # TikTok ya no usa el adaptador directo: la llamada fue
+            # a Zernio (draft-first) y sin resume_publish_id.
+            self.assertNotIn("resume_publish_id",
+                             fake.publish_video.call_args[1])
 
-    def test_tiktok_sin_token_queda_en_draft_con_motivo(self):
+    def test_tiktok_sin_clave_zernio_queda_en_draft_con_motivo(self):
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg = _clip(tmp, "tiktok")
             fake = _fake_adapter(publish_video={
                 "ok": False, "mode": "draft",
-                "reason": "sin token de TikTok en tokens/"})
-            with mock.patch("clipagent.platforms.TikTokAdapter",
+                "reason": "sin ZERNIO_API_KEY en el entorno "
+                          "(secreto ZERNIO_API_KEY)"})
+            with mock.patch("clipagent.platforms.ZernioAdapter",
                            return_value=fake):
                 for p in _patches():
                     p.start()
@@ -136,7 +142,7 @@ class TestDirectPublisher(unittest.TestCase):
                 r = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r["action"], "draft", r)
             self.assertEqual(item["state"], "draft")
-            self.assertIn("sin token", r["reason"])
+            self.assertIn("ZERNIO_API_KEY", r["reason"])
             # El paquete manual se genera igual (simulado en tests).
             self.assertIn("paquete manual en", r["reason"])
 
@@ -206,13 +212,13 @@ class TestReintentoTransitorio(unittest.TestCase):
         q, item, cfg = _clip(tmp, "tiktok")
         fake = _fake_adapter(publish_video={
             "ok": False, "mode": "error", "status": 503,
-            "reason": "TikTok caído (503)", "retryable": True})
+            "reason": "Zernio caído (503)", "retryable": True})
         return q, item, cfg, fake
 
     def test_5xx_se_reintenta_sin_cambiar_el_estado(self):
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg, fake = self._setup_error(tmp)
-            with mock.patch("clipagent.platforms.TikTokAdapter",
+            with mock.patch("clipagent.platforms.ZernioAdapter",
                            return_value=fake):
                 for p in _patches():
                     p.start()
@@ -227,7 +233,7 @@ class TestReintentoTransitorio(unittest.TestCase):
     def test_tres_transitorios_y_el_cuarto_va_a_failed(self):
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg, fake = self._setup_error(tmp)
-            with mock.patch("clipagent.platforms.TikTokAdapter",
+            with mock.patch("clipagent.platforms.ZernioAdapter",
                            return_value=fake):
                 for p in _patches():
                     p.start()
@@ -242,6 +248,10 @@ class TestReintentoTransitorio(unittest.TestCase):
 
 class TestProcessing(unittest.TestCase):
     def test_processing_guarda_publish_id_y_retoma(self):
+        # Zernio no reanuda por publish_id (no hay resume en su
+        # API): el segundo ciclo vuelve a llamar a publish_video
+        # sin resume_publish_id. El publish_id, si viene, se guarda
+        # igual en platform_data por el flujo genérico.
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg = _clip(tmp, "tiktok")
             calls = {"n": 0}
@@ -251,11 +261,11 @@ class TestProcessing(unittest.TestCase):
                 if calls["n"] == 1:
                     return {"ok": False, "mode": "processing",
                             "publish_id": "pub1", "retryable": True,
-                            "reason": "TikTok sigue procesando"}
+                            "reason": "Zernio sigue procesando"}
                 return {"ok": True, "mode": "api", "post_id": "tt1"}
             fake = mock.Mock()
             fake.publish_video.side_effect = video
-            with mock.patch("clipagent.platforms.TikTokAdapter",
+            with mock.patch("clipagent.platforms.ZernioAdapter",
                            return_value=fake):
                 for p in _patches():
                     p.start()
@@ -268,10 +278,12 @@ class TestProcessing(unittest.TestCase):
                 r2 = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r2["action"], "published", r2)
             self.assertEqual(item["platform_id"], "tt1")
-            # El resume pasó el publish_id en la segunda llamada.
-            self.assertEqual(
-                fake.publish_video.call_args[1]["resume_publish_id"],
-                "pub1")
+            # ZernioAdapter.publish_video no acepta resume: la
+            # segunda llamada no lleva resume_publish_id.
+            self.assertEqual(fake.publish_video.call_count, 2)
+            self.assertNotIn(
+                "resume_publish_id",
+                fake.publish_video.call_args[1])
 
 
 if __name__ == "__main__":
@@ -325,7 +337,7 @@ class TestFanOutLoop(unittest.TestCase):
         patches = _patches() + [
             mock.patch("clipagent.publish.get_publisher",
                        side_effect=_get_publisher),
-            mock.patch("clipagent.platforms.TikTokAdapter",
+            mock.patch("clipagent.platforms.ZernioAdapter",
                        return_value=tk),
             mock.patch("clipagent.platforms.InstagramAdapter",
                        return_value=ig),
@@ -363,7 +375,8 @@ class TestFanOutLoop(unittest.TestCase):
             q, _yt, cfg, patches = self._setup_loop(
                 tmp, tiktok_result={
                     "ok": False, "mode": "draft",
-                    "reason": "sin token de TikTok en tokens/"})
+                    "reason": "sin ZERNIO_API_KEY en el entorno "
+                              "(secreto ZERNIO_API_KEY)"})
             for p in patches:
                 p.start()
                 self.addCleanup(p.stop)
@@ -376,7 +389,7 @@ class TestFanOutLoop(unittest.TestCase):
             self.assertEqual(
                 q._find(clip, "tiktok")["state"], "draft")
             self.assertIn(
-                "sin token",
+                "ZERNIO_API_KEY",
                 q._find(clip, "tiktok")["history"][-1]["note"])
             self.assertEqual(
                 q._find(clip, "instagram_reels")["state"], "published")
