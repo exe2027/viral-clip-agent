@@ -1,0 +1,30 @@
+[Script Info]
+Title: p3220 RDJavi simple
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: RDJavi,Noto Sans Condensed,42,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,40,40,200,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.12,0:00:05.18,RDJavi,,0,0,0,,¿Cuál será el botón de cambiar la cámara, gente?
+Dialogue: 0,0:00:14.10,0:00:15.96,RDJavi,,0,0,0,,Voy a decir esto muchas veces antes de…
+Dialogue: 0,0:00:15.96,0:00:17.30,RDJavi,,0,0,0,,Sí, pero lo voy a decir de nuevo,
+Dialogue: 0,0:00:17.30,0:00:19.74,RDJavi,,0,0,0,,no me creo que estemos aquí, viendo esto, gente.
+Dialogue: 0,0:00:21.07,0:00:23.30,RDJavi,,0,0,0,,Y de barbaridad al triángulo.
+Dialogue: 0,0:00:23.30,0:00:26.26,RDJavi,,0,0,0,,No, hijo de puta, casi me la lío, cabrón.
+Dialogue: 0,0:00:27.78,0:00:28.86,RDJavi,,0,0,0,,¿Cómo me he podido caer en eso?
+Dialogue: 0,0:00:29.85,0:00:30.85,RDJavi,,0,0,0,,¿Cómo me he podido caer en eso?
+Dialogue: 0,0:00:31.82,0:00:32.76,RDJavi,,0,0,0,,Y le hago caso, tío.
+Dialogue: 0,0:00:36.58,0:00:38.08,RDJavi,,0,0,0,,Tendrá temprano que ir al paquete, ok.
+Dialogue: 0,0:00:38.78,0:00:39.60,RDJavi,,0,0,0,,Esto es lo del focus,
+Dialogue: 0,0:00:39.60,0:00:40.76,RDJavi,,0,0,0,,la vía de focus de Jason, eh.
+Dialogue: 0,0:00:41.68,0:00:42.60,RDJavi,,0,0,0,,Todo después será importante
+Dialogue: 0,0:00:42.60,0:00:44.00,RDJavi,,0,0,0,,para cuando disparamos a gente, por si
+Dialogue: 0,0:00:44.00,0:00:45.50,RDJavi,,0,0,0,,queremos matarles o incapacitarles.
+Dialogue: 0,0:00:46.08,0:00:46.74,RDJavi,,0,0,0,,Importante, importante.

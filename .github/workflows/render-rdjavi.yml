@@ -1,0 +1,102 @@
+# Render RDJavi pulido en GitHub Actions (opción D del tribunal, 2026-11-18).
+#
+# La VM (1,5 CPU compartidas) mató el render dos veces por lento; el
+# runner ubuntu-latest tiene 4 vCPU (free tier, $0) y el tribunal estima
+# 2,5-3,5 min para este clip. Un solo pase (opción C): layout + punch-in
+# + subtítulos + audio en una invocación de clipagent/rdjavi.py, sin
+# concat ni segundo encode.
+#
+# Entrada: el intermedio h264 1080p30 ya transcodificado
+# (runs/2932415021-p3220/rdjavi/seg_1080p30.mp4, 74 MB, committeado
+# con -f porque *.mp4 está en .gitignore). El render toma los primeros
+# 48,01 s (--duration), que corresponden al corte [3200-3248] del VOD.
+# Salida: MP4 1080x1920 como artifact (no se commitea, no se publica).
+#
+# Uso: Actions > Render RDJavi (p3220) > Run workflow (los defaults son
+# p3220; los inputs permiten reutilizarlo para otros clips).
+name: Render RDJavi (p3220)
+
+on:
+  workflow_dispatch:
+    inputs:
+      segment:
+        description: "Segmento de entrada (relativo al repo)"
+        default: "runs/2932415021-p3220/rdjavi/seg_1080p30.mp4"
+      ass:
+        description: "ASS de subtítulos simples (MarginV 200)"
+        default: "runs/2932415021-p3220/rdjavi/subs_simple.ass"
+      gradient:
+        description: "PNG gradiente Vice City"
+        default: "runs/2932415021-p3220/rdjavi/vice_gradient.png"
+      duration:
+        description: "Duración del clip (s)"
+        default: "48.01"
+      out:
+        description: "MP4 de salida (relativo al repo)"
+        default: "runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4_rdjavi_final.mp4"
+      punch_in:
+        description: "Punch-in inicio fin (s)"
+        default: "16 26"
+      bg_frame:
+        description: "Segundo del clip para el fondo desenfocado"
+        default: "20"
+      preset:
+        description: "Preset x264"
+        default: "veryfast"
+      crf:
+        description: "CRF x264"
+        default: "23"
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar ffmpeg y fuentes
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core
+          # El ASS pide "Noto Sans Condensed"; si el paquete no la trae,
+          # bajar la variable de google/fonts (fallback de libass si falla).
+          if ! fc-list | grep -qi "Noto Sans Condensed"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/NotoSansCondensed.ttf \
+              https://github.com/google/fonts/raw/main/ofl/notosanscondensed/NotoSansCondensed%5Bwght%5D.ttf || true
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Noto Sans Condensed" | head -3 || echo "sin Noto Sans Condensed (libass usara fallback)"
+          ffmpeg -version | head -1
+          python3 --version
+
+      - name: Render RDJavi (un solo pase)
+        run: |
+          START=$(date +%s)
+          python3 -m clipagent.rdjavi \
+            --segment "${{ inputs.segment }}" \
+            --start 0 --duration "${{ inputs.duration }}" \
+            --ass "${{ inputs.ass }}" \
+            --gradient "${{ inputs.gradient }}" \
+            --cam-box 421:274:0:0 --cam-square 274:274:68:0 \
+            --game-crop 1080:1080:465:0 \
+            --out "${{ inputs.out }}" \
+            --bg-frame "${{ inputs.bg_frame }}" \
+            --punch-in ${{ inputs.punch_in }} \
+            --fps 30 --preset "${{ inputs.preset }}" --crf "${{ inputs.crf }}"
+          echo "RENDER_WALL=$(( $(date +%s) - START )) s (solo el pase RDJavi)"
+
+      - name: Verificar salida (ffprobe)
+        run: |
+          ffprobe -v error \
+            -show_entries format=duration,size \
+            -show_entries stream=codec_name,width,height,r_frame_rate,codec_type \
+            -of default=nw=1 "${{ inputs.out }}"
+          ls -lh "${{ inputs.out }}"
+
+      - name: Subir MP4 como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdjavi-p3220-final
+          path: ${{ inputs.out }}
+          retention-days: 7
