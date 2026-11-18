@@ -122,7 +122,12 @@ jobs:
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
           PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
           PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
-          PANEL_URL: https://avc-em9.pages.dev
+          # URL DIRECTA del Worker, NO el front de Pages: Pages
+          # corta las llamadas API desde Actions (RemoteDisconnected
+          # / 405 vacíos; medido 2026-11-18: login 200 por el Worker
+          # directo y conexión cortada por Pages con el mismo
+          # request). El front para humanos sigue en Pages.
+          PANEL_URL: https://avc.vikingosfoodspa.workers.dev
         run: |
           python -m clipagent live "${{ matrix.target.name }}" \
             --platform "${{ matrix.target.platform }}" \
