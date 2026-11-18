@@ -31,7 +31,8 @@ STATIC_SECRETS = ("TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET",
                   "GEMINI_API_KEY", "GOOGLE_API_KEY",
                   "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET",
                   "META_APP_ID", "META_APP_SECRET",
-                  "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+                  "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+                  "ZERNIO_API_KEY", "ZERNIO_TIKTOK_ACCOUNT_ID")
 
 
 def tokens_dir(base_dir=None, create=False):

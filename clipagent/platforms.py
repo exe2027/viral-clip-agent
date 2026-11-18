@@ -18,7 +18,7 @@ import urllib.request
 
 from . import credentials as _creds
 
-GRAPH_VERSION = "v26.0"
+GRAPH_VERSION = "v27.0"
 
 
 def _http(method, url, headers=None, body=None, timeout=30,
@@ -404,6 +404,173 @@ class TikTokAdapter:
                 "publish_id": publish_id, "retryable": True,
                 "reason": "TikTok sigue procesando el video; "
                           "se retoma en el siguiente ciclo"}
+
+
+class ZernioAdapter:
+    """Publicación vía Zernio API (agregador; TikTok por su vía).
+
+    Docs oficiales (verificado 2026-11-18, https://zernio.com/llms.txt
+    y https://docs.zernio.com/platforms/tiktok):
+    - Base: https://zernio.com/api/v1, Bearer ZERNIO_API_KEY.
+    - Media: POST /v1/media/presign {filename, contentType} ->
+      {uploadUrl, publicUrl}; PUT de los bytes a uploadUrl.
+    - Post: POST /v1/posts {content, platforms: [{platform:
+      "tiktok", accountId}], mediaItems: [{type: "video", url}],
+      tiktokSettings: {...}, isDraft, publishNow}.
+    - tiktokSettings exige content_preview_confirmed y
+      express_consent_given en true; en cuentas conectadas por la
+      app TikTok for Business el video solo puede ser
+      PUBLIC_TO_EVERYONE: para cualquier otra audiencia se manda
+      tiktokSettings.draft: true (y aquí isDraft: true).
+    - dryRun NO existe en POST /v1/posts (solo en el bulk-upload
+      por CSV, ?dryRun): el dry_run de este adaptador es LOCAL —
+      valida archivo/clave/cuenta y devuelve el payload que se
+      mandaría, sin tocar la red.
+
+    Draft-first para TikTok (app sin auditar): por defecto
+    draft=True, así nada sale en público sin revisión. Sin clave
+    o sin cuenta -> draft con el motivo (R5: nunca rompe el resto).
+    La clave se lee de ZERNIO_API_KEY y la cuenta de
+    ZERNIO_TIKTOK_ACCOUNT_ID (entorno o .env, vía credentials).
+    """
+
+    API = "https://zernio.com/api/v1"
+
+    def __init__(self, base_dir=None, request_fn=None, api_key=None,
+                 account_id=None):
+        self.base_dir = base_dir
+        self.request_fn = request_fn
+        self._api_key = api_key
+        self._account_id = account_id
+
+    def _key(self):
+        if self._api_key:
+            return self._api_key
+        return _creds.get_secret("ZERNIO_API_KEY")
+
+    def _account(self):
+        if self._account_id:
+            return self._account_id
+        return _creds.get_secret("ZERNIO_TIKTOK_ACCOUNT_ID")
+
+    def _auth(self):
+        return {"Authorization": f"Bearer {self._key()}"}
+
+    def _post_payload(self, video_url, title, account_id, draft):
+        """Cuerpo de POST /v1/posts para un video de TikTok."""
+        settings = {
+            "privacy_level": "PUBLIC_TO_EVERYONE",
+            "allow_comment": True, "allow_duet": True,
+            "allow_stitch": True,
+            "commercial_content_type": "none",
+            "content_preview_confirmed": True,
+            "express_consent_given": True,
+            "media_type": "video", "auto_add_music": False,
+            "video_made_with_ai": False,
+        }
+        if draft:
+            settings["draft"] = True
+        return {
+            "content": title,
+            "platforms": [{"platform": "tiktok",
+                           "accountId": account_id}],
+            "mediaItems": [{"type": "video", "url": video_url}],
+            "tiktokSettings": settings,
+            "isDraft": draft,
+            "publishNow": not draft,
+        }
+
+    def upload_media(self, clip_path):
+        """Presign + PUT: devuelve la publicUrl del video, o el
+        motivo por el que no se pudo (draft/error, nunca excepción).
+        """
+        if not self._key():
+            return _draft("sin ZERNIO_API_KEY en el entorno "
+                          "(secreto ZERNIO_API_KEY)")
+        if not os.path.isfile(clip_path):
+            return {"ok": False, "reason":
+                    f"archivo no existe: {clip_path}"}
+        status, resp = _http(
+            "POST", f"{self.API}/media/presign", self._auth(),
+            {"filename": os.path.basename(clip_path),
+             "contentType": "video/mp4"},
+            request_fn=self.request_fn)
+        upload_url = resp.get("uploadUrl")
+        public_url = resp.get("publicUrl")
+        if status != 200 or not upload_url or not public_url:
+            return _error_result(status, resp)
+        with open(clip_path, "rb") as f:
+            data = f.read()
+        status, resp = _http(
+            "PUT", upload_url, {"Content-Type": "video/mp4"}, data,
+            request_fn=self.request_fn)
+        if status not in (200, 201, 204):
+            return _error_result(status, resp)
+        return {"ok": True, "mode": "api", "public_url": public_url}
+
+    def create_post(self, video_url, title, account_id=None,
+                    draft=True, dry_run=False):
+        """POST /v1/posts con un video ya subido (URL pública).
+
+        dry_run=True no toca la red: valida clave/cuenta/URL y
+        devuelve el payload que se mandaría (mode "dry-run").
+        """
+        key = self._key()
+        if not key:
+            return _draft("sin ZERNIO_API_KEY en el entorno "
+                          "(secreto ZERNIO_API_KEY)")
+        account = account_id or self._account()
+        if not account:
+            return _draft("sin cuenta de TikTok en Zernio "
+                          "(ZERNIO_TIKTOK_ACCOUNT_ID)")
+        if not (video_url or "").startswith("https://"):
+            return _draft("Zernio exige una URL HTTPS pública del "
+                          "video (mediaItems.url)")
+        payload = self._post_payload(video_url, title, account, draft)
+        if dry_run:
+            return {"ok": True, "mode": "dry-run",
+                    "reason": "dry-run local: no se llamó a la API "
+                              "de Zernio (POST /v1/posts no tiene "
+                              "dryRun en la documentación)",
+                    "payload": payload}
+        status, resp = _http(
+            "POST", f"{self.API}/posts", self._auth(), payload,
+            request_fn=self.request_fn)
+        if status in (200, 201) and resp.get("id"):
+            return {"ok": True, "mode": "api",
+                    "post_id": resp["id"],
+                    "draft": draft,
+                    "detail": resp}
+        if status in (200, 201):
+            return {"ok": True, "mode": "api", "draft": draft,
+                    "detail": resp}
+        return _error_result(status, resp)
+
+    def publish_video(self, clip_path, title, account_id=None,
+                      draft=True, dry_run=False):
+        """Video completo por Zernio: presign + PUT + POST /v1/posts.
+
+        draft=True (por defecto): queda como borrador en Zernio,
+        no sale en público. dry_run=True: valida todo sin red.
+        """
+        if dry_run:
+            if not self._key():
+                return _draft("sin ZERNIO_API_KEY en el entorno "
+                              "(secreto ZERNIO_API_KEY)")
+            if not (account_id or self._account()):
+                return _draft("sin cuenta de TikTok en Zernio "
+                              "(ZERNIO_TIKTOK_ACCOUNT_ID)")
+            if not os.path.isfile(clip_path):
+                return {"ok": False, "reason":
+                        f"archivo no existe: {clip_path}"}
+            return self.create_post(
+                "https://example.com/dry-run.mp4", title,
+                account_id=account_id, draft=draft, dry_run=True)
+        up = self.upload_media(clip_path)
+        if not up.get("ok"):
+            return up
+        return self.create_post(up["public_url"], title,
+                                account_id=account_id, draft=draft)
 
 
 class InstagramAdapter:
