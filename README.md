@@ -20,6 +20,13 @@ El cerebro es este repo, pero **todo se usa y se verifica desde la web, nada loc
 - **Layout split vertical RDJavi (GTA 6, 2026-11-18)**: streamer ARRIBA, gameplay ABAJO (ver [Formato del clip](#formato-del-clip-referencia-rdjavi-estilo-gta-6)). Si el juego no se ve, la cámara se achica, nunca al revés.
 - **Descargar SOLO la parte del clip**, nunca el vídeo entero; del chat, solo la ventana alrededor del pico (`--peak`, ±120 s).
 - **Hype por ráfaga rápida**: se mide la velocidad del chat (mensajes por 10 s / por minuto) y su pico contra el baseline rodante, no solo el total de comentarios. Una ráfaga repentina pesa más.
+- **Pre-filtro rápido de Óscar Boix (2026-11-18, `clipagent/prefilter.py`, commit `eda2798`)**: puerta BARATA entre la detección y el trabajo caro (Whisper, viralidad, SEO, render). 1 punto por mensaje, 2 si es reacción (`ja{2,}|j{2,}a|xd+|kekw|lul|omegalul|lmao+|clip|noo+|wtf|pog|😂|🤣|💀`), tramos de 10 s; un pico es un tramo ≥ 3x la mediana de sus vecinos de ±5 min, separación mínima 90 s. Solo los picos que pasan llegan a la puntuación completa. Config: `config.yaml > scoring.prefilter_min_multiple: 3.0`, `prefilter_separation_s: 90`; `--no-prefilter` lo apaga. **Salvaguarda de chat caliente**: si NO encuentra ningún pico en todo el VOD, se desactiva solo y deja pasar todo a la puntuación completa (nunca tumba un VOD entero). Medido en el VOD de Rubius 2932415021 (75.483 mensajes): mayor múltiplo 2,23x, 3220 solo 1,19x, 7775 1,87x — el 3x literal habría tumbado todos los clips; con la salvaguarda el ahorro en ese VOD es 0 y no se pierde ningún clip. En un VOD frío sí ahorra: descarta los flojos antes de transcribir y renderizar.
+- **Puerta live hype v2 (2026-11-18, `clipagent/live.py`, commit `de7e905`)**: en directo, un pico se emite si el múltiplo es ≥ 3,0 (chat frío) **O** si `hype_ratio ≥ 1,3 + score ≥ 14 + hype_score ≥ 1,0` (chat caliente). Warmup 120 s (sin 120 s de chat no hay baseline fiable, no se emite nada; sin picos antes de 60 s). **Anti-cero con fallback**: si la sesión termina sin picos, se emite la mejor ventana (`hype_ratio ≥ 1,2`, `score ≥ 13`). Anti-spam de emotes. Verificado en la corrida 44404808950 (2026-11-18 18:45–19:09): Rubius detectó por fin picos (1 procesado, score 23,8, múltiplo 1,44 — imposible con el 3,0x viejo).
+- **Frases hype del streamer (2026-11-18, `clipagent/streamer_hype.py`)**: lo que DICE el streamer también marca hype — "WTF", "OMG", "Dios mío", "no lo puedo creer", "no me lo creo", "qué locura", "esto es increíble", "madre mía", "esto es otro nivel", "qué gráficos", "cojones", "olé". Se mide en la transcripción Whisper que ya existe, queda registrado en el clip (`streamer_hype`) y visible en la Cola LIVE. NO toca viralidad, SEO, prioridad ni las puertas 50/90. "vamos" quedó fuera por demasiado genérico.
+- **Gritos por decibeles (2026-11-18, `clipagent/audio.py::shout_spikes`)**: un grito es un SUBIDÓN, no un nivel alto constante. Un segundo cuenta como grito si su RMS es ≥ +8 dB sobre la mediana de los 10 s anteriores y ≥ -30 dBFS. Queda en `audio_verdict` (`shout_seconds`/`shout_count`), en la revisión y en el clip live. NO toca el scoring (el componente audio ya premiaba el rango).
+- **Gritos SOLO del streamer + rescate (2026-11-18 19:23, commit `33ce30f`)**: `audio.streamer_shout_spikes` — un salto de decibeles cuenta solo si cae dentro de un tramo de VOZ de la transcripción Whisper; una explosión del juego con el streamer callado NO cuenta; sin voz no hay gritos. Límite honesto: la pista viene mezclada, si el streamer habla encima de una explosión ese segundo sí cuenta. **Rescate como punto aparte** (`review.py`): un clip borderline (viralidad revisada 45–49,9) con **2+ segundos de grito del streamer y SEO ≥ 90 pasa aunque no llegue a 50**; con 1 solo segundo no hay rescate (un grito aislado puede ser una risa o un fallo). La puerta 50/90 queda intacta.
+- **Repetición en el chat (2026-11-18, `clipagent/ingest.py`)**: ya se mide — `rep_ratio` (1 − cuerpos distintos / mensajes) y el `hype_score` tiene el componente "repetición" (`rep_ratio × 4`, máx. +2 al score). Matiz: si más del 40% del chat es idéntico se penaliza ×0,5 como spam (`repetition_spam`); la diferencia es que lo repitan muchos usuarios distintos (hype) vs pocos (spam).
+- **Subtítulos: karaoke por defecto (2026-11-18 19:17, decisión del usuario) y al pie de la cámara (2026-11-18 19:02)**: ver [Subtítulos estilo RDJavi](#formato-del-clip-referencia-rdjavi-estilo-gta-6). Nunca en el gameplay: ahí van los subtítulos propios de GTA 6 y se solaparían.
 - **Filtros duros**: viralidad ≥ 50 y SEO ≥ 90 por plataforma, si no no se publica (salvo override del usuario). Prioridad **LIVE sobre VOD** en la Cola. Fórmula intocable: `viralidad^0,5 × SEO^0,3 × chat_norm^0,2`. Clip de más de 7 días: −10 pts/día.
 - **Puerta de render PRE-CORTE (2026-11-18)**: el clip SOLO se corta/renderiza si ya pasa las puertas con el paquete provisional (viralidad estimada ≥ 45 pre-corte — calibrado, ver abajo — y SEO ≥ 90 en al menos una plataforma). Si no pasa, se descarta SIN descargar el segmento ni renderizar. Calibración medida: p3220 estima 46,3 (real 53,8) y su SEO pre-corte es 89/91/92/92; p2010 estima 44,5. Con el 50 literal pre-corte, p3220 se descartaría; por eso el umbral pre-corte es 45 y el 50 real sigue vigente en publicación.
 - **Revisión automática de los mejores picos (2026-11-18, aprobado)**: en el loop en vivo, los top 3 picos por directo con viralidad auto 40–49,9 pasan por revisión automática (3 fotogramas + transcripción Whisper + juez Gemini con los 5 componentes humanos) y se re-calcula su viralidad; si tras la revisión pasan ≥ 50 y SEO ≥ 90, se renderizan y se encolan en LIVE; si no, se descartan SIN render. ≥ 50 va directo a render; < 40 se descarta sin revisión. Si Gemini no está disponible, fallback a la puerta pre-corte (≥ 45), registrado como tal. La puerta de publicación sigue en 50, no se baja.
@@ -55,14 +62,43 @@ SETUP en plano ancho (habitación/PC/luces, aspecto ≥ 1,8 y ancho ≥
 60% del frame). Se registra en el manifiesto; mientras DJ Mariio
 esté aparcado, el layout sigue siendo RDJavi en los dos casos.
 
-**Subtítulos estilo RDJavi (total, 2026-11-18)**: una línea centrada
-en la parte baja del gameplay (~87–89%, borde inferior en y≈1690,
-MarginV 230, mínimo 200), letra chica 30–35 px, sans-serif fina,
-blanca con contorno/sombra negra, sin fondo de color, sin resaltado
-palabra por palabra, sin amarillo ni negrita. Solo aparecen con cada
-frase. Estilo `ref` (default); el karaoke queda como opción, no
-como default. La regla vieja de MarginV mínimo 680 queda
-reemplazada por el estilo RDJavi completo.
+**Subtítulos karaoke por defecto, al pie de la cámara (2026-11-18)**.
+Decisiones del usuario: 19:02 — los subtítulos van en la parte de
+ABAJO de la cámara del influencer, estilo TikTok, porque si van en el
+gameplay se solapan con los subtítulos del GTA 6; 19:17 — **karaoke
+por defecto**. La webcam ocupa y 0–595 y el gameplay empieza en y 749,
+así que el subtítulo cae en la banda 595–749, justo al pie de la
+cámara: `Alignment 8` (arriba-centrado), `MarginV 608`
+(`clipagent/rdjavi.py`: `SUBS_ALIGN = 8`, `SUBS_MARGIN_V = 608`).
+Verificado en el clip 3220 v2/v3: a los 18 s el subtítulo nuestro queda
+debajo de la cámara y el del juego ("Es absurdo que vaya con los
+Kingfishers…") queda abajo en el gameplay, separados; a los 34 s
+(Lucia habla en inglés, 33–36 s) no hay subtítulo nuestro encima y el
+del juego en español se ve limpio. La posición vieja (parte baja del
+gameplay, MarginV 230, borde en y≈1690) queda PROHIBIDA: ahí se
+solapa con el juego. La regla vieja de MarginV mínimo 680 también
+queda reemplazada.
+
+Estilos disponibles (`clipagent/config.py > subtitle_styles`,
+`config.yaml > subtitles.default_style`; se eligen con
+`--subtitle-style` en `subtitles.py` o en Ajustes del panel):
+
+| Estilo | Letra | Color | Negrita | Borde | Fondo | Cómo puntúa |
+|---|---|---|---|---|---|---|
+| `ref` (default hasta 2026-11-18 19:17) | 32 px fina | Blanco | No | 2 | No | Una línea, sin resaltado palabra por palabra |
+| `tiktok` | 48 px | Blanco | Sí | 3 | No | Una línea (v2 del clip 3220) |
+| `highlight` | 52 px | Amarillo `#FFFF00` | Sí | 2 | Sí (caja) | Palabras clave en amarillo con caja |
+| `karaoke` (**default desde 2026-11-18 19:17**) | 56 px | Palabra activa amarilla `#FFFF00`, resto blanco | Sí | 4 | No | Palabra por palabra: cada palabra se ilumina al decirla (`\k` por palabra, reparto proporcional por longitud; no necesita tiempos por palabra de Whisper). `max_chars: 8`, `max_duration: 1.0 s` por bloque |
+
+El default es `karaoke` en `clipagent/config.py` (`DEFAULT_CONFIG`) y
+en `config.yaml` (`subtitles.default_style: "karaoke"`); se verifica
+con `get_subtitle_style()` sin argumento. La plantilla RDJavi genera
+el ASS con `make_karaoke_ass()` (`clipagent/rdjavi.py`) y el workflow
+de GitHub Actions ya usa `subs_karaoke.ass` por defecto. Subtítulos
+SIEMPRE y COMPLETOS: de TODO lo que dice el influencer, nunca
+inventar texto; sin voz verificable el clip queda BLOQUEADO
+(`needs_human_transcription` + `publish_blocked`) hasta
+transcribirlo de oído.
 
 **Miniaturas estilo GTA 6 / Vice City**: texto de
 `THUMBNAIL_TEXTS` (`NO PUEDE SER`, `¡QUÉ LOCURA!`, `VICE CITY`,
@@ -88,8 +124,11 @@ desloguearse: el trabajo vive en GitHub Actions (Cerebro) + Worker
 cron */5 en Cloudflare. Nada depende de su sesión, su navegador
 ni su teléfono; al volver a entrar ve el estado y la Cola avanzando.
 
-### Lo que falta por construir
+### Estado actual (2026-11-18 19:27) y lo que falta
 
+- **Clip 3220 de Rubius LISTO (v3 karaoke)**: `runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4_rdjavi_subs_C_v3_karaoke.mp4` — 48,02 s, 1080×1920, 60 fps, 27 MB, moov al frente, viralidad 53,8, SEO 92/94/94/94, hype 134 msgs/10 s (ráfaga 1,31x), título `GTA 6: El chat: "Cinema"`. v1 (ref) y v2 (tiktok) intactas. **Nada publicado todavía**: la orden vigente es encolar sin publicar en público hasta que el usuario dé el visto bueno.
+- **Clip 7775 de Rubius pendiente de re-render**: pasa scores (viralidad 52,5, SEO 100/100/100/100, ráfaga 1,92x, cromos coleccionables) pero su MP4 actual tiene el layout center roto y sin subtítulos quemados. Falta re-renderizarlo con la plantilla RDJavi C + karaoke al pie de la cámara y medir ahí el tiempo real de C en solitario.
+- **Encolado al panel BLOQUEADO**: falta `PANEL_SESSION_TOKEN` (token de sesión del panel, 30 días) o `PANEL_USERNAME` + `PANEL_PASSWORD` en el entorno. El script `runs/live/rubius_2026-11-18/enqueue_clip.py` está listo y validado en seco (ver [Encolar en el panel](#encolar-en-el-panel-web)). La contraseña/token NUNCA se pide por chat: se usa un flujo seguro o una sesión ya logueada del navegador.
 - **Cortador en vivo real en construcción**: hoy no existe; el plan es Fase 0 sombra → Fase 1 semi-manual (detectar el pico en el directo y cortar mientras pasa).
 - **TikTok en público automático en curso**: por API directa solo publica en privado sin auditoría (1-4 semanas); hoy va por Zernio en draft-first. La auditoría de TikTok se prepara aparte (borrador fuera del repo).
 - **Primera publicación real desde la web**: el flujo de publicar desde el panel se prueba en seco (llega hasta la última puerta); para la primera publicación real hace falta un clip fuerte (viralidad ≥ 50, 40-60 s, subtítulos verificados) y las cuentas de YouTube y TikTok creadas y verificadas en Cuentas.
@@ -173,6 +212,66 @@ python clips_chat_v2.py chat.json --video vod.mp4 --out clips
 3. Si el título promete algo que no se ve en el clip (una jugada, un juego), no lo uses: el check anti-clickbait de `viral_package.py` lo rechaza y lo degrada a un título de reacción.
 4. Sube a mano solo lo que quedó en borrador (ver "Fan-out" más abajo): si una plataforma no tiene token, auditoría o URL pública, el paquete manual está en `drafts/<clip>_<plataforma>/`.
 
+### 4b. Verificar un render RDJavi antes de encolar (ffprobe + fotogramas)
+
+Un MP4 que sigue creciendo en disco NO es un MP4 válido: hasta que
+ffmpeg escribe el `moov` al final, `ffprobe` dice `moov atom not
+found`. No entregues, no encoles y no publiques un archivo sin
+verificarlo así:
+
+```bash
+# 1. Duración y tamaño (p3220: 48,01 s, ~27 MB, 1080x1920, 60 fps)
+ffprobe -v error -show_entries format=duration,size \
+  -show_entries stream=codec_name,width,height,r_frame_rate,codec_type \
+  -of default=noprint_wrappers=1 \
+  runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4_rdjavi_subs_C_v3_karaoke.mp4
+
+# 2. moov al frente (faststart): el orden de cajas debe ser ftyp, moov, free, mdat
+# 3. Fotogramas del punch-in (16–26 s): extrae 15,9 / 16,1 / 25,9 / 26,1 s
+#    y comprueba a ojo: 15,9 normal → 16,1 zoom → 25,9 zoom → 26,1 normal
+ffmpeg -y -v error -ss 15.9 -i <clip.mp4> -frames:v 1 frame_15_9.jpg
+ffmpeg -y -v error -ss 16.1 -i <clip.mp4> -frames:v 1 frame_16_1.jpg
+ffmpeg -y -v error -ss 25.9 -i <clip.mp4> -frames:v 1 frame_25_9.jpg
+ffmpeg -y -v error -ss 26.1 -i <clip.mp4> -frames:v 1 frame_26_1.jpg
+
+# 4. Subtítulos sin solape: un fotograma en t=18 s (subtítulo nuestro al pie
+#    de la cámara, subtítulo del juego abajo en el gameplay, separados) y
+#    otro en t=34 s (Lucia habla en inglés: sin subtítulo nuestro encima)
+```
+
+Si el render salió con duración absurda (193 s, 6189 s) es la cola
+congelada: el `color=` sin duración (ver v2.8). No lo arregles a mano
+por fuera: corrige el script (`color:d=$DUR` + `-t`) y vuelve a
+renderizar; si el contenido bueno está en los primeros 48 s, un
+recorte por copia de stream (`ffmpeg -i largo.mp4 -t 48.01 -c copy
+corto.mp4`) no re-codifica ni pierde calidad.
+
+### Encolar en el panel web
+
+`runs/live/rubius_2026-11-18/enqueue_clip.py` lee el `manifest.json`
+del run y crea el clip con `POST /api/clips` + sube el MP4 con
+`PUT /api/clips/:id/video`. **NO publica** (no llama a
+`POST /api/clips/:id/publish`). Aborta solo si faltan credenciales o
+si el clip no pasa las puertas (viralidad < 50, SEO < 90 en las 4
+plataformas). Panel: https://avc-em9.pages.dev.
+
+```bash
+PANEL_SESSION_TOKEN=... python3 runs/live/rubius_2026-11-18/enqueue_clip.py \
+  runs/2932415021-p3220 \
+  runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4_rdjavi_subs_C_v3_karaoke.mp4
+```
+
+Auth: `PANEL_SESSION_TOKEN` (token de sesión del panel, 30 días) o
+`PANEL_USERNAME` + `PANEL_PASSWORD` en el entorno. **Nunca pidas la
+contraseña ni el token por chat y nunca escribas su valor en el repo,
+en logs ni en docs**: se consigue por un flujo seguro o desde una
+sesión ya logueada del navegador. Después de encolar, verifica EN EL
+PANEL desplegado (Cola) que el clip aparece con su MP4 subido: un
+éxito del script en local no prueba nada si no se ve en la web.
+La publicación desde el panel pasa por `publishGate` (topes diarios,
+espaciamiento 2 h, subtítulos completos, permiso del streamer) y el
+fan-out a las 4 plataformas.
+
 ### Fan-out: apenas se publica en YouTube, también en las otras 3
 
 Cuando un clip se publica con éxito en YouTube Shorts, el bucle lo encola automáticamente en TikTok, Instagram Reels y Facebook Reels con el mismo clip y su paquete por plataforma (título, descripción y tags propios de cada una). Cada plataforma pasa por sus propias puertas: puntaje por plataforma (viralidad ≥ 50, SEO ≥ 90, SEO < 70 bloqueo duro), cuota y ritmo de `limits.yaml`, circuit breaker, lista blanca en el momento de publicar y pausas. Si una falla o no tiene credenciales, queda en **draft con el motivo visible** (en la cola y en el panel local) y las demás siguen; el fallo de una nunca revierte el publicado de YouTube ni de las otras. Se apaga con `fanout.enabled: false` en `config.yaml`.
@@ -201,7 +300,7 @@ python jobqueue.py approve 3      # o: python jobqueue.py reject 3
 
 ### 5. Configuración
 
-Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hashtags ES/EN, duración del corte, estilos de subtítulo (`tiktok`, `highlight`, `karaoke`) y zonas seguras del HUD. Edítalo antes de tu primera corrida y no subas tus datos personales al repo.
+Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hashtags ES/EN, duración del corte, estilos de subtítulo (`ref`, `tiktok`, `highlight`, `karaoke`; **default: `karaoke`**, al pie de la cámara) y zonas seguras del HUD. Edítalo antes de tu primera corrida y no subas tus datos personales al repo. La plantilla RDJavi vive en `clipagent/rdjavi.py` (opción C, un solo pase) y su uso está en `RDJAVI-TEMPLATE.md` — OJO: ese archivo aún describe los subtítulos simples viejos en el gameplay; lo vigente es el karaoke al pie de la cámara de este README (v2.8).
 
 ### 6. API de Gemini (opcional, solo para la visión)
 
@@ -326,6 +425,106 @@ Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65
 ```bash
 python auto_clips.py https://kick.com/coker/videos/TU_VIDEO_UUID --top-n 5 --audio-check --precise-cut
 ```
+
+## Qué cambió en la v2.8 (2026-11-18) — plantilla RDJavi C, karaoke, pre-filtro, puerta live v2
+
+Tag `v2.8` en GitHub (HEAD `124bfdc`; `v2.7-beta` era solo local). El
+tribunal de render (5 agentes + juez, 2026-11-18 16:33) falló: 1º C un
+solo pase, 2º D GitHub Actions, 3º A preset/CRF; descartados B
+(pre-render de fondo, solo 10–20%) y E (proxy 30 fps, pierde 60 fps).
+
+### Plantilla RDJavi, opción C — un solo pase (commit `d21cca5`)
+
+El render viejo hacía 3 renders por tramo (0–16 s normal, 16–26 s
+zoom, 26–48 s normal) + `concat` + un 2º encode completo para quemar
+los subtítulos: 18+ min por clip de 48 s en la VM (1,5 CPU
+compartidas), con un salto de 1 frame en los pegues y saltos de
+volumen entre partes. La opción C lo hace todo en **un solo pase de
+ffmpeg** (`clipagent/rdjavi.py`, antes `runs/.../rdjavi/render_rdjavi.sh`,
+que queda solo como backup; `runs/` está en el `.gitignore`):
+
+- **Punch-in sin concat**: doble rama de cámara + `overlay enable`
+  (`lt(t,16)+gte(t,26)` para la cámara normal, `gte(t,16)*lt(t,26)`
+  para la zoom) — corte duro exacto en 16 s y 26 s, sin pegar nada.
+  Verificado fotograma a fotograma: 15,9 s normal → 16,1 s zoom →
+  25,9 s zoom → 26,1 s normal.
+- **Fix cola congelada**: la fuente `color=c=black:s=1080x1920:r=60`
+  es INFINITA si no lleva duración: al acabar el segmento a los
+  48,01 s, los overlays repiten el último fotograma eternamente y
+  ffmpeg no cierra nunca (el render C produjo un MP4 válido de
+  193,07 s: 48 s buenos + 145 s de cola congelada, sin audio; se
+  recortó por copia de stream `-c copy` a 48,01 s sin re-codificar).
+  El script corregido lleva `color=...:d=$DUR` **y** `-t "$DUR"` de
+  salida como seguro. **Nunca** dejes un `color=` sin duración ni
+  comentarios `# ...` dentro del string de `-filter_complex` (bash no
+  los ve dentro de comillas: pasan como texto al filtro y rompen el
+  render con `Trailing garbage after a filter`; `bash -n` NO lo
+  detecta).
+- **Crops exactos (segmento 2560×1440)**: cámara normal
+  `365:365:90:0`, zoom `310:310:125:27` (medido en p3220; el zoom
+  calculado `309:309:118:28` dejaba la cara 1 px descentrada),
+  fondo `561:365:0:0`, gameplay `1440:1440:620:0`. Con el intermedio
+  h264 1080p30 las coordenadas son ×0,75 (ej: `274:274:68:0`).
+- **Fondo pre-renderizado**: una imagen fija por clip
+  (`<run>/rdjavi/bg.png`, fotograma desenfocado + gradiente Vice
+  City), cacheada y usada como entrada en loop — sin `gblur` por
+  fotograma. Audio copiado (`-c:a copy`), sin `loudnorm`.
+- **Tiempos medidos (p3220, 48,01 s, con otros ffmpeg corriendo a la
+  vez en la VM — nunca una medición en solitario)**: v3 karaoke
+  **6m49s**, v2 tiktok **8m54s**; el contenido real de C se codificó
+  en ~3,5 min extrapolados (el resto fue la cola congelada del bug).
+  La medición limpia en solitario queda para el 7775. Por web
+  (GitHub Actions, 4 vCPU, opción D): **2,5–3,5 min estimados**,
+  sin medir todavía. No paralelizar renders en la VM (riesgo
+  OOM/swap, ganancia cero) y no renderizar en Cloudflare Workers
+  (sin ffmpeg, 128 MB, límite de CPU).
+
+### Subtítulos: karaoke por defecto, al pie de la cámara
+
+Ver [Subtítulos karaoke por defecto](#formato-del-clip-referencia-rdjavi-estilo-gta-6).
+Resumen: default `karaoke` (56 px negrita, palabra activa amarilla,
+resto blanco, borde 4, palabra por palabra), posición `Alignment 8`,
+`MarginV 608`, banda 595–749 al pie de la cámara, nunca en el
+gameplay. v3 del 3220 verificada con fotogramas en t=18 s y t=34 s.
+
+### Pre-filtro Óscar Boix (commit `eda2798`)
+
+Ver [Reglas vigentes](#reglas-vigentes-2026-11-18). Resumen: conteo
+1 punto por mensaje / 2 por reacción, tramo 10 s, pico ≥ 3x la
+mediana de ±5 min, separación 90 s, puerta barata antes de
+Whisper/viralidad/SEO/render, con salvaguarda anti-cero para chats
+calientes. Tests: `test_prefilter.py` 13/13 en verde.
+
+### Puerta live hype v2, frases del streamer, gritos y repetición
+
+Ver [Reglas vigentes](#reglas-vigentes-2026-11-18). Commits:
+`de7e905` (puerta hype v2 + frases del streamer),
+`87a21c2` (gritos por decibeles + "cojones"/"olé"),
+`33ce30f` (gritos solo del streamer + rescate en revisión),
+`8337c71` (límite de retención del chat en `LiveSession`:
+ventana deslizante 900 s, cap 20.000 mensajes, cola máx. 1000).
+
+### Scores: qué es cada número (para no confundirlos)
+
+| Score | Qué mide | Dónde vive | Rango |
+|---|---|---|---|
+| `score_chat` | Solo el chat: velocidad (msgs/10 s, msgs/min), ráfaga vs baseline, risas, hype, usuarios únicos | `burst_peaks.json`, `manifest.json > clips[].score` | Ej: 3220 → 14,3; 7775 → 15,54; 7615 → 17,04 |
+| `hype_score` v2 | Hype por velocidad, 0–10 por ventana | `clipagent/ingest.py score_windows` | 3220 → 5,9/10; 7775 → 6,5/10 |
+| Viralidad | 7 componentes (ver abajo), 0–100 | `manifest.json > clips[].viral_score` | <50 descarta, 50–69 revisar, 70–84 prioritario, 85–100 urgente |
+| SEO | Por plataforma, 0–100 | `manifest.json > clips[].seo_scores` | <90 no publica (70–89 solo con override registrado, <70 bloqueo duro) |
+| Prioridad | `viralidad^0,5 × SEO^0,3 × chat_norm^0,2` (media geométrica ponderada; SEO cambia por plataforma) | `clipagent/priority.py` | Ordena la Cola; LIVE +15 solo para ordenar |
+
+**Viralidad, 7 componentes** (`clipagent/detect.py`, `WEIGHTS`):
+total = Hook×2,0 + Claridad×1,5 + Novedad×1,5 + ChatNorm×1,5 +
+Loop×1,5 + Audio×1,0 + Packaging×1,0. El chat entra una sola vez,
+normalizado (múltiplo sobre mediana, topes si risas+hype <10% o
+0 risas/hype o pocos usuarios únicos). Ejemplo real, clip 3220
+(53,8): hook 6,0 · claridad 7,0 · novedad 6,0 · loop 5,0 ·
+packaging 6,0 · chat 2,56 (base 1,09 + hype v2 +1,47; tope 4,0 por
+(risas+hype)/msgs 9%) · audio 5,0 (std 4,7 dB, 172 palabras).
+**No tocar los pesos hasta 30 clips publicados medidos a 7 días**
+(un cambio ±25% por ciclo como máximo). La fórmula de prioridad es
+INTOCABLE en pesos y umbrales.
 
 ## Señales de Uri (2026-11-17): heatmap + movimiento + voz del juego
 
