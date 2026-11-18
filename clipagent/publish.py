@@ -110,11 +110,14 @@ _DEFAULT_LIMITS = {
                        "quota_upload_cost_units": 1,
                        "quota_upload_calls_per_day": 100,
                        "quota_other_daily_units": 10000},
-    "tiktok": {"plan_per_day": 2, "max_per_day": 3},
+    "tiktok": {"plan_per_day": 2, "max_per_day": 3,
+               "zernio_per_day": 15, "zernio_pending_drafts_max": 5},
     "instagram_reels": {"plan_per_day": 2, "max_per_day": 3},
     "facebook_reels": {"plan_per_day": 2, "max_per_day": 3},
     "min_spacing_hours": 2,
     "new_account_daily": 1,
+    "established_after_days": 30,
+    "established_min_publishes": 10,
 }
 
 
@@ -130,7 +133,17 @@ def load_limits(path=None):
     limits = {k: dict(v) if isinstance(v, dict) else v
               for k, v in _DEFAULT_LIMITS.items()}
     if path is None:
-        path = os.path.join(BASE_DIR, "limits.yaml")
+        # limits.yaml vive en la RAÍZ del repo (junto a config.yaml),
+        # no en clipagent/: se busca ahí primero y luego junto a este
+        # módulo. (Bug 2026-11-18: antes solo se miraba en clipagent/,
+        # así que el archivo de la raíz nunca se leía y siempre se
+        # usaba el fallback; los valores coincidían, por eso no se
+        # notaba, pero los campos nuevos como zernio_per_day se
+        # perdían.)
+        candidates = [os.path.join(BASE_DIR, "..", "limits.yaml"),
+                      os.path.join(BASE_DIR, "limits.yaml")]
+        path = next((p for p in candidates if os.path.exists(p)),
+                    candidates[0])
     try:
         import yaml
         with open(path, encoding="utf-8") as f:
@@ -141,7 +154,8 @@ def load_limits(path=None):
         entry = data.get(platform)
         if isinstance(entry, dict):
             limits[platform].update(entry)
-    for key in ("min_spacing_hours", "new_account_daily"):
+    for key in ("min_spacing_hours", "new_account_daily",
+                "established_after_days", "established_min_publishes"):
         if key in data:
             limits[key] = data[key]
     return limits

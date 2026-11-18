@@ -69,7 +69,7 @@ def _build_prompt(title, game=None):
     title_line = f'Título del clip: "{title}"\n' if title else ""
     game_line = f"Juego: {game}\n" if game else ""
     return (
-        "Eres el editor de miniaturas de un canal de clips de directos. "
+        "Eres el editor de miniaturas de un canal de clips de GTA 6. "
         "Te paso 3 fotogramas reales del mismo clip, en orden: "
         "1 = antes del momento, 2 = el momento (payoff), 3 = después del momento.\n"
         + title_line
@@ -78,6 +78,7 @@ def _build_prompt(title, game=None):
         "1) Que se vea lo que promete el título (si el título promete una jugada, tiene que verse gameplay; si promete una reacción, tienen que verse caras riendo).\n"
         "2) Cara o emoción visible y nítida.\n"
         "3) Imagen nítida y con luz, sin pantalla negra, sin menú de pausa ni barra de carga.\n"
+        "4) Estética GTA 6 / Vice City: prefiere fotogramas con los colores neón del atardecer (rosa/violeta/naranja), palmeras o el escenario de Vice City, y el gameplay en tercera persona como protagonista; la portada tiene que funcionar con el texto de miniatura del canal en tipografía condensada neón.\n"
         "Devuelve SOLO este JSON, sin más texto:\n"
         '{"best": 2, "ranking": [2, 1, 3], "reason": "una frase corta en español"}'
     )

@@ -58,13 +58,17 @@ class TestSplitIlloJuan(unittest.TestCase):
         self.assertEqual(seg["params"]["cam_h"], 600)
 
     def test_split_filter_has_game_on_top_cam_below(self):
+        # Variante "plain" (split simple): streamer ARRIBA (600 px),
+        # gameplay ABAJO (1320 px, la mayor parte). La variante por
+        # defecto para GTA 6 es RDJavi (ver test_layout_referencia).
         params = {"box": [4.0, 26.0, 25.0, 25.5], "game_x0": 31.0,
-                  "game_h": 1320, "cam_h": 600}
+                  "game_h": 1320, "cam_h": 600, "split_variant": "plain"}
         f, = segment_filter_graph("0:v", "vout", "split", params,
                                   2560, 1440, dict(DEFAULTS)),
         self.assertIn("vstack", f)
-        self.assertIn("scale=1080:1320", f)  # juego arriba, mayor parte
-        self.assertIn("scale=1080:600", f)   # cámara abajo, más chica
+        self.assertIn("scale=1080:1320", f)  # gameplay abajo, mayor parte
+        self.assertIn("scale=1080:600", f)   # streamer arriba, más chico
+        self.assertIn("[sp_cv][sp_gv]vstack", f)  # cámara primero (arriba)
         self.assertNotIn("overlay=", f.split("vstack")[0].replace(
             "overlay=(W-w)/2:(H-h)/2", ""))  # la cámara no se superpone al juego
 
@@ -109,7 +113,7 @@ class TestFacecamBoxForzado(unittest.TestCase):
     # originales sin convertir (el grafo la reescalaba como muestra
     # 160x90: 12x fuera de sitio) y el PiP tapaba el juego. Con la
     # caja medida [42, 306, 306, 315] en 1920x1080, decide_layout
-    # debe devolver split vertical (juego 1320 arriba, cámara 600
+    # debe devolver split vertical (streamer arriba, gameplay
     # abajo), igual que un pip detectado.
     def test_facecam_box_forzado_da_split_no_pip(self):
         cfg = dict(DEFAULTS)

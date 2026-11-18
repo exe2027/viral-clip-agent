@@ -311,3 +311,39 @@ conéctalos y agrega tests.
 
 Empieza por la sección 0 (tabla HECHO / PARCIAL / PENDIENTE) y luego sigue
 desde la primera fase incompleta.
+
+## Reglas del usuario 2026-11-18 (añadido; manda sobre lo anterior si contradice)
+
+Fuente canónica: `docs/reglas-usuario.md` (tabla completa con
+archivo y test por regla). Resumen:
+
+- Clips **40–60 s** (nunca < 40 ni > 60, nunca 30 exacto, 25–35
+  prohibido). El clip p2010 (38 s, viralidad 44,5) NO tiene override.
+- **Rubius prioritario, IlloJuan PAUSADO** (no publicar, no encolar
+  clip_02). Clip p3220 (48 s, viralidad 53,8, SEO 92/94/94/94) a la
+  Cola web, sin publicar en público.
+- **Hype por ráfaga v2**: velocidad msgs/10 s y /60 s contra baseline
+  rodante (mediana 5 min); risas, emotes hype y repetición por
+  usuarios distintos dentro de la ráfaga.
+- **Categoría GTA VI obligatoria** (Helix/Kick por API oficial +
+  capítulos del VOD); el gate de publicación la exige.
+- **SIN franja horaria**: se publica a cualquier hora; los topes
+  diarios se respetan igual.
+- **Layout RDJavi personalizado GTA 6 / Vice City** (default para
+  GTA 6; DJ Mariio aparcado): streamer ARRIBA, gameplay ABAJO; fondo
+  desenfocado 0–730, webcam centrada 580×590 en (250,190), gameplay
+  730–1770, banda inferior 1770–1920 con barra atardecer
+  rosa/violeta/naranja + handle @ELCLIPDEGTA6 | GTA VI. Subtítulos
+  estilo RDJavi total (una línea, 32 px, MarginV 230, mínimo 200;
+  la regla vieja de 680 queda reemplazada). Miniaturas estilo GTA 6.
+- **Configuración desde la web**: Ajustes del panel (D1 por tenant,
+  leídos por Worker/brain); nada de editar código para cambiar
+  layout, subtítulos, duración, viralidad/SEO, topes, categoría,
+  miniatura, hype o el loop.
+- **REGLA DE ORO — automatizado 100%**: Iniciar en el panel arranca
+  el loop (Cerebro + Worker cron */5) y el usuario puede
+  desloguearse; nada depende de su sesión, navegador ni teléfono.
+- **Topes como REGLAS** (`limits.yaml`): YT plan 3/máx 5, resto plan
+  2/máx 3, nuevas 1/día, Zernio 15/día + 5 borradores, 2 h entre
+  publicaciones; escalado automático nueva → establecida (30 días
+  desde la 1ª publicación + 10 publicaciones sin sanciones).

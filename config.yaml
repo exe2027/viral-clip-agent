@@ -207,19 +207,31 @@ subtitle_policy:
 
 # Estilos de subtítulo elegibles (plantillas con
 # preview). Se eligen con --subtitle-style en subtitles.py.
-# margin_v 680 en los tres (decisión del usuario 2026-11-17):
-# con Alignment=2 el texto queda en la zona de juego (borde
-# inferior en y=1240), nunca sobre la webcam (1320-1920).
-# burn_subtitles() además lo impone como mínimo aunque un estilo
+# margin_v 230 en todos (estilo RDJavi total, 2026-11-18):
+# con Alignment=2 el texto queda en la parte baja del gameplay
+# (borde inferior en y≈1690, 87-89%), nunca sobre la cámara
+# (0-730 px) ni sobre la banda inferior (1770-1920 px).
 # viejo traiga otro valor.
 subtitle_styles:
+  ref:                    # RDJavi (default): una línea, letra chica fina,
+    # blanca con contorno negro, sin fondo ni resaltado palabra por
+    # palabra, en la parte baja del gameplay.
+    font_color: "#FFFFFF"
+    border_color: "#000000"
+    border_width: 2
+    fontsize: 32
+    bold: false
+    margin_v: 230
+    max_chars: 42
+    max_duration: 3.0
+    box: false
   tiktok:                 # clásico: blanco, negrita, borde negro, abajo
     font_color: "#FFFFFF"
     border_color: "#000000"
     border_width: 3
     fontsize: 48
     bold: true
-    margin_v: 680
+    margin_v: 230
     max_chars: 20
     max_duration: 2.0
     box: false
@@ -229,7 +241,7 @@ subtitle_styles:
     border_width: 2
     fontsize: 52
     bold: true
-    margin_v: 680
+    margin_v: 230
     max_chars: 20
     max_duration: 2.0
     box: true
@@ -243,7 +255,7 @@ subtitle_styles:
     border_width: 4
     fontsize: 64
     bold: true
-    margin_v: 680
+    margin_v: 230
     max_chars: 8
     max_duration: 1.0
     box: false
@@ -477,7 +489,7 @@ rules:
   layout_split: true
   never_cover_minimap_or_hud: true
   # Subtítulos (2026-11-17): siempre en la zona de juego, nunca
-  # sobre la cara del influencer / la webcam. MarginV mínimo 680.
+  # sobre la cara del influencer / la webcam. MarginV de referencia 230, mínimo 200.
   subtitles_never_over_webcam: true
   subtitle_zone: "gameplay"
   # Juego verificado: nunca afirmar en título/descripción un juego

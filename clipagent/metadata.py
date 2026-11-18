@@ -1292,8 +1292,30 @@ MAX_TAGS = 15
 
 # 7.5: textos de miniatura entre los que elegir (el que mejor puntúe
 # contra el título: sin palabras repetidas, <=2 en MAYÚSCULAS).
-THUMBNAIL_TEXTS = ("NO PUEDE SER", "ESPERA EL FINAL", "LA REACCIÓN",
-                   "MIRA ESTO", "QUÉ MOMENTO")
+# Estilo GTA 6 / Vice City (2026-11-18, orden del usuario): textos
+# cortos y de reacción, todos <=3 palabras; el RENDER (cuando se
+# quema sobre la portada) usa tipografía condensada, neón
+# rosa/violeta/naranja y estética Vice City (ver THUMBNAIL_STYLE
+# y thumbnails.thumbnail_with_text).
+THUMBNAIL_TEXTS = ("NO PUEDE SER", "¡QUÉ LOCURA!", "VICE CITY",
+                   "ESPERA EL FINAL", "LA REACCIÓN", "MIRA ESTO")
+
+# Estilo de miniatura GTA 6 / Vice City (2026-11-18). La miniatura
+# es el fotograma elegido por Gemini + el texto de THUMBNAIL_TEXTS
+# quemado con este estilo: condensada, neón atardecer Vice City,
+# contorno negro grueso, sin fondo de color. La tipografía
+# condensada es Barlow Condensed (la del panel); si el TTF no está
+# en disco, el render usa DejaVu Sans Bold (ver thumbnails.py).
+THUMBNAIL_STYLE = {
+    "name": "gta6",  # estilo de miniatura (Ajustes del panel)
+    "font_family": "Barlow Condensed",
+    "font_fallback": "DejaVu Sans",
+    "colors": ("#FF2E88", "#7B2FFF", "#FF9E00"),  # rosa, violeta, naranja
+    "text_color": "#FFFFFF",  # texto blanco con...
+    "accent_color": "#FF2E88",  # ...acento rosa neón (primera palabra / borde)
+    "outline_color": "#000000",
+    "elements": ("palmeras", "atardecer Vice City", "neón"),
+}
 
 
 def _prefer_ideal_length(titles):

@@ -129,19 +129,19 @@ DEFAULT_CONFIG = {
         "tiktok": {
             "font_color": "#FFFFFF", "border_color": "#000000",
             "border_width": 3, "fontsize": 48, "bold": True,
-            "margin_v": 680, "max_chars": 20, "max_duration": 2.0,
+            "margin_v": 230, "max_chars": 20, "max_duration": 2.0,
             "box": False,
         },
         "highlight": {
             "font_color": "#FFFF00", "border_color": "#000000",
             "border_width": 2, "fontsize": 52, "bold": True,
-            "margin_v": 680, "max_chars": 20, "max_duration": 2.0,
+            "margin_v": 230, "max_chars": 20, "max_duration": 2.0,
             "box": True,
         },
         "karaoke": {
             "font_color": "#FFFF00", "border_color": "#000000",
             "border_width": 3, "fontsize": 56, "bold": True,
-            "margin_v": 680, "max_chars": 8, "max_duration": 1.0,
+            "margin_v": 230, "max_chars": 8, "max_duration": 1.0,
             "box": False,
         },
     },
@@ -270,7 +270,8 @@ DEFAULT_CONFIG = {
 #   * Pre-roll: 20 s de contexto antes del pico.
 #   * Subtítulos: siempre en la zona de juego, nunca sobre la cara
 #     del influencer / la webcam (split: juego 0-1320 px, cámara
-#     1320-1920 px; MarginV mínimo 680 = 600 + 80).
+#     banda inferior 1770-1920 px; MarginV de referencia 230,
+#     mínimo 200 (geometría RDJavi, 2026-11-18).
 #   * Nunca tapar minimapa ni HUD; layout split vertical.
 #   * Nunca afirmar un juego no verificado; nunca quemar subtítulos
 #     alucinados (manda la transcripción corregida por el usuario).

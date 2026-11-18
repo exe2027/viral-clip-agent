@@ -17,13 +17,74 @@ El cerebro es este repo, pero **todo se usa y se verifica desde la web, nada loc
 
 - **Clips de 40 a 60 segundos**: nunca menos de 40, nunca más de 60, nunca 30 exacto; el rango 25-35 s está prohibido (regla de oro). Objetivo 40 s (20 s antes del pico + 20 s después). `config.yaml > clips.min_duration_s: 40, target_duration_s: 40, max_duration_s: 60`.
 - **Subtítulos SIEMPRE y COMPLETOS**, quemados, de TODO lo que dice el influencer, no solo del pico; nunca inventar texto. Sin voz verificable el clip queda BLOQUEADO (`needs_human_transcription` + `publish_blocked`) hasta transcribirlo de oído.
-- **Layout split vertical**: juego arriba, cámara abajo más chica, sin tapar minimapa ni HUD; dos webcams se apilan. Si el juego no se ve, la cámara se achica, nunca al revés.
+- **Layout split vertical RDJavi (GTA 6, 2026-11-18)**: streamer ARRIBA, gameplay ABAJO (ver [Formato del clip](#formato-del-clip-referencia-rdjavi-estilo-gta-6)). Si el juego no se ve, la cámara se achica, nunca al revés.
 - **Descargar SOLO la parte del clip**, nunca el vídeo entero; del chat, solo la ventana alrededor del pico (`--peak`, ±120 s).
 - **Hype por ráfaga rápida**: se mide la velocidad del chat (mensajes por 10 s / por minuto) y su pico contra el baseline rodante, no solo el total de comentarios. Una ráfaga repentina pesa más.
 - **Filtros duros**: viralidad ≥ 50 y SEO ≥ 90 por plataforma, si no no se publica (salvo override del usuario). Prioridad **LIVE sobre VOD** en la Cola. Fórmula intocable: `viralidad^0,5 × SEO^0,3 × chat_norm^0,2`. Clip de más de 7 días: −10 pts/día.
-- **Topes diarios por plataforma (anti-ban, `limits.yaml`)**: YouTube plan 3 / máx 5 al día; TikTok, Instagram y Facebook plan 2 / máx 3; cuentas nuevas 1/día; mínimo 2 h entre publicaciones.
+- **Topes diarios por plataforma (anti-ban, `limits.yaml`, puestos como REGLA por el agente 2026-11-18)**: YouTube plan 3 / máx 5 al día; TikTok, Instagram y Facebook plan 2 / máx 3; cuentas nuevas 1/día; TikTok vía Zernio 15/día y 5 borradores pendientes; mínimo 2 h entre publicaciones. **Escalado automático**: la cuenta pasa de nueva a establecida (topes normales) a los 30 días desde su primera publicación + 10 publicaciones sin sanciones; lo aplica solo el Worker del panel cada día (se ve en Ajustes).
 - **SIN franja horaria desde 2026-11-18** (decisión del usuario): se publica a cualquier hora; los topes diarios se respetan igual.
 - **Publicación automática con puertas**: sin aprobación humana por clip, pero solo si pasa todas las puertas (viralidad, SEO, subtítulos completos, permiso del streamer, lista blanca, topes, preview visto). Lo que no pasa queda en borrador con el motivo visible, nunca se finge una publicación.
+
+### Formato del clip (referencia RDJavi, estilo GTA 6)
+
+Referencias del usuario (2026-11-18): Instagram reel de RDJavi
+https://www.instagram.com/reel/Df4sy4bxlmr/ (formato base) y de DJ
+Mariio https://www.instagram.com/reel/Df4uyMVjDwq/ (APARCADO por
+orden del usuario 2026-11-18: no se usa como layout).
+
+**Layout RDJavi — personalizado GTA 6 / Vice City (default para
+GTA 6, el panel es solo GTA 6)**, lienzo 1080×1920, split apilado
+streamer ARRIBA / gameplay ABAJO, sin cámara en esquina sobre el
+juego. Código: `clipagent/render.py` (`split_variant: "rdjavi"`,
+`_split_rdjavi_graph`); tests: `test_layout_referencia.py`.
+
+| Zona | Geometría exacta |
+|---|---|
+| Zona superior | 0–730 px (~0–38%): fondo desenfocado a ancho completo, ampliado de la propia webcam (morado/magenta/rosa del setup) |
+| Webcam nítida | Centrada, ~580×590 px (~54% ancho, ~31% altura, casi 1:1), en (250, 190), margen superior ~10%, esquinas levemente redondeadas (r=24), plano medio cabeza y hombros; su borde inferior se superpone 25–50 px sobre el gameplay |
+| Gameplay | 730–1770 px (~39–93%, ~55–56% altura), ancho completo, recorte casi cuadrado 1:1, sin marco; gameplay en tercera persona como protagonista |
+| Franja inferior | 1770–1920 px (~93–100%): banda difuminada que sigue el color del gameplay, sin texto del juego |
+| Branding Vice City | Barra atardecer rosa `#FF2E88` → violeta `#7B2FFF` → naranja `#FF9E00` (6 px) en la costura gameplay/banda + handle `@ELCLIPDEGTA6 | GTA VI` centrado en la banda (blanco, negrita, contorno negro). Sin emojis, sin título grande, sin barra de progreso |
+| Cortes | Duros entre ángulos del juego, sin fundidos. Cámara mayormente FIJA en posición/tamaño (solo se mueve el streamer dentro del encuadre); excepción: un punch-in/zoom cerrado puntual sobre la webcam en un momento de reacción (`params["punch_in"] = {"t0","t1","zoom"}`, tiempos relativos al tramo) |
+
+**Encuadre adaptativo**: el detector (`detect_framing`) distingue
+si el streamer muestra SOLO LA CARA (plano medio, RDJavi) o su
+SETUP en plano ancho (habitación/PC/luces, aspecto ≥ 1,8 y ancho ≥
+60% del frame). Se registra en el manifiesto; mientras DJ Mariio
+esté aparcado, el layout sigue siendo RDJavi en los dos casos.
+
+**Subtítulos estilo RDJavi (total, 2026-11-18)**: una línea centrada
+en la parte baja del gameplay (~87–89%, borde inferior en y≈1690,
+MarginV 230, mínimo 200), letra chica 30–35 px, sans-serif fina,
+blanca con contorno/sombra negra, sin fondo de color, sin resaltado
+palabra por palabra, sin amarillo ni negrita. Solo aparecen con cada
+frase. Estilo `ref` (default); el karaoke queda como opción, no
+como default. La regla vieja de MarginV mínimo 680 queda
+reemplazada por el estilo RDJavi completo.
+
+**Miniaturas estilo GTA 6 / Vice City**: texto de
+`THUMBNAIL_TEXTS` (`NO PUEDE SER`, `¡QUÉ LOCURA!`, `VICE CITY`,
+`ESPERA EL FINAL`, `LA REACCIÓN`, `MIRA ESTO`) + fotograma elegido
+por Gemini con criterio Vice City (neón rosa/violeta/naranja,
+palmeras, tercera persona protagonista; ver `vision._build_prompt`).
+`thumbnails.thumbnail_with_text` quema el texto sobre la portada
+con tipografía condensada negrita y sombra rosa neón
+(`--text "VICE CITY"` en el CLI).
+
+**Configuración desde la web (sin editar código)**: la pestaña
+Ajustes del panel guarda la configuración en D1 por tenant y el
+cerebro la lee por el endpoint puente del Worker
+(`clipagent/panel_settings.py`; `PANEL_WORKER_URL` +
+`PANEL_BRIDGE_TOKEN`): layout, estilo de subtítulos, duración
+mín/máx, viralidad/SEO mínimos, topes diarios, categoría,
+estilo de miniatura, hype por ráfaga on/off y el botón
+Iniciar/Parar del loop.
+
+**Regla de oro — automatizado 100% (2026-11-18)**: si el usuario
+pulsa Iniciar en el panel, TODO se hace automático y puede hasta
+desloguearse: el trabajo vive en GitHub Actions (Cerebro) + Worker
+cron */5 en Cloudflare. Nada depende de su sesión, su navegador
+ni su teléfono; al volver a entrar ve el estado y la Cola avanzando.
 
 ### Lo que falta (2026-11-18)
 

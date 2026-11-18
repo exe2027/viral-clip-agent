@@ -111,14 +111,20 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual(r["decision"], "descartado")
         self.assertIn("GTA VI", r["reason"])
 
-    def test_sin_categoria_verificada_retiene(self):
-        # Sin categoría no se puede confirmar GTA VI: se retiene
-        # hasta verificar, no se publica a ciegas.
+    def test_sin_categoria_verificada_no_retiene_en_publicacion(self):
+        # Sin categoría NO se retiene en publicación (commit 18d3a30):
+        # el gate de categoría vive en el corte (detect_peaks descarta
+        # lo que no es GTA VI y etiqueta el resto) y en el panel
+        # (POST /api/clips exige game GTA VI + publishGate). Retener
+        # aquí bloqueaba clips heredados/en cola sin categoría en el
+        # manifiesto (p. ej. p3220, verificado GTA VI por ficha/VOD)
+        # antes de llegar a sus propias puertas. La categoría
+        # CONOCIDA que no es GTA VI sí descarta (ver test anterior).
         c = clip()
         del c["category"]
         r = policy.evaluate(c, "youtube_shorts", cfg=base_cfg())
-        self.assertEqual(r["decision"], "retenido")
-        self.assertIn("categor", r["reason"])
+        self.assertEqual(r["decision"], "publicar")
+        self.assertTrue(any("categor" in check for check in r["checks"]))
 
     def test_categoria_gta_vi_alias_valen(self):
         for cat in ("GTA VI", "GTA 6", "gta6",

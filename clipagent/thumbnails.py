@@ -14,7 +14,9 @@ clip con ffmpeg, en distintos timestamps alrededor del payoff
 Los 3 quedan guardados para elección humana en la aprobación; la
 aprobación elige uno, el código no elige por el humano. La portada
 de Instagram es una copia del fotograma del payoff
-(``cover_instagram.jpg``), 1080x1920, sin texto quemado por ahora.
+(``cover_instagram.jpg``), 1080x1920, sin texto quemado por ahora;
+con ``--text`` (o ``thumbnail_with_text``) se quema encima el texto
+de miniatura estilo GTA 6 / Vice City (condensada neón).
 
 Con ``--vision`` (ver ``vision.py``), Gemini Flash-Lite ordena los
 3 frames y propone el mejor para el título dado; la portada pasa a
@@ -176,6 +178,62 @@ def instagram_cover(frames, out_path=None, vision_choice=None, vision_result=Non
             "source_role": chosen["role"], "note": note}
 
 
+# Miniatura estilo GTA 6 / Vice City (2026-11-18, orden del usuario):
+# el texto de THUMBNAIL_TEXTS se quema sobre la portada con
+# tipografía condensada negrita, blanco con contorno negro grueso y
+# sombra rosa neón, centrado sobre el gameplay (y=780: bajo la
+# webcam RDJavi, 0-730, sin tapar la cara). La condensada es Noto
+# Sans Condensed Bold (en disco); Barlow Condensed (la del panel)
+# no está instalada en la máquina de render: si algún día lo está,
+# THUMBNAIL_TEXT_FONTFILE puede apuntar a ella.
+THUMBNAIL_TEXT_FONTFILE = ("/usr/share/fonts/truetype/noto/"
+                           "NotoSans-CondensedBold.ttf")
+THUMBNAIL_TEXT_FONTFILE_FALLBACK = ("/usr/share/fonts/truetype/dejavu/"
+                                    "DejaVuSans-Bold.ttf")
+THUMBNAIL_TEXT_FONTSIZE = 120
+THUMBNAIL_TEXT_Y = 780
+THUMBNAIL_TEXT_SHADOW_COLOR = "#FF2E88"  # rosa neón Vice City
+
+
+def _drawtext_escape(text):
+    """Escapa el texto para drawtext (\": \\ ')."""
+    return (str(text).replace("\\", "\\\\").replace(":", "\\:")
+            .replace("'", "\\'"))
+
+
+def thumbnail_with_text(frame_path, text, out_path=None, fontsize=None,
+                        y=None):
+    """Quema el texto de miniatura (estilo GTA 6) sobre un fotograma.
+
+    frame_path: portada 1080x1920 (la elegida por Gemini o el payoff).
+    text: uno de THUMBNAIL_TEXTS (<=3 palabras, en MAYÚSCULAS).
+    Devuelve {"path", "text", "fontfile"}. El texto va centrado,
+    condensado negrita, blanco con contorno negro y sombra rosa
+    neón, sobre el gameplay (no tapa la cara del streamer).
+    """
+    from .metadata import THUMBNAIL_TEXTS
+    frame_path = Path(frame_path)
+    if not text or str(text).strip() not in THUMBNAIL_TEXTS:
+        raise ValueError(f"texto de miniatura no válido: {text!r} "
+                         f"(usa uno de {THUMBNAIL_TEXTS})")
+    fontfile = (THUMBNAIL_TEXT_FONTFILE
+                if Path(THUMBNAIL_TEXT_FONTFILE).exists()
+                else THUMBNAIL_TEXT_FONTFILE_FALLBACK)
+    out_path = Path(out_path) if out_path else frame_path.with_name(
+        frame_path.stem + "_thumb.jpg")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    size = fontsize or THUMBNAIL_TEXT_FONTSIZE
+    top = THUMBNAIL_TEXT_Y if y is None else y
+    vf = (f"drawtext=fontfile={fontfile}:text='{_drawtext_escape(text)}':"
+          f"fontsize={size}:fontcolor=white:borderw=8:bordercolor=black:"
+          f"shadowcolor={THUMBNAIL_TEXT_SHADOW_COLOR}:shadowx=0:shadowy=8:"
+          f"x=(w-text_w)/2:y={top}")
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(frame_path),
+                    "-vf", vf, "-frames:v", "1", str(out_path)],
+                   check=True)
+    return {"path": str(out_path), "text": str(text), "fontfile": fontfile}
+
+
 def thumbnail_candidates_for_clip(clip_path, moment_card=None, out_dir=None):
     """Atajo: saca los frames desde la ficha del momento (payoff real)."""
     payoff = None
@@ -197,6 +255,7 @@ def main():
     p.add_argument("--game", default=None, help="Juego del clip")
     p.add_argument("--model", default=None, help="Modelo de Gemini (default: gemini-2.5-flash-lite)")
     p.add_argument("--vision-out", default=None, help="Dónde guardar el resultado de la visión (default: <out-dir>/vision.json)")
+    p.add_argument("--text", default=None, help="Texto de miniatura estilo GTA 6 (uno de THUMBNAIL_TEXTS): lo quema sobre la portada con tipografía condensada neón")
     args = p.parse_args()
 
     payoff = args.payoff
@@ -232,6 +291,9 @@ def main():
                                 vision_choice=vision_choice,
                                 vision_result=vision_result)
         print(f"  Portada IG: {cover['path']} ({cover['note']})")
+        if args.text:
+            thumb = thumbnail_with_text(cover["path"], args.text)
+            print(f"  Miniatura GTA 6: {thumb['path']} (texto: {thumb['text']})")
     return 0
 
 

@@ -734,16 +734,26 @@ def main() -> int:
         return 1
 
     # Cortes variables (config.yaml, sección clips): objetivo 40 s,
-    # mínimo 36 s, tope duro 60 s (reglas del usuario 2026-11-17: el
+    # mínimo 40 s, tope duro 60 s (reglas del usuario 2026-11-18: el
     # clip de 21 s era "muy poco"; prohibido 25-35 s, regla de oro).
     # --duration fuerza la duración; si no, manda target_duration_s.
     # El segmento descargado cubre pre-roll + max(target,
     # max_duration_s) para que el corte preciso tenga margen.
     cfg = load_config() if load_config else {}
+    # Ajustes del panel (2026-11-18): si el Worker está configurado
+    # por entorno (PANEL_WORKER_URL + PANEL_BRIDGE_TOKEN), los
+    # Ajustes de la pestaña Ajustes mandan sobre config.yaml. Sin
+    # entorno, comportamiento de siempre.
+    if os.environ.get("PANEL_WORKER_URL") and os.environ.get("PANEL_BRIDGE_TOKEN"):
+        try:
+            from clipagent.panel_settings import load_config_with_panel
+            cfg = load_config_with_panel()
+        except Exception:
+            pass
     clip_cfg = (cfg or {}).get("clips") or {}
     target_dur = args.duration or int(clip_cfg.get("target_duration_s") or 40)
     max_dur = args.duration or int(clip_cfg.get("max_duration_s") or 60)
-    min_dur = 1 if args.duration else int(clip_cfg.get("min_duration_s") or 36)
+    min_dur = 1 if args.duration else int(clip_cfg.get("min_duration_s") or 40)
     use_precise = (args.precise_cut if args.precise_cut is not None
                    else bool(clip_cfg.get("precise_cut", True)))
     seg_len = args.pre_roll + max(target_dur, max_dur)

@@ -195,9 +195,9 @@ class TestReglasSubtitulos20261117(unittest.TestCase):
         self.assertFalse(subtitles_overlap_webcam(230, fontsize=32))
         # Con 1400 el borde superior subiría a la zona de cámara.
         self.assertTrue(subtitles_overlap_webcam(1400))
-        # La posición vieja (680) sigue dentro del juego.
-        self.assertFalse(subtitles_overlap_webcam(680))
-        self.assertFalse(subtitles_overlap_webcam(680, fontsize=64))
+        # La posición de referencia (230) sigue dentro del juego.
+        self.assertFalse(subtitles_overlap_webcam(230))
+        self.assertFalse(subtitles_overlap_webcam(230, fontsize=32))
 
     def test_burn_corrige_el_margin_v_viejo_solo(self):
         self.assertEqual(effective_subtitle_margin_v(140), 200)

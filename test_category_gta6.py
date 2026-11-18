@@ -176,10 +176,13 @@ class TestPolicyCategoryGate(unittest.TestCase):
         self.assertEqual(r["decision"], "descartado")
         self.assertIn("GTA VI", r["reason"])
 
-    def test_sin_categoria_retiene(self):
+    def test_sin_categoria_no_retiene_en_publicacion(self):
+        # Sin categoría no se retiene en publicación: el gate vive
+        # en el corte + panel (ver test_policy.py). Una categoría
+        # conocida fuera de GTA VI sí descarta.
         r = evaluate(self._clip(None), "youtube_shorts")
-        self.assertEqual(r["decision"], "retenido")
-        self.assertIn("categor", r["reason"])
+        self.assertEqual(r["decision"], "publicar")
+        self.assertTrue(any("categor" in check for check in r["checks"]))
 
     def test_effective_category_orden(self):
         self.assertEqual(
