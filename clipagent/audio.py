@@ -193,6 +193,68 @@ def shout_spikes(rms_list, jump_db=SHOUT_JUMP_DB,
     return spikes
 
 
+def speech_segments(transcript):
+    """Tramos de voz del streamer [(inicio, fin)] en segundos.
+
+    De la transcripción Whisper (``segments`` con start/end; si no
+    los hay, del rango de las palabras con timestamp). Sin
+    transcripción o sin voz devuelve []. Es la única manera de
+    separar al streamer del gameplay: el audio viene mezclado en
+    una sola pista, no hay canales separados. Un segundo cuenta
+    como "del streamer" solo si Whisper dice que ahí estaba
+    hablando.
+    """
+    if not transcript:
+        return []
+    segs = []
+    for seg in transcript.get("segments") or []:
+        try:
+            start, end = float(seg["start"]), float(seg["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end > start:
+            segs.append((start, end))
+    if segs:
+        return segs
+    words = transcript_words(transcript)
+    starts = [w["start"] for w in words
+              if isinstance(w.get("start"), (int, float))]
+    ends = [w["end"] for w in words
+            if isinstance(w.get("end"), (int, float))]
+    if starts and ends:
+        return [(min(starts), max(ends))]
+    return []
+
+
+def streamer_shout_spikes(rms_list, transcript,
+                          jump_db=SHOUT_JUMP_DB,
+                          min_dbfs=SHOUT_MIN_DBFS,
+                          baseline_s=SHOUT_BASELINE_S):
+    """Gritos SOLO del streamer (2026-11-18, pedido del usuario).
+
+    Un salto de decibeles cuenta solo si cae dentro de un tramo de
+    voz de la transcripción: una explosión del juego con el streamer
+    callado NO es grito del streamer. Sin transcripción o sin voz no
+    hay gritos del streamer (0, nunca se inventa). Si el streamer
+    habla encima de una explosión, ese segundo sí cuenta: la pista
+    viene mezclada y no se puede separar más que esto.
+    """
+    spikes = shout_spikes(rms_list, jump_db=jump_db,
+                          min_dbfs=min_dbfs, baseline_s=baseline_s)
+    if not spikes:
+        return []
+    segs = speech_segments(transcript)
+    if not segs:
+        return []
+    out = []
+    for sec in spikes:
+        for start, end in segs:
+            if start - 0.5 <= sec <= end + 0.5:
+                out.append(sec)
+                break
+    return out
+
+
 def is_flat(stats):
     """True si el audio es una cama constante (música/juego sin voz)."""
     if stats["std_db"] is None:
@@ -249,6 +311,7 @@ def audio_verdict(video_path, chat_score=None, peak_rel=None,
     stats = audio_stats(rms)
     flat = is_flat(stats)
     shouts = shout_spikes(rms)
+    streamer_shouts = streamer_shout_spikes(rms, transcript)
     words = transcript_words(transcript)
     bonus, bonus_reason = transcription_bonus(transcript, peak_rel, lang)
 
@@ -275,6 +338,8 @@ def audio_verdict(video_path, chat_score=None, peak_rel=None,
         "flat": flat,
         "shout_seconds": shouts,
         "shout_count": len(shouts),
+        "streamer_shout_seconds": streamer_shouts,
+        "streamer_shout_count": len(streamer_shouts),
         "words": len(words),
         "transcription_bonus": bonus,
         "transcription_bonus_reason": bonus_reason,

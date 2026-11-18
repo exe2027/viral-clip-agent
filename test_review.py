@@ -36,6 +36,13 @@ GEMINI_BAJO = json.dumps({
     "packaging": 4.0,
     "razones": {k: "flojo" for k in
                 ("hook", "claridad", "novedad", "loop", "packaging")}})
+# 4,5 en todo: viral revisado ~46,5 (entre 45 y 50): el rango del
+# rescate por gritos del streamer.
+GEMINI_MEDIO = json.dumps({
+    "hook": 4.5, "claridad": 4.5, "novedad": 4.5, "loop": 4.5,
+    "packaging": 4.5,
+    "razones": {k: "medio" for k in
+                ("hook", "claridad", "novedad", "loop", "packaging")}})
 
 
 def p3220_detail():
@@ -114,13 +121,16 @@ class TestReviewPeak(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _patch_all(self, gemini_text, seo=None):
+    def _patch_all(self, gemini_text, seo=None, audio_extra=None):
         seo = seo if seo is not None else {
             "youtube_shorts": {"score": 92},
             "tiktok": {"score": 94},
             "instagram_reels": {"score": 94},
             "facebook_reels": {"score": 94}}
         pkg = {"best_title": 'GTA 6: El chat: "Cinema"'}
+        audio = {"stats": {"std_db": 16.0, "steady_frac": 0.2},
+                 "words": 40}
+        audio.update(audio_extra or {})
         patches = [
             mock.patch("clipagent.workers.pre_corte_package",
                        return_value=(pkg, seo)),
@@ -129,9 +139,7 @@ class TestReviewPeak(unittest.TestCase):
             mock.patch("clipagent.transcribe.transcribe_audio",
                        return_value=(self.transcript, {})),
             mock.patch("clipagent.audio.audio_verdict",
-                       return_value={"stats": {"std_db": 16.0,
-                                               "steady_frac": 0.2},
-                                     "words": 40}),
+                       return_value=audio),
             mock.patch("clipagent.vision._call_gemini",
                        return_value=gemini_text),
             mock.patch("clipagent.vision.get_api_key",
@@ -173,6 +181,52 @@ class TestReviewPeak(unittest.TestCase):
             "tiktok": {"score": 88}}), p3220_detail())
         self.assertFalse(r["pasa"], r["motivo"])
         self.assertGreaterEqual(r["viral_revisado"], 50.0)
+
+    def test_revision_rescate_por_gritos_del_streamer(self):
+        """Rescate (2026-11-18): viral revisado 45-49,9 + 2+ s de
+        grito DEL STREAMER + SEO >= 90 -> pasa como punto aparte."""
+        if not os.path.isfile(P3220_CHAT):
+            self.skipTest("sin datos reales de p3220")
+        detail = p3220_detail()
+        r = self._run(
+            self._patch_all(GEMINI_MEDIO, audio_extra={
+                "streamer_shout_count": 2,
+                "streamer_shout_seconds": [18, 19]}),
+            detail)
+        self.assertGreaterEqual(r["viral_revisado"], 45.0)
+        self.assertLess(r["viral_revisado"], 50.0)
+        self.assertTrue(r["pasa"], r["motivo"])
+        self.assertTrue(r["streamer_shout_rescue"])
+        self.assertIn("gritos", r["motivo"])
+
+    def test_revision_sin_rescate_con_un_solo_grito(self):
+        """Con 1 solo segundo de grito no hay rescate."""
+        if not os.path.isfile(P3220_CHAT):
+            self.skipTest("sin datos reales de p3220")
+        detail = p3220_detail()
+        r = self._run(
+            self._patch_all(GEMINI_MEDIO, audio_extra={
+                "streamer_shout_count": 1,
+                "streamer_shout_seconds": [18]}),
+            detail)
+        self.assertLess(r["viral_revisado"], 50.0)
+        self.assertFalse(r["pasa"], r["motivo"])
+        self.assertFalse(r["streamer_shout_rescue"])
+
+    def test_revision_sin_rescate_sin_gritos(self):
+        """Sin gritos del streamer no hay rescate aunque esté en
+        45-49,9."""
+        if not os.path.isfile(P3220_CHAT):
+            self.skipTest("sin datos reales de p3220")
+        detail = p3220_detail()
+        r = self._run(
+            self._patch_all(GEMINI_MEDIO, audio_extra={
+                "streamer_shout_count": 0,
+                "streamer_shout_seconds": []}),
+            detail)
+        self.assertLess(r["viral_revisado"], 50.0)
+        self.assertFalse(r["pasa"], r["motivo"])
+        self.assertFalse(r["streamer_shout_rescue"])
 
     def test_gemini_caido_fallback_pre_corte(self):
         """Sin juez, fallback al umbral pre-corte 45 (no se tumba

@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from clipagent.audio import shout_spikes
+from clipagent.audio import shout_spikes, streamer_shout_spikes
 from clipagent.detect import (audio_component, audio_weight_for,
                               score_clip)
 
@@ -117,6 +117,47 @@ class TestShoutSpikes(unittest.TestCase):
     def test_sin_baseline_no_puntua(self):
         levels = [-16.0, -15.0, -32.0, -32.0]
         self.assertEqual(shout_spikes(self._rms(levels)), [])
+
+
+class TestStreamerShoutSpikes(unittest.TestCase):
+    """Gritos SOLO del streamer (2026-11-18): el salto de decibeles
+    cuenta solo si Whisper dice que el streamer hablaba ahí. Una
+    explosión del juego con el streamer callado no cuenta."""
+
+    def test_solo_cuenta_si_habla(self):
+        levels = [-32.0] * 40
+        levels[20] = -16.0
+        levels[21] = -15.0
+        levels[35] = -15.0  # explosión del juego, sin voz
+        rms = [(s, float(db)) for s, db in enumerate(levels)]
+        transcript = {"segments": [{"start": 19.0, "end": 23.0,
+                                     "text": "no lo puedo creer"}]}
+        self.assertEqual(streamer_shout_spikes(rms, transcript),
+                         [20, 21])
+
+    def test_sin_transcripcion_no_hay_gritos_del_streamer(self):
+        levels = [-32.0] * 20 + [-16.0, -15.0] + [-32.0] * 18
+        rms = [(s, float(db)) for s, db in enumerate(levels)]
+        self.assertEqual(streamer_shout_spikes(rms, None), [])
+        self.assertEqual(streamer_shout_spikes(rms, {}), [])
+
+    def test_sin_voz_no_hay_gritos_del_streamer(self):
+        levels = [-32.0] * 20 + [-16.0, -15.0] + [-32.0] * 18
+        rms = [(s, float(db)) for s, db in enumerate(levels)]
+        transcript = {"segments": []}
+        self.assertEqual(streamer_shout_spikes(rms, transcript), [])
+
+    def test_solo_palabras_con_timestamp_tambien_valen(self):
+        levels = [-32.0] * 20 + [-16.0, -15.0] + [-32.0] * 18
+        rms = [(s, float(db)) for s, db in enumerate(levels)]
+        transcript = {"segments": [
+            {"text": "no creo",
+             "words": [{"word": "no", "start": 19.0, "end": 19.4},
+                       {"word": "creo", "start": 22.0,
+                        "end": 22.5}]}]}
+        # speech_segments cae a palabras: tramo 19,0-22,5.
+        self.assertEqual(streamer_shout_spikes(rms, transcript),
+                         [20, 21])
 
 
 if __name__ == "__main__":

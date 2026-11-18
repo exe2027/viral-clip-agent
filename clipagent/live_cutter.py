@@ -727,8 +727,11 @@ class LiveCutterSession(LiveSession):
                             reviewed.get("viral_revisado"),
                         "human": reviewed.get("human"),
                         "motivo": reviewed.get("motivo"),
+                        # Gritos SOLO del streamer (no del gameplay).
                         "shouts": (reviewed.get("audio") or {}).get(
-                            "shout_count", 0)}
+                            "streamer_shout_count", 0),
+                        "rescate_gritos": bool(
+                            reviewed.get("streamer_shout_rescue"))}
                        if reviewed is not None else None),
             "burst_score": detail.get("burst_score"),
             "hype_score": detail.get("hype_score"),

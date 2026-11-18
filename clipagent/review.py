@@ -51,6 +51,17 @@ REVIEW_TOP_N = 3
 REVIEW_SEO_MIN = 90
 REVIEW_PEAK_REL_S = 20.0  # el pico cae a los 20 s de la ventana 40 s
 
+# Rescate por gritos DEL STREAMER (2026-11-18, aprobado por el
+# usuario): punto aparte, no toca la puerta 50/90. Un clip
+# borderline (viralidad revisada 45-49,9) con 2+ segundos de grito
+# del streamer (decibeles medidos solo mientras habla, ver
+# audio.streamer_shout_spikes) pasa aunque no llegue a 50, si el
+# SEO también pasa (>= 90). Con 1 solo segundo de grito, o sin
+# voz, no hay rescate: un grito aislado puede ser una risa o un
+# golpe al micrófono.
+SHOUT_RESCUE_VIRAL_MIN = 45.0
+SHOUT_RESCUE_MIN = 2
+
 HUMAN_COMPONENTS = ("hook", "claridad", "novedad", "loop", "packaging")
 
 REVIEW_PROMPT = """Eres el juez de viralidad de un canal de clips de GTA 6 en español.
@@ -235,7 +246,11 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
                            "words": full.get("words"),
                            "shout_count": full.get("shout_count", 0),
                            "shout_seconds": full.get("shout_seconds",
-                                                     [])}
+                                                     []),
+                           "streamer_shout_count": full.get(
+                               "streamer_shout_count", 0),
+                           "streamer_shout_seconds": full.get(
+                               "streamer_shout_seconds", [])}
         result["transcript_words"] = int(full.get("words") or 0)
     except Exception as e:  # noqa: BLE001 - sin fotogramas ni
         # audio no hay revisión posible: fallback pre-corte.
@@ -266,6 +281,29 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
         f"; {gate['motivo']}")
     result["estados"] = gate["estados"]
     result["plataformas_publicables"] = gate["plataformas_publicables"]
+    # 5b. Rescate por gritos del streamer (punto aparte): si no
+    # llega a 50 pero sí a 45, con 2+ segundos de grito del
+    # streamer y SEO >= 90, pasa igual. Queda registrado.
+    streamer_shouts = int((result["audio"] or {}).get(
+        "streamer_shout_count") or 0)
+    result["streamer_shout_rescue"] = False
+    if (not result["pasa"]
+            and result["viral_revisado"] >= SHOUT_RESCUE_VIRAL_MIN
+            and streamer_shouts >= SHOUT_RESCUE_MIN):
+        rescue = render_gate(result["viral_revisado"], seo_for_gate,
+                             cfg=cfg,
+                             viral_min=SHOUT_RESCUE_VIRAL_MIN)
+        if rescue["pasa"]:
+            result["pasa"] = True
+            result["streamer_shout_rescue"] = True
+            result["motivo"] += (
+                f"; RESCATE por gritos del streamer "
+                f"({streamer_shouts} s, viral "
+                f"{result['viral_revisado']:.1f} >= "
+                f"{SHOUT_RESCUE_VIRAL_MIN:.0f}, SEO >= 90)")
+            result["estados"] = rescue["estados"]
+            result["plataformas_publicables"] = rescue[
+                "plataformas_publicables"]
     return result
 
 
