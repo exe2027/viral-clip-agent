@@ -27,6 +27,7 @@ import ssl
 import struct
 import tempfile
 import time
+from collections import deque
 from datetime import datetime, timezone
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -82,6 +83,18 @@ LIVE_WARMUP_S = 120
 # (sin antes, la ventana inicial de la sesión no tiene baseline y
 # parece un pico por arte de cálculo, no por el chat).
 LIVE_MIN_PEAK_TS_S = 60
+# Retención acotada del chat en vivo (auditoría security-audit
+# run-1, fingerprint live.LiveSession.unbounded-chat-accumulation,
+# LOW): el detector solo retiene la ventana deslizante de los
+# últimos 15 min y como mucho 20.000 mensajes; cada tick puntúa
+# solo esa ventana retenida, nunca todo el chat acumulado. La
+# puerta live, la viralidad, el SEO, la prioridad y los filtros
+# duros no cambian: esto solo acota memoria y trabajo por tick.
+LIVE_CHAT_WINDOW_S = 900
+LIVE_CHAT_MAX_MESSAGES = 20000
+# Cola de la bomba en LiveSession.run: acotada, con descarte del
+# mensaje más viejo si se llena (shed); la bomba nunca bloquea.
+LIVE_QUEUE_MAXSIZE = 1000
 
 
 # ---------------------------------------------------------------------------
@@ -448,14 +461,17 @@ def _chat_json_path(messages):
 class LivePeakDetector:
     """Picos en vivo con el mismo scoring que el VOD.
 
-    Cada tick re-puntúa el chat acumulado (score_windows) y emite
-    las ventanas nuevas que pasan la puerta live: múltiplo >= 3x
-    sobre la mediana (chat frío) O ráfaga de hype
-    (hype_ratio >= 1,3 + score >= 14 + hype_score >= 1,0, chat
-    caliente). El anti-spam (sin mensajes, solo emote-spam) frena
-    en ambas vías. No hay filtro top-5 en vivo: en directo no se
-    conoce el ranking final y el cooldown (1 clip / 10 min) ya
-    limita la emisión.
+    Cada tick re-puntúa solo la ventana retenida de chat
+    (últimos LIVE_CHAT_WINDOW_S segundos, como mucho
+    LIVE_CHAT_MAX_MESSAGES mensajes; score_windows sobre esa
+    ventana rebaseada a 0, con las claves devueltas a su ts
+    relativo original) y emite las ventanas nuevas que pasan la
+    puerta live: múltiplo >= 3x sobre la mediana (chat frío) O
+    ráfaga de hype (hype_ratio >= 1,3 + score >= 14 +
+    hype_score >= 1,0, chat caliente). El anti-spam (sin
+    mensajes, solo emote-spam) frena en ambas vías. No hay
+    filtro top-5 en vivo: en directo no se conoce el ranking
+    final y el cooldown (1 clip / 10 min) ya limita la emisión.
     `t0` es el inicio del directo (los ts son segundos desde t0).
     """
 
@@ -464,10 +480,16 @@ class LivePeakDetector:
                  hype_score_min=LIVE_HYPE_SCORE_MIN,
                  score_min=LIVE_SCORE_MIN,
                  fallback_hype_ratio_min=LIVE_FALLBACK_HYPE_RATIO_MIN,
-                 fallback_score_min=LIVE_FALLBACK_SCORE_MIN):
+                 fallback_score_min=LIVE_FALLBACK_SCORE_MIN,
+                 window_s=LIVE_CHAT_WINDOW_S,
+                 max_messages=LIVE_CHAT_MAX_MESSAGES):
         self.t0 = t0 or time.time()
         self.window_size = window_size
-        self.messages = []
+        # deque con maxlen: al llegar al tope se descarta el
+        # mensaje más viejo (retención acotada por cantidad).
+        self.messages = deque(maxlen=max_messages)
+        self.window_s = window_s
+        self.max_messages = max_messages
         self.emitted = set()
         self.hype_ratio_min = hype_ratio_min
         self.hype_score_min = hype_score_min
@@ -476,20 +498,34 @@ class LivePeakDetector:
         self.fallback_score_min = fallback_score_min
 
     def add_message(self, user, text, ts=None):
-        self.messages.append((user, text, (ts or time.time()) - self.t0))
+        rel = (ts or time.time()) - self.t0
+        self.messages.append((user, text, rel))
+        # Ventana deslizante por tiempo: fuera lo anterior a
+        # window_s segundos del mensaje más reciente.
+        cutoff = rel - self.window_s
+        while self.messages and self.messages[0][2] < cutoff:
+            self.messages.popleft()
 
     def _scores(self):
-        """(scores, detail, mediana) del chat acumulado, o vacíos.
+        """(scores, detail, mediana) de la ventana retenida, o vacíos.
 
         Nunca levanta: un tick sin puntuación devuelve vacío.
+        Solo se puntúa la ventana retenida (rebaseada a 0 para
+        que score_windows no recorra desde el inicio de la
+        sesión); las claves se devuelven a su ts relativo
+        original, así tick/best_fallback no cambian.
         """
         if len(self.messages) < 5:
             return {}, {}, 1.0
         from .ingest import score_windows
         import statistics
-        path = _chat_json_path(self.messages)
+        snapshot = list(self.messages)
+        base = int(min(m[2] for m in snapshot))
+        rebased = [(user, text, rel - base)
+                   for user, text, rel in snapshot]
+        path = _chat_json_path(rebased)
         try:
-            scores, detail = score_windows(path)
+            scores_rb, detail_rb = score_windows(path)
         except Exception:  # noqa: BLE001 - el tick nunca tumba la sesión
             return {}, {}, 1.0
         finally:
@@ -497,8 +533,10 @@ class LivePeakDetector:
                 os.remove(path)
             except OSError:
                 pass
-        if not scores:
+        if not scores_rb:
             return {}, {}, 1.0
+        scores = {ts + base: s for ts, s in scores_rb.items()}
+        detail = {ts + base: d for ts, d in detail_rb.items()}
         return scores, detail, max(statistics.median(scores.values()), 1.0)
 
     @staticmethod
@@ -683,9 +721,12 @@ class LiveSession:
     def run(self, source, duration_s=3600, tick_s=30):
         """Lee la fuente hasta `duration_s` y registra picos.
 
-        La fuente se bombea en un hilo a una cola: el bucle principal
-        despierta cada segundo aunque el chat esté callado, así la
-        duración se cumple siempre. Devuelve los picos de la sesión.
+        La fuente se bombea en un hilo a una cola acotada
+        (LIVE_QUEUE_MAXSIZE): si se llena, la bomba descarta el
+        mensaje más viejo y sigue (shed), nunca bloquea; el bucle
+        principal despierta cada segundo aunque el chat esté
+        callado, así la duración se cumple siempre. Devuelve los
+        picos de la sesión.
         """
         import queue
         import threading
@@ -695,19 +736,43 @@ class LiveSession:
             messages = source.iter_messages()
         else:
             messages = iter(source)
-        inbox = queue.Queue()
+        inbox = queue.Queue(maxsize=LIVE_QUEUE_MAXSIZE)
         stop = threading.Event()
+
+        def _offer(item):
+            """Encola sin bloquear jamás: si la cola está llena,
+            descarta el mensaje más viejo; si aun así no entra,
+            se descarta el propio item. El centinela None, en
+            cambio, espera acotado hasta entrar."""
+            try:
+                inbox.put_nowait(item)
+                return
+            except queue.Full:
+                pass
+            try:
+                inbox.get_nowait()  # descarta el más viejo
+            except queue.Empty:
+                pass
+            try:
+                inbox.put_nowait(item)
+            except queue.Full:
+                if item is None:
+                    try:
+                        inbox.put(item, timeout=5)
+                    except queue.Full:
+                        pass
+                # Si no es el centinela, se descarta (shed).
 
         def _pump():
             try:
                 for item in messages:
-                    inbox.put(item)
+                    _offer(item)
                     if stop.is_set():
                         break
             except Exception:  # noqa: BLE001 - la bomba nunca tumba nada
                 pass
             finally:
-                inbox.put(None)
+                _offer(None)
 
         thread = threading.Thread(target=_pump, daemon=True)
         thread.start()
