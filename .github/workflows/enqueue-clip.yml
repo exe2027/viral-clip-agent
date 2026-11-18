@@ -42,6 +42,12 @@ on:
       subtitle_style:
         description: "Estilo de subtitulo (tiktok | highlight | karaoke)"
         default: "karaoke"
+      clip_id:
+        description: "ID del clip ya encolado (solo con skip_enqueue=true)"
+        default: ""
+      skip_enqueue:
+        description: "true = no encolar, publicar el clip_id dado"
+        default: "false"
 
 jobs:
   enqueue-and-publish:
@@ -57,6 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Encolar v3 (sin publicar todavia)
+        if: ${{ inputs.skip_enqueue != 'true' }}
         run: |
           set -euo pipefail
           python3 runs/live/rubius_2026-11-18/enqueue_clip.py \
@@ -67,5 +74,9 @@ jobs:
           echo "CLIP_ID=$(cat /tmp/clip_id.txt)"
       - name: Publicar en las 4 cuentas + verificar
         run: |
+          set -euo pipefail
+          ID="${{ inputs.clip_id }}"
+          if [ -z "$ID" ]; then ID="$(cat /tmp/clip_id.txt)"; fi
+          echo "Publicando clip $ID"
           python3 runs/live/rubius_2026-11-18/publish_clip.py \
-            "$(cat /tmp/clip_id.txt)" --wait-min=14
+            "$ID" --wait-min=14

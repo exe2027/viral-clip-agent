@@ -120,7 +120,7 @@ def main():
           "| titulo =", clip.get("title"))
     up = bridge.upload_video(clip["id"], video_path)
     print("MP4 SUBIDO:", video_path, f"({size_mb:.1f} MB) ->", up)
-    bridge.tracking_step(clip["id"], "subido",
+    bridge.tracking_step(clip["id"], "paquete",
                          f"MP4 con subtitulos subido ({size_mb:.1f} MB).")
     got = bridge.list_clips()
     mine = [x for x in got if x.get("id") == clip["id"]]
