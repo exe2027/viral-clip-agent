@@ -353,3 +353,12 @@ archivo y test por regla). Resumen:
   p2010 44,5 — y SEO >= 90 en al menos una plataforma). Si no pasa,
   se descarta SIN descargar el segmento ni renderizar. El 50 REAL
   sigue vigente en la puerta de publicación.
+- Revisión automática de los mejores picos (APROBADO 2026-11-18): en el
+  loop en vivo, los top 3 picos por directo con viralidad auto 40-49,9
+  pasan por revisión automática (3 fotogramas + transcripción Whisper +
+  juez Gemini con los 5 componentes humanos) y se re-calcula su
+  viralidad; si tras la revisión pasan >= 50 y SEO >= 90, se renderizan
+  y se encolan en LIVE; si no, se descartan SIN render. >= 50 directo a
+  render; < 40 se descarta sin revisión. Si Gemini no está disponible,
+  fallback a la puerta pre-corte (>= 45), registrado como tal. La puerta
+  de publicación sigue en 50, NO se baja.

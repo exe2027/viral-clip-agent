@@ -464,6 +464,10 @@ class LiveCutterSession(LiveSession):
         self.cut_clips = []      # registros de clips cortados
         self.skipped = []        # picos descartados (con motivo)
         self._clip_n = 0
+        # Revisión automática de los mejores picos (2026-11-18):
+        # top 3 por directo con viralidad auto 40-49,9. Cada entrada
+        # es el dict que devuelve review.review_peak.
+        self._reviewed_peaks = []
 
     # -- store perezoso (StepJobs) ------------------------------------
     @property
@@ -553,7 +557,25 @@ class LiveCutterSession(LiveSession):
                  "category": category, "source": source,
                  "at": datetime.now(timezone.utc).isoformat()})
             return None
-        # 2. Ventana 40 s con pre-roll 20 s (+ latencia HLS en vivo).
+        # 2. PUERTA PRE-RENDER en vivo (2026-11-18): la viralidad
+        # AUTO (solo chat, sin human/audio) decide ANTES de gastar
+        # render. >= 50: directo. 40-49,9: revisión automática
+        # (top 3 por directo, fotogramas + transcripción + Gemini).
+        # < 40: se descarta sin revisión ni render. La puerta de
+        # publicación sigue en 50 (paso 6 la vuelve a medir).
+        from .detect import score_clip as _score_clip
+        from .review import decide_render
+        viral_auto = float((_score_clip(detail, multiple) or {}).get(
+            "total") or 0.0)
+        action, motivo_render = decide_render(
+            viral_auto, len(self._reviewed_peaks))
+        if action == "descartar":
+            self.skipped.append(
+                {"ts": peak_ts, "reason": motivo_render,
+                 "viral_auto": viral_auto,
+                 "at": datetime.now(timezone.utc).isoformat()})
+            return None
+        # 3. Ventana 40 s con pre-roll 20 s (+ latencia HLS en vivo).
         rec_start = max(0.0, peak_ts - CLIP_PRE_S + self.latency_s)
         if self.recorder is not None:
             self.recorder.wait_until(peak_ts + CLIP_PRE_S
@@ -572,21 +594,51 @@ class LiveCutterSession(LiveSession):
             video_for_cut = window_path
         else:
             raise RuntimeError("sin recorder: no hay vídeo que cortar")
-        # 3. Corte vertical split RDJavi (streamer arriba, gameplay abajo).
+        # 4. REVISIÓN automática (solo picos 40-49,9): fotogramas +
+        # transcripción + juez Gemini -> viralidad revisada. Si no
+        # pasa 50 real + SEO 90, se descarta SIN render (la ventana
+        # ya extraída es solo una copia, no un render).
+        reviewed = None
+        if action == "revision":
+            from .live import _chat_json_path
+            from .review import review_peak
+            chat_path = _chat_json_path(self.detector.messages)
+            reviewed = review_peak(
+                window_path, detail, multiple, chat_path, peak_ts,
+                score, game="GTA 6", lang="es",
+                streamer=self.streamer, cfg=self.cfg)
+            reviewed["peak_ts"] = peak_ts
+            self._reviewed_peaks.append(reviewed)
+            if not reviewed["pasa"]:
+                self.skipped.append(
+                    {"ts": peak_ts,
+                     "reason": f"revisión: {reviewed['motivo']}",
+                     "viral_auto": viral_auto,
+                     "viral_revisado": reviewed.get("viral_revisado"),
+                     "revision": reviewed.get("revision"),
+                     "at": datetime.now(timezone.utc).isoformat()})
+                return None
+        # 5. Corte vertical split RDJavi (streamer arriba, gameplay abajo).
         raw_clip = os.path.join(work_dir, f"clip_{n:02d}.mp4")
         cut = cut_clip(video_for_cut, cut_start, CLIP_DURATION_S,
                        raw_clip, layout_mode="auto", cfg=self.cfg)
         layout = cut.get("layout") or {}
-        # 4. Subtítulos quemados COMPLETOS. Sin voz verificable el
+        # 6. Subtítulos quemados COMPLETOS. Sin voz verificable el
         # clip queda BLOQUEADO (nunca se publica, nunca se inventa).
         burned = os.path.join(work_dir, f"clip_{n:02d}_subs.mp4")
         sub = subtitle_clip(raw_clip, burn=burned, cfg=self.cfg,
                             lang="es")
         final_clip = burned if os.path.isfile(burned) else raw_clip
         blocked = bool(sub.get("publish_blocked"))
-        # 5. Título validado + paquete SEO + prioridad (intocable).
-        from .detect import score_clip
-        viral = score_clip(detail, multiple)
+        # 7. Título validado + paquete SEO + prioridad (intocable).
+        # Si hubo revisión, la viralidad post-corte usa sus valores
+        # REALES (human Gemini + audio medido), no la estimación.
+        if reviewed is not None:
+            viral = _score_clip(detail, multiple,
+                                human=reviewed.get("human"),
+                                audio=reviewed.get("audio"))
+        else:
+            viral = _score_clip(detail, multiple)
         viral_total = viral.get("total")
         title = build_title(detail, layout,
                             payoff_ts_clip=CLIP_PRE_S, lang="es",
@@ -606,9 +658,18 @@ class LiveCutterSession(LiveSession):
         package["category_source"] = source
         package["origin"] = "live"
         package["peak_ts"] = peak_ts
+        package["viral_auto"] = viral_auto
+        if reviewed is not None:
+            package["review"] = {
+                "revision": reviewed.get("revision"),
+                "viral_revisado": reviewed.get("viral_revisado"),
+                "human": reviewed.get("human"),
+                "seo_pre_corte": reviewed.get("seo"),
+                "motivo": reviewed.get("motivo"),
+            }
         with open(pkg["package_path"], "w", encoding="utf-8") as f:
             json.dump(package, f, ensure_ascii=False, indent=2)
-        # 6. Puertas duras por plataforma (viralidad/SEO/duración).
+        # 8. Puertas duras por plataforma (viralidad/SEO/duración).
         from .priority import publish_status
         seo = package.get("seo") or {}
         statuses = {}
@@ -624,6 +685,13 @@ class LiveCutterSession(LiveSession):
             "game": "GTA 6", "origin": "live",
             "score": score, "multiple": multiple,
             "viral_total": viral_total,
+            "viral_auto": viral_auto,
+            "review": ({"revision": reviewed.get("revision"),
+                        "viral_revisado":
+                            reviewed.get("viral_revisado"),
+                        "human": reviewed.get("human"),
+                        "motivo": reviewed.get("motivo")}
+                       if reviewed is not None else None),
             "burst_score": detail.get("burst_score"),
             "hype_score": detail.get("hype_score"),
             "hype_ratio": detail.get("hype_ratio"),
@@ -637,7 +705,7 @@ class LiveCutterSession(LiveSession):
             "at": datetime.now(timezone.utc).isoformat(),
         }
         self._record(record)
-        # 7. Panel web (Cola LIVE) + publicación automática.
+        # 9. Panel web (Cola LIVE) + publicación automática.
         panel_clip_id = None
         if self.bridge is not None and not self.dry_run:
             panel_clip_id = self._enqueue_panel(record)
@@ -661,6 +729,15 @@ class LiveCutterSession(LiveSession):
                     "youtube_shorts", {}).get("priority")
             except (OSError, ValueError):
                 yt_priority = None
+            _reason = (f"LIVE GTA VI ({record['category']}, "
+                       f"{record['category_source']}) — hype "
+                       f"{record.get('hype_score')} — viralidad "
+                       f"{record.get('viral_total')}")
+            _review = record.get("review") or {}
+            if _review:
+                _reason += (f" — revisión {_review.get('revision')}: "
+                            f"{record.get('viral_auto')} -> "
+                            f"{_review.get('viral_revisado')}")
             payload = {
                 "title": record["title"],
                 "start_sec": record["start_sec"],
@@ -679,10 +756,7 @@ class LiveCutterSession(LiveSession):
                 else 0,
                 "origin": "live",
                 "game": "GTA VI",
-                "reason": (f"LIVE GTA VI ({record['category']}, "
-                           f"{record['category_source']}) — hype "
-                           f"{record.get('hype_score')} — viralidad "
-                           f"{record.get('viral_total')}"),
+                "reason": _reason,
             }
             clip = self.bridge.create_clip(payload)
             panel_id = clip.get("id")
