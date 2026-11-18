@@ -8,7 +8,8 @@ Cuando alguien le entrega este repo a Muse, Muse tiene que hacer **todas** las p
 2. No empieces a configurar, a cortar clips ni a publicar nada hasta tener las respuestas.
 3. Si una respuesta dice "por defecto" o "no sé", usa el valor por defecto y márcalo como pendiente de confirmar.
 4. Las claves y secretos **nunca** van en el chat, en el README ni en el repo. Van en un archivo `.env` en la raíz (ya está en el `.gitignore`) o por el flujo seguro de Muse. Nunca pidas una tarjeta de crédito: la API de Gemini gratis no la necesita (ver abajo).
-5. Al terminar, escribe los valores en su lugar (`config.yaml`, `influencers.yaml`, `accounts.yaml`, `.env`) y devuelve un resumen de qué quedó configurado y qué quedó pendiente.
+5. Al terminar, escribe los valores en su lugar (`config.yaml`, `streamers.yaml`, `.env`, y las Cuentas e Influencers del panel web) y devuelve un resumen de qué quedó configurado y qué quedó pendiente.
+6. **El panel web es la vía principal** (https://avc-em9.pages.dev, login `seba`): las cuentas de publicación y los streamers se configuran y se verifican ahí, en Cuentas e Influencers. Lo de este archivo es para que una sesión nueva sepa qué preguntar y dónde va cada respuesta; **todo cambio tiene que terminar desplegado y verificado en la web, nada local**.
 
 ## Cómo responder
 
@@ -25,6 +26,7 @@ Copia la plantilla del final, rellénala y mándala en un solo mensaje. Puedes e
 | ¿De qué juego son los clips? | Ej: GTA 6, GTA V RP, Counter-Strike 2 | GTA 6 | `config.yaml > channel.game` y `layout.game` |
 | ¿En qué idioma es el canal? | es / en / both | es | `config.yaml > channel.language` |
 | ¿Cuál es el nicho, en una frase? | Ej: clips de directos | clips de directos | `config.yaml > channel.niche` |
+| ¿Dónde está el panel web? ¿Con qué login se entra? | Ej: avc-em9.pages.dev, usuario seba | https://avc-em9.pages.dev, usuario `seba` (tenant `sebastian`) | Panel web (Cuentas, Cola, Influencers) |
 
 ## 2. Streamers con permiso (lista blanca)
 
@@ -32,34 +34,34 @@ Solo se cortan y se publican clips de streamers que están en esta lista. Estar 
 
 | Pregunta | Opciones / ejemplo | Por defecto | Dónde va |
 |---|---|---|---|
-| ¿Qué streamers puedo usar? (uno por línea) | Ej: illojuan | illojuan | `influencers.yaml` y `allowed_streamers.yaml` |
-| ¿En qué plataforma está cada uno? | twitch / kick | twitch | `influencers.yaml > plataforma` |
-| ¿Qué juego hace cada uno? | Ej: GTA 6 | GTA 6 | `influencers.yaml > juego` |
-| ¿En qué idioma habla cada uno? | es / en / otro | es | `influencers.yaml > idioma` |
-| ¿Desde cuándo tienes su permiso? | Fecha, ej: 2026-11-16 | 2026-11-16 | `influencers.yaml > fecha_permiso` |
-| ¿En qué plataformas se pueden publicar sus clips? | youtube / tiktok / instagram / facebook | las 4 | `influencers.yaml > alcance.plataformas_publicacion` |
+| ¿Qué streamers puedo usar? (uno por línea) | Ej: rubius | **rubius (prioritario)**; illojuan **PAUSADO** desde 2026-11-18 | `streamers.yaml` (lista única) y panel web > Influencers |
+| ¿En qué plataforma está cada uno? | twitch / kick | twitch | `streamers.yaml > plataforma` |
+| ¿Qué juego hace cada uno? | Ej: GTA 6 | GTA 6 | `streamers.yaml > juego` |
+| ¿En qué idioma habla cada uno? | es / en / otro | es | `streamers.yaml > idioma` |
+| ¿Desde cuándo tienes su permiso? | Fecha, ej: 2026-11-18 | rubius 2026-11-18; illojuan 2026-11-16 (pausado) | `streamers.yaml > fecha_permiso` |
+| ¿En qué plataformas se pueden publicar sus clips? | youtube / tiktok / instagram / facebook | las 4 | `streamers.yaml > publish_platforms` |
 
 ## 3. Cuentas de publicación
 
 | Pregunta | Opciones / ejemplo | Por defecto | Dónde va |
 |---|---|---|---|
-| ¿Ya tienes canal de YouTube? ¿Cuál es el @? ¿Está verificado? ¿Tiene OAuth configurado? | Ej: @elclipdegta6, creado, sin verificar, sin OAuth | YouTube ES @elclipdegta6, creado, sin verificar, sin OAuth | `clipagent setup` / `clipagent doctor` (el estado se calcula, no se escribe a mano) |
-| ¿Ya tienes cuenta de TikTok? ¿Cuál es el @? ¿La app para publicar por API está aprobada? | Ej: @elclipdegta6____bits, creada, app sin aprobar | TikTok ES @elclipdegta6____bits, creada, app sin aprobar | `clipagent setup` / `clipagent doctor` |
-| ¿Ya tienes cuenta de Instagram? ¿Es profesional? ¿Está vinculada a una Página de Facebook? | Ej: @elclipdegta6, profesional, vinculada a Elclipdegta6 | Instagram @elclipdegta6, profesional, vinculada | `clipagent setup` / `clipagent doctor` |
-| ¿Ya tienes Página de Facebook? ¿Cuál es su nombre? | Ej: Elclipdegta6, creada | Página Elclipdegta6, creada | `clipagent setup` / `clipagent doctor` |
-| ¿Cuál es el ig_user_id de Instagram (para publicar Reels por API)? | El número de la cuenta en Meta (Graph API Explorer o la configuración de la app) | Sin configurar (Instagram en draft) | `config.yaml > platform_accounts.instagram_reels.ig_user_id` o `IG_USER_ID` en `.env` |
-| ¿Cuál es el page_id de la Página de Facebook (para publicar Reels por API)? | El número de la Página en Meta | Sin configurar (Facebook en draft) | `config.yaml > platform_accounts.facebook_reels.page_id` o `FACEBOOK_PAGE_ID` en `.env` |
-| ¿Dónde están servidos los clips con HTTPS (para que Instagram los descargue)? | La base de tu hosting estático, ej: https://clips.tudominio.com/ | Sin configurar (Instagram en draft) | `config.yaml > public_url.base_url` o `CLIP_PUBLIC_BASE_URL` en `.env` |
+| ¿Ya tienes canal de YouTube? ¿Cuál es el @? ¿Está verificado? ¿Tiene OAuth configurado? | Ej: @elclipdegta6, creado, sin verificar, sin OAuth | YouTube ES @elclipdegta6, creado, OAuth hecho (token con refresh guardado 2026-11-18); **falta crear la cuenta API en el panel** | Panel web > Cuentas (verificar ahí) |
+| ¿Ya tienes cuenta de TikTok? ¿Cuál es el @? ¿La app para publicar por API está aprobada? | Ej: @elclipdegta6____bits, creada, app sin aprobar | TikTok ES @elclipdegta6____bits, creada, **conectada en Zernio** (draft-first); app sin auditar (auditoría en curso) | Panel web > Cuentas + Zernio |
+| ¿Ya tienes cuenta de Instagram? ¿Es profesional? ¿Está vinculada a una Página de Facebook? | Ej: @elclipdegta6, profesional, vinculada a Elclipdegta6 | Instagram @elclipdegta6, profesional, vinculada a Elclipdegta6, **Meta conectada en el panel** | Panel web > Cuentas (Meta, verificada) |
+| ¿Ya tienes Página de Facebook? ¿Cuál es su nombre? | Ej: Elclipdegta6, creada | Página Elclipdegta6, creada, **Meta conectada en el panel** | Panel web > Cuentas (Meta, verificada) |
+| ¿Cuál es el ig_user_id de Instagram (para publicar Reels por API)? | El número de la cuenta en Meta (Graph API Explorer o la configuración de la app) | Configurado y verificado en el panel (Meta conectada) | Panel web > Cuentas > Meta (extra) |
+| ¿Cuál es el page_id de la Página de Facebook (para publicar Reels por API)? | El número de la Página en Meta | Configurado y verificado en el panel (Meta conectada) | Panel web > Cuentas > Meta (extra) |
+| ¿Dónde están servidos los clips con HTTPS (para que Instagram los descargue)? | La base de tu hosting estático, ej: https://clips.tudominio.com/ | R2 del panel (dominio público de Cloudflare, configurado en el Worker) | `wrangler.toml > PUBLIC_BASE_URL` / Worker |
 | Al publicar en YouTube, ¿se publica también en TikTok, Instagram y Facebook automáticamente (fan-out)? | sí / no | Sí (cada plataforma con sus propias puertas; el fallo de una no bloquea a las otras) | `config.yaml > fanout.enabled` |
-| ¿Cuántos clips al día se pueden publicar por plataforma? | Números por plataforma | YouTube 3-5, TikTok 1, Instagram 1, Facebook 1 (cuentas nuevas) | Límites de publicación (ver README) |
-| ¿En qué horario se publica? | Ej: 18:00-23:59 hora de Chile | 18:00-23:59, hora de Chile | Configuración de publicación |
+| ¿Cuántos clips al día se pueden publicar por plataforma? | Números por plataforma | YouTube plan 3 / máx 5; TikTok, Instagram y Facebook plan 2 / máx 3; cuentas nuevas 1/día; mínimo 2 h entre publicaciones | `limits.yaml` |
+| ¿En qué horario se publica? | Ej: 18:00-23:59 hora de Chile | **Sin franja horaria** (decisión 2026-11-18: se publica a cualquier hora; los topes diarios se respetan igual) | Sin franja (eliminada 2026-11-18) |
 
 ## 4. Clips
 
 | Pregunta | Opciones / ejemplo | Por defecto | Dónde va |
 |---|---|---|---|
 | ¿Cuántos clips por VOD? | Número, ej: 5 | 5 | `--top-n` / `config.yaml` |
-| ¿Cuánto tiene que durar cada clip? | Objetivo y rango, ej: 30 s, entre 21 y 40 s | Objetivo 30 s, entre 21 y 40 s, tope duro 60 s | `config.yaml > clips.target_duration_s / min_duration_s / max_duration_s` |
+| ¿Cuánto tiene que durar cada clip? | Objetivo y rango, ej: 40 s, entre 40 y 60 s | **Objetivo 40 s, entre 40 y 60 s, tope duro 60 s; 25-35 s prohibido, nunca 30 s** | `config.yaml > clips.target_duration_s / min_duration_s / max_duration_s` |
 | ¿Cuántos segundos antes del pico empieza el corte? | Número, ej: 20 | 20 | `config.yaml > clips.pre_roll` |
 | ¿Ventana de chat para detectar picos? | Número en segundos, ej: 10 | 10 | `config.yaml > clips.window` |
 | ¿Separación mínima entre picos? | Número en segundos, ej: 60 | 60 | `config.yaml > clips.min_separation` |
@@ -80,26 +82,27 @@ Solo se cortan y se publican clips de streamers que están en esta lista. Estar 
 |---|---|---|---|
 | ¿Hashtags en español? | Lista, ej: #GTA6 #GTA6Clips | #GTA6, #GTA6Clips, #ElClipDeGTA6, #GTA, #RockstarGames, #gaming | `config.yaml > hashtags.es` |
 | ¿Hashtags en inglés? | Lista, ej: #GTA6 #GTA6Clips | #GTA6, #GTA6Clips, #GTA, #RockstarGames, #gaming, #clips | `config.yaml > hashtags.en` |
-| ¿Se puede publicar sin tu aprobación? | sí / no | **No, nunca**: todo clip queda en revisión hasta que lo apruebes | Cola + `jobqueue.py approve / reject` |
+| ¿Se puede publicar sin tu aprobación? | sí / no | **Sí, automática con puertas** (viralidad ≥ 50, SEO ≥ 90, subtítulos completos, lista blanca, topes diarios, preview visto); sin aprobación por clip | Panel web > Cola + puertas de publicación |
+| ¿Cómo se mide el hype? | Total de comentarios / ráfaga | **Por ráfaga rápida**: mensajes por 10 s / por minuto contra el baseline rodante; una ráfaga repentina pesa más que el total | Detección de picos (ver README) |
 
 ## 7. APIs y claves (opcional, todo funciona sin ellas salvo que se diga lo contrario)
 
 | Pregunta | Para qué es | Por defecto | Dónde va |
 |---|---|---|---|
-| ¿Tienes API key de Gemini? | Solo para la visión, con Gemini 3.5 Flash-Lite (3 fotogramas por clip): vetar títulos que prometen algo que no se ve en pantalla, y elegir el mejor frame para la miniatura (`thumbnails.py --vision`). La detección del momento es por el chat, nunca por Gemini. Sin key, la visión queda apagada y la app funciona igual. | Sin key (visión apagada) | `.env > GEMINI_API_KEY` |
+| ¿Tienes API key de Gemini? | Solo para la visión, con Gemini 3.5 Flash-Lite (3 fotogramas por clip): vetar títulos que prometen algo que no se ve en pantalla, y elegir el mejor frame para la miniatura (`thumbnails.py --vision`). La detección del momento es por el chat, nunca por Gemini. Sin key, la visión queda apagada y la app funciona igual. | Creada 2026-11-18 en AI Studio, gratis y sin tarjeta; guardada en secreto de GitHub y en `.env`; visión para miniaturas implementada, **veto de títulos todavía sin cablear en `auto_clips.py`** | `.env > GEMINI_API_KEY` |
 | ¿Quieres que Gemini elija el mejor frame? | Sí / no | Sí (con `--vision`; sin key cae al fotograma del payoff) | `thumbnails.py --vision` |
 | ¿Cómo se crea la key de Gemini, si no la tienes? | En https://aistudio.google.com, Get API key, Create API key in new project. Gratis, sin tarjeta. **No toques "Set up billing" ni "Upgrade": esa pantalla pide tarjeta y no es la de la key gratis.** Tener Gemini Pro (la app) no te da una API key sola. Cuesta ~$0,0006 por clip, capa gratuita 500 peticiones/día. | — | — |
-| ¿Tienes Twitch Client ID y Client Secret? | Solo para el monitor de influencers (`watcher.py`) por la vía oficial Helix. Sin ellos, el monitor usa la ruta pública y sirve igual para vigilar. | Sin credenciales | `.env > TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` |
-| ¿Tienes alguna otra API que quieras usar? | Ej: ElevenLabs, OpenAI, fal.ai (OpenShorts las pide, este repo no) | Ninguna | `.env` (nunca en el repo) |
+| ¿Tienes Twitch Client ID y Client Secret? | Solo para el monitor de influencers (`watcher.py`) por la vía oficial Helix. Sin ellos, el monitor usa la ruta pública y sirve igual para vigilar. | Sí, guardados 2026-11-18 en secretos de GitHub (entorno `sebastian`); verificación Helix pendiente | Secretos de GitHub (nunca en el repo) |
+| ¿Tienes alguna otra API que quieras usar? | Ej: ElevenLabs, OpenAI, fal.ai (OpenShorts las pide, este repo no) | Zernio (TikTok, draft-first) | Secretos de GitHub (nunca en el repo) |
 
 ## 8. Entorno (dónde corre)
 
 | Pregunta | Opciones / ejemplo | Por defecto | Dónde va |
 |---|---|---|---|
-| ¿Dónde va a correr? | Tu computador / un servidor / otro | Local | — |
+| ¿Dónde va a correr? | Tu computador / un servidor / otro | **Panel web en Cloudflare** (https://avc-em9.pages.dev) + cerebro en GitHub Actions; el repo local es solo para desarrollar | — |
 | ¿Qué sistema operativo? | Ej: Linux, macOS, Windows | Linux | — |
 | ¿Ya tienes Python 3.10+, FFmpeg y TwitchDownloaderCLI instalados? | sí / no | Ver tutorial del README | — |
-| ¿Quieres que revise VODs nuevos solo, en algún horario? | Ej: todos los días a las 09:00 | Revisión diaria 09:00, hora de Chile | Cron / `watcher.py --loop` |
+| ¿Quieres que revise VODs nuevos solo, en algún horario? | Ej: todos los días a las 09:00 | Worker con cron cada 5 min en el panel; cortador en vivo en construcción (Fase 0 sombra → Fase 1 semi-manual 19 nov) | Panel web > Worker |
 
 ---
 
@@ -112,8 +115,9 @@ CANAL
 - Juego:
 - Idioma (es / en / both):
 - Nicho:
+- Panel web (URL, usuario):
 
-STREAMERS CON PERMISO (uno por línea: nombre, plataforma, juego, idioma, fecha del permiso)
+STREAMERS CON PERMISO (uno por línea: nombre, plataforma, juego, idioma, fecha del permiso; indica si está pausado)
 -
 
 CUENTAS
@@ -131,6 +135,7 @@ CLIPS
 - Ventana de chat (segundos):
 - Separación mínima entre picos (segundos):
 - Recorte (auto / center / left / right):
+- Hype (total / ráfaga):
 
 SUBTÍTULOS
 - Estilo (tiktok / highlight / karaoke):
@@ -155,7 +160,7 @@ ENTORNO
 - Revisión automática de VODs nuevos (sí / no, horario):
 ```
 
-## Ejemplo rellenado (El Clip de GTA 6, 2026-11-16)
+## Ejemplo rellenado (El Clip de GTA 6, 2026-11-18)
 
 ```text
 CANAL
@@ -164,45 +169,55 @@ CANAL
 - Juego: GTA 6
 - Idioma (es / en / both): es
 - Nicho: clips de directos
+- Panel web: https://avc-em9.pages.dev, usuario seba (tenant sebastian)
 
 STREAMERS CON PERMISO
-- illojuan, twitch, GTA 6, es, 2026-11-16
+- rubius, twitch, GTA 6, es, 2026-11-18 (PRIORITARIO, activo)
+- illojuan, twitch, GTA 6, es, 2026-11-16 (PAUSADO desde 2026-11-18)
 
 CUENTAS
-- YouTube (@elclipdegta6, creado, sin verificar, sin OAuth)
-- TikTok (@elclipdegta6____bits, creada, app sin aprobar)
-- Instagram (@elclipdegta6, profesional, vinculada a la Página Elclipdegta6)
-- Facebook (El Clip de GTA 6, página pendiente)
-- Clips por día: YouTube 3-5, TikTok 1, Instagram 1, Facebook 1
-- Horario: 18:00-23:59, hora de Chile
+- YouTube (@elclipdegta6, creado, OAuth hecho con token y refresh guardado 2026-11-18; falta crear la cuenta API en el panel)
+- TikTok (@elclipdegta6____bits, creada, conectada en Zernio, draft-first; app sin auditar, auditoría en curso)
+- Instagram (@elclipdegta6, profesional, vinculada a la Página Elclipdegta6, Meta conectada en el panel)
+- Facebook (Elclipdegta6, creada, Meta conectada en el panel)
+- Clips por día: YouTube plan 3 / máx 5; TikTok, Instagram y Facebook plan 2 / máx 3; cuentas nuevas 1/día; mínimo 2 h entre publicaciones
+- Horario: sin franja horaria (se publica a cualquier hora, decisión 2026-11-18)
 
 CLIPS
 - Clips por VOD: 5
-- Duración: objetivo 30 s, entre 21 y 40 s, tope 60 s
+- Duración: objetivo 40 s, entre 40 y 60 s, tope 60 s; 25-35 s prohibido, nunca 30 s
 - Segundos antes del pico: 20
 - Ventana de chat: 10 s
 - Separación mínima: 60 s
-- Recorte: auto
+- Recorte: auto (split vertical: juego arriba, cámara abajo)
+- Hype: por ráfaga rápida (mensajes por 10 s / por minuto contra el baseline rodante)
 
 SUBTÍTULOS
 - Estilo: karaoke
 - Idioma de salida: auto
 - Traducir lo que no sea español: sí (español nunca se traduce)
 - Palabras: Lucia, Jason, Leonida, Vice City, GTA 6
+- Regla: subtítulos siempre y completos, quemados, todo lo que dice el influencer; sin voz verificable el clip queda bloqueado, nunca se inventa texto
 
 TÍTULOS Y HASHTAGS
 - Hashtags ES: #GTA6 #GTA6Clips #ElClipDeGTA6 #GTA #RockstarGames #gaming
 - Hashtags EN: #GTA6 #GTA6Clips #GTA #RockstarGames #gaming #clips
-- ¿Publicar sin mi aprobación? No, nunca
+- ¿Publicar sin mi aprobación? Sí, automática con puertas (viralidad ≥ 50, SEO ≥ 90, subtítulos completos, lista blanca, topes diarios, preview visto)
 
 APIS Y CLAVES
-- Gemini API key: creada el 2026-11-16 en AI Studio, gratis y sin tarjeta; visión todavía sin cablear, apagada por defecto
-- Twitch Client ID y Secret: no
-- Otras APIs: ninguna
+- Gemini API key: creada el 2026-11-18 en AI Studio, gratis y sin tarjeta; guardada en secreto de GitHub y en .env; visión para miniaturas implementada, veto de títulos todavía sin cablear en auto_clips.py
+- Twitch Client ID y Secret: guardados 2026-11-18 en secretos de GitHub (entorno sebastian); verificación Helix pendiente
+- Otras APIs: Zernio (TikTok, draft-first)
 
 ENTORNO
-- Dónde corre: local
+- Dónde corre: panel web en Cloudflare (avc-em9.pages.dev) + cerebro en GitHub Actions; repo local solo para desarrollar
 - Sistema operativo: Linux
 - Python, FFmpeg y TwitchDownloaderCLI: sí
-- Revisión automática: sí, todos los días a las 09:00, hora de Chile
+- Revisión automática: Worker con cron cada 5 min; cortador en vivo en construcción (Fase 0 sombra → Fase 1 semi-manual 19 nov)
+
+PENDIENTE (2026-11-18)
+- Crear las cuentas API de YouTube y TikTok en Cuentas (seba) y verificarlas
+- Clip fuerte de Rubius (viralidad ≥ 50, 40-60 s, subtítulos verificados) en la Cola de la web
+- Primera publicación real desde la web
+- Cortador en vivo y TikTok en público automático (auditoría en curso)
 ```

@@ -4,6 +4,33 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 
 **Automático:** `auto_clips.py` hace todo en un solo comando — descarga chat, detecta, corta y empaqueta cada clip para viral. Ver [Automatización](#automatización-un-solo-comando). En Twitch baja el VOD; en Kick baja solo el segmento de 60 s de cada pico, nunca el VOD entero.
 
+## Estado actual (2026-11-18) — Panel web AVC
+
+El cerebro es este repo, pero **todo se usa y se verifica desde la web, nada local**: el panel vive en Cloudflare y la publicación sale desde ahí.
+
+- **Panel:** https://avc-em9.pages.dev — login al entrar, **usuario `seba`** (tenant `sebastian`); cada persona entra con su propio login y ve solo su panel, sus cuentas, su cola y sus sesiones. 12 pestañas: Worker, Cola, Cuentas, Editor, Canales, Tracking, Analíticas, Usuarios, Influencers, Fuentes, Avisos, Ajustes. Worker en marcha (cron cada 5 min), D1 + R2 en Cloudflare.
+- **Cuentas en Cuentas (seba):** Meta **conectada** (Instagram @elclipdegta6 + Facebook Elclipdegta6, verificada en el panel); **YouTube en conexión** (OAuth hecho: proyecto "El Clip de GTA 6", token con refresh guardado; falta crear la cuenta API en el panel); **TikTok en conexión** (conectada en Zernio, @elclipdegta6____bits, vía `ZernioAdapter`, draft-first; falta crear la cuenta API en el panel).
+- **Cuentas del canal:** Twitch `elclipdegta6`, YouTube "El Clip de GTA 6" (@elclipdegta6), TikTok @elclipdegta6____bits, Instagram @elclipdegta6, Facebook Elclipdegta6. Correo del canal: Bits2025cl@gmail.com. Las claves y tokens **nunca** van en este repo: van en secretos de GitHub (entorno `sebastian`) y cifrados en el panel (D1).
+- **Streamers:** **Rubius prioritario** (permiso dado 2026-11-18, GTA 6 en vivo + VOD 2932415021, 4 plataformas ES); **IlloJuan PAUSADO** desde 2026-11-18 (su clip_02 sigue bloqueado por subtítulos sin verificar por oído). Ver `streamers.yaml` (lista única; estar en la lista = permiso ya dado).
+
+### Reglas vigentes (2026-11-18)
+
+- **Clips de 40 a 60 segundos**: nunca menos de 40, nunca más de 60, nunca 30 exacto; el rango 25-35 s está prohibido (regla de oro). Objetivo 40 s (20 s antes del pico + 20 s después). `config.yaml > clips.min_duration_s: 40, target_duration_s: 40, max_duration_s: 60`.
+- **Subtítulos SIEMPRE y COMPLETOS**, quemados, de TODO lo que dice el influencer, no solo del pico; nunca inventar texto. Sin voz verificable el clip queda BLOQUEADO (`needs_human_transcription` + `publish_blocked`) hasta transcribirlo de oído.
+- **Layout split vertical**: juego arriba, cámara abajo más chica, sin tapar minimapa ni HUD; dos webcams se apilan. Si el juego no se ve, la cámara se achica, nunca al revés.
+- **Descargar SOLO la parte del clip**, nunca el vídeo entero; del chat, solo la ventana alrededor del pico (`--peak`, ±120 s).
+- **Hype por ráfaga rápida**: se mide la velocidad del chat (mensajes por 10 s / por minuto) y su pico contra el baseline rodante, no solo el total de comentarios. Una ráfaga repentina pesa más.
+- **Filtros duros**: viralidad ≥ 50 y SEO ≥ 90 por plataforma, si no no se publica (salvo override del usuario). Prioridad **LIVE sobre VOD** en la Cola. Fórmula intocable: `viralidad^0,5 × SEO^0,3 × chat_norm^0,2`. Clip de más de 7 días: −10 pts/día.
+- **Topes diarios por plataforma (anti-ban, `limits.yaml`)**: YouTube plan 3 / máx 5 al día; TikTok, Instagram y Facebook plan 2 / máx 3; cuentas nuevas 1/día; mínimo 2 h entre publicaciones.
+- **SIN franja horaria desde 2026-11-18** (decisión del usuario): se publica a cualquier hora; los topes diarios se respetan igual.
+- **Publicación automática con puertas**: sin aprobación humana por clip, pero solo si pasa todas las puertas (viralidad, SEO, subtítulos completos, permiso del streamer, lista blanca, topes, preview visto). Lo que no pasa queda en borrador con el motivo visible, nunca se finge una publicación.
+
+### Lo que falta (2026-11-18)
+
+- **Cortador en vivo real en construcción**: hoy no existe; el plan es Fase 0 sombra → Fase 1 semi-manual el 19 nov (detectar el pico en el directo y cortar mientras pasa).
+- **TikTok en público automático en curso**: por API directa solo publica en privado sin auditoría (1-4 semanas); hoy va por Zernio en draft-first. La auditoría de TikTok está en borrador (`~/workspace/gta6-clips/independencia/tiktok-auditoria-borrador.md`).
+- **Primera publicación real desde la web pendiente**: el flujo de publicar desde el panel ya se probó en seco (llega hasta la última puerta); falta un clip fuerte de Rubius (viralidad ≥ 50, 40-60 s, subtítulos verificados) y las cuentas de YouTube y TikTok en Cuentas.
+
 ## Tutorial: cómo usarlo (paso a paso)
 
 ¿Te acaban de entregar este repo? Empieza por `CONFIGURACION.md`: ahí están todas las preguntas que Muse te tiene que hacer en un solo mensaje (canal, streamers, cuentas, clips, subtítulos, APIs) antes de configurar nada.
@@ -147,7 +174,7 @@ Listo, ahí te da la key. **No toques "Set up billing", "Configurar facturación
 GEMINI_API_KEY=tu_key_aqui
 ```
 
-**Estado actual (2026-11-16).** La key ya se creó en AI Studio, gratis y sin tarjeta ni cuenta de facturación, y quedó verificada con una llamada real a `gemini-3.5-flash-lite`. El módulo de visión para miniaturas ya está implementado (`vision.py`, `thumbnails.py --vision`): hoy la app funciona 100% sin ella, con títulos por texto + clasificador local de layout, y la visión queda apagada por defecto (`vision_skipped`). El veto de títulos con visión todavía no está cableado en `auto_clips.py`. Guarda la key en el `.env` para usar `--vision`; no hace falta para usar la app hoy.
+**Estado actual (2026-11-18).** La key ya se creó en AI Studio, gratis y sin tarjeta ni cuenta de facturación, y quedó verificada con una llamada real a `gemini-3.5-flash-lite` y guardada como secreto de GitHub (entorno `sebastian`) y en `.env`. El módulo de visión para miniaturas ya está implementado (`vision.py`, `thumbnails.py --vision`): hoy la app funciona 100% sin ella, con títulos por texto + clasificador local de layout, y la visión queda apagada por defecto (`vision_skipped`). **El veto de títulos con visión todavía no está cableado en `auto_clips.py`.** Guarda la key en el `.env` para usar `--vision`; no hace falta para usar la app hoy.
 
 ### 7. Aviso
 
@@ -808,7 +835,7 @@ python auto_clips.py 1234567890 --delete-vod
 python auto_clips.py https://kick.com/locones/videos/<uuid> --audio-fallback
 ```
 
-Lo único que queda a mano es subirlos a TikTok / Reels / Shorts: eso no se puede automatizar sin que cada plataforma te pida entrar y confirmar en tu teléfono.
+Lo que queda a mano es solo lo que una plataforma no deja hacer por API (TikTok sin auditoría: borrador por Zernio, a publicar con 1 toque). Todo lo demás se publica solo desde el panel web (ver "Estado actual" arriba) o por fan-out.
 
 ## Cola FIFO + worker + aprobación
 
@@ -830,9 +857,7 @@ python worker.py                # procesar la cola hasta vaciarla
 - **Persistente:** la cola vive en SQLite (`queue.db`, gitignored),
   nunca solo en memoria. Estados: `queued → processing →
   ready_for_review → approved/rejected → published/failed/dead`.
-- **Entrada:** solo streamers en la lista blanca de `config.yaml`
-  (`allowlist`: IlloJuan; REGLA 2026-11-16: estar en la lista que
-  sube el usuario = permiso ya dado, sin ficha), dedup por
+- **Entrada:** solo streamers en la lista blanca de `streamers.yaml` (lista única desde Fase 4.1; hoy Rubius activo, IlloJuan pausado desde 2026-11-18. REGLA 2026-11-16: estar en la lista que sube el usuario = permiso ya dado, sin ficha), dedup por
   VOD + idioma, y no se encola si quedan menos de 2 GB libres.
   `--force` en `add` salta solo la lista blanca (pruebas locales) y
   deja el job marcado.
@@ -858,7 +883,8 @@ Pruebas: `python3 test_queue.py` (32 tests, BD temporal, sin red).
 
 ## Monitor de influencers — `watcher.py` (ver `WATCHER.md`)
 
-Vigila la lista blanca de `influencers.yaml` (**hoy solo IlloJuan**,
+Vigila la lista blanca de `streamers.yaml` (**hoy Rubius activo,
+IlloJuan pausado desde 2026-11-18**,
 Twitch, español, GTA) y detecta directos en vivo y VODs nuevos, para
 no pegar la URL a mano. El encolado manual por URL queda como opción
 secundaria.
@@ -875,7 +901,7 @@ python3 watcher.py --loop --live        # bucle cada poll_minutes (config.yaml, 
   siempre con aprobación humana. El watcher detecta en vivo y
   registra; encola **solo VODs terminados**.
 - **Frenos antes de encolar:** kill-switch (`queue.kill`), lista
-  blanca (influencers en `influencers.yaml`; REGLA 2026-11-16:
+  blanca (streamers en `streamers.yaml`; REGLA 2026-11-16:
   estar en la lista que sube el usuario = permiso ya dado), solo
   GTA 6 verificado, solo VOD terminado, dedup (`seen_vods.json`,
   gitignored, + dedup de la cola por VOD + idioma), tope de 5 VODs
@@ -1046,10 +1072,10 @@ para el detalle completo.
   creada), FB 🔴 RED (Page no creada). Sin fila en verde, draft-first.
 - **Cola** (`publish_queue.json`): `queued → ready_for_review →
   approved → published / failed`, más `draft` y `quarantined`.
-  Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h, franja
-  18:00-23:59 Chile.
-- **Lista blanca** (`influencers.yaml` canónica + `allowed_streamers.yaml`,
-  IlloJuan concedido): se verifica
+  Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h.
+  SIN franja horaria desde el 2026-11-18 (decisión del usuario).
+- **Lista blanca** (`streamers.yaml` canónica, Rubius concedido
+  2026-11-18, IlloJuan pausado): se verifica
   EN EL MOMENTO de publicar, no solo al detectar. Si el streamer
   ya no está en la lista, no se publica.
 - **Rechazos:** formato → 1 reintento; copyright/contenido →
@@ -1085,8 +1111,8 @@ para el detalle completo.
 - **La cola consulta la puerta** antes de publicar:
   `counter.py gate --platform youtube --clip c1` (exit 0 =
   permitido) o `gate_publish()` desde Python. La lista blanca
-  canónica es `influencers.yaml` + `allowed_streamers.yaml`
-  (IlloJuan): si la lista está vacía, la fase 4 queda bloqueada.
+  canónica es `streamers.yaml` (Rubius concedido 2026-11-18,
+  IlloJuan pausado): si la lista está vacía, la fase 4 queda bloqueada.
 - **Simulación**: `python3 counter.py simulate` (10 aprobados sin
   editar → 1 rechazo → contador a cero, más demostración del breaker
   con 2 fallos seguidos; usa estado temporal, no toca el real).
