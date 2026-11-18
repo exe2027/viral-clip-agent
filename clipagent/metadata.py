@@ -1381,11 +1381,87 @@ def validate_metadata_lengths(pkg):
     return issues
 
 
+# Exclamaciones genéricas prohibidas en la miniatura (2026-11-18,
+# regla endurecida). Si el trabajo paralelo de miniaturas ya definió
+# _GENERIC_THUMBNAIL_NORM, manda esa lista; si no, esta copia local
+# (mismos textos, ya normalizados: sin tildes ni puntuación).
+_GEMINI_GENERIC_THUMBNAIL_NORM = frozenset({
+    "NO PUEDE SER", "QUE LOCURA", "VICE CITY", "ESPERA EL FINAL",
+    "LA REACCION", "MIRA ESTO", "INCREIBLE", "NO LO CREO",
+    "NO WAY", "WAIT FOR IT", "CHAT REACTION", "UNREAL", "INSANE", "WOW",
+})
+
+
+def _gemini_first_package(check_card, visible, lang, llm_client=None):
+    """Primer paquete SEO con Gemini (título, descripción, hashtags,
+    miniatura) desde la ficha. Devuelve el dict validado o None.
+
+    Validación (lo que ya existe): ``validate_title_final``
+    (check_title + lint + reglas de lo visible); el título nombra
+    el juego real cuando se ve gameplay (sin juego en el título el
+    SEO pierde la keyword); descripción con el juego; hashtags con
+    #; miniatura de 1-4 palabras sin repetir el título. El SEO por
+    plataforma se mide DESPUÉS, sobre el paquete armado
+    (``gemini_seo``): si no llega a 90, el reintento existente lo
+    mejora o el clip queda retenido como hoy — aquí no es motivo
+    de fallback. Sin LLM, o si algo falla, None: reglas.
+    Nunca levanta: cualquier excepción es fallback a reglas.
+    """
+    try:
+        from .llm import get_llm_client, make_seo_package
+    except Exception:
+        return None
+    try:
+        client = llm_client if llm_client is not None else get_llm_client()
+        if client is None or not client.available():
+            return None
+        raw = make_seo_package(client, lang=lang)(check_card,
+                                                  visible=visible)
+        if not isinstance(raw, dict):
+            return None
+        title = (raw.get("title") or "").strip()
+        desc = (raw.get("description") or "").strip()
+        hashtags = raw.get("hashtags") or []
+        thumb = (raw.get("thumbnail_text") or "").strip()
+        if not title or not desc or not hashtags or not thumb:
+            return None
+        validation = validate_title_final(title, check_card,
+                                          visible=visible, lang=lang)
+        if not validation["ok"]:
+            return None
+        game = (check_card or {}).get("game")
+        if game and visible != VISIBLE_CAMS_ONLY:
+            if _norm_title(game) not in _norm_title(title):
+                return None
+            if _norm_title(game) not in _norm_title(desc):
+                return None
+        tags = [t for t in hashtags
+                if isinstance(t, str) and t.startswith("#")]
+        if not tags:
+            return None
+        if not 1 <= len(thumb.split()) <= 4:
+            return None
+        if _norm_title(thumb) and _norm_title(thumb) in _norm_title(title):
+            return None
+        # Sin exclamaciones genéricas (2026-11-18, regla endurecida):
+        # el texto de miniatura nombra el momento concreto. Manda la
+        # lista del trabajo paralelo de miniaturas si está definida;
+        # si no, la copia local de arriba.
+        _generic = (globals().get("_GENERIC_THUMBNAIL_NORM")
+                    or _GEMINI_GENERIC_THUMBNAIL_NORM)
+        if _norm_title(thumb).upper() in _generic:
+            return None
+        return {"title": title, "description": desc,
+                "hashtags": tags[:8], "thumbnail_text": thumb}
+    except Exception:
+        return None
+
+
 def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  lang="both", examples=None, moment_card=None, game=None,
                  streamer=None, seen_path=None, vod_id=None, date=None,
                  register=False, visible=None, layout=None,
-                 reel_patterns=None, credit_streamer=True):
+                 reel_patterns=None, credit_streamer=True, llm_client=None):
     """Devuelve el paquete viral completo de un clip.
 
     Con ``moment_card`` (recomendado, Bloque 2): los 10 títulos, el
@@ -1408,6 +1484,14 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     Con ``reel_patterns`` (reel_study.py): el paquete añade la clave
     ``reel_study`` con plantillas y títulos sugeridos desde reels
     virales, todos validados por el check; ``best_title`` NO cambia.
+    Gemini primero (2026-11-18): el primer paquete SEO (título,
+    descripción, hashtags, miniatura) lo escribe Gemini desde la
+    ficha (``_gemini_first_package``); si no está disponible o lo
+    que devuelve no pasa check_title + lint + juego, las reglas de
+    siempre. ``llm_client`` es inyección para tests; sin él se
+    resuelve solo (gemini si hay key, si no reglas). El paquete
+    expone ``pkg_source`` ("gemini" o "rules") y, con Gemini,
+    ``gemini_package`` + ``gemini_seo`` (SEO medido del paquete).
     """
     examples = examples or []
     multiple = viral_multiple(score, all_scores, median_score=median_score)
@@ -1459,13 +1543,38 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     visible_reason = (visible_info or {}).get("reason") or (
         f"visible pasado por el llamador: {visible}" if visible else
         "sin dato de lo visible")
+    # Gemini primero (2026-11-18): el primer paquete SEO lo escribe
+    # la IA desde la ficha; si no está disponible o lo que devuelve
+    # no valida, las reglas de siempre (sin romper nada).
+    # ``llm_client`` es inyección para tests; sin él se resuelve
+    # solo (gemini si hay key, si no NullLLMClient -> reglas).
+    gemini_pkg = None
+    try:
+        gemini_pkg = _gemini_first_package(
+            check_card, visible, lang, llm_client=llm_client)
+    except Exception:
+        gemini_pkg = None
+    if gemini_pkg:
+        # Los hashtags de Gemini reemplazan los del juego; los tags
+        # de búsqueda siguen siendo los de las reglas.
+        hashtags = gemini_pkg["hashtags"]
     titles = generate_titles(check_card, lang=lang, n=10,
                              seen_path=seen_path, vod_id=vod_id, date=date,
                              visible=visible)
     # 7.5: entre los títulos que pasaron el check, se prefiere uno
     # de largo ideal (40-55 car.): da el máximo en el componente
     # título del SEO. Sin títulos, best queda None como antes.
-    best = _prefer_ideal_length(titles)
+    # Con Gemini, manda su título (ya validado): se antepone a la
+    # lista de candidatos para que quede trazado.
+    if gemini_pkg:
+        titles = [{"title": gemini_pkg["title"],
+                   "issues": _check_title_lint(gemini_pkg["title"]),
+                   "warnings": [],
+                   "check_ok": True,
+                   "check_reason": "Gemini: pasa check_title + lint"}] + titles
+        best = gemini_pkg["title"]
+    else:
+        best = _prefer_ideal_length(titles)
     # Arreglo 3, red de seguridad: el mejor título pasa la validación
     # final contra lo visible. No debería fallar (generate_titles ya
     # filtró), pero si un candidato se colara, se degrada a reacción
@@ -1524,6 +1633,13 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                     "Clip completo en vertical, sin contexto necesario.")
         queries = [f"{game_label.lower()} mejores momentos", f"{game_label.lower()} clips graciosos"] if game else ["clips graciosos stream", "reacción del chat clips"]
 
+    # Gemini primero: su descripción y su texto de miniatura
+    # reemplazan los de las reglas (el hook/onscreen/loop y los
+    # sufijos de abajo — contexto, crédito, CTA — se mantienen).
+    if gemini_pkg:
+        desc = gemini_pkg["description"]
+        thumb = gemini_pkg["thumbnail_text"]
+
     # Arreglo 4: en un clip solo cams con contexto, la descripción lo
     # dice (el contexto va quemado en pantalla; la descripción no lo
     # promete como si fuera gameplay, solo lo anota).
@@ -1552,12 +1668,14 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     if len(desc) > MAX_DESC_LEN:
         desc = desc[:MAX_DESC_LEN - 1] + "…"
 
-    # La miniatura no repite el título: si el thumb coincide, se cambia.
-    if best and _norm_title(thumb) in _norm_title(best):
-        thumb = "MIRA ESTO"
-    # 7.5: entre los textos de miniatura, el que mejor puntúe contra
-    # el título (sin palabras repetidas, <=2 en MAYÚSCULAS).
-    thumb = _best_thumbnail_text(thumb, best)
+    # La miniatura no repite el título: _moment_thumbnail_text ya
+    # quita las palabras del título, y el paquete Gemini se valida
+    # en _gemini_first_package. Nada se reemplaza por una
+    # exclamación genérica (regla 2026-11-18): el texto que nombra
+    # el momento comparte palabras con el título por naturaleza y
+    # la puntuación SEO lo refleja, sin inventar otro texto.
+    if not gemini_pkg:
+        thumb = _best_thumbnail_text(thumb, best)
 
     # Estudio de reels (reel_study.py): solo AÑADE sugerencias
     # validadas al paquete, nunca cambia best_title ni la descripción.
@@ -1570,6 +1688,12 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "formula_desc": HOOK_FORMULAS[formula],
         "titles": titles,  # 10 títulos reales, cada uno con su check
         "best_title": best,
+        "title": best,  # alias del título elegido (= best_title)
+        "description": desc,  # alias de description_first_2_lines
+        "hashtags": hashtags,  # hashtags usados (Gemini o reglas)
+        # Gemini primero (2026-11-18): "gemini" si el paquete lo
+        # escribió la IA, "rules" si salió por reglas (fallback).
+        "pkg_source": "gemini" if gemini_pkg else "rules",
         "title_issues": _check_title_lint(best) if best else ["sin título que pase el check promesa-payoff"],
         "needs_human_review": best is None,
         # Arreglo 3: lo visible y la validación final del título.
@@ -1613,6 +1737,17 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                                  "sample_n": 0}
     # 7.5: longitudes validadas (la descripción se recorta si pasa).
     pkg["length_issues"] = validate_metadata_lengths(pkg)
+    if gemini_pkg:
+        # Paquete Gemini: se guarda tal cual vino y su SEO medido
+        # (transparencia). El gate 50/90 y retry_best deciden como
+        # siempre: si no llega a 90, el reintento lo mejora o el clip
+        # queda retenido.
+        pkg["gemini_package"] = gemini_pkg
+        try:
+            pkg["gemini_seo"] = score_package_seo(
+                pkg, lang=lang if lang in ("es", "en") else "es")
+        except Exception:
+            pkg["gemini_seo"] = {}
     return pkg
 
 
