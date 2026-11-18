@@ -48,6 +48,9 @@ on:
       skip_enqueue:
         description: "true = no encolar, publicar el clip_id dado"
         default: "false"
+      check_only:
+        description: "true = solo leer el estado de los jobs, sin publicar nada"
+        default: "false"
 
 jobs:
   enqueue-and-publish:
@@ -62,8 +65,13 @@ jobs:
       SUBTITLE_STYLE: ${{ inputs.subtitle_style }}
     steps:
       - uses: actions/checkout@v4
+      - name: Solo verificar jobs (lectura, sin publicar)
+        if: ${{ inputs.check_only == 'true' }}
+        run: |
+          set -euo pipefail
+          python3 runs/live/rubius_2026-11-18/check_jobs.py "${{ inputs.clip_id }}"
       - name: Encolar v3 (sin publicar todavia)
-        if: ${{ inputs.skip_enqueue != 'true' }}
+        if: ${{ inputs.skip_enqueue != 'true' && inputs.check_only != 'true' }}
         run: |
           set -euo pipefail
           python3 runs/live/rubius_2026-11-18/enqueue_clip.py \
@@ -73,6 +81,7 @@ jobs:
             > /tmp/clip_id.txt
           echo "CLIP_ID=$(cat /tmp/clip_id.txt)"
       - name: Publicar en las 4 cuentas + verificar
+        if: ${{ inputs.check_only != 'true' }}
         run: |
           set -euo pipefail
           ID="${{ inputs.clip_id }}"
