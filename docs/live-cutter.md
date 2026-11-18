@@ -71,6 +71,30 @@ duración 40-60 s, rango 25-35 prohibido, subtítulos completos
 (sin voz verificable = BLOQUEADO), streamer con permiso, topes
 diarios y cooldown.
 
+## Regla de oro: 100% automático DESDE LA WEB (2026-11-18 15:05)
+
+Si el usuario pulsa **Iniciar** en el panel, todo se hace
+automático y puede hasta desloguearse: el sistema sigue trabajando
+solo. Nada depende de su sesión, su navegador ni su teléfono.
+El trabajo vive en **GitHub Actions (Cerebro) + Worker cron */5**
+en Cloudflare. El cutter cumple esto: el workflow
+`cerebro-live.yml` corre por horario (cada 30 min) sin sesión del
+usuario, y la conexión con el panel usa las credenciales de
+servicio `PANEL_USERNAME`/`PANEL_PASSWORD` (secretos de GitHub),
+nunca la sesión del usuario.
+
+## Layout y subtítulos: los del pipeline compartido
+
+El cutter no tiene layout propio: llama a `cut_clip` con
+`layout_mode="auto"`, así que hereda el layout por defecto del
+momento. Desde 2026-11-18 14:54 el por defecto es el **RDJavi
+personalizado GTA 6 / Vice City** (webcam centrada arriba, fondo
+desenfocado morado/magenta, gameplay abajo, neón rosa-violeta-
+naranja, palmeras). Los subtítulos también salen del pipeline
+compartido (`subtitle_clip`): estilo RDJavi simple, una línea
+blanca con contorno negro, sin karaoke, sin fondo. Si el layout
+por defecto cambia, el cutter cambia con él sin tocar código.
+
 ## Uso
 
 ```bash
