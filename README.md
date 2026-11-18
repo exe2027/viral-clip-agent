@@ -4,14 +4,14 @@ Herramienta en Python para detectar automáticamente los mejores momentos de un 
 
 **Automático:** `auto_clips.py` hace todo en un solo comando — descarga chat, detecta, corta y empaqueta cada clip para viral. Ver [Automatización](#automatización-un-solo-comando). En Twitch baja el VOD; en Kick baja solo el segmento de 60 s de cada pico, nunca el VOD entero.
 
-## Estado actual (2026-11-18) — Panel web AVC
+## Cómo se usa — Panel web (plantilla para un usuario nuevo)
 
 El cerebro es este repo, pero **todo se usa y se verifica desde la web, nada local**: el panel vive en Cloudflare y la publicación sale desde ahí.
 
-- **Panel:** https://avc-em9.pages.dev — login al entrar, **usuario `seba`** (tenant `sebastian`); cada persona entra con su propio login y ve solo su panel, sus cuentas, su cola y sus sesiones. 12 pestañas: Worker, Cola, Cuentas, Editor, Canales, Tracking, Analíticas, Usuarios, Influencers, Fuentes, Avisos, Ajustes. Worker en marcha (cron cada 5 min), D1 + R2 en Cloudflare.
-- **Cuentas en Cuentas (seba):** Meta **conectada** (Instagram @elclipdegta6 + Facebook Elclipdegta6, verificada en el panel); **YouTube en conexión** (OAuth hecho: proyecto "El Clip de GTA 6", token con refresh guardado; falta crear la cuenta API en el panel); **TikTok en conexión** (conectada en Zernio, @elclipdegta6____bits, vía `ZernioAdapter`, draft-first; falta crear la cuenta API en el panel).
-- **Cuentas del canal:** Twitch `elclipdegta6`, YouTube "El Clip de GTA 6" (@elclipdegta6), TikTok @elclipdegta6____bits, Instagram @elclipdegta6, Facebook Elclipdegta6. Correo del canal: Bits2025cl@gmail.com. Las claves y tokens **nunca** van en este repo: van en secretos de GitHub (entorno `sebastian`) y cifrados en el panel (D1).
-- **Streamers:** **Rubius prioritario** (permiso dado 2026-11-18, GTA 6 en vivo + VOD 2932415021, 4 plataformas ES); **IlloJuan PAUSADO** desde 2026-11-18 (su clip_02 sigue bloqueado por subtítulos sin verificar por oído). Ver `streamers.yaml` (lista única; estar en la lista = permiso ya dado).
+- **Panel:** https://TU_PANEL.pages.dev — login al entrar, **usuario `tu-usuario`** (tenant `tu-usuario`); cada persona entra con su propio login y ve solo su panel, sus cuentas, su cola y sus sesiones. 12 pestañas: Worker, Cola, Cuentas, Editor, Canales, Tracking, Analíticas, Usuarios, Influencers, Fuentes, Avisos, Ajustes. Worker en marcha (cron cada 5 min), D1 + R2 en Cloudflare.
+- **Cuentas en Cuentas:** conecta y verifica ahí tus cuentas de publicación (Meta para Instagram + Facebook, YouTube por OAuth, TikTok por Zernio). Cada cuenta muestra su estado real (conectada solo si está verificada de verdad).
+- **Cuentas del canal:** Twitch `tu-cuenta`, YouTube "Tu canal de clips" (@tu-cuenta), TikTok @tu-cuenta, Instagram @tu-cuenta, Facebook TuCanal. Correo del canal: TU_EMAIL. Las claves y tokens **nunca** van en este repo: van en secretos de GitHub (entorno `tu-entorno`) y cifrados en el panel (D1).
+- **Streamers:** los configuras tú en `streamers.yaml` (lista única; estar en la lista = permiso ya dado) y en Influencers del panel. Ejemplo: `tu-streamer, twitch, GTA 6, es, TU_FECHA_PERMISO (activo)`.
 
 ### Reglas vigentes (2026-11-18)
 
@@ -44,7 +44,7 @@ juego. Código: `clipagent/render.py` (`split_variant: "rdjavi"`,
 | Webcam nítida | Centrada, ~580×590 px (~54% ancho, ~31% altura, casi 1:1), en (250, 190), margen superior ~10%, esquinas levemente redondeadas (r=24), plano medio cabeza y hombros; su borde inferior se superpone 25–50 px sobre el gameplay |
 | Gameplay | 730–1770 px (~39–93%, ~55–56% altura), ancho completo, recorte casi cuadrado 1:1, sin marco; gameplay en tercera persona como protagonista |
 | Franja inferior | 1770–1920 px (~93–100%): banda difuminada que sigue el color del gameplay, sin texto del juego |
-| Branding Vice City | Barra atardecer rosa `#FF2E88` → violeta `#7B2FFF` → naranja `#FF9E00` (6 px) en la costura gameplay/banda + handle `@ELCLIPDEGTA6 | GTA VI` centrado en la banda (blanco, negrita, contorno negro). Sin emojis, sin título grande, sin barra de progreso |
+| Branding Vice City | Barra atardecer rosa `#FF2E88` → violeta `#7B2FFF` → naranja `#FF9E00` (6 px) en la costura gameplay/banda + handle `@TU-CANAL | GTA VI` centrado en la banda (blanco, negrita, contorno negro). Sin emojis, sin título grande, sin barra de progreso |
 | Cortes | Duros entre ángulos del juego, sin fundidos. Cámara mayormente FIJA en posición/tamaño (solo se mueve el streamer dentro del encuadre); excepción: un punch-in/zoom cerrado puntual sobre la webcam en un momento de reacción (`params["punch_in"] = {"t0","t1","zoom"}`, tiempos relativos al tramo) |
 
 **Encuadre adaptativo**: el detector (`detect_framing`) distingue
@@ -86,11 +86,11 @@ desloguearse: el trabajo vive en GitHub Actions (Cerebro) + Worker
 cron */5 en Cloudflare. Nada depende de su sesión, su navegador
 ni su teléfono; al volver a entrar ve el estado y la Cola avanzando.
 
-### Lo que falta (2026-11-18)
+### Lo que falta por construir
 
-- **Cortador en vivo real en construcción**: hoy no existe; el plan es Fase 0 sombra → Fase 1 semi-manual el 19 nov (detectar el pico en el directo y cortar mientras pasa).
-- **TikTok en público automático en curso**: por API directa solo publica en privado sin auditoría (1-4 semanas); hoy va por Zernio en draft-first. La auditoría de TikTok está en borrador (`~/workspace/gta6-clips/independencia/tiktok-auditoria-borrador.md`).
-- **Primera publicación real desde la web pendiente**: el flujo de publicar desde el panel ya se probó en seco (llega hasta la última puerta); falta un clip fuerte de Rubius (viralidad ≥ 50, 40-60 s, subtítulos verificados) y las cuentas de YouTube y TikTok en Cuentas.
+- **Cortador en vivo real en construcción**: hoy no existe; el plan es Fase 0 sombra → Fase 1 semi-manual (detectar el pico en el directo y cortar mientras pasa).
+- **TikTok en público automático en curso**: por API directa solo publica en privado sin auditoría (1-4 semanas); hoy va por Zernio en draft-first. La auditoría de TikTok se prepara aparte (borrador fuera del repo).
+- **Primera publicación real desde la web**: el flujo de publicar desde el panel se prueba en seco (llega hasta la última puerta); para la primera publicación real hace falta un clip fuerte (viralidad ≥ 50, 40-60 s, subtítulos verificados) y las cuentas de YouTube y TikTok creadas y verificadas en Cuentas.
 
 ## Tutorial: cómo usarlo (paso a paso)
 
@@ -114,7 +114,7 @@ No hace: no detecta los momentos con Gemini: la detección es por el chat, Gemin
 ### 2. Instalación
 
 ```bash
-git clone https://github.com/exe2027/viral-clip-agent.git
+git clone https://github.com/TU_USUARIO/viral-clip-agent.git
 cd viral-clip-agent
 python3 -m venv .venv
 .venv/bin/pip install faster-whisper
@@ -130,7 +130,7 @@ python auto_clips.py 1234567890
 python auto_clips.py https://www.twitch.tv/videos/1234567890 --lang es
 
 # Kick, por URL del vídeo
-python auto_clips.py https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9 --top-n 5
+python auto_clips.py https://kick.com/coker/videos/TU_VIDEO_UUID --top-n 5
 ```
 
 Eso descarga el chat, detecta los picos, corta los clips en vertical, les pone el paquete viral y deja todo en `runs/<vod-id>/` con `manifest.json`, `manifest.md` y `titles.txt`.
@@ -139,8 +139,8 @@ Si ya sabes el momento (por ejemplo, lo viste en directo), no hace falta bajar e
 
 ```bash
 # Solo el momento 01h40m50s: chat en [5930s, 6170s] (±120 s, config clips.chat_window_s)
-python auto_clips.py 2929847999 --peak 6050 --lang es
-python auto_clips.py 2929847999 --peak 1:40:50 --chat-window 180 --dry-run
+python auto_clips.py 1234567890 --peak 6050 --lang es
+python auto_clips.py 1234567890 --peak 1:40:50 --chat-window 180 --dry-run
 ```
 
 El chat de ventana queda en `runs/<vod-id>/chat_w<inicio>-<fin>.json` y el manifiesto registra `chat.scope: "window"` (la mediana y el múltiplo viral son locales a la ventana). Sin `--peak`, descubrir picos desde cero sigue necesitando el chat completo.
@@ -235,7 +235,7 @@ Listo, ahí te da la key. **No toques "Set up billing", "Configurar facturación
 GEMINI_API_KEY=tu_key_aqui
 ```
 
-**Estado actual (2026-11-18).** La key ya se creó en AI Studio, gratis y sin tarjeta ni cuenta de facturación, y quedó verificada con una llamada real a `gemini-3.5-flash-lite` y guardada como secreto de GitHub (entorno `sebastian`) y en `.env`. El módulo de visión para miniaturas ya está implementado (`vision.py`, `thumbnails.py --vision`): hoy la app funciona 100% sin ella, con títulos por texto + clasificador local de layout, y la visión queda apagada por defecto (`vision_skipped`). **El veto de títulos con visión todavía no está cableado en `auto_clips.py`.** Guarda la key en el `.env` para usar `--vision`; no hace falta para usar la app hoy.
+**Estado actual (2026-11-18).** La key ya se creó en AI Studio, gratis y sin tarjeta ni cuenta de facturación, y quedó verificada con una llamada real a `gemini-3.5-flash-lite` y guardada como secreto de GitHub (entorno `tu-entorno`) y en `.env`. El módulo de visión para miniaturas ya está implementado (`vision.py`, `thumbnails.py --vision`): hoy la app funciona 100% sin ella, con títulos por texto + clasificador local de layout, y la visión queda apagada por defecto (`vision_skipped`). **El veto de títulos con visión todavía no está cableado en `auto_clips.py`.** Guarda la key en el `.env` para usar `--vision`; no hace falta para usar la app hoy.
 
 ### 7. Aviso
 
@@ -282,7 +282,7 @@ Un mismo emote repetido por 14 personas (KEKW×14) también es baja diversidad, 
 |---|---|---|---|---|
 | Locones (Kick, 2.517 msgs) | 03h08m25s | #1, 24.75 pts | fuera del top-5 (rank #39, z 3.84, raw 24.75 → adj 3.09, emote 96%, rep 52%, `emote_spam` + `repetition_spam`) | ✅ baja claramente |
 | Coker (Kick, 8.269 msgs) | 03h15m10s | #1, 56.50 pts | #3, z 9.02 (raw 56.50, sin penalizar: emote 26%, rep 29%) | ✅ se mantiene arriba |
-| Nora (Twitch 2929669422, 19.033 msgs) | 07h12m10s | #1, 67.75 pts | #3, z 12.59 (raw 67.75, sin penalizar: emote 26%, rep 31%) | ✅ se mantiene arriba |
+| Nora (Twitch 1234567890, 19.033 msgs) | 07h12m10s | #1, 67.75 pts | #3, z 12.59 (raw 67.75, sin penalizar: emote 26%, rep 31%) | ✅ se mantiene arriba |
 
 Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65), 01h47m55s (8.05), 01h45m50s (6.71) — VOD poco denso, los picos nuevos son ráfagas pequeñas; Coker 33m30s (9.53), 17m45s (9.15), 03h15m10s (9.02), 01h24m25s (8.92), 19m05s (8.33); Nora 06h04m55s (13.39), 01h37m35s (13.10), 07h12m10s (12.59), 03h53m40s (11.21), 06h47m45s (10.51).
 
@@ -322,7 +322,7 @@ Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65
 - `--precise-cut`: afina inicio/fin por clip con `precise_cut.py` (transcribe la ventana de 60 s del candidato: el segmento en Kick, una ventana temporal en Twitch) y guarda `precise_cut` en el manifiesto; el archivo lleva sufijo `_precise`.
 
 ```bash
-python auto_clips.py https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e4629249f9 --top-n 5 --audio-check --precise-cut
+python auto_clips.py https://kick.com/coker/videos/TU_VIDEO_UUID --top-n 5 --audio-check --precise-cut
 ```
 
 ## Señales de Uri (2026-11-17): heatmap + movimiento + voz del juego
@@ -436,7 +436,7 @@ máx. 2 s por bloque) y las quema en el vídeo vertical con ffmpeg
 
 ```bash
 # Transcribe y quema en un paso
-.venv/bin/python subtitles.py runs/2929669422/clips/clip_7h12m_vertical.mp4
+.venv/bin/python subtitles.py runs/1234567890/clips/clip_7h12m_vertical.mp4
 # Solo el SRT, sin quemar (revisar antes)
 .venv/bin/python subtitles.py clip.mp4 --srt clip.srt --no-burn
 # Forzar idioma o modelo
@@ -503,7 +503,7 @@ Pruebas reales (modelo `tiny`):
   en esos 60 s; el resto es audio del juego.
 - **Español no se traduce (Kick, Coker):** detectado `es` (prob. 0,62),
   `task=transcribe`, subtítulos en español ("¿Me / te... / No,").
-- **Inglés (Twitch, 2929669422):** detectado `en`, `task=transcribe`,
+- **Inglés (Twitch, 1234567890):** detectado `en`, `task=transcribe`,
   subtítulos en inglés (ya estaba en inglés, no hay nada que traducir).
 - Prueba unitaria de la decisión: `python3 test_subtitle_policy.py`
   (11/11 casos: es/ro/en/fr/de/pt, con y sin flags).
@@ -626,7 +626,7 @@ guarda igual y se revisa el SRT antes de publicar.
 
 `auto_clips.py` acepta URLs de Kick igual que las de Twitch. El
 soporte de Kick vive en el paquete `kick_downloader/`, vendorizado
-de [KickDownloaderCLI](https://github.com/exe2027/kickdownloaderCLI)
+de [KickDownloaderCLI](https://github.com/TU_USUARIO/kickdownloaderCLI)
 (proyecto aparte, MIT): mismo código y mismos endpoints, sin
 depender del `kick.py` suelto que había antes. Si Kick cambia algo,
 se arregla ahí y se vuelve a vendorizar. Ojo: el escaneo rápido
@@ -635,8 +635,8 @@ NO en kickdownloaderCLI v0.1.0 — hay que subirlo también al proyecto
 aparte para que no diverja.
 
 ```bash
-python auto_clips.py https://kick.com/locones/videos/01a1e069-8470-7626-8d5e-21ccb729c509
-python auto_clips.py https://kick.com/locones/videos/01a1e069-8470-7626-8d5e-21ccb729c509 --dry-run
+python auto_clips.py https://kick.com/locones/videos/TU_VIDEO_UUID
+python auto_clips.py https://kick.com/locones/videos/TU_VIDEO_UUID --dry-run
 ```
 
 Cómo funciona por dentro (todo verificado en vivo el 2026-11-16):
@@ -759,7 +759,7 @@ python auto_clips.py <vod> --layout pip
   corregir la clasificación: 2 cams persistentes sin franja apilada
   → stack; 1 cam persistente sin caja → PiP con la caja estable.
 - **Vtuber / PNG tuber** (`_detect_vtuber_candidates`, 2026-11-17,
-  VOD Rubius 2931565552): un avatar reactivo (anime, sin cara
+  VOD de ejemplo 1234567890): un avatar reactivo (anime, sin cara
   humana) no lo ve Haar y no tiene borde de caja superior, así que
   caía a center y se perdía del recorte. Heurística temporal sobre
   los fotogramas del escaneo: un parche pequeño en una esquina que
@@ -874,7 +874,7 @@ El nombre de cada clip dice el pico, el puntaje y el desglose, por ejemplo `clip
 ```bash
 python auto_clips.py 1234567890
 python auto_clips.py https://www.twitch.tv/videos/1234567890 --lang es
-python auto_clips.py https://kick.com/locones/videos/01a1e069-8470-7626-8d5e-21ccb729c509
+python auto_clips.py https://kick.com/locones/videos/TU_VIDEO_UUID
 ```
 
 Hace solo, en orden: descarga el chat, detecta los picos con
@@ -918,7 +918,7 @@ python worker.py                # procesar la cola hasta vaciarla
 - **Persistente:** la cola vive en SQLite (`queue.db`, gitignored),
   nunca solo en memoria. Estados: `queued → processing →
   ready_for_review → approved/rejected → published/failed/dead`.
-- **Entrada:** solo streamers en la lista blanca de `streamers.yaml` (lista única desde Fase 4.1; hoy Rubius activo, IlloJuan pausado desde 2026-11-18. REGLA 2026-11-16: estar en la lista que sube el usuario = permiso ya dado, sin ficha), dedup por
+- **Entrada:** solo streamers en la lista blanca de `streamers.yaml` (lista única desde Fase 4.1; solo los activos de la lista. REGLA 2026-11-16: estar en la lista que sube el usuario = permiso ya dado, sin ficha), dedup por
   VOD + idioma, y no se encola si quedan menos de 2 GB libres.
   `--force` en `add` salta solo la lista blanca (pruebas locales) y
   deja el job marcado.
@@ -944,9 +944,8 @@ Pruebas: `python3 test_queue.py` (32 tests, BD temporal, sin red).
 
 ## Monitor de influencers — `watcher.py` (ver `WATCHER.md`)
 
-Vigila la lista blanca de `streamers.yaml` (**hoy Rubius activo,
-IlloJuan pausado desde 2026-11-18**,
-Twitch, español, GTA) y detecta directos en vivo y VODs nuevos, para
+Vigila la lista blanca de `streamers.yaml` (los streamers activos
+de la lista, Twitch, español, GTA) y detecta directos en vivo y VODs nuevos, para
 no pegar la URL a mano. El encolado manual por URL queda como opción
 secundaria.
 
@@ -976,8 +975,8 @@ python3 watcher.py --loop --live        # bucle cada poll_minutes (config.yaml, 
   gratis en dev.twitch.tv) o, sin ellas, por la ruta pública GQL que
   usa la propia web de Twitch (no oficial, puede cambiar; Helix es
   la vía estable).
-- **Probado 2026-11-16 con IlloJuan:** en vivo (GTA V #7, 60.371
-  espectadores), último VOD terminado 2929822269 (GTA V #6) no
+- **Probado con un directo en vivo:** en vivo (GTA V, miles de
+  espectadores), último VOD terminado 1234567890 (GTA V) no
   encolado (es GTA V, no GTA 6);
   segunda pasada sin propuestas nuevas (dedup); `--live` sin encolar
   nada (frenos aguantan) y cola sin tocar. Tests offline:
@@ -1104,7 +1103,7 @@ Idea del reel de David Madrazo (@davidmadrazo.ia, "content-os"): vigilar reels v
 # Estudiar reels por URL (máx. 10 por corrida, pasada manual, no scrapeo)
 python reel_study.py --url https://www.instagram.com/reel/DfpHUNFiKke/ \
   --url https://www.instagram.com/reel/DcmuKhJAe3I/ \
-  --account-id 17841429035950873 --out reel_patterns.json
+  --account-id TU_ACCOUNT_ID --out reel_patterns.json
 # O desde un JSON con reels (salida de instagram-cli post o lista)
 python reel_study.py --from-json reels.json --out reel_patterns.json
 # auto_clips.py usa reel_patterns.json si existe (o --reel-patterns <ruta>);
@@ -1135,8 +1134,8 @@ para el detalle completo.
   approved → published / failed`, más `draft` y `quarantined`.
   Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h.
   SIN franja horaria desde el 2026-11-18 (decisión del usuario).
-- **Lista blanca** (`streamers.yaml` canónica, Rubius concedido
-  2026-11-18, IlloJuan pausado): se verifica
+- **Lista blanca** (`streamers.yaml` canónica, con fecha de permiso
+  por streamer): se verifica
   EN EL MOMENTO de publicar, no solo al detectar. Si el streamer
   ya no está en la lista, no se publica.
 - **Rechazos:** formato → 1 reintento; copyright/contenido →
@@ -1172,8 +1171,8 @@ para el detalle completo.
 - **La cola consulta la puerta** antes de publicar:
   `counter.py gate --platform youtube --clip c1` (exit 0 =
   permitido) o `gate_publish()` desde Python. La lista blanca
-  canónica es `streamers.yaml` (Rubius concedido 2026-11-18,
-  IlloJuan pausado): si la lista está vacía, la fase 4 queda bloqueada.
+  canónica es `streamers.yaml` (con fecha de permiso por streamer):
+  si la lista está vacía, la fase 4 queda bloqueada.
 - **Simulación**: `python3 counter.py simulate` (10 aprobados sin
   editar → 1 rechazo → contador a cero, más demostración del breaker
   con 2 fallos seguidos; usa estado temporal, no toca el real).
@@ -1234,19 +1233,19 @@ REGLA 2026-11-16: estar en la lista blanca que sube el usuario = permiso ya dado
 
 Con `test_chat.json` (incluido, 43 mensajes de ejemplo en ES/EN) y un VOD de prueba de 100 s: detectó el pico de risas en español a los 30 s (32 pts, 16 risas, 1.88x la mediana) y el de hype a los 90 s (22 pts, 11 hype, 1.29x), cortó clips reales de 1080x1920 y generó el manifiesto viral con títulos, miniaturas y tags. Los falsos positivos (`extra`, `lollipop`) puntuaron 1, como mensaje normal.
 
-Con un VOD real (NoraExplorer, 2929669422, 7h13m, 19.033 mensajes):
+Con un VOD real (NoraExplorer, 1234567890, 7h13m, 19.033 mensajes):
 chat descargado con TwitchDownloaderCLI 1.56.5, 5 picos (el mejor
 7h12m10s, 78 pts, 13x la mediana de 6), solo se bajó el segmento de
 60 s del pico (no el VOD entero) y se cortó en vertical 1080x1920.
 Con `subtitles.py` se transcribió ese segmento (inglés, probabilidad
 0.98, 152 palabras, 44 bloques de subtítulos) y se quemaron los
-subtítulos en `runs/2929669422/clips/clip_7h12m_subs.mp4`, verificado
+subtítulos en `runs/1234567890/clips/clip_7h12m_subs.mp4`, verificado
 con ffprobe (1080x1920, 60,01 s) y por fotogramas: el texto se ve
 legible abajo del todo. Ojo: ese VOD es de GTA 5, no de GTA 6, y el
 pico es la despedida del directo ("see you guys on the 19th"), no
 una jugada; hay que revisar cada clip antes de publicar.
 
-Con un VOD real de Kick (Locones, `01a1e069-8470-7626-8d5e-21ccb729c509`,
+Con un VOD real de Kick (Locones, `TU_VIDEO_UUID`,
 10h27m, Counter-Strike 2, 2.166 views, chat en rumano): el chat completo
 habría tardado ~50 min (7.525 ventanas de 5 s) y el usuario lo canceló;
 con el escaneo rápido (`scan_chat_peaks`, 126 muestras cada 5 min +
