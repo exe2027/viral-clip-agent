@@ -377,6 +377,21 @@ autopublish:
 scoring:
   seo_gate: 90
   viral_min: 50
+  # Pre-filtro rápido de Óscar Boix (2026-11-18, clipagent/prefilter.py):
+  # 1 punto por mensaje, 2 por reacción, tramos de 10 s; un pico pasa
+  # si su tramo llega a prefilter_min_multiple x la mediana de sus
+  # vecinos de ±5 min. Puerta barata ANTES de Whisper/viralidad/SEO/
+  # render; no toca la fórmula de viralidad, la prioridad ni los
+  # filtros duros. Si ningún tramo del VOD llega al mínimo (chat
+  # caliente, medido en Rubius 2932415021: máx. 2,23x), el pre-filtro
+  # se desactiva solo y no descarta nada. --no-prefilter lo apaga.
+  # prefilter_separation_s es el TOPE de separación entre picos del
+  # pre-filtro; la puerta usa min(--min-separation, este valor)
+  # porque select_top_peaks ya dedupó y el pre-filtro no puede ser
+  # más agresivo que el pipeline (con 90 s se perdía el pico real
+  # de 90 s, a 50 s del de 40 s).
+  prefilter_min_multiple: 3.0
+  prefilter_separation_s: 90
   # 7.2: peso del componente audio del score de viralidad. En Kick
   # es mayor (1,5): el chat es menos fiable como señal y el audio
   # manda más. Con estos valores el total no cambia.

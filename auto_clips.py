@@ -210,6 +210,23 @@ except ImportError:
     checkpoint_mod = False
 
 try:
+    # Pre-filtro rápido de Óscar Boix (2026-11-18): puerta barata
+    # antes de Whisper/viralidad/SEO/render. Ver clipagent/prefilter.py.
+    from clipagent.prefilter import (
+        count_windows,
+        find_prefilter_peaks,
+        multiples_per_bucket,
+        prefilter_gate,
+    )
+    prefilter_mod = True
+except ImportError:
+    count_windows = None
+    find_prefilter_peaks = None
+    multiples_per_bucket = None
+    prefilter_gate = None
+    prefilter_mod = False
+
+try:
     # Score de viralidad 0-100 + señales MVP (7 componentes, banda,
     # filtro previo). Distinto del score de chat: no se mezclan.
     from clipagent.detect import (audio_weight_for, compute_signals,
@@ -684,6 +701,12 @@ def main() -> int:
     p.add_argument("--preset", default="fast")
     p.add_argument("--dry-run", action="store_true", help="Solo descarga el chat y lista picos, sin video ni cortes")
     p.add_argument("--no-viral", action="store_true", help="No genera el empaquetado viral (títulos, miniatura, SEO)")
+    p.add_argument("--no-prefilter", dest="prefilter", action="store_false",
+                   help="Apaga el pre-filtro rápido de Óscar Boix (por "
+                        "defecto, los picos que no llegan a 3x la mediana "
+                        "en puntos 1/2 no llegan a Whisper/viralidad/SEO/"
+                        "render; en chat caliente sin ningún tramo 3x se "
+                        "desactiva solo)")
     p.add_argument("--llm-select", dest="llm_select", action="store_true",
                    help="Selección de momentos con LLM tras el corte (7.1): una llamada con todos los candidatos; sin LLM o si falla, se sigue con el chat. El worker la pasa siempre.")
     p.add_argument("--no-llm-select", dest="llm_select", action="store_false",
@@ -1057,6 +1080,48 @@ def main() -> int:
     # previo del score de viralidad (solo top-5).
     rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
 
+    # 2b. Pre-filtro rápido de Óscar Boix (2026-11-18): puerta barata
+    # ANTES de Whisper/viralidad/SEO/render. Cuenta 1 punto por
+    # mensaje y 2 por reacción en tramos de 10 s; solo los picos con
+    # un tramo >= 3x la mediana de sus vecinos (±5 min) llegan al
+    # filtro previo y al corte. No se aplica con --peak (momento
+    # explícito) ni a los picos por audio de Kick (sin chat), y nunca
+    # tumba el job: si no se puede aplicar, se sigue sin él. Si no
+    # hay NINGÚN tramo 3x en el VOD (chat caliente), el pre-filtro
+    # se desactiva solo y deja pasar todos los picos (ver
+    # clipagent/prefilter.py).
+    prefilter_summary = {"active": False, "prefilter_peaks": [],
+                         "passed": len(peaks), "discarded": 0,
+                         "reason": "no aplicado"}
+    prefilter_discarded = []
+    if (not peak_mode and not audio_peaks and args.prefilter
+            and prefilter_mod):
+        try:
+            from clipagent.ingest import _load_chat
+            _pf_cfg = (cfg or {}).get("scoring") or {}
+            _pf_min = float(_pf_cfg.get("prefilter_min_multiple", 3.0))
+            _pf_msgs = [(off, body)
+                        for off, body, _u in _load_chat(chat_path)]
+            _pf_points = count_windows(_pf_msgs)
+            # La separación del pre-filtro nunca supera la del
+            # pipeline (--min-separation): select_top_peaks ya
+            # dedupó con esa separación y el pre-filtro no puede
+            # tumbar un pico que el pipeline mantuvo (p. ej. picos
+            # reales a 50 s con --min-separation 20 y separación
+            # de Óscar de 90 s: el de 90 s se perdía).
+            _pf_sep = min(args.min_separation,
+                          int(_pf_cfg.get("prefilter_separation_s", 90)))
+            _pf_peaks = find_prefilter_peaks(
+                _pf_points, min_multiple=_pf_min, separation=_pf_sep)
+            peaks, prefilter_discarded, prefilter_summary = prefilter_gate(
+                peaks, _pf_peaks,
+                multiples=multiples_per_bucket(_pf_points))
+            print(f"Pre-filtro Óscar: {prefilter_summary['reason']}")
+        except Exception as e:  # noqa: BLE001 - el pre-filtro nunca tumba el job
+            print(f"Pre-filtro Óscar: no se pudo aplicar ({e}); "
+                  "se sigue sin él.", file=sys.stderr)
+            prefilter_discarded = []
+
     # 3. Filtro previo: los picos que no pasan (múltiplo < 3x, solo
     # emote-spam, sin mensajes, fuera del top-5) NO se cortan ni se
     # encolan; quedan registrados en el manifiesto como descartados.
@@ -1075,12 +1140,13 @@ def main() -> int:
     elif viral_score_mod:
         peaks, discarded = filter_candidates(peaks, detail, rank_map,
                                              median_score)
+        discarded = prefilter_discarded + discarded
     else:
         print("Aviso: sin viral_score.py, no se aplica el filtro previo; "
               "se cortan todos los picos.", file=sys.stderr)
         floor = max(median_score or 0.0, 1.0)
         peaks = [(ts, s, round(s / floor, 2)) for ts, s in peaks]
-        discarded = []
+        discarded = prefilter_discarded
     for ts, s, m in peaks:
         print(f"  Filtro: {fmt_ts(ts)} — {s} pts ({m}x la mediana) pasa")
     for dc in discarded:
@@ -1098,6 +1164,7 @@ def main() -> int:
                 "chat": chat_scope,
                 "seo_overrides": [], "clips": [],
                 "descartados": discarded,
+                "prefilter": prefilter_summary,
                 "status": "ok" if peaks else "sin_momentos_virales"}
     # Señal de Uri (2026-11-17): heatmap de YouTube ("lo más
     # repetido"), UNA sola lectura de metadatos con yt-dlp para
