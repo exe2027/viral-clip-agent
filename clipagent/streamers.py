@@ -24,7 +24,12 @@ HEADER = """# streamers.yaml — la ÚNICA lista de streamers (Fase 4.1).
 #
 """
 
-PLATFORMS = ("twitch", "kick")
+PLATFORMS = ("twitch", "kick", "youtube")
+# youtube es plataforma válida de streamer (identidad/VOD, ej.
+# IShowSpeed), pero el monitoreo EN VIVO del watcher solo cubre
+# twitch/kick: un streamer youtube se salta en el barrido en vivo
+# con nota visible (ver watcher.py), hasta que haya watcher de
+# YouTube Live.
 PUBLISH_PLATFORMS = ("youtube", "tiktok", "instagram", "facebook")
 EXCLUDED_STATES = ("denegado", "revocado")
 
@@ -145,7 +150,7 @@ def _save(streamers, path):
 def add_streamer(entry, path=None, base_dir=None):
     """Agrega un streamer. Devuelve (ok, mensaje).
 
-    Valida: nombre (slug) y plataforma twitch|kick. Si ya existe,
+    Valida: nombre (slug) y plataforma twitch|kick|youtube. Si ya existe,
     no se duplica (se devuelve su estado actual).
     """
     base = base_dir or BASE_DIR
@@ -155,7 +160,7 @@ def add_streamer(entry, path=None, base_dir=None):
         return False, "falta el nombre del streamer"
     if norm["platform"] not in PLATFORMS:
         return False, (f"plataforma desconocida: {norm['platform']!r} "
-                       "(twitch o kick)")
+                       "(twitch, kick o youtube)")
     current = load_streamers(path, base)
     if any(e["name"] == norm["name"] for e in current):
         return False, f"{norm['name']} ya está en la lista"

@@ -131,3 +131,99 @@ streamers:
     publish_platforms: [youtube, tiktok, instagram, facebook]
     notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
     enabled: true
+  # --- EN INGLÉS (orden del usuario 2026-11-18) ---
+  # Los 8 con language en, game "GTA VI", estado concedido,
+  # fecha_permiso 2026-11-18, publish_platforms en las 4, enabled
+  # true. Handles verificados en vivo 2026-11-18 antes de agregarlos
+  # (ninguno inventado). OJO: IShowSpeed es YouTube (su Kick existe
+  # pero con solo ~3k seguidores y no es su plataforma principal);
+  # el watcher solo vigila twitch/kick en vivo, así que a IShowSpeed
+  # (youtube) no lo cubre el monitoreo en vivo todavía.
+  - name: kaicenat
+    platform: twitch
+    channel_url: "https://www.twitch.tv/kaicenat"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Kai Cenat. EN. Verificado 2026-11-18: canal existe en Twitch (título 'KaiCenat - Live on Twitch', en directo al verificar)."
+    enabled: true
+  - name: ishowspeed
+    platform: youtube
+    channel_url: "https://www.youtube.com/@IShowSpeed"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "IShowSpeed. EN. Verificado 2026-11-18: canal oficial @IShowSpeed en YouTube (vídeos de millones de visitas, directos). Su Kick (kick.com/ishowspeed) existe pero con ~3k seguidores y no es su plataforma principal. El watcher en vivo (twitch/kick) no lo cubre todavía."
+    enabled: true
+  - name: n3on
+    platform: kick
+    channel_url: "https://kick.com/n3on"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "N3ON. EN. Verificado 2026-11-18: Kick API v2 (1.315.467 seguidores). Presentado en prensa como el primero en jugar GTA 6 en Nueva Zelanda."
+    enabled: true
+  - name: xqc
+    platform: kick
+    channel_url: "https://kick.com/xqc"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "xQc. EN. Verificado 2026-11-18: Kick API v2 (1.734.868 seguidores, EN DIRECTO en Grand Theft Auto VI al verificar)."
+    enabled: true
+  - name: theburntpeanut
+    platform: twitch
+    channel_url: "https://www.twitch.tv/theburntpeanut"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "TheBurntPeanut. EN. Verificado 2026-11-18: canal existe en Twitch (título 'TheBurntPeanut - Live on Twitch', en directo al verificar)."
+    enabled: true
+  - name: burn
+    platform: twitch
+    channel_url: "https://www.twitch.tv/burn"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Burn. EN. Verificado 2026-11-18: canal existe en Twitch (título 'Burn - Twitch')."
+    enabled: true
+  - name: kaysan
+    platform: twitch
+    channel_url: "https://www.twitch.tv/kaysan"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Kaysan. EN. Verificado 2026-11-18: canal existe en Twitch (título 'Kaysan - Twitch')."
+    enabled: true
+  - name: willneff
+    platform: twitch
+    channel_url: "https://www.twitch.tv/willneff"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-18"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "WillNeff. EN. Verificado 2026-11-18: canal existe en Twitch (título 'willneff - Twitch')."
+    enabled: true

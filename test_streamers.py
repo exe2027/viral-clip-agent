@@ -41,9 +41,13 @@ class TestSingleList(unittest.TestCase):
         # Decisión del usuario 2026-11-18 15:30: 10 streamers activos
         # (Rubius + IlloJuan reactivado + 8 nuevos), todos GTA VI.
         # IlloJuan estuvo pausado 13:34-15:30, ya no.
+        # Orden 2026-11-18: + 8 en inglés (Kai Cenat, IShowSpeed,
+        # N3ON, xQc, TheBurntPeanut, Burn, Kaysan, Will Neff).
         self.assertEqual(watched, {
             "illojuan", "rubius", "auronplay", "ibai", "thegrefg",
             "xokas", "djmariio", "knekro", "rdjavi", "westcol",
+            "kaicenat", "ishowspeed", "n3on", "xqc", "theburntpeanut",
+            "burn", "kaysan", "willneff",
         })
         self.assertIn("illojuan", watched)
         from clipagent.publish import load_whitelist
@@ -69,7 +73,8 @@ class TestSingleList(unittest.TestCase):
             "rdjavi": "2026-11-18",
             "westcol": "2026-11-18",
         }
-        self.assertEqual(len(entries), 10)
+        self.assertEqual(len([e for e in entries
+                              if e["language"] == "es"]), 10)
         for name, fecha in esperado.items():
             with self.subTest(streamer=name):
                 e = streamers.get_streamer(name, entries)
@@ -84,6 +89,44 @@ class TestSingleList(unittest.TestCase):
                 canal = {"djmariio": "https://www.twitch.tv/djMariio"}.get(
                     name, f"https://www.twitch.tv/{name}")
                 self.assertEqual(e["channel_url"], canal)
+                self.assertEqual(e["publish_platforms"],
+                                 ["youtube", "tiktok", "instagram",
+                                  "facebook"])
+
+    def test_ocho_ingleses_todos_gta_vi(self):
+        """Orden 2026-11-18: 8 influencers EN con categoría GTA VI.
+        Handles verificados en vivo antes de agregarlos (ninguno
+        inventado): KaiCenat e IShowSpeed (YouTube), n3on y xQc
+        (Kick), TheBurntPeanut, Burn, Kaysan y WillNeff (Twitch)."""
+        from clipagent.category import is_gta6
+        entries = streamers.load_streamers()
+        en = [e for e in entries if e["language"] == "en"]
+        self.assertEqual(len(en), 8)
+        esperado = {
+            "kaicenat": ("twitch", "https://www.twitch.tv/kaicenat"),
+            "ishowspeed": ("youtube",
+                           "https://www.youtube.com/@IShowSpeed"),
+            "n3on": ("kick", "https://kick.com/n3on"),
+            "xqc": ("kick", "https://kick.com/xqc"),
+            "theburntpeanut": ("twitch",
+                               "https://www.twitch.tv/theburntpeanut"),
+            "burn": ("twitch", "https://www.twitch.tv/burn"),
+            "kaysan": ("twitch", "https://www.twitch.tv/kaysan"),
+            "willneff": ("twitch",
+                         "https://www.twitch.tv/willneff"),
+        }
+        for name, (platform, canal) in esperado.items():
+            with self.subTest(streamer=name):
+                e = streamers.get_streamer(name, entries)
+                self.assertIsNotNone(e, f"falta {name} en streamers.yaml")
+                self.assertTrue(e.get("enabled", True), f"{name} activo")
+                self.assertEqual(e["platform"], platform)
+                self.assertEqual(e["channel_url"], canal)
+                self.assertEqual(e["game"], "GTA VI")
+                self.assertTrue(is_gta6(e["game"]))
+                self.assertEqual(e["language"], "en")
+                self.assertEqual(e["estado"], "concedido")
+                self.assertEqual(e["fecha_permiso"], "2026-11-18")
                 self.assertEqual(e["publish_platforms"],
                                  ["youtube", "tiktok", "instagram",
                                   "facebook"])
@@ -111,10 +154,10 @@ class TestSingleList(unittest.TestCase):
             self.assertFalse(ok)  # no se duplica
             self.assertIn("ya está", msg)
             ok, msg = streamers.add_streamer(
-                {"name": "malo", "platform": "youtube"}, path=path,
+                {"name": "malo", "platform": "facebook"}, path=path,
                 base_dir=tmp)
             self.assertFalse(ok)
-            self.assertIn("twitch o kick", msg)
+            self.assertIn("twitch, kick o youtube", msg)
             self.assertTrue(streamers.remove_streamer("nuevo", path, tmp))
             self.assertFalse(streamers.remove_streamer("nuevo", path, tmp))
             self.assertEqual(streamers.load_streamers(path, tmp), [])
