@@ -97,5 +97,39 @@ class TestSplitCut(unittest.TestCase):
         self.assertEqual(probe, "1080,1920")
 
 
+SEG2 = "runs/2928823801-verify/segments/seg_02_t07h03m00s.mp4"
+
+
+@unittest.skipUnless(os.path.exists(SEG2), "falta el segmento 2 de IlloJuan")
+class TestFacecamBoxForzado(unittest.TestCase):
+    # Regresión 2026-11-18 (clip 02, pico 25400 s = 07h03m20s): la
+    # detección automática no vio la webcam (cara chica y oscura en
+    # el borde azul, t=5/20/35) y el clip caía a "center"; además el
+    # camino forzado facecam_box devolvía "pip" con la caja en px
+    # originales sin convertir (el grafo la reescalaba como muestra
+    # 160x90: 12x fuera de sitio) y el PiP tapaba el juego. Con la
+    # caja medida [42, 306, 306, 315] en 1920x1080, decide_layout
+    # debe devolver split vertical (juego 1320 arriba, cámara 600
+    # abajo), igual que un pip detectado.
+    def test_facecam_box_forzado_da_split_no_pip(self):
+        cfg = dict(DEFAULTS)
+        cfg["facecam_box"] = [42, 306, 306, 315]
+        d = decide_layout(SEG2, 40.0, start_offset=0.0, cfg=cfg)
+        layouts = {s["layout"] for s in d["segments"]}
+        self.assertEqual(layouts, {"split"},
+                         f"layouts={layouts}: facecam_box debe dar split, no pip ni center")
+        seg = d["segments"][0]
+        self.assertEqual(seg["params"]["game_h"], 1320)
+        self.assertEqual(seg["params"]["cam_h"], 600)
+        # Caja convertida a muestra (160x90): [3.5, 25.5, 25.5, 26.25].
+        bx, by, bw, bh = seg["params"]["box"]
+        self.assertAlmostEqual(bx, 42 * 160 / 1920, delta=1.0)
+        self.assertAlmostEqual(by, 306 * 90 / 1080, delta=1.0)
+        self.assertAlmostEqual(bw, 306 * 160 / 1920, delta=1.0)
+        self.assertAlmostEqual(bh, 315 * 90 / 1080, delta=1.0)
+        # La ventana de juego empieza a la derecha de la cámara.
+        self.assertGreaterEqual(seg["params"]["game_x0"], bx + bw)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

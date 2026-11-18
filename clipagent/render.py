@@ -35,7 +35,8 @@ Cómo se detecta (sin dependencias nuevas: solo stdlib + ffmpeg):
     (solo superiores: abajo están el minimapa y el HUD de GTA, que
     dispararían falsos positivos) y con interior con textura. Detección
     heurística v1: si no está claro, cae a centrado (seguro) y se puede
-    forzar con ``facecam_box`` en config.yaml o ``--layout pip``.
+    forzar con ``facecam_box`` en config.yaml (split vertical) o
+    ``--layout pip`` (PiP explícito, único caso en que queda PiP).
   * Si ``facecam_box`` está en config.yaml, manda sobre la detección.
 
 La decisión queda registrada en el manifiesto por clip (qué layout se
@@ -1704,13 +1705,38 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
             segments = apply_game_voice(segments, game_voice, duration)
         return {"mode": forced, "segments": segments, "samples": []}
     if cfg.get("facecam_box"):
-        segments = [{"start": 0.0, "end": float(duration),
-                     "layout": "pip",
-                     "params": {"box": list(cfg["facecam_box"])},
-                     "reason": "facecam_box explícito en config.yaml"}]
-        if game_voice:
-            segments = apply_game_voice(segments, game_voice, duration)
-        return {"mode": "pip", "segments": segments, "samples": []}
+        # Caja explícita en px del vídeo original (config.yaml):
+        # manda sobre la detección y recibe el MISMO trato que un
+        # pip detectado: split vertical (regla 2026-11-16, webcam +
+        # gameplay nunca en PiP ni en recorte centrado). Antes este
+        # camino devolvía layout "pip" con la caja en px originales
+        # sin convertir (el grafo la reescalaba como si fueran coords
+        # de muestra 160x90: caja 12x fuera de sitio) y el PiP tapaba
+        # el juego. La caja se pasa a muestra y _split_params calcula
+        # la ventana de juego a la derecha de la cámara.
+        src_size = None
+        try:
+            src_size = _probe_size(video_path)
+        except Exception:
+            src_size = None
+        if src_size is not None:
+            sw, sh = src_size
+            fx, fy, fw, fh = [float(v)
+                              for v in cfg["facecam_box"][:4]]
+            box_s = [fx * SAMPLE_W / sw, fy * SAMPLE_H / sh,
+                     fw * SAMPLE_W / sw, fh * SAMPLE_H / sh]
+            segments = [{"start": 0.0, "end": float(duration),
+                         "layout": "split",
+                         "params": _split_params(box_s, cfg),
+                         "reason": ("facecam_box explícito en config.yaml "
+                                    f"{[int(v) for v in cfg['facecam_box'][:4]]} "
+                                    "-> split vertical: juego arriba, "
+                                    "cámara abajo (sin PiP en el centro)")}]
+            if game_voice:
+                segments = apply_game_voice(segments, game_voice, duration)
+            return {"mode": "split", "segments": segments, "samples": []}
+        # Sin tamaño del vídeo no se puede convertir la caja: caer al
+        # auto de abajo en vez de un PiP con coords imposibles.
 
     # Escaneo por tramo (Bloque 4): muestrea cada 2 s y clasifica
     # 0/1/2 cams por regiones estables. Se reusan sus fotogramas para
@@ -2289,10 +2315,18 @@ def cut_clip_with_layout(video_path, start_sec, duration, output_path,
             parts.append(
                 f"[0:v]trim=start={s0:.3f}:end={s1:.3f},"
                 f"setpts=PTS-STARTPTS[{f'v{i}_in'}];{graph}")
+            # Normalizar SAR antes del concat: un tramo split con
+            # fondo difuminado puede salir con SAR != 1:1 (el scale
+            # con force_original_aspect_ratio=increase lo conserva)
+            # y el concat exige SAR identico en todas las entradas
+            # (2026-11-18, VOD Rubius 2932415021: SAR 4770:4771 vs
+            # 1:1, ffmpeg -22). Sin esto, cualquier clip multi-tramo
+            # con split revienta en el concat.
+            parts.append(f"[v{i}]setsar=1[v{i}s]")
+            vlabels.append(f"[v{i}s]")
             parts.append(
                 f"[0:a]atrim=start={s0:.3f}:end={s1:.3f},"
                 f"asetpts=PTS-STARTPTS[a{i}]")
-            vlabels.append(f"[v{i}]")
             alabels.append(f"[a{i}]")
         n = len(segments)
         parts.append(f"{''.join(vlabels)}concat=n={n}:v=1:a=0[vout]")

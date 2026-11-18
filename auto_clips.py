@@ -1060,6 +1060,12 @@ def main() -> int:
         discarded = []
         print("Filtro previo: no se aplica — el momento es explícito "
               "(--peak).")
+        # El bucle de abajo espera ternas (ts, score, multiple): en
+        # modo --peak los picos venian como pares y reventaba con
+        # ValueError (2026-11-18, VOD Rubius 2932415021). El multiple
+        # es informativo: score / mediana local de la ventana.
+        floor = max(median_score or 0.0, 1.0)
+        peaks = [(ts, s, round(s / floor, 2)) for ts, s in peaks]
     elif viral_score_mod:
         peaks, discarded = filter_candidates(peaks, detail, rank_map,
                                              median_score)
