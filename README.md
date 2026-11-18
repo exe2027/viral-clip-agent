@@ -47,6 +47,16 @@ python auto_clips.py https://kick.com/coker/videos/01a1dffd-8fb8-71ee-abb7-66e46
 
 Eso descarga el chat, detecta los picos, corta los clips en vertical, les pone el paquete viral y deja todo en `runs/<vod-id>/` con `manifest.json`, `manifest.md` y `titles.txt`.
 
+Si ya sabes el momento (por ejemplo, lo viste en directo), no hace falta bajar el chat entero ni detectar picos: `--peak` baja solo el chat de la ventana alrededor de ese momento y corta ese clip. Regla del usuario 2026-11-17 23:00: del chat, solo la ventana alrededor del momento del clip, nunca el chat entero (el vídeo ya era solo el segmento por pico).
+
+```bash
+# Solo el momento 01h40m50s: chat en [5930s, 6170s] (±120 s, config clips.chat_window_s)
+python auto_clips.py 2929847999 --peak 6050 --lang es
+python auto_clips.py 2929847999 --peak 1:40:50 --chat-window 180 --dry-run
+```
+
+El chat de ventana queda en `runs/<vod-id>/chat_w<inicio>-<fin>.json` y el manifiesto registra `chat.scope: "window"` (la mediana y el múltiplo viral son locales a la ventana). Sin `--peak`, descubrir picos desde cero sigue necesitando el chat completo.
+
 Antes de gastar tiempo y disco, prueba sin cortar nada:
 
 ```bash

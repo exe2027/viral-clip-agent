@@ -87,6 +87,9 @@ clips:
   pre_roll: 20            # segundos antes del pico (regla: 20 s de contexto)
   window: 10              # ventana de chat en segundos
   min_separation: 60      # separación mínima entre picos
+  chat_window_s: 120      # REGLA DEL USUARIO 2026-11-17 23:00: con --peak,
+                          # del chat solo la ventana alrededor del momento
+                          # (±120 s del pico), nunca el chat entero
   # Layout split vertical (regla 2026-11-16): juego arriba, cámara
   # abajo, sobre 1080x1920 (1320+600=1920). Los subtítulos viven en
   # la zona de juego, nunca sobre la cámara (ver subtitles abajo).

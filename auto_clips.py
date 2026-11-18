@@ -351,6 +351,70 @@ def download_chat(vod_id: str, chat_path: str, force: bool = False):
          "-o", chat_path, "-E"], "descarga del chat")
 
 
+def parse_peak_ts(value: str) -> float:
+    """Momento pedido con --peak: segundos ("6050") o reloj
+    ("1:40:50" / "40:50"). Devuelve segundos (float)."""
+    text = (value or "").strip()
+    if not text:
+        raise ValueError("momento vacío")
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) not in (2, 3) or not all(
+                p.strip().isdigit() for p in parts):
+            raise ValueError(
+                f"{value!r}: usa segundos o reloj H:MM:SS / MM:SS")
+        nums = [int(p) for p in parts]
+        total = nums[-1] + 60 * nums[-2] + (3600 * nums[-3]
+                                            if len(nums) == 3 else 0)
+        return float(total)
+    try:
+        total = float(text)
+    except ValueError:
+        raise ValueError(f"{value!r}: usa segundos o reloj H:MM:SS / MM:SS")
+    if total < 0:
+        raise ValueError("el momento no puede ser negativo")
+    return total
+
+
+def chat_window_bounds(peak_sec: float, window_s: int):
+    """Ventana de chat alrededor del momento: [pico-ventana,
+    pico+ventana], con el inicio recortado a 0 (pico al principio
+    del VOD)."""
+    begin = max(0, int(peak_sec) - int(window_s))
+    end = int(peak_sec) + int(window_s)
+    return begin, end
+
+
+def chat_window_path(out_dir: str, begin: int, end: int) -> str:
+    """El archivo de chat de ventana lleva la ventana en el nombre
+    (chat_w5930-6170.json): reutilizarlo solo vale para ese mismo
+    momento, nunca para otro pico."""
+    return os.path.join(out_dir, f"chat_w{begin}-{end}.json")
+
+
+def download_chat_window(vod_id: str, chat_path: str, peak_sec: float,
+                         window_s: int, force: bool = False):
+    """Baja SOLO la ventana de chat alrededor del momento
+    (chatdownload -b <inicio>s -e <fin>s), nunca el chat entero.
+
+    Regla del usuario 2026-11-17 23:00: del chat, solo la ventana
+    alrededor del momento del clip. Un VOD de 4h30 son ~160 MB de
+    chat; una ventana de ±120 s son unos pocos MB. Reutiliza el
+    archivo si ya existe y es válido para ese VOD (mismo criterio
+    que download_chat)."""
+    begin, end = chat_window_bounds(peak_sec, window_s)
+    if not force and os.path.isfile(chat_path):
+        valid, _ = inspect_chat_json(chat_path, vod_id)
+        if valid:
+            print(f"Chat de ventana ya descargado, se reutiliza: {chat_path}")
+            return
+        print("Chat de ventana inválido o de otro VOD, se vuelve a "
+              f"bajar: {chat_path}")
+    run([twitch_cli(), "chatdownload", "--id", str(vod_id),
+         "-b", f"{begin}s", "-e", f"{end}s",
+         "-o", chat_path, "-E"], "descarga del chat (ventana)")
+
+
 def download_twitch_segment(vod_id: str, start_sec: float, end_sec: float,
                             out_path: str):
     """Baja SOLO [start_sec, end_sec] del VOD de Twitch con
@@ -597,6 +661,15 @@ def main() -> int:
                    "cortan los picos que pasan el filtro previo)")
     p.add_argument("--window", type=int, default=10)
     p.add_argument("--min-separation", type=int, default=60)
+    p.add_argument("--peak", default=None,
+                   help="Momento explícito en segundos o reloj (\"6050\" o "
+                        "\"1:40:50\"): baja SOLO el chat de la ventana "
+                        "alrededor de ese momento (regla 2026-11-17 23:00) "
+                        "y corta ese clip, sin detectar picos ni aplicar "
+                        "el filtro previo. Solo Twitch.")
+    p.add_argument("--chat-window", type=int, default=None,
+                   help="Segundos de chat a cada lado del --peak (default: "
+                        "config clips.chat_window_s, 120)")
     p.add_argument("--pre-roll", type=int, default=20)
     p.add_argument("--duration", type=int, default=None,
                    help="Duración forzada del clip en segundos (default: "
@@ -748,6 +821,51 @@ def main() -> int:
               f"en {out_dir} (se reutilizan si el archivo existe).")
 
     chat_path = args.chat or os.path.join(out_dir, "chat.json")
+
+    # REGLA DEL USUARIO 2026-11-17 23:00: del chat, solo la ventana
+    # alrededor del momento del clip, nunca el chat entero. --peak
+    # fija el momento: el chat se baja solo en [pico-ventana,
+    # pico+ventana] (config clips.chat_window_s, default 120 s por
+    # lado) y ese pico ES el clip, sin detección ni filtro previo
+    # (el usuario eligió el momento). Sin --peak, descubrir picos
+    # desde cero sigue necesitando el chat completo.
+    peak_mode = args.peak is not None
+    chat_scope = {"scope": "full", "file": chat_path}
+    peak_sec = None
+    window_s = None
+    if peak_mode:
+        if platform == "kick":
+            print("Error: --peak solo funciona en Twitch (Kick usa su "
+                  "escaneo).", file=sys.stderr)
+            return 1
+        if args.video:
+            print("Error: --peak no se combina con --video (el vídeo "
+                  "local no trae chat).", file=sys.stderr)
+            return 1
+        try:
+            peak_sec = parse_peak_ts(args.peak)
+        except ValueError as e:
+            print(f"Error: --peak inválido: {e}", file=sys.stderr)
+            return 1
+        window_s = (args.chat_window if args.chat_window is not None
+                    else int(clip_cfg.get("chat_window_s") or 120))
+        win_begin, win_end = chat_window_bounds(peak_sec, window_s)
+        if args.chat:
+            chat_scope = {"scope": "window", "peak": peak_sec,
+                          "window_s": window_s,
+                          "window": [win_begin, win_end],
+                          "file": chat_path,
+                          "note": "chat local ya descargado; la ventana "
+                                  "solo delimita el análisis"}
+        else:
+            chat_path = chat_window_path(out_dir, win_begin, win_end)
+            chat_scope = {"scope": "window", "peak": peak_sec,
+                          "window_s": window_s,
+                          "window": [win_begin, win_end],
+                          "file": chat_path}
+        print(f"Modo --peak: momento {fmt_ts(int(peak_sec))} "
+              f"({peak_sec:.0f}s), chat solo en ventana "
+              f"[{win_begin}s, {win_end}s] (±{window_s}s)")
     # Sin --video ya no hay vod.mp4: Twitch corta de un segmento por
     # pico (ver el bucle). video_path solo vive con --video local.
     video_path = args.video
@@ -794,7 +912,11 @@ def main() -> int:
                     out_raw_ndjson=os.path.join(out_dir, "chat_kick_raw.ndjson"),
                     workers=args.workers)
         else:
-            download_chat(vod_id, chat_path, force=args.force_chat)
+            if peak_mode:
+                download_chat_window(vod_id, chat_path, peak_sec,
+                                     window_s, force=args.force_chat)
+            else:
+                download_chat(vod_id, chat_path, force=args.force_chat)
     if not os.path.isfile(chat_path):
         print(f"Error: no existe el chat: {chat_path}", file=sys.stderr)
         return 1
@@ -813,7 +935,27 @@ def main() -> int:
     scores, detail = score_windows(chat_path, window_size=args.window, lang=args.lang)
     total_msgs = sum(d["msgs"] for d in detail.values())
     audio_peaks = []
-    if not scores or total_msgs == 0:
+    if peak_mode:
+        # El momento es explícito: el pico pedido es el clip, sin
+        # buscar otros. La rejilla de ventanas es de window/2 (5 s):
+        # el pico se ajusta a la ventana que lo contiene. Si la
+        # ventana no trae mensajes, se corta igual con score 0.
+        step = max(1, args.window // 2)
+        peak_ts = int(peak_sec // step) * step
+        if peak_ts in scores and detail.get(peak_ts):
+            peaks = [(peak_ts, scores[peak_ts])]
+            d = detail[peak_ts]
+            print(f"Pico pedido: {fmt_ts(peak_ts)} — {scores[peak_ts]} pts "
+                  f"({d['msgs']} msgs, {d['risas']} risas, {d['hype']} hype); "
+                  f"ventana de chat: {total_msgs} mensajes en total")
+        else:
+            peaks = [(peak_ts, 0)]
+            detail[peak_ts] = {"msgs": 0, "risas": 0, "hype": 0, "users": 0}
+            scores[peak_ts] = 0
+            print(f"Aviso: sin mensajes de chat en {fmt_ts(peak_ts)} dentro "
+                  "de la ventana; se corta igual (momento explícito, "
+                  "score 0).", file=sys.stderr)
+    elif not scores or total_msgs == 0:
         print("Chat vacío: no hay mensajes con los que detectar picos.")
         if platform == "kick" and args.audio_fallback and kick_meta:
             print("Fallback por audio transcrito (muestreo, ver kick_downloader/core.py)...")
@@ -839,12 +981,23 @@ def main() -> int:
         # chat + audio pendiente; los humanos quedan estimados y el
         # total es BETA). No descarga vídeo ni corta nada.
         if viral_score_mod and scores:
-            median = statistics.median(scores.values())
+            if peak_mode:
+                # La mediana es local a la ventana: las ventanas vacías
+                # de antes del momento no cuentan (si no, la mediana
+                # es 0 y el múltiplo queda en None y revienta el
+                # formato del filtro).
+                in_window = [s for ts, s in scores.items()
+                             if win_begin <= ts <= win_end]
+                median = statistics.median(in_window) if in_window else 0
+            else:
+                median = statistics.median(scores.values())
             ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
             rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
             print("Score de viralidad (BETA, sin entrada humana):")
             for ts, score in peaks:
-                multiple = score / median if median > 0 else None
+                # Con mediana <= 0, el múltiplo es el propio score
+                # (mismo criterio que viral_multiple en ese caso).
+                multiple = score / median if median > 0 else score
                 vs = score_clip(detail[ts], multiple, rank=rank_map.get(ts),
                                 human=(human_scores.get("all")
                                        or human_scores.get(str(ts))))
@@ -881,18 +1034,33 @@ def main() -> int:
         print(f"VOD: {fmt_ts(int(duration))} ({duration:.0f}s)")
 
     # Mediana de los picos: la ficha del momento y el paquete viral la
-    # usan para el múltiplo viral (x veces la mediana).
-    median_score = statistics.median(scores.values()) if scores else None
+    # usan para el múltiplo viral (x veces la mediana). Con --peak la
+    # mediana es local a la ventana de chat (las ventanas vacías de
+    # antes del momento no cuentan).
+    if peak_mode:
+        in_window = [s for ts, s in scores.items()
+                     if win_begin <= ts <= win_end]
+        median_score = statistics.median(in_window) if in_window else None
+        ranked = sorted(((ts, s) for ts, s in scores.items()
+                         if win_begin <= ts <= win_end),
+                        key=lambda kv: kv[1], reverse=True)
+    else:
+        median_score = statistics.median(scores.values()) if scores else None
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     # Puesto de cada pico en el VOD (1 = el mejor): lo usa el filtro
     # previo del score de viralidad (solo top-5).
-    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     rank_map = {ts: i + 1 for i, (ts, _s) in enumerate(ranked)}
 
     # 3. Filtro previo: los picos que no pasan (múltiplo < 3x, solo
     # emote-spam, sin mensajes, fuera del top-5) NO se cortan ni se
     # encolan; quedan registrados en el manifiesto como descartados.
-    # --top-n es un MÁXIMO, no una cuota.
-    if viral_score_mod:
+    # --top-n es un MÁXIMO, no una cuota. Con --peak no se aplica:
+    # el momento es explícito y el filtro es para la cola automática.
+    if peak_mode:
+        discarded = []
+        print("Filtro previo: no se aplica — el momento es explícito "
+              "(--peak).")
+    elif viral_score_mod:
         peaks, discarded = filter_candidates(peaks, detail, rank_map,
                                              median_score)
     else:
@@ -915,6 +1083,7 @@ def main() -> int:
     # 4. Cortar + titular y manifiesto
     manifest = {"vod_id": vod_id, "platform": platform,
                 "source_url": args.vod, "lang": args.lang,
+                "chat": chat_scope,
                 "seo_overrides": [], "clips": [],
                 "descartados": discarded,
                 "status": "ok" if peaks else "sin_momentos_virales"}
