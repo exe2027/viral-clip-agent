@@ -872,8 +872,17 @@ def _ass_time(seconds):
 
 
 def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
-                       offset=0.0, max_end=None, game_voice=None):
+                       offset=0.0, max_end=None, game_voice=None,
+                       alignment=2, margin_v=None):
     """Convierte bloques SRT en un ASS karaoke palabra por palabra.
+
+    ``alignment`` / ``margin_v`` colocan el subtitulo: por defecto
+    Alignment 2 (abajo-centrado) con el margin_v del estilo, que es
+    la parte baja del gameplay. La plantilla RDJavi pasa
+    alignment=8, margin_v=608 (al pie de la camara, banda 595..749),
+    para no solapar los subtitulos propios de GTA 6 (regla del
+    usuario 2026-11-18 19:02). Si no se pasa margin_v, usa el del
+    estilo.
 
     Cada bloque se reparte entre sus palabras en proporción a su
     longitud (palabra + espacio): la etiqueta ``\\k`` de cada palabra
@@ -900,7 +909,7 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
     border_color = style.get("border_color", "#000000")
     border_width = style.get("border_width", 3)
     fontsize = style.get("fontsize", 64)
-    margin_v = style.get("margin_v", 140)
+    margin_v = style.get("margin_v", 140) if margin_v is None else margin_v
     bold = -1 if style.get("bold", True) else 0
     game_spans = normalize_game_voice(
         game_voice, max_end) if game_voice else []
@@ -929,7 +938,7 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
         f"{hex_to_ass_color(font_color, 1.0)},"
         f"{hex_to_ass_color(border_color, 1.0)},"
         f"{hex_to_ass_color('#000000', 0.0)},"
-        f"{bold},0,0,0,100,100,0,0,1,{border_width},0,2,10,10,{margin_v},1\n"
+        f"{bold},0,0,0,100,100,0,0,1,{border_width},0,{alignment},10,10,{margin_v},1\n"
         + game_style +
         "\n"
         "[Events]\n"

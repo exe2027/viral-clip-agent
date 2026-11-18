@@ -13,16 +13,25 @@ usuario 2026-11-18: estilo RDJavi TOTAL, DJ Mariio olvidado):
   * Gameplay ABAJO: y=749..1786 (39%-93%), 1080x1037, recorte 1:1.
   * Barra negra abajo: y=1786..1920.
   * Cortes duros; camara fija con un punch-in (zoom ~1,18x) en la
-    reaccion (por defecto 16-26 s del clip).
-  * Subtitulos SIMPLES estilo RDJavi: una linea centrada, Noto Sans
-    Condensed 42, blanca con contorno negro, sin fondo, sin karaoke,
-    MarginV 200, en la parte baja del gameplay (ver make_simple_ass
-    o un .ass ya hecho; se queman en el mismo pase).
+    reaccion (por defecto 16-26 s del clip), con doble rama de
+    camara + overlay enable (opcion C, 2026-11-18): sin trim ni
+    concat de 3 tramos.
+  * Subtitulos KARAOKE por defecto (decision del usuario
+    2026-11-18 19:17): palabra por palabra, palabra activa
+    amarilla y resto blanco, 56 px negrita con contorno negro,
+    AL PIE DE LA CAMARA (Alignment 8, MarginV 608, banda
+    595..749), nunca en el gameplay, para no solapar los
+    subtitulos propios de GTA 6 (regla 2026-11-18 19:02).
+    Ver make_karaoke_ass(). Se queman en el mismo pase.
 
 Por que es rapido (vs el render viejo de 4 pases):
   * 1 solo pase: layout + punch-in + subtitulos + audio en una
     invocacion; sin renders por tramo ni concat de MP4 ni segundo
     pase de quemado.
+  * La fuente de color de fondo lleva duracion (color:d=DUR) y la
+    salida lleva -t DUR: sin duracion el color es una fuente
+    infinita y ffmpeg no termina nunca (cola congelada de 193 s
+    en p3220, 2026-11-18).
   * Fondo desenfocado pre-renderizado: una imagen fija (fotograma del
     clip desenfocado + gradiente) cacheada en <run>/rdjavi/bg.png;
     el pase principal la usa como entrada en loop, sin gblur por
@@ -55,7 +64,22 @@ GAME_Y, GAME_H = 749, 1037   # gameplay: y 749..1786
 GAME_CROP = "1440:1440:620:0"  # recorte 1:1 centrado (x=620 evita el HUD izq.)
 DEFAULT_CAM_BOX = "561:365:0:0"  # caja PiP del streamer en el segmento
 DEFAULT_CAM_SQUARE = "365:365:90:0"  # recorte cuadrado (cara centrada)
+# Recorte exacto del punch-in medido en p3220 (2026-11-18): el zoom
+# calculado (309:309:118:28) dejaba la cara 1 px descentrada; este es
+# el del script local verificado fotograma a fotograma (15,9/16,1 y
+# 25,9/26,1 s). Solo vale para DEFAULT_CAM_SQUARE; con otro recorte
+# se calcula con punch_crop().
+PUNCH_SQUARE_EXACT = "310:310:125:27"
 PUNCH_ZOOM = 1.18
+
+# Subtitulos al pie de la camara (regla del usuario 2026-11-18 19:02):
+# la webcam ocupa y 0..595 y el gameplay empieza en y 749, asi que el
+# texto cae en la banda 595..749. Alignment 8 = arriba-centrado,
+# MarginV medido desde arriba. Nunca en el gameplay: ahi van los
+# subtitulos propios de GTA 6 y se solaparian.
+SUBS_ALIGN = 8
+SUBS_MARGIN_V = 608
+SUBS_FONT = "Noto Sans"
 
 
 def _run(cmd, what):
@@ -98,34 +122,40 @@ def punch_crop(square, zoom):
 
 def build_filter(cam_square, punch_in, duration, ass_path, fps,
                  game_crop=GAME_CROP):
-    """Grafo de un solo pase: cam (con punch-in) + fondo fijo + juego."""
+    """Grafo de un solo pase, opcion C (2026-11-18): doble rama de
+    camara + overlay enable para el punch-in, sin trim ni concat.
+
+    El color de fondo lleva duracion (d=duration): sin ella es una
+    fuente infinita y ffmpeg no cierra nunca (cola congelada).
+    """
     p0, p1 = punch_in if punch_in else (None, None)
-    parts = []
-    # fps=30 PRIMERO: todo el grafo trabaja a 30 fps (antes el fps
-    # estaba al final y el grafo entero corria a 60 fps: el doble
-    # de trabajo y de tamano).
     if p0 is not None:
-        zc = punch_crop(cam_square, PUNCH_ZOOM)
-        parts.append(
+        zc = (PUNCH_SQUARE_EXACT if cam_square == DEFAULT_CAM_SQUARE
+              else punch_crop(cam_square, PUNCH_ZOOM))
+        head = (
             f"[0:v]fps={fps},split=2[cam_src][game_src];"
-            f"[cam_src]split=3[ca][cb][cc];"
-            f"[ca]trim=start=0:end={p0},setpts=PTS-STARTPTS,"
-            f"crop={cam_square},scale={CAM_W}:{CAM_H},setsar=1[ca2];"
-            f"[cb]trim=start={p0}:end={p1},setpts=PTS-STARTPTS,"
-            f"crop={zc},scale={CAM_W}:{CAM_H},setsar=1[cb2];"
-            f"[cc]trim=start={p1}:end={duration},setpts=PTS-STARTPTS,"
-            f"crop={cam_square},scale={CAM_W}:{CAM_H},setsar=1[cc2];"
-            f"[ca2][cb2][cc2]concat=n=3:v=1:a=0[cam];")
+            f"[cam_src]split=2[cam_n][cam_z];"
+            f"[cam_n]crop={cam_square},scale={CAM_W}:{CAM_H},setsar=1[camN];"
+            f"[cam_z]crop={zc},scale={CAM_W}:{CAM_H},setsar=1[camZ];")
+        cam_overlay = (
+            f"[step1][camN]overlay={CAM_X}:{CAM_Y}:"
+            f"enable='lt(t,{p0})+gte(t,{p1})'[step2a];"
+            f"[step2a][camZ]overlay={CAM_X}:{CAM_Y}:"
+            f"enable='gte(t,{p0})*lt(t,{p1})'[step2];")
     else:
-        parts.append(
+        head = (
             f"[0:v]fps={fps},split=2[cam_src][game_src];"
             f"[cam_src]crop={cam_square},scale={CAM_W}:{CAM_H},setsar=1[cam];")
-    parts.append(
+        cam_overlay = (
+            f"[step1][cam]overlay={CAM_X}:{CAM_Y}[step2];")
+    parts = [
+        head,
         f"[game_src]crop={game_crop},scale={W}:{GAME_H},setsar=1[game];"
-        f"color=c=black:s={W}x{H}:r={fps}[base];"
-        f"[base][1:v]overlay=0:0[step1];"
-        f"[step1][cam]overlay={CAM_X}:{CAM_Y}[step2];"
-        f"[step2][game]overlay=0:{GAME_Y}[vout];")
+        f"color=c=black:s={W}x{H}:r={fps}:d={duration}[base];"
+        f"[base][1:v]overlay=0:0[step1];",
+        cam_overlay,
+        f"[step2][game]overlay=0:{GAME_Y}[vout];",
+    ]
     if ass_path:
         parts.append(f"[vout]ass={ass_path}[vsub]")
         vlabel = "[vsub]"
@@ -134,20 +164,52 @@ def build_filter(cam_square, punch_in, duration, ass_path, fps,
     return "".join(parts), vlabel
 
 
+def build_render_cmd(segment, start, duration, ass_path, out_path, bg_png,
+                     cam_square=DEFAULT_CAM_SQUARE, punch_in=(16, 26),
+                     fps=30, preset="veryfast", crf=23,
+                     game_crop=GAME_CROP):
+    """Comando ffmpeg del render RDJavi en un solo pase.
+
+    La entrada ya lleva -t duration y la salida tambien: el -t de
+    salida es el seguro por si alguna fuente del grafo no termina
+    (sin el, un color sin duracion alargaba el render a 193 s).
+    """
+    filt, vlabel = build_filter(cam_square, punch_in, duration, ass_path,
+                                fps, game_crop)
+    return ["ffmpeg", "-y", "-v", "error",
+            "-ss", str(start), "-t", str(duration), "-i", segment,
+            "-loop", "1", "-t", str(duration), "-i", bg_png,
+            "-filter_complex", filt,
+            "-map", vlabel, "-map", "0:a",
+            "-c:a", "copy",
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            "-t", str(duration), out_path]
+
+
+def make_karaoke_ass(blocks, style, font_name=SUBS_FONT):
+    """ASS karaoke al pie de la camara a partir de bloques SRT.
+
+    Usa el estilo karaoke de la config (default, 2026-11-18) con
+    Alignment 8 y MarginV 608: el subtitulo queda en la banda
+    595..749, justo bajo la webcam y siempre por encima del
+    gameplay. El generador base pone Alignment 2 / MarginV 230
+    (parte baja del gameplay); aqui se fuerza la posicion RDJavi.
+    """
+    from .transcribe import srt_to_karaoke_ass
+    return srt_to_karaoke_ass(blocks, style, font_name=font_name,
+                              alignment=SUBS_ALIGN,
+                              margin_v=SUBS_MARGIN_V)
+
+
 def render(segment, start, duration, ass_path, out_path, bg_png,
            cam_square=DEFAULT_CAM_SQUARE, punch_in=(16, 26),
            fps=30, preset="veryfast", crf=23, game_crop=GAME_CROP):
     """Render RDJavi en un solo pase. Devuelve los segundos que tardo."""
-    filt, vlabel = build_filter(cam_square, punch_in, duration, ass_path,
-                                fps, game_crop)
-    cmd = ["ffmpeg", "-y", "-v", "error",
-           "-ss", str(start), "-t", str(duration), "-i", segment,
-           "-loop", "1", "-t", str(duration), "-i", bg_png,
-           "-filter_complex", filt,
-           "-map", vlabel, "-map", "0:a",
-           "-c:a", "copy",
-           "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-           "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path]
+    cmd = build_render_cmd(segment, start, duration, ass_path, out_path,
+                           bg_png, cam_square=cam_square,
+                           punch_in=punch_in, fps=fps, preset=preset,
+                           crf=crf, game_crop=game_crop)
     return _run(cmd, "render RDJavi")
 
 

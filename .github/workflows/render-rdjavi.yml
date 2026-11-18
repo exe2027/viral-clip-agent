@@ -2,14 +2,21 @@
 #
 # La VM (1,5 CPU compartidas) mató el render dos veces por lento; el
 # runner ubuntu-latest tiene 4 vCPU (free tier, $0) y el tribunal estima
-# 2,5-3,5 min para este clip. Un solo pase (opción C): layout + punch-in
-# + subtítulos + audio en una invocación de clipagent/rdjavi.py, sin
-# concat ni segundo encode.
+# 2,5-3,5 min para este clip. Un solo pase (opción C, plantilla común
+# clipagent/rdjavi.py): layout + punch-in con overlay enable + subtítulos
+# karaoke al pie de la cámara + audio en una invocación, sin concat ni
+# segundo encode. El color de fondo lleva duración y la salida lleva -t
+# (sin eso ffmpeg no termina nunca: cola congelada de 193 s en p3220).
+# Subtítulos karaoke por defecto (2026-11-18): Alignment 8, MarginV 608,
+# banda 595..749 al pie de la cámara, nunca en el gameplay (ahí van los
+# subtítulos propios de GTA 6).
 #
 # Entrada: el intermedio h264 1080p30 ya transcodificado
 # (runs/2932415021-p3220/rdjavi/seg_1080p30.mp4, 74 MB, committeado
-# con -f porque *.mp4 está en .gitignore). El render toma los primeros
-# 48,01 s (--duration), que corresponden al corte [3200-3248] del VOD.
+# con -f porque *.mp4 está en .gitignore) y el ASS karaoke de p3220
+# (subs_karaoke.ass, también committeado con -f por la misma razón).
+# El render toma los primeros 48,01 s (--duration), que corresponden
+# al corte [3200-3248] del VOD.
 # Salida: MP4 1080x1920 como artifact (no se commitea, no se publica).
 #
 # Uso: Actions > Render RDJavi (p3220) > Run workflow (los defaults son
@@ -23,8 +30,8 @@ on:
         description: "Segmento de entrada (relativo al repo)"
         default: "runs/2932415021-p3220/rdjavi/seg_1080p30.mp4"
       ass:
-        description: "ASS de subtítulos simples (MarginV 200)"
-        default: "runs/2932415021-p3220/rdjavi/subs_simple.ass"
+        description: "ASS de subtítulos karaoke al pie de la cámara (Alignment 8, MarginV 608)"
+        default: "runs/2932415021-p3220/rdjavi/subs_karaoke.ass"
       gradient:
         description: "PNG gradiente Vice City"
         default: "runs/2932415021-p3220/rdjavi/vice_gradient.png"

@@ -1,0 +1,28 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Karaoke,Noto Sans,56,&H0000FFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,4,0,8,40,40,608,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.12,0:00:05.18,Karaoke,,0,0,0,,{\k50}¿Cuál {\k41}será {\k25}el {\k50}botón {\k25}de {\k66}cambiar {\k25}la {\k66}cámara, {\k58}gente?
+Dialogue: 0,0:00:14.10,0:00:15.96,Karaoke,,0,0,0,,{\k19}Voy {\k9}a {\k28}decir {\k23}esto {\k33}muchas {\k28}veces {\k28}antes {\k18}de…
+Dialogue: 0,0:00:15.96,0:00:17.30,Karaoke,,0,0,0,,{\k16}Sí, {\k20}pero {\k12}lo {\k16}voy {\k8}a {\k24}decir {\k12}de {\k26}nuevo,
+Dialogue: 0,0:00:17.30,0:00:19.74,Karaoke,,0,0,0,,{\k15}no {\k15}me {\k25}creo {\k20}que {\k40}estemos {\k30}aquí, {\k35}viendo {\k30}esto, {\k34}gente.
+Dialogue: 0,0:00:21.07,0:00:23.30,Karaoke,,0,0,0,,{\k15}Y {\k22}de {\k82}barbaridad {\k22}al {\k82}triángulo.
+Dialogue: 0,0:00:23.30,0:00:26.26,Karaoke,,0,0,0,,{\k28}No, {\k35}hijo {\k21}de {\k42}puta, {\k35}casi {\k21}me {\k21}la {\k35}lío, {\k58}cabrón.
+Dialogue: 0,0:00:27.78,0:00:28.86,Karaoke,,0,0,0,,{\k20}¿Cómo {\k10}me {\k10}he {\k24}podido {\k17}caer {\k10}en {\k17}eso?
+Dialogue: 0,0:00:29.85,0:00:30.85,Karaoke,,0,0,0,,{\k19}¿Cómo {\k9}me {\k9}he {\k22}podido {\k16}caer {\k9}en {\k16}eso?
+Dialogue: 0,0:00:31.82,0:00:32.76,Karaoke,,0,0,0,,{\k9}Y {\k13}le {\k22}hago {\k27}caso, {\k23}tío.
+Dialogue: 0,0:00:36.58,0:00:38.08,Karaoke,,0,0,0,,{\k27}Tendrá {\k35}temprano {\k15}que {\k12}ir {\k12}al {\k35}paquete, {\k14}ok.
+Dialogue: 0,0:00:38.78,0:00:39.60,Karaoke,,0,0,0,,{\k19}Esto {\k11}es {\k11}lo {\k15}del {\k26}focus,
+Dialogue: 0,0:00:39.60,0:00:40.76,Karaoke,,0,0,0,,{\k12}la {\k15}vía {\k12}de {\k23}focus {\k12}de {\k27}Jason, {\k15}eh.
+Dialogue: 0,0:00:41.68,0:00:42.60,Karaoke,,0,0,0,,{\k16}Todo {\k25}después {\k16}será {\k35}importante
+Dialogue: 0,0:00:42.60,0:00:44.00,Karaoke,,0,0,0,,{\k18}para {\k25}cuando {\k39}disparamos {\k7}a {\k25}gente, {\k14}por {\k12}si
+Dialogue: 0,0:00:44.00,0:00:45.50,Karaoke,,0,0,0,,{\k38}queremos {\k38}matarles {\k8}o {\k66}incapacitarles.
+Dialogue: 0,0:00:46.08,0:00:46.74,Karaoke,,0,0,0,,{\k33}Importante, {\k33}importante.
