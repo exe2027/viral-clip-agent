@@ -29,6 +29,13 @@ class TestStreamerHype(unittest.TestCase):
         self.assertIn("dios mío", hits["phrases"])
         self.assertIn("no me lo creo", hits["phrases"])
 
+    def test_exclamaciones_del_reel_gta_vi_clips(self):
+        # Reel 2026-11-18: el streamer suelta "cojones" y "ole" al
+        # ver que tiran al personaje del auto.
+        hits = find_streamer_hype("¡Cojones! ¡Olé, qué pasada!")
+        self.assertIn("cojones", hits["phrases"])
+        self.assertIn("ole", hits["phrases"])
+
     def test_sin_hype(self):
         hits = find_streamer_hype(
             "Bueno, vamos a seguir con la misión tranquilamente.")

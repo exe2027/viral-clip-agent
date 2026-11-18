@@ -67,6 +67,17 @@ BONUS_NEAR_PEAK_S = 10.0   # ventana alrededor del pico para el bonus
 BONUS_LAUGH = 0.20         # +20% si hay risa/hype cerca del pico
 BONUS_VOICE = 0.10         # +10% si hay voz cerca del pico (sin risa/hype)
 
+# Gritos por decibeles (idea del usuario 2026-11-18 18:24): un grito
+# es un SUBIDÓN, no un nivel alto constante. Un directo siempre a
+# -15 dBFS no tiene gritos; uno a -35 con un segundo a -18 sí. Por
+# eso se mide el salto sobre la mediana de los 10 s anteriores, no
+# el volumen medio (ver OJO en el docstring: el nivel medio NO
+# discrimina). Señal registrada, no cambia el scoring: el
+# componente audio ya premia el rango (detect.audio_component).
+SHOUT_JUMP_DB = 8.0        # salto mínimo sobre la mediana previa
+SHOUT_MIN_DBFS = -30.0     # el segundo tiene que ser audible
+SHOUT_BASELINE_S = 10      # mediana de los 10 s anteriores
+
 LAUGH_WORDS = {
     # "no" NO está en la lista a propósito: en español es negación
     # ("No, no, no" en Coker) y dispara falsos +20%.
@@ -154,6 +165,34 @@ def audio_stats(rms_list):
     }
 
 
+def shout_spikes(rms_list, jump_db=SHOUT_JUMP_DB,
+                 min_dbfs=SHOUT_MIN_DBFS,
+                 baseline_s=SHOUT_BASELINE_S):
+    """Segundos-grito: salto brusco de volumen (idea 2026-11-18).
+
+    ``rms_list``: [(segundo_relativo, dbfs), ...] de rms_per_second.
+    Devuelve [segundos] donde el RMS salta >= ``jump_db`` sobre la
+    mediana de los ``baseline_s`` segundos anteriores y el nivel
+    es audible (>= ``min_dbfs``). Los primeros 3 s no puntúan (sin
+    baseline fiable). Un nivel alto constante no es grito; una
+    subida gradual tampoco; un susurro que sube de -60 a -45 no
+    es grito (por debajo de ``min_dbfs``). Solo stdlib.
+    """
+    import statistics
+
+    spikes = []
+    vals = [db for _, db in rms_list]
+    for i, (sec, db) in enumerate(rms_list):
+        if i < 3 or db < min_dbfs:
+            continue
+        base = vals[max(0, i - baseline_s):i]
+        if not base:
+            continue
+        if db - float(statistics.median(base)) >= jump_db:
+            spikes.append(sec)
+    return spikes
+
+
 def is_flat(stats):
     """True si el audio es una cama constante (música/juego sin voz)."""
     if stats["std_db"] is None:
@@ -209,6 +248,7 @@ def audio_verdict(video_path, chat_score=None, peak_rel=None,
     rms = rms_per_second(video_path, start=start, end=end)
     stats = audio_stats(rms)
     flat = is_flat(stats)
+    shouts = shout_spikes(rms)
     words = transcript_words(transcript)
     bonus, bonus_reason = transcription_bonus(transcript, peak_rel, lang)
 
@@ -233,6 +273,8 @@ def audio_verdict(video_path, chat_score=None, peak_rel=None,
                            for s, db in rms],
         "stats": stats,
         "flat": flat,
+        "shout_seconds": shouts,
+        "shout_count": len(shouts),
         "words": len(words),
         "transcription_bonus": bonus,
         "transcription_bonus_reason": bonus_reason,

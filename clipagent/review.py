@@ -232,7 +232,10 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
                              peak_rel=REVIEW_PEAK_REL_S,
                              transcript=transcript, lang=lang)
         result["audio"] = {"stats": full.get("stats"),
-                           "words": full.get("words")}
+                           "words": full.get("words"),
+                           "shout_count": full.get("shout_count", 0),
+                           "shout_seconds": full.get("shout_seconds",
+                                                     [])}
         result["transcript_words"] = int(full.get("words") or 0)
     except Exception as e:  # noqa: BLE001 - sin fotogramas ni
         # audio no hay revisión posible: fallback pre-corte.

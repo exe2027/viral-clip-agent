@@ -726,7 +726,9 @@ class LiveCutterSession(LiveSession):
                         "viral_revisado":
                             reviewed.get("viral_revisado"),
                         "human": reviewed.get("human"),
-                        "motivo": reviewed.get("motivo")}
+                        "motivo": reviewed.get("motivo"),
+                        "shouts": (reviewed.get("audio") or {}).get(
+                            "shout_count", 0)}
                        if reviewed is not None else None),
             "burst_score": detail.get("burst_score"),
             "hype_score": detail.get("hype_score"),
@@ -779,6 +781,9 @@ class LiveCutterSession(LiveSession):
             if _sh.get("count"):
                 _reason += (" — streamer: "
                             + ", ".join(_sh.get("phrases") or []))
+            _shouts = (record.get("review") or {}).get("shouts")
+            if _shouts:
+                _reason += f" — gritos: {_shouts}"
             payload = {
                 "title": record["title"],
                 "start_sec": record["start_sec"],

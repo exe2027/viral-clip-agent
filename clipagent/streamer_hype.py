@@ -59,7 +59,11 @@ PHRASES_ES = (
     "qué explosión",
     "qué golazo",
     "no, no, no",
+    "cojones",
+    "ole",
 )
+# "cojones" y "ole" del reel de GTA VI CLIPS (2026-11-18): el
+# streamer los suelta al ver que tiran al personaje del auto.
 # "vamos" fuera: demasiado genérico ("vamos a seguir...") y salta
 # en habla normal sin hype.
 

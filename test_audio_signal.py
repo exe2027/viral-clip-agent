@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from clipagent.audio import shout_spikes
 from clipagent.detect import (audio_component, audio_weight_for,
                               score_clip)
 
@@ -88,6 +89,34 @@ class TestAudioWeight(unittest.TestCase):
                                audio=audio, audio_weight=w)["total"]
             self.assertGreaterEqual(total, 0.0)
             self.assertLessEqual(total, 100.0)
+
+
+class TestShoutSpikes(unittest.TestCase):
+    """Gritos por decibeles (2026-11-18): salto brusco sobre la
+    mediana de los 10 s anteriores, no nivel alto constante."""
+
+    def _rms(self, levels):
+        return [(s, float(db)) for s, db in enumerate(levels)]
+
+    def test_grito_detectado(self):
+        levels = [-32.0] * 20 + [-16.0, -15.0] + [-32.0] * 18
+        self.assertEqual(shout_spikes(self._rms(levels)), [20, 21])
+
+    def test_nivel_alto_constante_no_es_grito(self):
+        self.assertEqual(shout_spikes(self._rms([-16.0] * 40)), [])
+
+    def test_subida_gradual_no_es_grito(self):
+        levels = [-35.0 + 0.75 * s for s in range(20)]
+        self.assertEqual(shout_spikes(self._rms(levels)), [])
+
+    def test_susurro_que_sube_no_es_grito(self):
+        # Salto de 15 dB pero por debajo de -30 dBFS: no audible.
+        levels = [-60.0] * 20 + [-45.0, -44.0] + [-60.0] * 18
+        self.assertEqual(shout_spikes(self._rms(levels)), [])
+
+    def test_sin_baseline_no_puntua(self):
+        levels = [-16.0, -15.0, -32.0, -32.0]
+        self.assertEqual(shout_spikes(self._rms(levels)), [])
 
 
 if __name__ == "__main__":
