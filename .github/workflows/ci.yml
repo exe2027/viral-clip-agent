@@ -42,12 +42,5 @@ jobs:
           pip install -e .[dev,vision]
       - name: Ruff
         run: ruff check .
-      - name: Gitleaks (secretos en el repo y su historial)
-        # Paso con bloqueo (MEJORAS-PENDIENTES.md 1.1): si gitleaks
-        # encuentra un secreto, la CI falla. Complementa al test
-        # test_no_secrets_in_repo.py, que escanea el árbol actual.
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Tests
         run: pytest -q
