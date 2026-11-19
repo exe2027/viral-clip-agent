@@ -1,0 +1,31 @@
+# Reintento de publicación SOLO en Instagram del clon clip 15.
+#
+# El clon 15 lo creó enqueue-illojuan-ig.yml y su job 13 quedó en
+# draft porque faltaba el Extra (ig_user_id). Meta ya está resuelto
+# (2026-11-19 05:27: token nuevo tras la revinculación, Graph ya
+# devuelve instagram_business_account, panel en verde).
+# POST /publish re-encola un job en draft en vez de duplicarlo
+# (enqueuePublishJobs: draft/failed -> scheduled), así que este
+# workflow republica el clip 15 sin crear otro clon.
+name: Publish IlloJuan IG retry (clip 15)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: sebastian
+    env:
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_TENANT: sebastian
+      PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+      PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publicar clip 15 solo en Instagram + verificar
+        run: |
+          set -euo pipefail
+          python3 runs/live/illojuan-borra-gta6-ig/publish_illojuan_ig.py 15 --wait-min=14
