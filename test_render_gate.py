@@ -38,8 +38,8 @@ P3220_CHAT = os.path.join(
 
 SEO_BUENO = {"youtube_shorts": 92, "tiktok": 94,
              "instagram_reels": 94, "facebook_reels": 94}
-SEO_BAJO = {"youtube_shorts": 85, "tiktok": 84,
-            "instagram_reels": 83, "facebook_reels": 82}
+SEO_BAJO = {"youtube_shorts": 75, "tiktok": 74,
+            "instagram_reels": 73, "facebook_reels": 72}
 
 
 # --- render_gate (pura) -----------------------------------------------
@@ -66,11 +66,11 @@ def test_render_gate_seo_bajo_falla():
 
 
 def test_render_gate_max_no_min():
-    """Basta UNA plataforma >= 90: el clip se corta si se puede
+    """Basta UNA plataforma >= 80: el clip se corta si se puede
     publicar en alguna; la puerta por plataforma sigue en
     publicación."""
-    g = render_gate(55.0, {"youtube_shorts": 89, "tiktok": 91,
-                            "instagram_reels": 88, "facebook_reels": 87})
+    g = render_gate(55.0, {"youtube_shorts": 79, "tiktok": 81,
+                            "instagram_reels": 78, "facebook_reels": 77})
     assert g["pasa"] is True
     assert g["plataformas_publicables"] == ["tiktok"]
 
@@ -124,7 +124,9 @@ def _chat_with_burst(path, burst_start=100, n_burst=40, n_base=20):
                     reason="falta el chat real de p3220 en runs/")
 def test_gate_p3220_real_pasa():
     """Con los datos reales de p3220, la puerta pre-corte PASA:
-    estimación 46,3 >= 45 y SEO máx. 92 >= 90, título provisional
+    estimación 46,3 >= 45 y SEO máx. 81 >= 80 (puerta bajada a
+    45/80 el 2026-11-19; el paquete es el de reglas, sin clave de
+    Gemini en local), título provisional
     'GTA 6: El chat: "Cinema"'."""
     from clipagent.ingest import median_over_all, score_windows
     scores, detail = score_windows(P3220_CHAT, lang="es")
@@ -137,7 +139,8 @@ def test_gate_p3220_real_pasa():
         clip_start=3200, duration=48, n=1)
     assert gate["viral_estimate"] == pytest.approx(46.3, abs=0.2)
     assert gate["seo_medido"] is True
-    assert max(gate["seo"].values()) >= 90
+    assert max(gate["seo"].values()) >= 80
+    assert gate["pasa"] is True
     assert gate["pre_corte_title"] == 'GTA 6: El chat: "Cinema"'
     assert gate["pasa"] is True
 

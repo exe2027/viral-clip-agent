@@ -239,7 +239,9 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
         # Regla 11 (hoy): el clip solo se corta si ya pasa las
         # puertas con el paquete provisional. El umbral pre-corte es
         # 45 (calibrado: p3220 estima 46,3 vs real 53,8; p2010 44,5);
-        # el 50 REAL sigue en la puerta de publicación.
+        # la puerta de publicación bajó a 45/80 el 2026-11-19 por
+        # orden del usuario (antes 50/90), así que el 45 ya es el
+        # listón real en ambos lados.
         from clipagent.policy import render_gate
         from clipagent.workers import PRE_CORTE_VIRAL_MIN
         self.assertEqual(PRE_CORTE_VIRAL_MIN, 45)
@@ -250,9 +252,9 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
             46.3, seo_bueno, viral_min=PRE_CORTE_VIRAL_MIN)["pasa"])
         self.assertFalse(render_gate(
             44.5, seo_bueno, viral_min=PRE_CORTE_VIRAL_MIN)["pasa"])
-        # Y con el umbral real (50) la estimación de p3220 no
-        # pasaría: por eso el 50 solo se aplica en publicación.
-        self.assertFalse(render_gate(46.3, seo_bueno)["pasa"])
+        # Con el listón bajado a 45, la estimación de p3220 (46,3)
+        # pasa también la puerta por defecto.
+        self.assertTrue(render_gate(46.3, seo_bueno)["pasa"])
         self.assertTrue(render_gate(53.8, seo_bueno)["pasa"])
 
 
