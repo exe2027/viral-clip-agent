@@ -446,6 +446,10 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
                  "hace <6 h); se sigue.")
             continue
         vods_tried += 1
+        # Fase en vivo: se refresca al empezar cada VOD (un VOD
+        # tarda ~8 min; sin esto la fase envejece y el panel la
+        # marca "sin señal reciente" a mitad de corrida).
+        _report_phase("modo_vod", name, bridge=bridge, dry_run=dry_run)
         _log(f"{name}: VOD {vod_id} ({vod.get('title', '')[:60]!r}, "
              f"categoría Helix {vod.get('category')!r})")
         if dry_run:

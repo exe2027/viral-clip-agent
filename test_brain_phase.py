@@ -198,11 +198,15 @@ class TestVodFallbackPhase(unittest.TestCase):
             latest_vod_fn=lambda entry: vod,
             auto_clips_fn=lambda *a, **k: {"clips": []})
         self.assertEqual(n, 0)
-        self.assertEqual(len(bridge.phases), 2)
+        self.assertEqual(len(bridge.phases), 3)
         self.assertEqual(bridge.phases[0][0], "modo_vod")
         self.assertIn("rubius", bridge.phases[0][1])
-        self.assertEqual(bridge.phases[1][0], "sin_directos")
-        self.assertIn("modo VOD:", bridge.phases[1][1])
+        # Al empezar el VOD la fase se refresca con el streamer
+        # (el run_id es GITHUB_RUN_ID en Actions, vacío en local).
+        self.assertEqual(bridge.phases[1][0], "modo_vod")
+        self.assertEqual(bridge.phases[1][1], "rubius")
+        self.assertEqual(bridge.phases[2][0], "sin_directos")
+        self.assertIn("modo VOD:", bridge.phases[2][1])
 
     def test_con_es_en_vivo_no_reporta_modo_vod(self):
         bridge = _RecordingBridge()

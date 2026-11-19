@@ -50,9 +50,12 @@
 #   después IlloJuan) con los mismos filtros (viralidad >= 50,
 #   SEO >= 90, 40-60 s, subtítulos completos). Máx. 2 VODs y 2
 #   clips por corrida, 6 h de enfriamiento por VOD (estado en el
-#   artefacto cerebro-live-vod-state). Los clips van a la Cola del
-#   panel con el MP4 (origin='vod'), SIN publicar. Nunca baja el
-#   VOD entero (solo el segmento del pico, vía auto_clips.py).
+#   artefacto cerebro-live-vod-state, bajado con gh desde la
+#   última corrida completada: download-artifact sin run-id solo
+#   busca en la corrida actual y el restore venía vacío). Los
+#   clips van a la Cola del panel con el MP4 (origin='vod'), SIN
+#   publicar. Nunca baja el VOD entero (solo el segmento del
+#   pico, vía auto_clips.py).
 # - Fase en vivo (2026-11-19, corrección del usuario: el panel
 #   tiene que mostrar qué hace el cerebro AHORA, no solo un piloto
 #   verde/rojo): detect reporta buscando_picos / sin_directos, cut
@@ -231,18 +234,24 @@ jobs:
       # el runner es efímero; se restaura del artefacto de la
       # corrida anterior y se vuelve a subir al final. Separado
       # del estado diario (cerebro-state-sebastian) para no pisarlo.
+      # OJO: actions/download-artifact sin run-id solo busca en la
+      # corrida ACTUAL (donde el artefacto aún no existe), así que
+      # el restore siempre venía vacío y cada corrida reprocesaba
+      # los 2 VODs. Se baja con gh desde la última corrida
+      # completada de este workflow (se prueban las 5 últimas por
+      # si alguna falló antes de subir el estado).
       - name: Restaurar estado del fallback
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: cerebro-live-vod-state
-          # El artefacto guarda state.json en su raíz: hay que
-          # bajarlo a runs/vod-fallback para que quede en
-          # runs/vod-fallback/state.json, donde lo lee vod-fallback.
-          # Con path: . quedaba en ./state.json y el enfriamiento
-          # de 6 h nunca se aplicaba (cada corrida reprocesaba
-          # los 2 VODs).
-          path: runs/vod-fallback
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p runs/vod-fallback
+          for id in $(gh run list --workflow cerebro-live.yml --status completed --limit 5 --json databaseId --jq '.[].databaseId'); do
+            if gh run download "$id" -n cerebro-live-vod-state -D runs/vod-fallback 2>/dev/null; then
+              echo "estado restaurado de la corrida $id"
+              break
+            fi
+          done
+          ls runs/vod-fallback/state.json 2>/dev/null || echo "sin estado previo: se empieza vacío"
       - name: Modo VOD (Rubius, IlloJuan) -> Cola del panel, sin publicar
         env:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
