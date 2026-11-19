@@ -162,7 +162,7 @@ anulado.)
 | Panel web, login, cuentas, ajustes | Cloudflare Pages + Workers | Es web; no necesita ffmpeg |
 | Cola + estados (`step_jobs`) | D1 (mismo esquema, `migrations/0001_step_jobs.sql`) | El Worker la lee/escribe; el runner de GitHub también |
 | Vigilar VODs 09:00, cron | GitHub Actions (`schedule`, workflow cerebro-*.yml) + Cron Trigger del Worker como respaldo | El cron de GitHub dispara el trabajo; el panel solo es el interruptor |
-| Cerebro: detección, corte, subtítulos, empaquetar, publicar | **GitHub Actions, runner `ubuntu-latest`** | Python + ffmpeg + faster-whisper + Playwright corren ahí; repo ya en GitHub (`exe2027/viral-clip-agent`, privado) |
+| Cerebro: detección, corte, subtítulos, empaquetar, publicar | **GitHub Actions, runner `ubuntu-latest`** | Python + ffmpeg + faster-whisper + Playwright corren ahí; repo ya en GitHub (el repositorio del proyecto, privado) |
 | Botón Iniciar / Detener | Panel → `repository_dispatch` al workflow (con token guardado como secreto del Worker, nunca en el repo) | El usuario no toca GitHub, ni terminal, ni instala nada después de Iniciar |
 | TikTok navegador (sesión + captcha) | Runner autoalojado en su PC, solo para esa pieza | Necesita sesión persistente en disco, misma IP y humano para el captcha; no corre en el runner de GitHub |
 

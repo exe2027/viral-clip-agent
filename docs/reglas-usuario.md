@@ -2,7 +2,7 @@
 
 > TODO lo que el usuario dice en el chat queda guardado en el
 > REPOSITORIO (código/config/docs) y desplegado en la WEB
-> (https://avc-em9.pages.dev + Worker). Nada local cuenta.
+> (el panel en Cloudflare + Worker). Nada local cuenta.
 > Si una regla cambia, cambia aquí Y en el código Y en el panel.
 
 ## Reglas vigentes (con su punto de aplicación)
@@ -32,7 +32,7 @@
 | Publicación automática con red de seguridad, sin aprobación por clip; puertas: preview visto, subtítulos completos, permiso streamer, SEO, topes diarios, espaciamiento 2 h | MÁSTER PROMPT FINAL | `clipagent/policy.py` evaluate, `clipagent/publish.py` check_limits, panel `jobs.ts` publishGate | `test_policy.py`, `worker/test/jobs.test.ts` |
 | Regla Nº1 no ser baneados: topes por plataforma (YT plan 3/techo 5, resto 2/3), cuentas nuevas 1/día la primera semana | 2026-11-16 | `limits.yaml`, `clipagent/publish.py` DAILY_LIMITS/NEW_ACCOUNT_DAILY, panel `jobs.ts` (plan/techo) | `test_limits.py` |
 | Todo **$0, gratis** (Gemini Flash-Lite gratis, sin servicios de pago) | 2026-11-16 | Sin claves de pago en `config.yaml` (test: sin api_key/client_secret en config versionada); secretos solo por env/GitHub Secrets | `test_reglas_usuario_2026_11_18.py` |
-| Panel en **Cloudflare avc-em9.pages.dev**, login por usuario, cada tenant ve solo lo suyo | 2026-11-17 | `config.yaml`/`DEFAULT_CONFIG` panel.base_url, `panel-backend/` (Worker + D1 + R2 + Pages), `worker/src/db.ts` (tenant_id en todo) | `test_reglas_usuario_2026_11_18.py` |
+| Panel en **Cloudflare (tu dominio Pages)**, login por usuario, cada tenant ve solo lo suyo | 2026-11-17 | `config.yaml`/`DEFAULT_CONFIG` panel.base_url, `panel-backend/` (Worker + D1 + R2 + Pages), `worker/src/db.ts` (tenant_id en todo) | `test_reglas_usuario_2026_11_18.py` |
 
 ## Decisiones registradas (no son código, pero mandan)
 

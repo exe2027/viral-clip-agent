@@ -246,7 +246,7 @@ ffprobe -v error -show_entries format=duration,size \
 PANEL_SESSION_TOKEN=... python3 runs/live/rubius_2026-11-18/enqueue_clip.py \
   runs/2932415021-p3220 \
   runs/2932415021-p3220/clips/clip_01_t53m20s_s14.3_r7h4_rdjavi_subs_C_v3_karaoke.mp4
-# Verificar EN EL PANEL (https://avc-em9.pages.dev, Cola) que el clip aparece
+# Verificar EN EL PANEL (TU_PANEL.pages.dev, Cola) que el clip aparece
 # con su MP4 subido. La publicación pasa por publishGate y el fan-out a las
 # 4 plataformas; topes: YT plan 3/máx 5 al día, TikTok/IG/FB plan 2/máx 3,
 # cuentas nuevas 1/día, mínimo 2 h entre publicaciones, sin franja horaria.

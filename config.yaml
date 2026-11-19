@@ -390,7 +390,7 @@ autopublish:
 scoring:
   seo_gate: 80
   viral_min: 45
-  # Pre-filtro rápido de Óscar Boix (2026-11-18, clipagent/prefilter.py):
+  # Pre-filtro rápido (2026-11-18, clipagent/prefilter.py):
   # 1 punto por mensaje, 2 por reacción, tramos de 10 s; un pico pasa
   # si su tramo llega a prefilter_min_multiple x la mediana de sus
   # vecinos de ±5 min. Puerta barata ANTES de Whisper/viralidad/SEO/

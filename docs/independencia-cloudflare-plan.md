@@ -17,7 +17,7 @@ Cloudflare) queda anulado.
 ### Panel — `panel-de-clips-gta-6`, versión v17
 - 10 pestañas: Worker, Crear, Editor, Cola, Tracking, Analíticas, Canales, Influencers, Cuentas, Ajustes.
 - 51 acciones. Las importantes: `listApiAccounts` / `verifyApiAccount` (verificación real contra la API), `publishClipNow`, `setPlatformPublishState` (estado por plataforma), `getTracking` (11 pasos), `checkNewVods`, `requestClipPreview` / `saveClipPreview`, `generateSeo`, `listPanelUsers`.
-- Cuentas hoy: YouTube ES Conectada, Meta · Español Conectada (Instagram @elclipdegta6 + Página Elclipdegta6, App ID 29102700319392159), TikTok ES Sin credencial. Cola: 32 clips.
+- Cuentas hoy: YouTube ES Conectada, Meta · Español Conectada (Instagram ES + la Página del canal, App ID solo en el Extra de Meta), TikTok ES Sin credencial. Cola: 32 clips.
 - Base de datos: SQLite local del artifact (`app.db`, 172 KB, Drizzle, migraciones 0001–0010). **No es Cloudflare D1**: cero menciones a Cloudflare/D1 en el código. "Panel en Cloudflare con D1" era intención de diseño, no está implementado.
 - Autenticación: no hay login. Sesión = `localStorage` del navegador (`panel-session-user`, solo guarda el id numérico). No hay Firebase/Google Auth en el código. Cualquiera con la URL puede cambiar de sesión con un clic.
 - **Hallazgo crítico: publicar hoy no sube nada.** `publishClipNow` y `processPublishQueue` solo marcan `publicado` en la base de datos. No hay código de subida a YouTube/TikTok/Instagram/Facebook en el panel.
@@ -91,7 +91,7 @@ En la versión independiente, por panel:
 - **Borrador por API (vía paralela):** scope `video.upload`, manda el clip a la bandeja de TikTok y el usuario lo publica con 1 toque. Exento de la restricción de privado de Direct Post, pero exige app review aprobado para `video.upload` y publicar cada borrador a mano; máx. 5 borradores pendientes/24 h. No está lista hoy.
 - **Zernio (provisional, sin verificar en vivo):** el tribunal lo puso primero en proyección (135) por ser $0, vía oficial auditada según anuncia, sin navegador ni captcha. Exige prueba en vivo: conectar por OAuth (sin entregar contraseña de TikTok, sin conectar Gmail), subir 1 clip real respetando 1/día, visible en público desde otra cuenta/incógnito, con URL y hora. Si falla o pide pago/Gmail, se descarta.
 - **Auditoría (paralela):** pedirla ya, sin esperar respuesta para publicar hoy. Ojo: TikTok no publica plazo oficial ("1–4 semanas" es estimación de terceros) y rechaza apps que son solo una utilidad para subir a cuentas propias.
-- **Plan B si el agente falla hoy:** manual — el sistema entrega MP4 + título + descripción + hashtags copiables y el usuario sube a mano desde `tiktok.com/upload` o TikTok Studio (programa 15 min–10 días, pero probablemente exige cuenta Business o 10.000+ seguidores). No hacer: Appium/emulador, multicuentas/rotar, cuenta en privado, @bitsflux vieja, esperar a la auditoría sin publicar.
+- **Plan B si el agente falla hoy:** manual — el sistema entrega MP4 + título + descripción + hashtags copiables y el usuario sube a mano desde `tiktok.com/upload` o TikTok Studio (programa 15 min–10 días, pero probablemente exige cuenta Business o 10.000+ seguidores). No hacer: Appium/emulador, multicuentas/rotar, cuenta en privado, la cuenta vieja de TikTok, esperar a la auditoría sin publicar.
 
 ## 6. Qué queda listo, qué falta, qué se necesita del usuario
 
@@ -115,7 +115,7 @@ En la versión independiente, por panel:
 
 **Qué necesita exactamente del usuario para desplegar (nada por chat, todo lo introduce él en su cuenta):**
 - Por persona: cuenta Cloudflare propia (recomendado; si no, proyectos separados en la misma cuenta, con aislamiento parcial).
-- Sus propias cuentas y credenciales por panel: TikTok, YouTube (clave API + OAuth), Meta (token largo de Página/Instagram, App ID 29102700319392159 solo para el panel de Sebastián; el colega usa su propia app), Gemini API key, token de API de Cloudflare para el despliegue.
+- Sus propias cuentas y credenciales por panel: TikTok, YouTube (clave API + OAuth), Meta (token largo de Página/Instagram, App ID solo en el Extra de Meta; cada tenant usa su propia app), Gemini API key, token de API de Cloudflare para el despliegue.
 - Dominio: aceptar `*.pages.dev` gratis o dar subdominio propio por persona.
 - Acceso al repo para quien despliegue + GitHub Environments con sus secretos.
 - Decisión tomada 17 nov 2026 ("Todo automático"): la publicación

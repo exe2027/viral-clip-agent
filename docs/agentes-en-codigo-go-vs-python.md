@@ -18,7 +18,7 @@ En palabras simples:
 | **Cola con prioridad** | Una lista ordenada, no por llegada, sino por puntuación | La cola ordena por la fórmula ya aprobada: viralidad^0,5 × SEO^0,3 × chat_norm^0,2. Un clip LIVE excelente pasa por delante de un VOD flojo. La cola decide *qué* se publica hoy; el worker solo ejecuta. |
 | **Servicio que se despierta por evento** | No espera a la hora: reacciona cuando algo pasa | Cuando Sebastián pulsa "Aprobar" en el panel, eso crea un evento y el worker de publicación se despierta. Cuando Twitch avisa (o el cron detecta) que terminó un directo, se dispara la detección de picos del VOD. |
 | **Orquestador** | El "jefe" que no hace el trabajo pesado: reparte trabajos, vigila reintentos y no deja duplicados | Recibe "VOD nuevo", crea trabajos en orden: 1) detectar picos, 2) cortar los 3 mejores, 3) subtitular, 4) empaquetar, 5) encolar. Si el paso 3 falla, reintenta solo ese paso, no vuelve a cortar. |
-| **Agente de navegador** | Un navegador real (Chrome) manejado por código, con sesión guardada | *Worker TikTok:* abre `tiktok.com/upload` con la sesión guardada de @elclipdegta6, sube el MP4, pone título/hashtags, publica. Si aparece un captcha, **no lo resuelve solo**: deja el trabajo en `espera_humano` y avisa. |
+| **Agente de navegador** | Un navegador real (Chrome) manejado por código, con sesión guardada | *Worker TikTok:* abre `tiktok.com/upload` con la sesión guardada de la cuenta de TikTok, sube el MP4, pone título/hashtags, publica. Si aparece un captcha, **no lo resuelve solo**: deja el trabajo en `espera_humano` y avisa. |
 
 ### El flujo completo, como cadena de trabajadores
 

@@ -141,7 +141,7 @@ Secreto del Worker (Cloudflare, `wrangler secret put`):
 
 | Secreto | Para qué |
 |---|---|
-| `GITHUB_TOKEN` | El botón Iniciar dispara el workflow (`repository_dispatch`); necesita permiso `actions:write` / `repo` sobre `exe2027/viral-clip-agent` |
+| `GITHUB_TOKEN` | El botón Iniciar dispara el workflow (`repository_dispatch`); necesita permiso `actions:write` / `repo` sobre el repositorio del proyecto |
 
 ## 7. Puesta en marcha (checklist)
 

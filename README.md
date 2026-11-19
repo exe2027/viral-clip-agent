@@ -25,33 +25,34 @@ La cuenta Meta del panel publica en la Página del canal y en la cuenta de Insta
 6. **Verificación:** `me/accounts?fields=id,name,instagram_business_account` debe devolver el campo con el `ig_user_id`; el panel debe mostrar "Meta aceptó el token. Instagram @... accesible" y la tarjeta en verde.
 7. **Errores y qué significan:** "Meta no aceptó la clave" = token corto o vencido → sacar el LARGO. "Aceptó el token pero la cuenta de Instagram no es accesible" = falta el Extra o el vínculo no está en Graph → revisar el Extra y re-vincular + regenerar el token.
 
-### Reglas vigentes (2026-11-18)
+### Reglas vigentes (2026-11-19)
 
 - **Clips de 40 a 60 segundos**: nunca menos de 40, nunca más de 60, nunca 30 exacto; el rango 25-35 s está prohibido (regla de oro). Objetivo 40 s (20 s antes del pico + 20 s después). `config.yaml > clips.min_duration_s: 40, target_duration_s: 40, max_duration_s: 60`.
 - **Subtítulos SIEMPRE y COMPLETOS**, quemados, de TODO lo que dice el influencer, no solo del pico; nunca inventar texto. Sin voz verificable el clip queda BLOQUEADO (`needs_human_transcription` + `publish_blocked`) hasta transcribirlo de oído.
 - **Layout split vertical RDJavi (GTA 6, 2026-11-18)**: streamer ARRIBA, gameplay ABAJO (ver [Formato del clip](#formato-del-clip-referencia-rdjavi-estilo-gta-6)). Si el juego no se ve, la cámara se achica, nunca al revés.
 - **Descargar SOLO la parte del clip**, nunca el vídeo entero; del chat, solo la ventana alrededor del pico (`--peak`, ±120 s).
 - **Hype por ráfaga rápida**: se mide la velocidad del chat (mensajes por 10 s / por minuto) y su pico contra el baseline rodante, no solo el total de comentarios. Una ráfaga repentina pesa más.
-- **Pre-filtro rápido de Óscar Boix (2026-11-18, `clipagent/prefilter.py`, commit `eda2798`)**: puerta BARATA entre la detección y el trabajo caro (Whisper, viralidad, SEO, render). 1 punto por mensaje, 2 si es reacción (`ja{2,}|j{2,}a|xd+|kekw|lul|omegalul|lmao+|clip|noo+|wtf|pog|😂|🤣|💀`), tramos de 10 s; un pico es un tramo ≥ 3x la mediana de sus vecinos de ±5 min, separación mínima 90 s. Solo los picos que pasan llegan a la puntuación completa. Config: `config.yaml > scoring.prefilter_min_multiple: 3.0`, `prefilter_separation_s: 90`; `--no-prefilter` lo apaga. **Salvaguarda de chat caliente**: si NO encuentra ningún pico en todo el VOD, se desactiva solo y deja pasar todo a la puntuación completa (nunca tumba un VOD entero). Medido en el VOD de Rubius 2932415021 (75.483 mensajes): mayor múltiplo 2,23x, 3220 solo 1,19x, 7775 1,87x — el 3x literal habría tumbado todos los clips; con la salvaguarda el ahorro en ese VOD es 0 y no se pierde ningún clip. En un VOD frío sí ahorra: descarta los flojos antes de transcribir y renderizar.
+- **Pre-filtro rápido (2026-11-18, `clipagent/prefilter.py`, commit `eda2798`)**: puerta BARATA entre la detección y el trabajo caro (Whisper, viralidad, SEO, render). 1 punto por mensaje, 2 si es reacción (`ja{2,}|j{2,}a|xd+|kekw|lul|omegalul|lmao+|clip|noo+|wtf|pog|😂|🤣|💀`), tramos de 10 s; un pico es un tramo ≥ 3x la mediana de sus vecinos de ±5 min, separación mínima 90 s. Solo los picos que pasan llegan a la puntuación completa. Config: `config.yaml > scoring.prefilter_min_multiple: 3.0`, `prefilter_separation_s: 90`; `--no-prefilter` lo apaga. **Salvaguarda de chat caliente**: si NO encuentra ningún pico en todo el VOD, se desactiva solo y deja pasar todo a la puntuación completa (nunca tumba un VOD entero). Medido en el VOD de Rubius 2932415021 (75.483 mensajes): mayor múltiplo 2,23x, 3220 solo 1,19x, 7775 1,87x — el 3x literal habría tumbado todos los clips; con la salvaguarda el ahorro en ese VOD es 0 y no se pierde ningún clip. En un VOD frío sí ahorra: descarta los flojos antes de transcribir y renderizar.
 - **Puerta live hype v2 (2026-11-18, `clipagent/live.py`, commit `de7e905`)**: en directo, un pico se emite si el múltiplo es ≥ 3,0 (chat frío) **O** si `hype_ratio ≥ 1,3 + score ≥ 14 + hype_score ≥ 1,0` (chat caliente). Warmup 120 s (sin 120 s de chat no hay baseline fiable, no se emite nada; sin picos antes de 60 s). **Anti-cero con fallback**: si la sesión termina sin picos, se emite la mejor ventana (`hype_ratio ≥ 1,2`, `score ≥ 13`). Anti-spam de emotes. Verificado en la corrida 44404808950 (2026-11-18 18:45–19:09): Rubius detectó por fin picos (1 procesado, score 23,8, múltiplo 1,44 — imposible con el 3,0x viejo).
-- **Frases hype del streamer (2026-11-18, `clipagent/streamer_hype.py`)**: lo que DICE el streamer también marca hype — "WTF", "OMG", "Dios mío", "no lo puedo creer", "no me lo creo", "qué locura", "esto es increíble", "madre mía", "esto es otro nivel", "qué gráficos", "cojones", "olé". Se mide en la transcripción Whisper que ya existe, queda registrado en el clip (`streamer_hype`) y visible en la Cola LIVE. NO toca viralidad, SEO, prioridad ni las puertas 50/90. "vamos" quedó fuera por demasiado genérico.
+- **Frases hype del streamer (2026-11-18, `clipagent/streamer_hype.py`)**: lo que DICE el streamer también marca hype — "WTF", "OMG", "Dios mío", "no lo puedo creer", "no me lo creo", "qué locura", "esto es increíble", "madre mía", "esto es otro nivel", "qué gráficos", "cojones", "olé". Se mide en la transcripción Whisper que ya existe, queda registrado en el clip (`streamer_hype`) y visible en la Cola LIVE. NO toca viralidad, SEO, prioridad ni las puertas 45/80. "vamos" quedó fuera por demasiado genérico.
 - **Gritos por decibeles (2026-11-18, `clipagent/audio.py::shout_spikes`)**: un grito es un SUBIDÓN, no un nivel alto constante. Un segundo cuenta como grito si su RMS es ≥ +8 dB sobre la mediana de los 10 s anteriores y ≥ -30 dBFS. Queda en `audio_verdict` (`shout_seconds`/`shout_count`), en la revisión y en el clip live. NO toca el scoring (el componente audio ya premiaba el rango).
-- **Gritos SOLO del streamer + rescate (2026-11-18 19:23, commit `33ce30f`)**: `audio.streamer_shout_spikes` — un salto de decibeles cuenta solo si cae dentro de un tramo de VOZ de la transcripción Whisper; una explosión del juego con el streamer callado NO cuenta; sin voz no hay gritos. Límite honesto: la pista viene mezclada, si el streamer habla encima de una explosión ese segundo sí cuenta. **Rescate como punto aparte** (`review.py`): un clip borderline (viralidad revisada 45–49,9) con **2+ segundos de grito del streamer y SEO ≥ 90 pasa aunque no llegue a 50**; con 1 solo segundo no hay rescate (un grito aislado puede ser una risa o un fallo). La puerta 50/90 queda intacta.
+- **Gritos SOLO del streamer + rescate (2026-11-18 19:23, commit `33ce30f`)**: `audio.streamer_shout_spikes` — un salto de decibeles cuenta solo si cae dentro de un tramo de VOZ de la transcripción Whisper; una explosión del juego con el streamer callado NO cuenta; sin voz no hay gritos. Límite honesto: la pista viene mezclada, si el streamer habla encima de una explosión ese segundo sí cuenta. **Rescate como punto aparte** (`review.py`): un clip borderline (viralidad revisada 45–49,9) con **2+ segundos de grito del streamer y SEO ≥ 90 pasaba aunque no llegara a 50**; con 1 solo segundo no había rescate (un grito aislado puede ser una risa o un fallo). **2026-11-19: subsumido por las puertas 45/80** — un clip 45–49,9 ya pasa directo, así que el rescate ya no decide nada; la medición de gritos se sigue registrando.
 - **Repetición en el chat (2026-11-18, `clipagent/ingest.py`)**: ya se mide — `rep_ratio` (1 − cuerpos distintos / mensajes) y el `hype_score` tiene el componente "repetición" (`rep_ratio × 4`, máx. +2 al score). Matiz: si más del 40% del chat es idéntico se penaliza ×0,5 como spam (`repetition_spam`); la diferencia es que lo repitan muchos usuarios distintos (hype) vs pocos (spam).
-- **Subtítulos: karaoke por defecto (2026-11-18 19:17, decisión del usuario) y al pie de la cámara (2026-11-18 19:02)**: ver [Subtítulos estilo RDJavi](#formato-del-clip-referencia-rdjavi-estilo-gta-6). Nunca en el gameplay: ahí van los subtítulos propios de GTA 6 y se solaparían.
-- **Filtros duros**: viralidad ≥ 50 y SEO ≥ 90 por plataforma, si no no se publica (salvo override del usuario). Prioridad **LIVE sobre VOD** en la Cola. Fórmula intocable: `viralidad^0,5 × SEO^0,3 × chat_norm^0,2`. Clip de más de 7 días: −10 pts/día.
-- **Puerta de render PRE-CORTE (2026-11-18)**: el clip SOLO se corta/renderiza si ya pasa las puertas con el paquete provisional (viralidad estimada ≥ 45 pre-corte — calibrado, ver abajo — y SEO ≥ 90 en al menos una plataforma). Si no pasa, se descarta SIN descargar el segmento ni renderizar. Calibración medida: p3220 estima 46,3 (real 53,8) y su SEO pre-corte es 89/91/92/92; p2010 estima 44,5. Con el 50 literal pre-corte, p3220 se descartaría; por eso el umbral pre-corte es 45 y el 50 real sigue vigente en publicación.
-- **Revisión automática de los mejores picos (2026-11-18, aprobado)**: en el loop en vivo, los top 3 picos por directo con viralidad auto 40–49,9 pasan por revisión automática (3 fotogramas + transcripción Whisper + juez Gemini con los 5 componentes humanos) y se re-calcula su viralidad; si tras la revisión pasan ≥ 50 y SEO ≥ 90, se renderizan y se encolan en LIVE; si no, se descartan SIN render. ≥ 50 va directo a render; < 40 se descarta sin revisión. Si Gemini no está disponible, fallback a la puerta pre-corte (≥ 45), registrado como tal. La puerta de publicación sigue en 50, no se baja.
-- **Topes diarios por plataforma (anti-ban, `limits.yaml`, puestos como REGLA por el agente 2026-11-18)**: YouTube plan 3 / máx 5 al día; TikTok, Instagram y Facebook plan 2 / máx 3; cuentas nuevas 1/día; TikTok vía Zernio 15/día y 5 borradores pendientes; mínimo 2 h entre publicaciones. **Escalado automático**: la cuenta pasa de nueva a establecida (topes normales) a los 30 días desde su primera publicación + 10 publicaciones sin sanciones; lo aplica solo el Worker del panel cada día (se ve en Ajustes).
-- **SIN franja horaria desde 2026-11-18** (decisión del usuario): se publica a cualquier hora; los topes diarios se respetan igual.
+- **Subtítulos RDJavi por defecto (desde 2026-11-19; el karaoke fue el default el 2026-11-18 y quedó reemplazado)**: amarillos fijos (`#FFFF00`, Arial Black 64 px, borde negro grueso), en la barra negra inferior, nunca en el gameplay: ahí van los subtítulos propios de GTA 6 y se solaparían. Ver [Subtítulos estilo RDJavi](#formato-del-clip-referencia-rdjavi-estilo-gta-6).
+- **Filtros duros**: viralidad ≥ 45 y SEO ≥ 80 por plataforma, si no no se publica (salvo override del usuario). Prioridad **LIVE sobre VOD** en la Cola. Fórmula intocable: `viralidad^0,5 × SEO^0,3 × chat_norm^0,2`. Clip de más de 7 días: −10 pts/día.
+- **Puerta de render PRE-CORTE (2026-11-18)**: el clip SOLO se corta/renderiza si ya pasa las puertas con el paquete provisional (viralidad estimada ≥ 45 pre-corte — calibrado, ver abajo — y SEO ≥ 80 en al menos una plataforma). Si no pasa, se descarta SIN descargar el segmento ni renderizar. Calibración medida: p3220 estima 46,3 (real 53,8) y su SEO pre-corte es 89/91/92/92; p2010 estima 44,5. Con el 50 literal pre-corte, p3220 se descartaría; por eso el umbral pre-corte es 45 y el 45 real sigue vigente en publicación.
+- **Revisión automática de los mejores picos (2026-11-18, aprobado)**: en el loop en vivo, los top 3 picos por directo con viralidad auto 40–44,9 pasan por revisión automática (3 fotogramas + transcripción Whisper + juez Gemini con los 5 componentes humanos) y se re-calcula su viralidad; si tras la revisión pasan ≥ 45 y SEO ≥ 80, se renderizan y se encolan en LIVE; si no, se descartan SIN render. ≥ 45 va directo a render; < 40 se descarta sin revisión. Si Gemini no está disponible, fallback a la puerta pre-corte (≥ 45), registrado como tal. La puerta de publicación sigue en 45, no se baja.
+- **Frenos por plataforma — vigentes en el panel (en vivo hoy)**: YouTube ~6/día por cuenta; TikTok, Instagram y Facebook 1/día en cuentas nuevas; 2–3 h entre publicaciones; por plataforma. Los topes suben solos cuando la cuenta deja de ser nueva (lo aplica el Worker del panel cada día, se ve en Ajustes). Verificado en vivo 2026-11-19: 9 publicaciones en YouTube en un día (5 ES + 4 EN, cada cuenta bajo su tope).
+- **Nuevas reglas de publicación 2026-11-19 (en `limits.yaml`, PENDIENTES de despliegue en el panel)**: TikTok 2/día (máx 3), Instagram 1/día (máx 2), YouTube 1/día (máx 2), Facebook 1/día (máx 2); máx 3 publicaciones por cuenta en 24 h móviles; cuenta nueva si <14 días o <20 publicaciones (semanas 1–2 a 1/día); espaciamiento 3 h (4 h en YouTube), mín 5 min; franjas hora Chile 12–14 / 18–20 / 21–23 (revoca el "sin franja" del 2026-11-18); 1 día libre/semana por cuenta; reintentos 5/15/45 min máx 3; spam/límite = pausa 48 h sin reintentar el mismo día. Hasta que el panel se despliegue con estas reglas, mandan los frenos vigentes de arriba.
+- **"Publicar ahora" (manual) pasa por encima del freno automático**: salta los topes diarios y el espaciamiento, con aviso y registro en el Tracking; NUNCA pasa por encima de las puertas de calidad (viralidad/SEO/subtítulos/permiso). Los frenos gobiernan solo la publicación automática.
+- **Preview de la Cola con marco por plataforma**: "Ver preview" despliega un marco que imita la app — pestañas por plataforma asignada al clip, cabecera con la plataforma y el handle de la cuenta, vídeo 9:16 reproducible con botones Me gusta/Comentar/Compartir, pie con título, descripción y hashtags, y línea de datos (duración, SEO por plataforma, caracteres de título/descripción, nº de tags, subtítulos, texto de miniatura). Honestidad: el panel guarda UN solo juego de título/descripción/tags por clip, así que los textos son los mismos en las 4 pestañas; lo que cambia es el marco, el handle y el SEO — y el marco lo dice. Estado: implementado en el frontend del panel, pendiente de despliegue.
+- **El camino VOD usa el mismo render y el mismo validador que el vivo**: el fallback VOD (cuando nadie está en directo) carga `config.yaml` igual que el vivo, usa la plantilla RDJavi v2 y el mismo validador final de Gemini; los subtítulos por defecto son RDJavi (amarillos fijos, sin karaoke). Commit `344a715`.
+- **Validador final en modo observación (2026-11-19)**: un "rechazado" de Gemini queda como "observado" — se registra con sus scores, no bloquea. El bloqueo se reactiva con `FINAL_REVIEW_OBSERVE_ONLY=0`.
 - **Publicación automática con puertas**: sin aprobación humana por clip, pero solo si pasa todas las puertas (viralidad, SEO, subtítulos completos, permiso del streamer, lista blanca, topes, preview visto). Lo que no pasa queda en borrador con el motivo visible, nunca se finge una publicación.
 
 ### Formato del clip (referencia RDJavi, estilo GTA 6)
 
-Referencias del usuario (2026-11-18): Instagram reel de RDJavi
-https://www.instagram.com/reel/Df4sy4bxlmr/ (formato base) y de DJ
-Mariio https://www.instagram.com/reel/Df4uyMVjDwq/ (APARCADO por
-orden del usuario 2026-11-18: no se usa como layout).
+Formato base: split apilado (streamer arriba, gameplay abajo), descrito abajo. El layout ancho alternativo queda APARCADO por orden del usuario 2026-11-18: no se usa como layout.
 
 **Layout RDJavi — personalizado GTA 6 / Vice City (default para
 GTA 6, el panel es solo GTA 6)**, lienzo 1080×1920, split apilado
@@ -74,11 +75,12 @@ SETUP en plano ancho (habitación/PC/luces, aspecto ≥ 1,8 y ancho ≥
 60% del frame). Se registra en el manifiesto; mientras DJ Mariio
 esté aparcado, el layout sigue siendo RDJavi en los dos casos.
 
-**Subtítulos karaoke por defecto, al pie de la cámara (2026-11-18)**.
+**Subtítulos RDJavi por defecto, en la barra negra inferior (desde 2026-11-19)**.
 Decisiones del usuario: 19:02 — los subtítulos van en la parte de
 ABAJO de la cámara del influencer, estilo TikTok, porque si van en el
-gameplay se solapan con los subtítulos del GTA 6; 19:17 — **karaoke
-por defecto**. La webcam ocupa y 0–595 y el gameplay empieza en y 749,
+gameplay se solapan con los subtítulos del GTA 6; 19:17 — karaoke
+por defecto (vigente hasta 2026-11-19; desde entonces el default es
+RDJavi, ver tabla). La webcam ocupa y 0–595 y el gameplay empieza en y 749,
 así que el subtítulo cae en la banda 595–749, justo al pie de la
 cámara: `Alignment 8` (arriba-centrado), `MarginV 608`
 (`clipagent/rdjavi.py`: `SUBS_ALIGN = 8`, `SUBS_MARGIN_V = 608`).
@@ -89,7 +91,7 @@ Kingfishers…") queda abajo en el gameplay, separados; a los 34 s
 del juego en español se ve limpio. La posición vieja (parte baja del
 gameplay, MarginV 230, borde en y≈1690) queda PROHIBIDA: ahí se
 solapa con el juego. La regla vieja de MarginV mínimo 680 también
-queda reemplazada.
+queda reemplazada. La banda 595–749 descrita arriba era del layout anterior; la plantilla RDJavi v2 pone los subtítulos en la barra negra inferior (1740–1920).
 
 Estilos disponibles (`clipagent/config.py > subtitle_styles`,
 `config.yaml > subtitles.default_style`; se eligen con
@@ -100,13 +102,14 @@ Estilos disponibles (`clipagent/config.py > subtitle_styles`,
 | `ref` (default hasta 2026-11-18 19:17) | 32 px fina | Blanco | No | 2 | No | Una línea, sin resaltado palabra por palabra |
 | `tiktok` | 48 px | Blanco | Sí | 3 | No | Una línea (v2 del clip 3220) |
 | `highlight` | 52 px | Amarillo `#FFFF00` | Sí | 2 | Sí (caja) | Palabras clave en amarillo con caja |
-| `karaoke` (**default desde 2026-11-18 19:17**) | 56 px | Palabra activa amarilla `#FFFF00`, resto blanco | Sí | 4 | No | Palabra por palabra: cada palabra se ilumina al decirla (`\k` por palabra, reparto proporcional por longitud; no necesita tiempos por palabra de Whisper). `max_chars: 8`, `max_duration: 1.0 s` por bloque |
+| `rdjavi` (**default desde 2026-11-19**) | 64 px Arial Black | Amarillo `#FFFF00` fijo | Sí | 6 | No (barra negra inferior) | Texto fijo completo, sin resaltado palabra por palabra; `max_chars: 20`, `max_duration: 2.0 s` por bloque |
+| `karaoke` (default hasta 2026-11-19) | 56 px | Palabra activa amarilla `#FFFF00`, resto blanco | Sí | 4 | No | Palabra por palabra: cada palabra se ilumina al decirla (`\k` por palabra, reparto proporcional por longitud; no necesita tiempos por palabra de Whisper). `max_chars: 8`, `max_duration: 1.0 s` por bloque |
 
-El default es `karaoke` en `clipagent/config.py` (`DEFAULT_CONFIG`) y
-en `config.yaml` (`subtitles.default_style: "karaoke"`); se verifica
-con `get_subtitle_style()` sin argumento. La plantilla RDJavi genera
-el ASS con `make_karaoke_ass()` (`clipagent/rdjavi.py`) y el workflow
-de GitHub Actions ya usa `subs_karaoke.ass` por defecto. Subtítulos
+El default es `rdjavi` en `clipagent/config.py` (`DEFAULT_CONFIG`) y
+en `config.yaml` (`subtitles.default_style: "rdjavi"`); se verifica
+con `get_subtitle_style()` sin argumento. El estilo `karaoke` sigue
+disponible: la plantilla RDJavi genera su ASS con `make_karaoke_ass()`
+(`clipagent/rdjavi.py`). Subtítulos
 SIEMPRE y COMPLETOS: de TODO lo que dice el influencer, nunca
 inventar texto; sin voz verificable el clip queda BLOQUEADO
 (`needs_human_transcription` + `publish_blocked`) hasta
@@ -143,7 +146,7 @@ ni su teléfono; al volver a entrar ve el estado y la Cola avanzando.
 - **Encolado al panel BLOQUEADO**: falta `PANEL_SESSION_TOKEN` (token de sesión del panel, 30 días) o `PANEL_USERNAME` + `PANEL_PASSWORD` en el entorno. El script `runs/live/rubius_2026-11-18/enqueue_clip.py` está listo y validado en seco (ver [Encolar en el panel](#encolar-en-el-panel-web)). La contraseña/token NUNCA se pide por chat: se usa un flujo seguro o una sesión ya logueada del navegador.
 - **Cortador en vivo real en construcción**: hoy no existe; el plan es Fase 0 sombra → Fase 1 semi-manual (detectar el pico en el directo y cortar mientras pasa).
 - **TikTok en público automático en curso**: por API directa solo publica en privado sin auditoría (1-4 semanas); hoy va por Zernio en draft-first. La auditoría de TikTok se prepara aparte (borrador fuera del repo).
-- **Primera publicación real desde la web**: el flujo de publicar desde el panel se prueba en seco (llega hasta la última puerta); para la primera publicación real hace falta un clip fuerte (viralidad ≥ 50, 40-60 s, subtítulos verificados) y las cuentas de YouTube y TikTok creadas y verificadas en Cuentas.
+- **Primera publicación real desde la web**: el flujo de publicar desde el panel se prueba en seco (llega hasta la última puerta); para la primera publicación real hace falta un clip fuerte (viralidad ≥ 45, 40-60 s, subtítulos verificados) y las cuentas de YouTube y TikTok creadas y verificadas en Cuentas.
 
 ## Tutorial: cómo usarlo (paso a paso)
 
@@ -153,7 +156,7 @@ ni su teléfono; al volver a entrar ve el estado y la Cola avanzando.
 
 Hace: detecta los mejores momentos de un directo por el **chat** (risas e hype, no por la transcripción), los corta en vertical `1080x1920`, les pone subtítulos, les genera título + descripción + tags para TikTok, Reels y Shorts, y los deja listos para revisar.
 
-Publica solo según la política (sin humano por clip): un clip se publica solo si pasa todos los cheques (viralidad ≥ 50, SEO ≥ 90 por plataforma, sin rojos del semáforo). Al publicar en YouTube Shorts, el fan-out lo intenta también en TikTok, Instagram Reels y Facebook Reels, cada una con sus propias puertas (ver "Fan-out" más abajo). Lo que no pasa queda retenido o en borrador con el motivo visible, nunca se finge una publicación.
+Publica solo según la política (sin humano por clip): un clip se publica solo si pasa todos los cheques (viralidad ≥ 45, SEO ≥ 80 por plataforma, sin rojos del semáforo). Al publicar en YouTube Shorts, el fan-out lo intenta también en TikTok, Instagram Reels y Facebook Reels, cada una con sus propias puertas (ver "Fan-out" más abajo). Lo que no pasa queda retenido o en borrador con el motivo visible, nunca se finge una publicación.
 
 No hace: no detecta los momentos con Gemini: la detección es por el chat, Gemini solo sirve para lo de abajo (visión, opcional).
 
@@ -264,8 +267,8 @@ corto.mp4`) no re-codifica ni pierde calidad.
 del run y crea el clip con `POST /api/clips` + sube el MP4 con
 `PUT /api/clips/:id/video`. **NO publica** (no llama a
 `POST /api/clips/:id/publish`). Aborta solo si faltan credenciales o
-si el clip no pasa las puertas (viralidad < 50, SEO < 90 en las 4
-plataformas). Panel: https://avc-em9.pages.dev.
+si el clip no pasa las puertas (viralidad < 45, SEO < 80 en las 4
+plataformas). Panel: https://TU_PANEL.pages.dev.
 
 ```bash
 PANEL_SESSION_TOKEN=... python3 runs/live/rubius_2026-11-18/enqueue_clip.py \
@@ -286,7 +289,7 @@ fan-out a las 4 plataformas.
 
 ### Fan-out: apenas se publica en YouTube, también en las otras 3
 
-Cuando un clip se publica con éxito en YouTube Shorts, el bucle lo encola automáticamente en TikTok, Instagram Reels y Facebook Reels con el mismo clip y su paquete por plataforma (título, descripción y tags propios de cada una). Cada plataforma pasa por sus propias puertas: puntaje por plataforma (viralidad ≥ 50, SEO ≥ 90, SEO < 70 bloqueo duro), cuota y ritmo de `limits.yaml`, circuit breaker, lista blanca en el momento de publicar y pausas. Si una falla o no tiene credenciales, queda en **draft con el motivo visible** (en la cola y en el panel local) y las demás siguen; el fallo de una nunca revierte el publicado de YouTube ni de las otras. Se apaga con `fanout.enabled: false` en `config.yaml`.
+Cuando un clip se publica con éxito en YouTube Shorts, el bucle lo encola automáticamente en TikTok, Instagram Reels y Facebook Reels con el mismo clip y su paquete por plataforma (título, descripción y tags propios de cada una). Cada plataforma pasa por sus propias puertas: puntaje por plataforma (viralidad ≥ 45, SEO ≥ 80, SEO < 70 bloqueo duro), cuota y ritmo de `limits.yaml`, circuit breaker, lista blanca en el momento de publicar y pausas. Si una falla o no tiene credenciales, queda en **draft con el motivo visible** (en la cola y en el panel local) y las demás siguen; el fallo de una nunca revierte el publicado de YouTube ni de las otras. Se apaga con `fanout.enabled: false` en `config.yaml`.
 
 | Plataforma | Cómo sube | Qué falta para que publique sola |
 |---|---|---|
@@ -312,7 +315,7 @@ python jobqueue.py approve 3      # o: python jobqueue.py reject 3
 
 ### 5. Configuración
 
-Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hashtags ES/EN, duración del corte, estilos de subtítulo (`ref`, `tiktok`, `highlight`, `karaoke`; **default: `karaoke`**, al pie de la cámara) y zonas seguras del HUD. Edítalo antes de tu primera corrida y no subas tus datos personales al repo. La plantilla RDJavi vive en `clipagent/rdjavi.py` (opción C, un solo pase) y su uso está en `RDJAVI-TEMPLATE.md` — OJO: ese archivo aún describe los subtítulos simples viejos en el gameplay; lo vigente es el karaoke al pie de la cámara de este README (v2.8).
+Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hashtags ES/EN, duración del corte, estilos de subtítulo (`ref`, `tiktok`, `highlight`, `karaoke`, `rdjavi`; **default: `rdjavi`**, en la barra negra inferior) y zonas seguras del HUD. Edítalo antes de tu primera corrida y no subas tus datos personales al repo. La plantilla RDJavi vive en `clipagent/rdjavi.py` (opción C, un solo pase) y su uso está en `RDJAVI-TEMPLATE.md` — OJO: ese archivo aún describe los subtítulos simples viejos en el gameplay; lo vigente es el RDJavi en la barra negra inferior de este README (v2.8).
 
 ### 6. API de Gemini (opcional, solo para la visión)
 
@@ -491,17 +494,18 @@ que queda solo como backup; `runs/` está en el `.gitignore`):
   OOM/swap, ganancia cero) y no renderizar en Cloudflare Workers
   (sin ffmpeg, 128 MB, límite de CPU).
 
-### Subtítulos: karaoke por defecto, al pie de la cámara
+### Subtítulos: RDJavi por defecto, en la barra negra inferior
 
-Ver [Subtítulos karaoke por defecto](#formato-del-clip-referencia-rdjavi-estilo-gta-6).
-Resumen: default `karaoke` (56 px negrita, palabra activa amarilla,
-resto blanco, borde 4, palabra por palabra), posición `Alignment 8`,
-`MarginV 608`, banda 595–749 al pie de la cámara, nunca en el
-gameplay. v3 del 3220 verificada con fotogramas en t=18 s y t=34 s.
+Ver [Subtítulos RDJavi por defecto](#formato-del-clip-referencia-rdjavi-estilo-gta-6).
+Resumen: default `rdjavi` (amarillo fijo `#FFFF00`, Arial Black 64 px,
+borde negro grueso 6, barra negra inferior 1740–1920), nunca en el
+gameplay. La posición vieja al pie de la cámara (banda 595–749,
+`MarginV 608`) era del layout anterior; v3 del 3220 verificada con
+fotogramas en t=18 s y t=34 s.
 
-### Pre-filtro Óscar Boix (commit `eda2798`)
+### Pre-filtro rápido (commit `eda2798`)
 
-Ver [Reglas vigentes](#reglas-vigentes-2026-11-18). Resumen: conteo
+Ver [Reglas vigentes](#reglas-vigentes-2026-11-19). Resumen: conteo
 1 punto por mensaje / 2 por reacción, tramo 10 s, pico ≥ 3x la
 mediana de ±5 min, separación 90 s, puerta barata antes de
 Whisper/viralidad/SEO/render, con salvaguarda anti-cero para chats
@@ -509,7 +513,7 @@ calientes. Tests: `test_prefilter.py` 13/13 en verde.
 
 ### Puerta live hype v2, frases del streamer, gritos y repetición
 
-Ver [Reglas vigentes](#reglas-vigentes-2026-11-18). Commits:
+Ver [Reglas vigentes](#reglas-vigentes-2026-11-19). Commits:
 `de7e905` (puerta hype v2 + frases del streamer),
 `87a21c2` (gritos por decibeles + "cojones"/"olé"),
 `33ce30f` (gritos solo del streamer + rescate en revisión),
@@ -522,8 +526,8 @@ ventana deslizante 900 s, cap 20.000 mensajes, cola máx. 1000).
 |---|---|---|---|
 | `score_chat` | Solo el chat: velocidad (msgs/10 s, msgs/min), ráfaga vs baseline, risas, hype, usuarios únicos | `burst_peaks.json`, `manifest.json > clips[].score` | Ej: 3220 → 14,3; 7775 → 15,54; 7615 → 17,04 |
 | `hype_score` v2 | Hype por velocidad, 0–10 por ventana | `clipagent/ingest.py score_windows` | 3220 → 5,9/10; 7775 → 6,5/10 |
-| Viralidad | 7 componentes (ver abajo), 0–100 | `manifest.json > clips[].viral_score` | <50 descarta, 50–69 revisar, 70–84 prioritario, 85–100 urgente |
-| SEO | Por plataforma, 0–100 | `manifest.json > clips[].seo_scores` | <90 no publica (70–89 solo con override registrado, <70 bloqueo duro) |
+| Viralidad | 7 componentes (ver abajo), 0–100 | `manifest.json > clips[].viral_score` | <40 descarta, 40–44,9 a revisión, ≥45 pasa (70–84 prioritario, 85–100 urgente) |
+| SEO | Por plataforma, 0–100 | `manifest.json > clips[].seo_scores` | <80 no publica (70–79 solo con override registrado, <70 bloqueo duro) |
 | Prioridad | `viralidad^0,5 × SEO^0,3 × chat_norm^0,2` (media geométrica ponderada; SEO cambia por plataforma) | `clipagent/priority.py` | Ordena la Cola; LIVE +15 solo para ordenar |
 
 **Viralidad, 7 componentes** (`clipagent/detect.py`, `WEIGHTS`):

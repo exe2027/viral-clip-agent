@@ -79,10 +79,10 @@ queda en draft-first (o bloqueada). Estado real a 2026-11-16
 
 | Cuenta | Estado | Lo que falta |
 |---|---|---|
-| YouTube ES @elclipdegta6 | 🟡 AMBER | Verificar canal + OAuth (client_secrets.json / token.json) |
-| TikTok ES @elclipdegta6____bits | 🟡 AMBER | App aprobada en TikTok for Developers + scopes `video.upload`, `user.info.basic` (1-4 sem.) |
-| Instagram ES @elclipdegta6 | 🟡 AMBER | Cuenta creada por el usuario el 2026-11-16 y vinculada a la Página Elclipdegta6 (pendiente de verificar por API que sea Profesional) |
-| Facebook Page Elclipdegta6 | 🟡 AMBER | Page creada por el usuario el 2026-11-16; luego rol admin/editor + Page access token (pendiente de verificar por API) |
+| YouTube ES (cuenta principal) | 🟡 AMBER | Verificar canal + OAuth (client_secrets.json / token.json) |
+| TikTok ES (cuenta principal) | 🟡 AMBER | App aprobada en TikTok for Developers + scopes `video.upload`, `user.info.basic` (1-4 sem.) |
+| Instagram ES (cuenta principal) | 🟡 AMBER | Cuenta creada por el usuario el 2026-11-16 y vinculada a la Página del canal (pendiente de verificar por API que sea Profesional) |
+| Facebook Page (Página del canal) | 🟡 AMBER | Page creada por el usuario el 2026-11-16; luego rol admin/editor + Page access token (pendiente de verificar por API) |
 
 Checklist por cuenta:
 
@@ -277,7 +277,7 @@ está en la lista blanca.
    la lista = permiso ya dado (2026-11-16). IlloJuan ya está.
 2. YouTube: verificar el canal + OAuth (`client_secrets.json`, `token.json`).
 3. TikTok: crear y aprobar la app en TikTok for Developers (1-4 sem.).
-4. Instagram: crear @elclipdegta6 (reintentar códigos) → Profesional →
+4. Instagram: crear la cuenta (reintentar códigos) → Profesional →
    vincular Page.
 5. Facebook: crear la Page El Clip de GTA 6 → rol + token.
 6. Aprobación del usuario por clip (cola `approved`) antes de cada subida.
