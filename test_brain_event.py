@@ -287,7 +287,9 @@ class TestLiveCutterEvents(unittest.TestCase):
         def _finalize(*a, **k):
             return {"seo": dict(seo)}
 
-        def _pub_status(viral, score):
+        def _pub_status(viral, score, **_k):
+            # publish_status recibe seo_gate/viral_min desde
+            # config.yaml (2026-11-19, 80/45); el mock los ignora.
             return seo_statuses
 
         def _final(*a, **k):

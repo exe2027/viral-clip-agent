@@ -401,18 +401,28 @@ def build_title(detail, layout_decision, payoff_ts_clip=20.0,
             else "Chat went wild 😂 GTA 6"
 
 
-def finalize_package(package_path, viral_total, chat_multiple):
+def finalize_package(package_path, viral_total, chat_multiple, cfg=None):
     """Prioridad + estado por plataforma (misma fórmula que el
     empaquetar del worker, sin reimplementarla). Escribe el
-    paquete con priority/status/virality/chat_multiple."""
+    paquete con priority/status/virality/chat_multiple.
+
+    Los umbrales salen de config.yaml (scoring.seo_gate /
+    scoring.viral_min, orden del usuario 2026-11-19: 80/45), no de
+    los defectos 90/50 de priority.py (2026-11-19, clips 24/25:
+    viral 49 con SEO 86 salía "descartado" aunque pasa 45/80).
+    """
+    from .policy import load_scoring_config
     from .priority import priority as priority_fn, publish_status
+    seo_gate, viral_min = load_scoring_config(cfg)
     with open(package_path, encoding="utf-8") as f:
         package = json.load(f)
     priorities, statuses = {}, {}
     for platform, score in (package.get("seo") or {}).items():
         priorities[platform] = priority_fn(viral_total, score,
                                            chat_multiple)
-        status, why = publish_status(viral_total, score)
+        status, why = publish_status(viral_total, score,
+                                     seo_gate=seo_gate,
+                                     viral_min=viral_min)
         statuses[platform] = {"status": status, "reason": why}
     package["priority"] = priorities
     package["publish_status"] = statuses
@@ -872,7 +882,7 @@ class LiveCutterSession(LiveSession):
             thumbnail_text=pub_pkg.get("thumbnail_text"),
             game_verified=True, visible=visible, lang=self.lang)
         package = finalize_package(pkg["package_path"], viral_total,
-                                   multiple)
+                                   multiple, cfg=self.cfg)
         package["category"] = category
         package["game"] = "GTA 6"
         package["category_source"] = source
@@ -890,11 +900,17 @@ class LiveCutterSession(LiveSession):
         with open(pkg["package_path"], "w", encoding="utf-8") as f:
             json.dump(package, f, ensure_ascii=False, indent=2)
         # 8. Puertas duras por plataforma (viralidad/SEO/duración).
-        from .priority import SEO_GATE, publish_status
+        # Los umbrales salen de config.yaml (80/45), no de los
+        # defectos 90/50 (2026-11-19, clips 24/25).
+        from .policy import load_scoring_config
+        from .priority import publish_status
+        seo_gate, viral_min = load_scoring_config(self.cfg)
         seo = package.get("seo") or {}
         statuses = {}
         for platform, s in seo.items():
-            statuses[platform] = publish_status(viral_total, s)
+            statuses[platform] = publish_status(viral_total, s,
+                                                seo_gate=seo_gate,
+                                                viral_min=viral_min)
         record = {
             "clip_id": clip_id, "streamer": self.streamer,
             "platform": self.platform, "vod_id": self.vod_id,
@@ -991,9 +1007,9 @@ class LiveCutterSession(LiveSession):
         # borrador sin jobs (igual que hoy) y se reporta el
         # descarte con el motivo exacto de la puerta (viralidad o
         # SEO, con los 4 números). Sin plataformas medidas no hay
-        # descarte que reportar. El umbral sale de la puerta
-        # misma (SEO_GATE), no va cableado: si el listón cambia,
-        # el evento lo sigue.
+        # descarte que reportar. El umbral sale de config.yaml
+        # (scoring), no va cableado: si el listón cambia, el
+        # evento lo sigue.
         _rescue = bool((record.get("review") or {}).get(
             "rescate_gritos"))
         if (statuses and not _rescue
@@ -1003,7 +1019,7 @@ class LiveCutterSession(LiveSession):
             if all(s[0] == "descartado" for s in statuses.values()):
                 _why = next(iter(statuses.values()))[1]
             else:
-                _why = (f"SEO post-corte < {SEO_GATE} "
+                _why = (f"SEO post-corte < {seo_gate} "
                         f"({_seo_summary(seo)}; viralidad "
                         f"{viral_total})")
             self._report_discard_once(
@@ -1082,6 +1098,10 @@ class LiveCutterSession(LiveSession):
                 "needs_human_transcription": 1 if record["publish_blocked"]
                 else 0,
                 "origin": "live",
+                # 2026-11-19 (clips 24/25, Kai Cenat): el payload no
+                # llevaba idioma y el panel lo dejaba en "es" por
+                # defecto, así que los clips EN iban a la cola ES.
+                "language": self.lang,
                 "game": "GTA VI",
                 "reason": _reason,
             }

@@ -426,6 +426,106 @@ class TestEnqueuePanelRescue(unittest.TestCase):
             self.assertNotIn("seo_scores", payload)
 
 
+class TestEnqueuePanelLanguage(unittest.TestCase):
+    """_enqueue_panel: el payload lleva el idioma del streamer.
+
+    2026-11-19 (clips 24/25, Kai Cenat): el payload no llevaba
+    idioma y el panel lo dejaba en "es" por defecto, así que los
+    clips EN iban a la cola ES y se publicarían en las cuentas en
+    español."""
+
+    class _FakeBridge:
+        def __init__(self):
+            self.payloads = []
+
+        def create_clip(self, payload):
+            self.payloads.append(payload)
+            return {"id": 97}
+
+        def upload_video(self, clip_id, path):
+            return {"ok": True}
+
+        def tracking_step(self, *a, **k):
+            return {"ok": True}
+
+    def _session(self, tmp, streamer):
+        return LiveCutterSession(
+            streamer, platform="twitch", stream_id="2026-11-19",
+            out_dir=os.path.join(tmp, "clips"), base_dir=tmp,
+            bridge=self._FakeBridge(), dry_run=False, vod_id="123")
+
+    def _record(self):
+        pkg_path = os.path.join(tempfile.gettempdir(), "pkg.json")
+        with open(pkg_path, "w", encoding="utf-8") as f:
+            json.dump({"priority": {"youtube_shorts": {"priority": 45}}}, f)
+        return {
+            "clip_id": "live:kaicenat:x:p62", "clip": __file__,
+            "title": "Kai Cenat", "start_sec": 100, "end_sec": 140,
+            "peak_ts": 167.0, "category": "Grand Theft Auto VI",
+            "category_source": "helix", "game": "GTA 6", "origin": "live",
+            "viral_total": 49.4, "viral_auto": 49.4,
+            "review": {}, "streamer_hype": {"count": 0, "distinct": 0,
+                                            "phrases": []},
+            "subtitles_complete": True, "publish_blocked": False,
+            "seo": {"youtube_shorts": 85, "tiktok": 88,
+                    "instagram_reels": 90, "facebook_reels": 82},
+            "publish_status": {}, "package_path": pkg_path,
+            "hype_score": 8.0, "burst_score": 8.0, "hype_ratio": 4.0,
+        }
+
+    def test_payload_lleva_idioma_en_para_kaicenat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp, "kaicenat")
+            self.assertEqual(session.lang, "en")
+            session._enqueue_panel(self._record())
+            self.assertEqual(session.bridge.payloads[0]["language"], "en")
+
+    def test_payload_lleva_idioma_es_para_rubius(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp, "rubius")
+            self.assertEqual(session.lang, "es")
+            session._enqueue_panel(self._record())
+            self.assertEqual(session.bridge.payloads[0]["language"], "es")
+
+
+class TestFinalizePackageUmbrales(unittest.TestCase):
+    """finalize_package: los umbrales salen de config.yaml (80/45).
+
+    2026-11-19 (clips 24/25): viral 49 con SEO 86 salía
+    "descartado" porque publish_status usaba los defectos 90/50."""
+
+    def _package(self, tmp, seo):
+        path = os.path.join(tmp, "pkg.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"seo": seo}, f)
+        return path
+
+    def test_viral_49_pasa_con_45_80(self):
+        from clipagent.live_cutter import finalize_package
+        seo = {"youtube_shorts": 85, "tiktok": 88,
+               "instagram_reels": 90, "facebook_reels": 82}
+        cfg = {"scoring": {"seo_gate": 80, "viral_min": 45}}
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = finalize_package(self._package(tmp, seo), 49.0, 2.0,
+                                   cfg=cfg)
+            for platform in seo:
+                self.assertEqual(
+                    pkg["publish_status"][platform]["status"],
+                    "publicable", platform)
+
+    def test_viral_49_no_pasa_con_defectos_90_50(self):
+        from clipagent.live_cutter import finalize_package
+        seo = {"youtube_shorts": 85, "tiktok": 88,
+               "instagram_reels": 90, "facebook_reels": 82}
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = finalize_package(self._package(tmp, seo), 49.0, 2.0,
+                                   cfg={})
+            for platform in seo:
+                self.assertEqual(
+                    pkg["publish_status"][platform]["status"],
+                    "descartado", platform)
+
+
 class TestCalibrationLangVisible(unittest.TestCase):
     """Calibración 2026-11-19: idioma por streamer, lo visible por
     layout, y persistencia de las revisiones."""
