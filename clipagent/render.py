@@ -2477,7 +2477,7 @@ def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg,
     game_filt = _game_filter(_v2_game_crop(src_w, src_h), game_zoom)
     parts = [f"[{vin}]split=2[cam_src][game_src];"]
     if punch_win is not None:
-        if "cx" in punch and "cy" in punch:
+        if punch is not None and "cx" in punch and "cy" in punch:
             # Centro automático del punch-in (coords de muestra
             # 160x90 -> px reales): el centro del viaje de la cara
             # en 16-26 s, no el centro de la caja.
