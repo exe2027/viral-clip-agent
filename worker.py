@@ -321,6 +321,49 @@ def _resolve_panel_bridge():
     return PanelBridge.from_env()
 
 
+def _transcript_text_for_clip(clip_path):
+    """Texto de la transcripción hermana del MP4, o ''.
+
+    Busca <stem>.transcript.json (o el .srt hermano) junto al
+    clip, con y sin el sufijo _subs del quemado. Sin ella el juez
+    valora solo imagen (final_review.py lo prevé).
+    """
+    try:
+        from clipagent.final_review import transcript_text_for_srt
+    except Exception:  # noqa: BLE001 - sin transcripción no se cae
+        return ""
+    base = os.path.splitext(clip_path)[0]
+    stems = [base]
+    if base.endswith("_subs"):
+        stems.append(base[:-5])
+    for stem in stems:
+        try:
+            txt = transcript_text_for_srt(stem + ".srt")
+        except Exception:  # noqa: BLE001 - probar el siguiente
+            txt = ""
+        if txt:
+            return txt
+    return ""
+
+
+def _review_clip_for_panel(clip_path, title, cfg=None):
+    """Validación final del render (2026-11-19, final_review.py).
+
+    Devuelve el dict de la revisión; nunca lanza: sin veredicto
+    (sin Gemini, sin fotogramas, validación desactivada) devuelve
+    decision "pendiente_revision" y el clip se sube SIN marcar el
+    preview. Solo "aprobado" marca; "rechazado" no se sube.
+    """
+    try:
+        from clipagent.final_review import maybe_review_final_clip
+        return maybe_review_final_clip(
+            clip_path, title,
+            transcript_text=_transcript_text_for_clip(clip_path),
+            cfg=cfg or {})
+    except Exception:  # noqa: BLE001 - sin veredicto no se aprueba
+        return {"decision": "pendiente_revision"}
+
+
 def _upload_clips_to_panel(q: Queue, job: dict, manifest: dict,
                            bridge=None):
     """Sube los clips del job a la Cola del panel (C8).
@@ -379,12 +422,35 @@ def _upload_clips_to_panel(q: Queue, job: dict, manifest: dict,
             continue
         try:
             payload = _panel_payload(job, manifest, clip)
+            # Validación final del render (2026-11-19): igual que
+            # en live/vod_fallback. Rechazado -> no se sube (el
+            # clip queda en local). Aprobado -> tras subir, el
+            # preview queda validado. Sin veredicto -> se sube
+            # sin marcar.
+            final_review = _review_clip_for_panel(
+                clip_path, payload.get("title") or "")
+            if final_review.get("decision") == "rechazado":
+                _log(f"Job #{job_id}: clip #{clip.get('n')} "
+                     f"rechazado por la validación final "
+                     f"({final_review.get('motivo') or ''}); "
+                     f"no se sube, queda en local.")
+                q.log(job_id, "panel_revision_rechazada",
+                      f"clip #{clip.get('n')}: validación final: "
+                      f"{final_review.get('motivo') or ''}; "
+                      f"no se sube, queda en local")
+                failed += 1
+                continue
             created = bridge.create_clip(payload)
             panel_id = created.get("id")
             if not panel_id:
                 raise ValueError(
                     f"POST /api/clips sin id: {str(created)[:200]}")
             bridge.upload_video(panel_id, clip_path)
+            if final_review.get("decision") == "aprobado":
+                try:
+                    bridge.preview_seen(panel_id)
+                except Exception:  # noqa: BLE001 - no tumba
+                    pass
         except Exception as e:  # noqa: BLE001 - el panel no tumba
             # el job ni pierde el clip local (sigue en out_dir y
             # en el manifiesto).

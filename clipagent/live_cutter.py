@@ -1008,8 +1008,24 @@ class LiveCutterSession(LiveSession):
                 payload["seo_scores"] = record.get("seo") or {}
             clip = self.bridge.create_clip(payload)
             panel_id = clip.get("id")
+            preview_ok = False
             if panel_id and os.path.isfile(record["clip"]):
                 self.bridge.upload_video(panel_id, record["clip"])
+                # Preview validado automáticamente (2026-11-19): el
+                # render ya pasó la validación final del cerebro
+                # (paso 8b, Gemini ve el MP4 final). Solo con
+                # decisión "aprobado": cualquier otro veredicto
+                # (pendiente/rechazado/desactivada/sin registro)
+                # NO marca nada y el freno sigue. Si el marcado
+                # falla, el clip queda en la Cola con
+                # preview_seen=0: nunca tumba el encolado.
+                if (record.get("final_review") or {}).get(
+                        "decision") == "aprobado":
+                    try:
+                        self.bridge.preview_seen(panel_id)
+                        preview_ok = True
+                    except Exception:  # noqa: BLE001 - no tumba
+                        pass
             for step, msg in (
                     ("detectado", f"LIVE {self.streamer}: pico a "
                      f"{record['peak_ts']:.0f}s"),
@@ -1024,6 +1040,11 @@ class LiveCutterSession(LiveSession):
                     ("cola_publicacion",
                      "en Cola LIVE del panel")):
                 self._track(record["clip_id"], step, msg, panel_id)
+            if preview_ok:
+                self._track(
+                    record["clip_id"], "revision",
+                    "Preview validado automáticamente: validación "
+                    "final aprobada", panel_id)
             return panel_id
         except Exception as e:  # noqa: BLE001 - el panel no tumba
             self.skipped.append(

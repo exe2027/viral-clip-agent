@@ -360,6 +360,26 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
         return None, ("sin voz verificable: subtítulos incompletos, "
                       "no se encola (publish_blocked)")
     final_video = burned if os.path.isfile(burned) else video
+    # Validación final del render (2026-11-19, final_review.py):
+    # el mismo juez visual del camino en vivo. Rechazado -> no
+    # se encola nada. Aprobado -> tras subir, el preview queda
+    # validado (preview_seen) sin inventar un visto humano.
+    # Pendiente (sin Gemini) o desactivada -> se encola sin
+    # marcar: el freno sigue para revisión humana.
+    try:
+        from .final_review import (
+            maybe_review_final_clip, transcript_text_for_srt)
+        final_review = maybe_review_final_clip(
+            final_video, title,
+            transcript_text=transcript_text_for_srt(
+                sub.get("srt") or ""),
+            cfg=cfg or {})
+    except Exception:  # noqa: BLE001 - sin veredicto no se aprueba
+        final_review = {"decision": "pendiente_revision"}
+    if final_review.get("decision") == "rechazado":
+        return None, (f"validación final: "
+                      f"{final_review.get('motivo') or ''}: "
+                      f"no se encola")
     viral_score = clip.get("viral_score") or {}
     total = viral_score.get("total") or 0
     seo = clip.get("seo_scores") or {}
@@ -404,6 +424,11 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
         if not panel_id:
             return None, f"POST /api/clips sin id: {str(created)[:200]}"
         bridge.upload_video(panel_id, final_video)
+        if final_review.get("decision") == "aprobado":
+            try:
+                bridge.preview_seen(panel_id)
+            except Exception:  # noqa: BLE001 - no tumba el encolado
+                pass
     except Exception as e:  # noqa: BLE001 - el panel no tumba la corrida
         return None, f"panel: no se pudo encolar ({e})"
     return panel_id, ""
