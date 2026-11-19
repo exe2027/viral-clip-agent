@@ -69,7 +69,7 @@ def load_identifiers(base_dir=None):
     for platform, ident in out.items():
         entry = data.get(platform) or {}
         for key in ("label", "handle", "page_name", "notes",
-                    "created_at"):
+                    "created_at", "published_count", "first_published"):
             if entry.get(key):
                 ident[key] = entry[key]
         if data.get("last_verified"):
@@ -96,14 +96,94 @@ def account_age_days(platform, base_dir=None, today=None):
     return max(0, (ref - born).days)
 
 
-def is_new_account(platform, base_dir=None, today=None):
-    """Cuenta nueva: menos de 7 días desde su creación (6.5).
+def account_published_count(platform, base_dir=None, queue=None,
+                            published_count=None):
+    """Publicaciones totales de la cuenta (None si no se sabe).
 
-    La primera semana el ritmo es reducido (NEW_ACCOUNT_DAILY en
-    limits.yaml, 1/día).
+    Prioridad: el argumento explícito, luego `published_count` en
+    accounts.yaml (lo escribe `doctor` o el usuario; sin inventar:
+    si no está, no se asume 0), y por último el conteo de la cola
+    que se pase (PublishQueue.published_count). Sin ninguna fuente,
+    None: la madurez se decide solo por edad.
+    """
+    if published_count is not None:
+        return int(published_count)
+    ident = load_identifiers(base_dir).get(platform) or {}
+    raw = ident.get("published_count")
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+    if queue is not None:
+        try:
+            return int(queue.published_count(platform))
+        except Exception:
+            return None
+    return None
+
+
+def warmup_stage(platform, base_dir=None, today=None,
+                 published_count=None, queue=None):
+    """Etapa de calentamiento (reglas de publicación 2026-11-19).
+
+    Devuelve "week1" | "week2" | "normal":
+      * "week1": menos de 7 días desde la creación (máx 1/día, en
+        días alternos o diarios, sin ráfagas).
+      * "week2": de 7 a 13 días, o 14+ días con menos de 20
+        publicaciones (máx 1/día todos los días).
+      * "normal": 14+ días Y 20+ publicaciones (ritmo normal).
+    Cuenta NUEVA = semana 1 o 2, es decir, menos de 14 días O
+    menos de 20 publicaciones. Sin fecha de creación ni conteo
+    conocido, "normal" (comportamiento de antes: cuenta antigua).
+    Subir de nivel exige además no haber tenido avisos,
+    restricciones ni caídas bruscas de alcance: eso lo decide el
+    humano o el panel, no esta función (aquí solo la edad y el
+    conteo).
     """
     age = account_age_days(platform, base_dir, today)
-    return age is not None and age < 7
+    count = account_published_count(platform, base_dir, queue,
+                                    published_count)
+    if age is None and count is None:
+        return "normal"
+    if age is not None and age < 7:
+        return "week1"
+    if age is not None and age < 14:
+        return "week2"
+    if count is not None and count < 20:
+        return "week2"
+    return "normal"
+
+
+def warmup_max_per_day(stage, limits=None):
+    """Tope diario en calentamiento (1/día en semana 1 y 2).
+
+    En "normal" devuelve None (manda el plan por plataforma).
+    `limits` es el dict de load_limits (warmup.week1/week2_max);
+    sin él, 1.
+    """
+    if stage not in ("week1", "week2"):
+        return None
+    warmup = (limits or {}).get("warmup") or {}
+    key = "week1_max_per_day" if stage == "week1" else "week2_max_per_day"
+    try:
+        return int(warmup.get(key, 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def is_new_account(platform, base_dir=None, today=None,
+                   published_count=None, queue=None):
+    """Cuenta nueva: menos de 14 días O menos de 20 publicaciones
+    (reglas de publicación 2026-11-19, reemplaza el "< 7 días" de
+    2026-11-16 y la madurez "30 días + 10 publicaciones").
+
+    La primera y segunda semana el ritmo es reducido (1/día, ver
+    warmup_max_per_day). Sin fecha ni conteo, se trata como
+    antigua (ritmo completo), como antes.
+    """
+    return warmup_stage(platform, base_dir, today,
+                        published_count, queue) != "normal"
 
 
 def _token_ok(platform, base_dir):

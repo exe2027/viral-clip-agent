@@ -1,26 +1,55 @@
-# limits.yaml — TOPES DIARIOS COMO REGLAS (orden del usuario 2026-11-18).
+# limits.yaml — TOPES DIARIOS COMO REGLAS (reglas de publicación 2026-11-19).
 #
 # Los topes los pone el agente como regla, porque conoce los topes
 # de subida de cada plataforma. El usuario NO tiene que adivinarlos:
 # en Ajustes del panel se muestran ya puestos con estos valores.
-# Cada tope = límite de la plataforma (fuente) con margen de
-# seguridad para cuentas nuevas (la cuenta es nueva hasta 30 días
-# desde su primera publicación + 10 publicaciones sin sanciones;
-# el escalado automático vive en el Worker del panel, ver
-# panel-backend; aquí están los valores que ese escalado usa).
+# Cada tope = límite interno del proyecto con margen de seguridad
+# para cuentas nuevas. Los valores DEBEN coincidir con los del
+# panel (panel-backend/worker/src/db.ts, DEFAULT_PANEL_SETTINGS):
+# el panel es el que aplica los topes al publicar; este archivo es
+# la regla que usa el publisher del repo.
 # Si falta este archivo, publisher.py usa los mismos valores como
 # fallback en el código (ver load_limits).
 #
+# REGLAS 2026-11-19 (reemplazan las del 2026-11-18):
+# - Ritmo normal: TikTok 2/día, Instagram 1/día, YouTube 1/día,
+#   Facebook 1/día. Máximo duro: TikTok 3, resto 2. Al máximo solo
+#   si la cuenta tiene >30 días sin restricción + cola viral alta
+#   + últimas 7 mantienen/suben alcance (regla 6).
+# - Nunca más de 3 publicaciones por cuenta en 24 h móviles
+#   (rolling_24h_max).
+# - Calentamiento: cuenta NUEVA si <14 días o <20 publicaciones.
+#   Semana 1: máx 1/día. Semana 2: máx 1/día diario. Semana 3+:
+#   ritmo normal. Subir solo sin avisos/restricciones/caída de
+#   alcance. (Antes: nueva hasta 30 días + 10 publicaciones.)
+# - Espaciamiento: misma cuenta mismo día mín 3 h (4 h YouTube),
+#   mín absoluto 5 min; mismo clip en distintas plataformas 15-30
+#   min mín (ideal 12-24 h); nunca el mismo clip en 2 cuentas de
+#   la misma plataforma el mismo día.
+# - Franjas (hora Chile, REVOCA la decisión 2026-11-18 "sin
+#   franja"): mañana 12:00-14:00, tarde 18:00-20:00, noche
+#   21:00-23:00. 1/día: tarde o noche. 2+: mediodía + noche. Hora
+#   exacta varía ±10 min cada día (jitter determinista).
+# - Días activos por semana: TikTok 5-6, resto 4-5; 1 día libre
+#   por semana por cuenta (rotativo, determinista por
+#   cuenta+semana).
+# - Errores: temporal (red, 429) reintento 5, 15, 45 min, máx 3.
+#   Spam/límite: detener esa cuenta, pausa 48 h, reprogramar al
+#   día siguiente, NO reintentar el mismo día. Nunca esquivar
+#   cambiando de cuenta, IP o método.
+
 # YouTube: la cuota de la Data API v3 ya no limita (videos.insert
-# cuesta 1 unidad, ~100 llamadas/día; el plan 3-5/día queda muy por
+# cuesta 1 unidad, ~100 llamadas/día; el plan 1/día queda muy por
 # debajo). El tope real es de prudencia anti-ban para cuentas
-# nuevas: plan 3/día, máximo 5/día. Fuente cuota:
+# nuevas: plan 1/día, máximo 2/día. Fuente cuota:
 # https://developers.google.com/youtube/data/revision_history
 # (revisado 2026-11-17; historial: 4 dic 2025 baja a ~100 u.,
 # 1 jun 2026 bucket propio, 2 nov 2026 1 unidad por llamada).
 youtube_shorts:
-  plan_per_day: 3
-  max_per_day: 5
+  plan_per_day: 1
+  max_per_day: 2
+  days_per_week_min: 4
+  days_per_week_max: 5
   quota_upload_cost_units: 1
   quota_upload_calls_per_day: 100
   quota_other_daily_units: 10000
@@ -43,6 +72,8 @@ youtube_shorts:
 tiktok:
   plan_per_day: 2
   max_per_day: 3
+  days_per_week_min: 5
+  days_per_week_max: 6
   zernio_per_day: 15
   zernio_pending_drafts_max: 5
   zernio_source_url: "https://docs.zernio.com"
@@ -53,33 +84,78 @@ tiktok:
 
 # Instagram Reels (Meta): la doc oficial devolvió 403 al verificarla
 # 2026-11-17; las guías citan 50 Reels/día por cuenta (sin verificar
-# en la fuente oficial). Plan 2/día = margen grande sobre ese valor.
+# en la fuente oficial). Plan 1/día = margen grande sobre ese valor.
 instagram_reels:
-  plan_per_day: 2
-  max_per_day: 3
+  plan_per_day: 1
+  max_per_day: 2
+  days_per_week_min: 4
+  days_per_week_max: 5
   platform_daily_limit_claimed: 50
   source_url: "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/"
   reviewed: null
   note: "TODO: la doc oficial de Meta devolvió 403 al verificarla 2026-11-17; el flujo (contenedor -> FINISHED -> publicar, URL HTTPS pública obligatoria) está corroborado por varias guías que citan esa doc. Sin verificar: límite diario (50 vs 100 según la fuente) y duración máxima por API (90 s vs 15 min). plan/max son topes internos del proyecto."
 
 # Facebook Reels (Meta): las guías citan 30 Reels/día por Página
-# (sin verificar en la fuente oficial). Plan 2/día = margen grande.
+# (sin verificar en la fuente oficial). Plan 1/día = margen grande.
 facebook_reels:
-  plan_per_day: 2
-  max_per_day: 3
+  plan_per_day: 1
+  max_per_day: 2
+  days_per_week_min: 4
+  days_per_week_max: 5
   platform_daily_limit_claimed: 30
   source_url: "https://developers.facebook.com/docs/video-api/guides/reels-publishing"
   reviewed: null
   note: "TODO: la doc oficial de Meta devolvió 403 al verificarla 2026-11-17; el flujo en 3 fases (start -> rupload.facebook.com -> finish) está corroborado por varias guías que citan esa doc. Requisitos del video (MP4 9:16, 3-90 s) y límite de 30 Reels/día por Página según esas guías, sin verificar en la fuente oficial. plan/max son topes internos del proyecto."
 
 # Frenos internos del proyecto (no son límites de plataforma).
-min_spacing_hours: 2
-# publish_window ELIMINADO 2026-11-18 (decisión del usuario:
-# sin franja horaria, se publica a cualquier hora).
+min_spacing_hours: 3
+youtube_spacing_hours: 4
+min_spacing_minutes: 5
+cross_platform_min_minutes: 15
+cross_platform_ideal_hours_min: 12
+rolling_24h_max: 3
+rest_day_per_week: 1
+slot_jitter_minutes: 10
+# Franjas de publicación (hora Chile, America/Santiago).
+# REVOCA la decisión 2026-11-18 ("sin franja horaria").
+# Claves leídas por clipagent/publish.py (time_slots dict).
+time_slots:
+  morning: ["12:00", "14:00"]
+  afternoon: ["18:00", "20:00"]
+  night: ["21:00", "23:00"]
+# Días activos por semana (tabla de la regla 2: TikTok 5-6,
+# resto 4-5): van como days_per_week_min/max en cada plataforma
+# arriba. Lo que se aplica como freno es 1 día libre por semana
+# por cuenta (rest_day_per_week, rotativo y determinista por
+# cuenta+semana, regla 7).
+# Hashtags: máx 5 en Instagram, 3-5 en el resto.
+hashtag_max:
+  instagram_reels: 5
+  other: 5
+# Calentamiento (2026-11-19): cuenta nueva si <14 días o <20
+# publicaciones. Semana 1: máx 1/día. Semana 2: máx 1/día diario.
+# Semana 3+: ritmo normal.
+warmup:
+  new_if_days: 14
+  new_if_publishes: 20
+  week1_max_per_day: 1
+  week2_max_per_day: 1
 new_account_daily: 1
-# Escalado automático (orden del usuario 2026-11-18; lo aplica el
-# Worker del panel cada día, ver panel-backend): cuenta NUEVA (1/día)
-# hasta 30 días desde su primera publicación + 10 publicaciones sin
-# sanciones; entonces pasa a ESTABLECIDA (plan normal por plataforma).
-established_after_days: 30
-established_min_publishes: 10
+# Reintentos (regla 8): temporal (red, 429) 5, 15, 45 min, máx 3.
+# Spam/límite: detener la cuenta, pausa 48 h, reprogramar al día
+# siguiente, sin reintento el mismo día.
+retry_backoff_minutes: [5, 15, 45]
+max_transient_retries: 3
+pause_hours: 48
+
+# EXCEPCIÓN DOCUMENTADA — clip IlloJuan borra GTA 6 (decisión del
+# dueño 2026-11-18, MEJORAS-PENDIENTES.md 3.2): se MANTIENE como
+# excepción, no se elimina el workflow. Solo para ese clip y solo
+# por el workflow `.github/workflows/enqueue-illojuan.yml`: los
+# Ajustes temporales del panel son min_duration_s 15,
+# new_account_daily 2 y spacing_hours 0, para forzar la publicación
+# ese día rompiendo el tope de 1/día de cuentas nuevas y la regla
+# de 40-60 s (el clip dura 19 s y es un repost, sin medición de
+# viralidad de chat). NO cambia los valores de este archivo: los
+# topes de arriba siguen siendo la regla para todo lo demás, y
+# ningún otro workflow puede bajarlos por su cuenta.

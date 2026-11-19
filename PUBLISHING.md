@@ -49,7 +49,7 @@ oficial de revisiones de la YouTube Data API v3):
   bucket). El pool compartido de **10.000 unidades/día** es solo
   para el resto de métodos (`thumbnails.set` 50 u., lecturas...).
 - Máximo por cuota: **100 Shorts/día**. La cuota YA NO limita el
-  plan del proyecto: **3-5/día**, muy por debajo en cualquier caso.
+  plan del proyecto: **1-2/día**, muy por debajo en cualquier caso.
 - La cuota se resetea a medianoche hora del Pacífico (EE. UU.).
   Si se agota, la API devuelve 403 `quotaExceeded`: esperar al día
   siguiente, no insistir.
@@ -121,25 +121,79 @@ La cola persiste en `publish_queue.json`. Flujo:
 3. Aprobación del usuario → `approved` (con `scheduled_for` opcional).
 4. `publish()` → `published` (con `platform_id`) o `failed`.
 
-## Topes (sin franja desde 2026-11-18)
+## Topes (reglas de publicación 2026-11-19)
 
-| Plataforma | Plan/día | Techo/día |
-|---|---|---|
-| YouTube Shorts | 3 | 5 (cuota: 6) |
-| TikTok | 2 | 3 |
-| Instagram Reels | 2 | 3 |
-| Facebook Reels | 2 | 3 |
+| Plataforma | Plan/día | Techo/día | Días/semana |
+|---|---|---|---|
+| YouTube Shorts | 1 | 2 (cuota: 100) | 4-5 |
+| TikTok | 2 | 3 | 5-6 |
+| Instagram Reels | 1 | 2 | 4-5 |
+| Facebook Reels | 1 | 2 | 4-5 |
 
-- **Espaciamiento:** mínimo 2 h entre subidas en la misma plataforma
-  (ideal 2-3 h).
-- **Franja:** SIN franja horaria desde el 2026-11-18 (decisión del
-  usuario: da lo mismo la hora, solo se sube). Los topes diarios y
-  el espaciamiento de 2 h siguen vigentes.
-- **Cuentas nuevas:** 1 publicación/día por plataforma la primera
-  semana (ver README, "Supervivencia por plataforma"). Los topes de
-  arriba son el techo una vez calentada la cuenta.
+- **Ritmo normal por defecto.** Al máximo duro solo si la cuenta
+  tiene > 30 días sin restricción, hay clips en cola con puntaje
+  viral alto y las últimas 7 publicaciones mantienen o suben su
+  alcance.
+- **Rolling 24 h:** nunca más de 3 publicaciones por cuenta en 24
+  horas móviles (ventana rolling, no día calendario).
+- **Espaciamiento:** mínimo 3 h entre subidas en la misma cuenta
+  (4 h en YouTube Shorts), mínimo absoluto 5 min. Mismo clip en
+  distintas plataformas: 15-30 min como mínimo (ideal 12-24 h, con
+  archivos y metadatos distintos). Nunca el mismo clip en dos
+  cuentas de la misma plataforma el mismo día.
+- **Franja (vuelve 2026-11-19; la decisión 2026-11-18 "sin franja"
+  queda revocada):** mañana 12:00-14:00, tarde 18:00-20:00, noche
+  21:00-23:00 (hora Chile). 1 vídeo/día: tarde o noche. 2 o más:
+  una en mediodía y otra en la noche. La hora exacta varía ±10 min
+  cada día, nunca la misma hora exacta todos los días. Las franjas
+  se aplican al planificar el día (`plan_daily()` / `publisher.py
+  plan`); `check_limits()` no bloquea por hora salvo
+  `enforce_window=True`.
+- **Cuentas nuevas (calentamiento):** cuenta nueva si tiene menos
+  de 14 días O menos de 20 publicaciones. Semana 1: máx 1/día en
+  días alternos o diarios, sin ráfagas. Semana 2: máx 1/día todos
+  los días. Desde la semana 3: ritmo normal. Subir de nivel solo
+  si no hubo avisos, restricciones ni caídas bruscas de alcance.
+  (Reemplaza la madurez vieja "30 días + 10 publicaciones".)
+- **Anti-spam:** cada plataforma recibe su propia versión (título,
+  descripción y hashtags distintos, sin marca de agua de otra app);
+  no reutilizar el mismo texto exacto dos veces el mismo día;
+  hashtags máx 5 en Instagram, 3-5 en el resto. Un clip sin aporte
+  propio (subtítulos, zoom, edición, hook) se marca
+  `requiere_edicion` y NO se publica. Nada de likes, comentarios o
+  seguimientos automatizados.
+- **Cola:** ordenada por puntaje viral, repartida entre
+  plataformas; lo que no cabe pasa al día siguiente. Un día libre
+  por semana por cuenta (rotación).
+- **Bajar a 1/día o pausar 48 h** si hay error de spam, límite de
+  API, aviso, shadowban sospechoso, alcance < 30% del promedio en
+  3 vídeos seguidos o cualquier restricción: avisar al usuario y
+  no reintentar.
 - **No a la misma hora en las 4 plataformas:** escalonar (YT tarde,
   TikTok noche, etc.) para que no parezca una subida coordinada.
+
+## Plan diario — `publisher.py plan` (regla 9)
+
+```bash
+python -m clipagent.publish plan --clips clips.json [--date 2026-11-20]
+```
+
+Devuelve el plan diario en JSON (`fecha`, `publicaciones` con
+`clip_id`, `plataforma`, `cuenta`, `hora_local`, `titulo`,
+`descripcion`, `hashtags`, `motivo`; `en_cola`; `alertas`),
+verificado contra las secciones 2, 3 y 4 antes de devolverlo: lo
+que no cumple va a la cola. Solo planifica, nunca publica nada.
+
+## Errores y reintentos (regla 8)
+
+| Error | Acción |
+|---|---|
+| Temporal (red, 429, 5xx) | Reintento con espera creciente **5, 15, 45 min**, máx 3 intentos (`next_retry()`) |
+| Spam o límite (`spam_risk_too_many_posts`, límite de publicaciones) | **Detener esa cuenta**, reprogramar al día siguiente, **NO reintentar el mismo día** |
+| Formato (400, archivo, título, duración) | Corregir y **1 reintento**; el 2º fallo va a cuarentena |
+| Copyright / contenido / reutilización (403, claim, strike, Content ID) | **Cuarentena inmediata**, revisión humana, **nunca reintento ciego** |
+
+Nunca esquivar un límite cambiando de cuenta, de IP o de método.
 
 ## Lista blanca — verificación AL PUBLICAR
 

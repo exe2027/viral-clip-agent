@@ -35,14 +35,19 @@ class TestNewAccount(unittest.TestCase):
             self.assertEqual(accounts.account_age_days(
                 "youtube_shorts", tmp, today=date(2026, 11, 17)), 1)
 
-    def test_cuenta_de_hace_8_dias_ya_no_es_nueva(self):
+    def test_cuenta_de_hace_8_dias_es_semana_2_todavia_nueva(self):
+        # Reglas 2026-11-19: nueva hasta 14 días (antes < 7 días).
+        # 8 días = semana 2, máx 1/día todos los días.
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "accounts.yaml"), "w",
                       encoding="utf-8") as f:
                 f.write("youtube_shorts:\n"
                         '  created_at: "2026-11-09"\n')
-            self.assertFalse(accounts.is_new_account(
+            self.assertTrue(accounts.is_new_account(
                 "youtube_shorts", tmp, today=date(2026, 11, 17)))
+            self.assertEqual(accounts.warmup_stage(
+                "youtube_shorts", tmp, today=date(2026, 11, 17)),
+                "week2")
 
     def test_sin_fecha_es_cuenta_antigua(self):
         with tempfile.TemporaryDirectory() as tmp:

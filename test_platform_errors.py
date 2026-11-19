@@ -80,7 +80,7 @@ class TestCheckLimits(unittest.TestCase):
         q = _queue(self.tmp.name)
         with mock.patch.object(publisher, "_now_chile",
                                return_value=self._now(20)):
-            for i in range(5):  # techo de youtube_shorts = 5
+            for i in range(2):  # techo de youtube_shorts = 2
                 item = q.enqueue(f"/tmp/c{i}.mp4", "youtube_shorts")
                 q.mark_published(item, f"vid{i}")
             ok, msg = check_limits(q, "youtube_shorts")
@@ -91,9 +91,8 @@ class TestCheckLimits(unittest.TestCase):
         q = _queue(self.tmp.name)
         with mock.patch.object(publisher, "_now_chile",
                                return_value=self._now(20)):
-            for i in range(3):  # plan de youtube_shorts = 3
-                item = q.enqueue(f"/tmp/c{i}.mp4", "youtube_shorts")
-                q.mark_published(item, f"vid{i}")
+            item = q.enqueue("/tmp/c0.mp4", "youtube_shorts")
+            q.mark_published(item, "vid0")  # plan YT = 1 (2026-11-19)
             ok, msg = check_limits(q, "youtube_shorts")
             self.assertFalse(ok)
             self.assertIn("plan del día cubierto", msg)
@@ -110,15 +109,20 @@ class TestCheckLimits(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("espaciamiento", msg)
 
-    def test_sin_franja_no_bloquea_a_las_10(self):
-        # Franja ELIMINADA 2026-11-18 (decisión del usuario: da lo
-        # mismo la hora, solo se sube). A las 10:00 check_limits pasa.
+    def test_sin_franja_dura_en_check_limits_la_franja_es_del_plan(self):
+        # Reglas 2026-11-19: las franjas VUELVEN (12-14 / 18-20 /
+        # 21-23), pero se aplican al PLANIFICAR el día (plan_daily),
+        # no como freno duro en check_limits: a las 10:00
+        # check_limits pasa, y plan_daily nunca programa a las 10.
         q = _queue(self.tmp.name)
         with mock.patch.object(publisher, "_now_chile",
                                return_value=self._now(10)):
             ok, msg = check_limits(q, "tiktok")
             self.assertTrue(ok, msg)
             self.assertNotIn("fuera de franja", msg)
+            ok, msg = check_limits(q, "tiktok", enforce_window=True)
+            self.assertFalse(ok)
+            self.assertIn("fuera de franja", msg)
 
 
 if __name__ == "__main__":

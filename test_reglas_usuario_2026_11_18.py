@@ -16,8 +16,11 @@ anteriores que siguen vigentes, con su punto de aplicación:
    con categoría GTA VI. clip_02 sigue publish_blocked por
    subtítulos sin verificar (no publicar). Sin override de p2010
    (viralidad 44,5 < 50).
-4. SIN franja horaria (hoy 14:25): da lo mismo la hora, solo se
-   sube. Topes diarios y espaciamiento 2 h siguen vigentes.
+4. Franja horaria: la decisión 2026-11-18 14:25 "sin franja" queda
+   REVOCADA por las reglas de publicación 2026-11-19: vuelven las
+   franjas Chile 12-14 / 18-20 / 21-23 (ver test_reglas_franja
+   abajo y test_publication_rules_2026_11_19.py). Topes diarios y
+   espaciamiento 3 h (4 h YT) siguen vigentes.
 5. Layout split vertical (2026-11-16): juego arriba, cámara abajo
    más chica, sin tapar minimapa ni HUD, dos webcams apiladas; si
    el juego no se ve, la cámara se achica, nunca al revés.
@@ -141,15 +144,20 @@ class TestReglas20261118Streamers(unittest.TestCase):
 
 
 class TestReglas20261118SinFranja(unittest.TestCase):
-    def test_sin_franja_topes_intactos(self):
-        # Franja eliminada 2026-11-18 14:25; PUBLISH_WINDOW en None.
-        self.assertIsNone(PUBLISH_WINDOW)
-        # Topes diarios y espaciamiento NO cambian (anti-ban).
-        self.assertEqual(DAILY_LIMITS["youtube_shorts"], (3, 5))
+    def test_franja_vuelve_topes_nuevos_2026_11_19(self):
+        # REVOCADO 2026-11-19: la decisión 2026-11-18 "sin franja"
+        # queda sin efecto; PUBLISH_WINDOW vuelve a ser el dict de
+        # franjas Chile 12-14 / 18-20 / 21-23.
+        self.assertEqual(PUBLISH_WINDOW, {
+            "morning": ("12:00", "14:00"),
+            "afternoon": ("18:00", "20:00"),
+            "night": ("21:00", "23:00")})
+        # Topes nuevos 2026-11-19 (anti-ban).
+        self.assertEqual(DAILY_LIMITS["youtube_shorts"], (1, 2))
         self.assertEqual(DAILY_LIMITS["tiktok"], (2, 3))
-        self.assertEqual(DAILY_LIMITS["instagram_reels"], (2, 3))
-        self.assertEqual(DAILY_LIMITS["facebook_reels"], (2, 3))
-        self.assertEqual(MIN_SPACING_HOURS, 2)
+        self.assertEqual(DAILY_LIMITS["instagram_reels"], (1, 2))
+        self.assertEqual(DAILY_LIMITS["facebook_reels"], (1, 2))
+        self.assertEqual(MIN_SPACING_HOURS, 3)
         self.assertEqual(NEW_ACCOUNT_DAILY, 1)
 
 

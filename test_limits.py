@@ -31,11 +31,18 @@ class TestLimits(unittest.TestCase):
         self.assertEqual(yt["quota_other_daily_units"], 10000)
         self.assertEqual(publisher.YOUTUBE_UPLOAD_COST_UNITS, 1)
         self.assertEqual(publisher.YOUTUBE_MAX_UPLOADS_BY_QUOTA, 100)
-        self.assertEqual(publisher.DAILY_LIMITS["youtube_shorts"], (3, 5))
-        self.assertEqual(publisher.MIN_SPACING_HOURS, 2)
-        # Franja ELIMINADA 2026-11-18 (decisión del usuario: sin
-        # franja horaria, se publica a cualquier hora).
-        self.assertIsNone(publisher.PUBLISH_WINDOW)
+        # Topes 2026-11-19: YT 1/2, TikTok 2/3, resto 1/2.
+        self.assertEqual(publisher.DAILY_LIMITS["youtube_shorts"], (1, 2))
+        self.assertEqual(publisher.DAILY_LIMITS["tiktok"], (2, 3))
+        self.assertEqual(publisher.DAILY_LIMITS["instagram_reels"], (1, 2))
+        self.assertEqual(publisher.DAILY_LIMITS["facebook_reels"], (1, 2))
+        self.assertEqual(publisher.MIN_SPACING_HOURS, 3)
+        # Franja VUELVE 2026-11-19 (revocada la decisión 2026-11-18
+        # "sin franja"): PUBLISH_WINDOW es el dict de franjas.
+        self.assertEqual(publisher.PUBLISH_WINDOW, {
+            "morning": ("12:00", "14:00"),
+            "afternoon": ("18:00", "20:00"),
+            "night": ("21:00", "23:00")})
         self.assertEqual(publisher.NEW_ACCOUNT_DAILY, 1)
 
     def test_reviewed_null_en_lo_no_verificado(self):
@@ -60,7 +67,7 @@ class TestLimits(unittest.TestCase):
                  limits["tiktok"]["max_per_day"]), (1, 1))
             self.assertEqual(limits["min_spacing_hours"], 4)
             # Lo no tocado sigue en el valor por defecto.
-            self.assertEqual(limits["youtube_shorts"]["plan_per_day"], 3)
+            self.assertEqual(limits["youtube_shorts"]["plan_per_day"], 1)
 
     def test_sin_archivo_fallback(self):
         limits = load_limits("/no/existe/limits.yaml")

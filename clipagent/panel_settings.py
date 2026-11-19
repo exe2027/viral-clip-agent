@@ -19,11 +19,18 @@ Campos (mismos nombres en D1, en el Worker y aquí):
   subtitle_style: "ref" | "karaoke" | "tiktok" | "highlight" (default "karaoke", 2026-11-18)
   min_duration_s / max_duration_s: 40 / 60
   min_virality: 50, min_seo: 90
-  youtube_plan_per_day: 3, youtube_max_per_day: 5
-  other_plan_per_day: 2, other_max_per_day: 3
+  youtube_plan_per_day: 1, youtube_max_per_day: 2
+  tiktok_plan_per_day: 2, tiktok_max_per_day: 3
+  other_plan_per_day: 1, other_max_per_day: 2 (Instagram y Facebook)
   new_account_daily: 1
   tiktok_zernio_per_day: 15, tiktok_zernio_pending_drafts_max: 5
-  min_spacing_hours: 2
+  min_spacing_hours: 3, youtube_spacing_hours: 4
+  cross_platform_min_minutes: 15, rolling_24h_max: 3
+  warmup_new_if_days: 14, warmup_new_if_publishes: 20
+  hashtag_max: 5
+  (Topes 2026-11-19: YT 1/2, TikTok 2/3, resto 1/2; la decisión
+  2026-11-18 "sin franja" queda revocada y vuelven las franjas
+  12-14 / 18-20 / 21-23, que viven en limits.yaml, no en Ajustes.)
   category: "GTA VI" (el gate exige GTA VI)
   thumbnail_style: "gta6"
   hype_burst: true | false (hype por ráfaga on/off)
@@ -55,12 +62,20 @@ PANEL_SETTINGS_FIELDS = {
     "min_seo": int,
     "youtube_plan_per_day": int,
     "youtube_max_per_day": int,
+    "tiktok_plan_per_day": int,
+    "tiktok_max_per_day": int,
     "other_plan_per_day": int,
     "other_max_per_day": int,
     "new_account_daily": int,
     "tiktok_zernio_per_day": int,
     "tiktok_zernio_pending_drafts_max": int,
     "min_spacing_hours": int,
+    "youtube_spacing_hours": int,
+    "cross_platform_min_minutes": int,
+    "rolling_24h_max": int,
+    "warmup_new_if_days": int,
+    "warmup_new_if_publishes": int,
+    "hashtag_max": int,
     "category": str,
     "thumbnail_style": str,
     "hype_burst": bool,
@@ -81,12 +96,20 @@ PANEL_SETTINGS_RANGES = {
     "min_seo": (0, 100),
     "youtube_plan_per_day": (0, 15),
     "youtube_max_per_day": (0, 15),
+    "tiktok_plan_per_day": (0, 15),
+    "tiktok_max_per_day": (0, 15),
     "other_plan_per_day": (0, 15),
     "other_max_per_day": (0, 15),
     "new_account_daily": (0, 5),
     "tiktok_zernio_per_day": (0, 15),
     "tiktok_zernio_pending_drafts_max": (0, 5),
     "min_spacing_hours": (0, 24),
+    "youtube_spacing_hours": (0, 24),
+    "cross_platform_min_minutes": (0, 120),
+    "rolling_24h_max": (0, 10),
+    "warmup_new_if_days": (0, 90),
+    "warmup_new_if_publishes": (0, 100),
+    "hashtag_max": (0, 15),
     "watermark_opacity": (0, 100),
     "watermark_size_px": (32, 1080),
 }
@@ -199,11 +222,24 @@ def apply_panel_settings(cfg, settings):
         limits.setdefault("youtube_shorts", {})["plan_per_day"] = clean["youtube_plan_per_day"]
     if clean.get("youtube_max_per_day") is not None:
         limits.setdefault("youtube_shorts", {})["max_per_day"] = clean["youtube_max_per_day"]
-    for plat in ("tiktok", "instagram_reels", "facebook_reels"):
+    # TikTok tiene plan/max propios (2/3); other_* solo aplica a
+    # Instagram y Facebook (1/2). Si el panel no manda los de
+    # TikTok, other_* sigue valiendo para TikTok como antes.
+    if clean.get("tiktok_plan_per_day") is not None:
+        limits.setdefault("tiktok", {})["plan_per_day"] = clean["tiktok_plan_per_day"]
+    if clean.get("tiktok_max_per_day") is not None:
+        limits.setdefault("tiktok", {})["max_per_day"] = clean["tiktok_max_per_day"]
+    for plat in ("instagram_reels", "facebook_reels"):
         if clean.get("other_plan_per_day") is not None:
             limits.setdefault(plat, {})["plan_per_day"] = clean["other_plan_per_day"]
         if clean.get("other_max_per_day") is not None:
             limits.setdefault(plat, {})["max_per_day"] = clean["other_max_per_day"]
+    if clean.get("tiktok_plan_per_day") is None \
+            and clean.get("other_plan_per_day") is not None:
+        limits.setdefault("tiktok", {})["plan_per_day"] = clean["other_plan_per_day"]
+    if clean.get("tiktok_max_per_day") is None \
+            and clean.get("other_max_per_day") is not None:
+        limits.setdefault("tiktok", {})["max_per_day"] = clean["other_max_per_day"]
     if clean.get("new_account_daily") is not None:
         limits["new_account_daily"] = clean["new_account_daily"]
     if clean.get("tiktok_zernio_per_day") is not None:
@@ -212,24 +248,45 @@ def apply_panel_settings(cfg, settings):
         limits.setdefault("tiktok", {})["zernio_pending_drafts_max"] = clean["tiktok_zernio_pending_drafts_max"]
     if clean.get("min_spacing_hours") is not None:
         limits["min_spacing_hours"] = clean["min_spacing_hours"]
+    if clean.get("youtube_spacing_hours") is not None:
+        limits["youtube_spacing_hours"] = clean["youtube_spacing_hours"]
+    if clean.get("cross_platform_min_minutes") is not None:
+        limits["cross_platform_min_minutes"] = clean["cross_platform_min_minutes"]
+    if clean.get("rolling_24h_max") is not None:
+        limits["rolling_24h_max"] = clean["rolling_24h_max"]
+    if clean.get("warmup_new_if_days") is not None:
+        limits.setdefault("warmup", {})["new_if_days"] = clean["warmup_new_if_days"]
+    if clean.get("warmup_new_if_publishes") is not None:
+        limits.setdefault("warmup", {})["new_if_publishes"] = clean["warmup_new_if_publishes"]
+    if clean.get("hashtag_max") is not None:
+        limits["hashtag_max"] = {"instagram_reels": clean["hashtag_max"],
+                                 "default": clean["hashtag_max"]}
     if limits:
         cfg["_panel_limits_override"] = limits
     return cfg
 
 
-def fetch_panel_settings(worker_url=None, bridge_token=None, tenant="sebastian",
+def fetch_panel_settings(worker_url=None, bridge_token=None, tenant=None,
                          timeout=10):
     """Lee los Ajustes del panel por el endpoint puente.
 
     Devuelve el dict de settings o None (sin red, sin token, error
-    HTTP o respuesta inválida: nunca lanza excepción; el cerebro
-    sigue con config.yaml).
+    HTTP o respuesta inválida: nunca lanza excepción por eso; el
+    cerebro sigue con config.yaml).
+
+    Sin PANEL_WORKER_URL/PANEL_BRIDGE_TOKEN no hay panel que leer y
+    no hace falta tenant. Con ellos configurados, el tenant es
+    obligatorio: si falta PANEL_TENANT o no está en tenants.yaml,
+    levanta TenantError y el proceso aborta sin tocar la red (regla
+    2026-11-18: sin tenant por defecto).
     """
+    from .tenant import require_tenant
+
     worker_url = (worker_url or os.environ.get("PANEL_WORKER_URL") or "").rstrip("/")
     bridge_token = bridge_token or os.environ.get("PANEL_BRIDGE_TOKEN")
-    tenant = tenant or os.environ.get("PANEL_TENANT") or "sebastian"
     if not worker_url or not bridge_token:
         return None
+    tenant = require_tenant(tenant)
     url = f"{worker_url}/api/bridge/settings?tenant={tenant}"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {bridge_token}",
@@ -248,7 +305,10 @@ def load_config_with_panel():
     """load_config() + Ajustes del panel si hay entorno configurado.
 
     Sin PANEL_WORKER_URL/PANEL_BRIDGE_TOKEN devuelve exactamente
-    load_config(). Con ellos, aplica los Ajustes encima.
+    load_config(). Con ellos, aplica los Ajustes encima. Si el panel
+    está configurado y falta PANEL_TENANT (o no está en la lista
+    blanca), levanta TenantError: el llamador no debe tragarlo con
+    un fallback silencioso a config.yaml.
     """
     from .config import load_config
     cfg = load_config()

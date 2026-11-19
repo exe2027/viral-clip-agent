@@ -24,10 +24,13 @@ Reglas del tribunal (Bloque 7) que implementa este módulo:
     dado; no hay ficha de permiso que registrar.)
   * Rechazos: error de formato -> 1 reintento; copyright/contenido ->
     cuarentena y revisión humana, nunca reintento ciego.
-  * Topes: YT 3-5/día, resto 2-3/día, espaciamiento 2-3 h.
-    SIN franja horaria desde el 2026-11-18 (decisión del usuario:
-    da lo mismo la hora, solo se sube; los topes diarios y el
-    espaciamiento siguen vigentes como defensa anti-ban).
+  * Topes: YT 1-2/día, TikTok 2-3/día, IG/FB 1-2/día,
+    espaciamiento 3 h (4 h en YouTube), rolling 24 h máx 3 por
+    cuenta, calentamiento nuevo (< 14 días o < 20 publicaciones:
+    semana 1 y 2 a 1/día). Franjas horarias Chile 12-14 / 18-20 /
+    21-23 (reglas de publicación 2026-11-19: la decisión
+    2026-11-18 "sin franja" queda revocada; las franjas se
+    aplican al planificar el día en plan_daily()).
   * --dry-run es el modo por defecto: sin credenciales no hace nada
     real, solo valida el paquete y reporta qué bloquearía la subida.
 
@@ -93,8 +96,10 @@ DRAFTS_DIR = os.path.join(BASE_DIR, "drafts")
 # ---------------------------------------------------------------------------
 # Topes (Bloque 7). Se leen de limits.yaml (Fase 2.4); los
 # valores de abajo son solo el fallback si falta ese archivo.
-# SIN franja horaria desde el 2026-11-18 (decisión del usuario):
-# la hora ya no frena la publicación.
+# Reglas de publicación 2026-11-19 (reemplazan las de 2026-11-18):
+# franjas horarias Chile 12-14 / 18-20 / 21-23 (la decisión
+# "sin franja" queda revocada), espaciamiento 3 h (4 h en YT),
+# rolling 24 h máx 3, calentamiento < 14 días o < 20 publicaciones.
 # Los topes por plataforma son prudencia con cuentas nuevas (ver
 # README: "Cuentas nuevas: 1 publicación por día por plataforma"
 # la primera semana; estos topes son el techo una vez calentada la
@@ -106,18 +111,37 @@ DRAFTS_DIR = os.path.join(BASE_DIR, "drafts")
 PLATFORMS = ("youtube_shorts", "tiktok", "instagram_reels", "facebook_reels")
 
 _DEFAULT_LIMITS = {
-    "youtube_shorts": {"plan_per_day": 3, "max_per_day": 5,
+    "youtube_shorts": {"plan_per_day": 1, "max_per_day": 2,
+                       "days_per_week_min": 4, "days_per_week_max": 5,
                        "quota_upload_cost_units": 1,
                        "quota_upload_calls_per_day": 100,
                        "quota_other_daily_units": 10000},
     "tiktok": {"plan_per_day": 2, "max_per_day": 3,
+               "days_per_week_min": 5, "days_per_week_max": 6,
                "zernio_per_day": 15, "zernio_pending_drafts_max": 5},
-    "instagram_reels": {"plan_per_day": 2, "max_per_day": 3},
-    "facebook_reels": {"plan_per_day": 2, "max_per_day": 3},
-    "min_spacing_hours": 2,
+    "instagram_reels": {"plan_per_day": 1, "max_per_day": 2,
+                        "days_per_week_min": 4, "days_per_week_max": 5},
+    "facebook_reels": {"plan_per_day": 1, "max_per_day": 2,
+                       "days_per_week_min": 4, "days_per_week_max": 5},
+    "min_spacing_hours": 3,
+    "youtube_spacing_hours": 4,
+    "min_spacing_minutes": 5,
+    "cross_platform_min_minutes": 15,
+    "cross_platform_ideal_hours_min": 12,
+    "rolling_24h_max": 3,
+    "rest_day_per_week": 1,
+    "hashtag_max": {"instagram_reels": 5, "default": 5},
+    "warmup": {"new_if_days": 14, "new_if_publishes": 20,
+               "week1_max_per_day": 1, "week2_max_per_day": 1},
     "new_account_daily": 1,
-    "established_after_days": 30,
-    "established_min_publishes": 10,
+    "hard_max_min_age_days": 30,
+    "pause_hours": 48,
+    "retry_backoff_minutes": [5, 15, 45],
+    "max_transient_retries": 3,
+    "time_slots": {"morning": ["12:00", "14:00"],
+                   "afternoon": ["18:00", "20:00"],
+                   "night": ["21:00", "23:00"]},
+    "slot_jitter_minutes": 10,
 }
 
 
@@ -125,12 +149,14 @@ def load_limits(path=None):
     """Límites de plataforma desde limits.yaml (o el fallback).
 
     Devuelve un dict con una entrada por plataforma (plan_per_day,
-    max_per_day, y en YouTube la cuota) más min_spacing_hours y
-    new_account_daily. Si falta el archivo o PyYAML, devuelve los
-    valores por defecto del código. (publish_window se eliminó el
-    2026-11-18: sin franja horaria, por decisión del usuario.)
+    max_per_day, días activos por semana, y en YouTube la cuota)
+    más min_spacing_hours, youtube_spacing_hours, rolling_24h_max,
+    warmup, time_slots, hashtag_max, retry_backoff_minutes y
+    pause_hours. Si falta el archivo o PyYAML, devuelve los
+    valores por defecto del código (reglas 2026-11-19).
     """
-    limits = {k: dict(v) if isinstance(v, dict) else v
+    limits = {k: dict(v) if isinstance(v, dict) else
+              (list(v) if isinstance(v, list) else v)
               for k, v in _DEFAULT_LIMITS.items()}
     if path is None:
         # limits.yaml vive en la RAÍZ del repo (junto a config.yaml),
@@ -154,10 +180,24 @@ def load_limits(path=None):
         entry = data.get(platform)
         if isinstance(entry, dict):
             limits[platform].update(entry)
-    for key in ("min_spacing_hours", "new_account_daily",
-                "established_after_days", "established_min_publishes"):
+    for key in ("min_spacing_hours", "youtube_spacing_hours",
+                "min_spacing_minutes", "cross_platform_min_minutes",
+                "cross_platform_ideal_hours_min", "rolling_24h_max",
+                "rest_day_per_week", "new_account_daily",
+                "hard_max_min_age_days", "pause_hours",
+                "max_transient_retries", "slot_jitter_minutes"):
         if key in data:
             limits[key] = data[key]
+    for key in ("hashtag_max", "warmup", "time_slots",
+                "retry_backoff_minutes"):
+        if key in data:
+            if isinstance(data[key], dict) and isinstance(
+                    limits.get(key), dict):
+                merged = dict(limits[key])
+                merged.update(data[key])
+                limits[key] = merged
+            else:
+                limits[key] = data[key]
     return limits
 
 
@@ -168,11 +208,36 @@ DAILY_LIMITS = {
     p: (int(_LIMITS[p]["plan_per_day"]), int(_LIMITS[p]["max_per_day"]))
     for p in PLATFORMS
 }
+DAYS_PER_WEEK = {
+    # plataforma: (mín, máx de días activos por semana)
+    p: (int(_LIMITS[p].get("days_per_week_min", 4)),
+        int(_LIMITS[p].get("days_per_week_max", 5)))
+    for p in PLATFORMS
+}
 MIN_SPACING_HOURS = int(_LIMITS["min_spacing_hours"])
-# PUBLISH_WINDOW ELIMINADO el 2026-11-18 (decisión del usuario: sin
-# franja horaria). Se mantiene el nombre como None para que un
-# import viejo falle de forma visible en vez de silenciosa.
-PUBLISH_WINDOW = None
+YOUTUBE_SPACING_HOURS = int(_LIMITS["youtube_spacing_hours"])
+MIN_SPACING_MINUTES = int(_LIMITS["min_spacing_minutes"])
+CROSS_PLATFORM_MIN_MINUTES = int(_LIMITS["cross_platform_min_minutes"])
+CROSS_PLATFORM_IDEAL_HOURS_MIN = int(
+    _LIMITS["cross_platform_ideal_hours_min"])
+ROLLING_24H_MAX = int(_LIMITS["rolling_24h_max"])
+REST_DAY_PER_WEEK = int(_LIMITS["rest_day_per_week"])
+# Franjas horarias Chile (reglas 2026-11-19; la decisión 2026-11-18
+# "sin franja" queda revocada). PUBLISH_WINDOW es el dict de
+# franjas {mañana/tarde/noche: (inicio, fin)}; se aplica al
+# planificar el día (plan_daily), no como freno duro en
+# check_limits (ver check_limits: enforce_window=False por
+# defecto, porque la regla 4b las llama "sugeridas").
+PUBLISH_WINDOW = {
+    slot: tuple(times)
+    for slot, times in _LIMITS["time_slots"].items()
+}
+SLOT_JITTER_MINUTES = int(_LIMITS["slot_jitter_minutes"])
+HASHTAG_MAX = dict(_LIMITS["hashtag_max"])
+WARMUP = dict(_LIMITS["warmup"])
+HARD_MAX_MIN_AGE_DAYS = int(_LIMITS["hard_max_min_age_days"])
+PAUSE_HOURS = int(_LIMITS["pause_hours"])
+RETRY_BACKOFF_MINUTES = list(_LIMITS["retry_backoff_minutes"])
 NEW_ACCOUNT_DAILY = int(_LIMITS["new_account_daily"])
 
 # YouTube Data API v3 — cuota (ver limits.yaml y el historial
@@ -465,6 +530,34 @@ class PublishQueue:
                 if i["platform"] == platform and i["state"] == "published"
                 and (i.get("published_at") or "").startswith(today)]
 
+    def published_in_last_24h(self, platform, now=None):
+        """Publicados en las últimas 24 h móviles (rolling, no día
+        calendario; regla 2, 2026-11-19). `now` es un datetime con
+        zona (por defecto, ahora en Chile)."""
+        ref = now or _now_chile()
+        out = []
+        for i in self.data["items"]:
+            if i["platform"] != platform or i["state"] != "published":
+                continue
+            at = i.get("published_at")
+            if not at:
+                continue
+            try:
+                dt = datetime.fromisoformat(at)
+            except ValueError:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ref.tzinfo)
+            if (ref - dt).total_seconds() < 24 * 3600:
+                out.append(i)
+        return out
+
+    def published_count(self, platform):
+        """Total histórico de publicados en esa plataforma."""
+        return sum(1 for i in self.data["items"]
+                   if i["platform"] == platform
+                   and i["state"] == "published")
+
     def last_published_at(self, platform):
         published = [i for i in self.data["items"]
                      if i["platform"] == platform and i["state"] == "published"
@@ -622,16 +715,55 @@ def _order_items(items, platform):
     return order_queue(clips, platform), no_score
 
 
-def check_limits(queue, platform):
+def spacing_hours_for(platform):
+    """Espaciamiento mínimo entre subidas de la misma cuenta:
+    3 h, 4 h en YouTube Shorts (regla 4, 2026-11-19)."""
+    return YOUTUBE_SPACING_HOURS if platform == "youtube_shorts" \
+        else MIN_SPACING_HOURS
+
+
+def hashtag_limit(platform):
+    """Máximo de hashtags: 5 en Instagram, 3-5 en el resto
+    (techo 5 en todos; regla 5, 2026-11-19)."""
+    return int(HASHTAG_MAX.get(platform, HASHTAG_MAX.get("default", 5)))
+
+
+def check_limits(queue, platform, now=None, warmup_stage=None,
+                 rest_day=False, enforce_window=False):
     """Topes antes de publicar: (ok, motivo).
 
-    - Tope diario (plan) y techo (YT: bucket de videos.insert,
-      100 llamadas/día; el resto, topes internos de limits.yaml).
-    - Espaciamiento mínimo 2 h desde la última subida.
-    - SIN franja horaria desde el 2026-11-18 (decisión del usuario:
-      da lo mismo la hora, solo se sube).
+    Reglas de publicación 2026-11-19:
+    - Tope diario (plan) y techo (máx) por plataforma; YT además
+      el bucket de videos.insert (100 llamadas/día).
+    - Rolling 24 h: nunca más de ROLLING_24H_MAX (3) por cuenta
+      en 24 h móviles, no día calendario.
+    - Espaciamiento mínimo 3 h desde la última subida (4 h en
+      YouTube), con mínimo absoluto de 5 min.
+    - Calentamiento: si warmup_stage es "week1"/"week2", máx
+      1/día (el llamador lo calcula con accounts.warmup_stage).
+    - Día libre: si rest_day, la cuenta no publica hoy.
+    - Franja: las franjas 12-14 / 18-20 / 21-23 se aplican al
+      PLANIFICAR el día (plan_daily), no aquí: check_limits no
+      bloquea por hora salvo enforce_window=True, porque la
+      regla 4b las llama "sugeridas (configurables)" y el bucle
+      publica los ítems vencidos cuando toca.
     """
+    now = now or _now_chile()
+    if rest_day:
+        return False, f"día libre de {platform} esta semana (rotación)"
     plan, maximum = DAILY_LIMITS[platform]
+    if warmup_stage in ("week1", "week2"):
+        cap = NEW_ACCOUNT_DAILY
+        today = queue.published_today(platform)
+        if len(today) >= cap:
+            return False, (f"calentamiento {warmup_stage}: "
+                           f"{len(today)}/{cap} hoy en {platform} "
+                           f"(máx 1/día hasta la semana 3)")
+    last_24h = queue.published_in_last_24h(platform, now=now)
+    if len(last_24h) >= ROLLING_24H_MAX:
+        return False, (f"rolling 24 h: {len(last_24h)}/"
+                       f"{ROLLING_24H_MAX} en {platform} "
+                       f"(ventana móvil, no día calendario)")
     today = queue.published_today(platform)
     if len(today) >= maximum:
         return False, f"tope diario alcanzado: {len(today)}/{maximum} en {platform}"
@@ -641,12 +773,477 @@ def check_limits(queue, platform):
     last = queue.last_published_at(platform)
     if last:
         last_dt = datetime.fromisoformat(last)
-        gap = (_now_chile() - last_dt).total_seconds() / 3600
-        if gap < MIN_SPACING_HOURS:
-            return False, (f"espaciamiento: última subida hace {gap:.1f} h, "
-                           f"mínimo {MIN_SPACING_HOURS} h")
-    # SIN franja (2026-11-18): la hora ya no frena la publicación.
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=now.tzinfo)
+        gap_min = (now - last_dt).total_seconds() / 60
+        spacing_min = spacing_hours_for(platform) * 60
+        if gap_min < MIN_SPACING_MINUTES:
+            return False, (f"espaciamiento: última subida hace "
+                           f"{gap_min:.0f} min, mínimo absoluto "
+                           f"{MIN_SPACING_MINUTES} min")
+        if gap_min < spacing_min:
+            return False, (f"espaciamiento: última subida hace "
+                           f"{gap_min / 60:.1f} h, mínimo "
+                           f"{spacing_hours_for(platform)} h en "
+                           f"{platform}")
+    if enforce_window and not _in_time_slot(now):
+        return False, ("fuera de franja: publica solo en "
+                       "12:00-14:00, 18:00-20:00 o 21:00-23:00 "
+                       "(hora Chile)")
     return True, f"dentro de topes ({len(today)}/{plan} hoy, plan {plan}/día)"
+
+
+def _in_time_slot(moment):
+    """True si `moment` (hora Chile) cae en alguna franja."""
+    hhmm = moment.strftime("%H:%M")
+    for start, end in PUBLISH_WINDOW.values():
+        if start <= hhmm < end:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Errores y reintentos (regla 8, 2026-11-19)
+# ---------------------------------------------------------------------------
+_TRANSIENT_WORDS = ("429", "500", "502", "503", "504", "timeout",
+                    "timed out", "connection", "red", "network",
+                    "rate limit", "rate_limit", "temporal")
+_SPAM_LIMIT_WORDS = ("spam", "too_many", "too many posts",
+                     "limit exceeded", "limite de publicaciones",
+                     "límite de publicaciones",
+                     "quotaexceeded", "quota exceeded",
+                     "spam_risk_too_many_posts")
+
+
+def classify_publish_error(error):
+    """Clasifica un error de publicación (regla 8).
+
+    Devuelve "transient" (red, 429, 5xx: reintento con backoff),
+    "spam_limit" (spam o límite: detener la cuenta, reprogramar
+    al día siguiente, SIN reintentar el mismo día) u "other".
+    El spam se comprueba primero: un 429 por exceso de
+    publicaciones es límite, no temporal.
+    """
+    text = (error or "").lower()
+    if any(w in text for w in _SPAM_LIMIT_WORDS):
+        return "spam_limit"
+    if any(w in text for w in _TRANSIENT_WORDS):
+        return "transient"
+    return "other"
+
+
+def next_retry(error, attempts_made):
+    """Qué hacer tras un fallo (regla 8).
+
+    `attempts_made` = reintentos ya usados. Devuelve:
+      {"action": "retry", "wait_minutes": N} — temporal, espera
+        creciente 5, 15, 45 min, máx 3 intentos;
+      {"action": "stop_today"} — spam/límite: detener esa cuenta
+        y reprogramar al día siguiente, sin reintentar hoy;
+      {"action": "give_up"} — temporal con los 3 intentos
+        agotados, u otro error no reintentable.
+    Nunca esquivar un límite cambiando de cuenta, IP o método.
+    """
+    kind = classify_publish_error(error)
+    if kind == "spam_limit":
+        return {"action": "stop_today",
+                "reason": "spam/límite: detener la cuenta y "
+                          "reprogramar al día siguiente, sin "
+                          "reintentar hoy"}
+    if kind == "transient":
+        if attempts_made < len(RETRY_BACKOFF_MINUTES):
+            return {"action": "retry",
+                    "wait_minutes": RETRY_BACKOFF_MINUTES[attempts_made],
+                    "reason": f"temporal: reintento "
+                              f"{attempts_made + 1}/"
+                              f"{len(RETRY_BACKOFF_MINUTES)} en "
+                              f"{RETRY_BACKOFF_MINUTES[attempts_made]} min"}
+        return {"action": "give_up",
+                "reason": "temporal: 3 intentos agotados, a revisión"}
+    return {"action": "give_up",
+            "reason": f"error no reintentable: {error}"}
+
+
+# ---------------------------------------------------------------------------
+# Anti-spam y contenido (regla 5, 2026-11-19)
+# ---------------------------------------------------------------------------
+def has_own_value(clip):
+    """True si el clip aporta algo propio (subtítulos, zoom,
+    edición, hook). Un corte crudo de Twitch/Kick sin ningún
+    cambio NO se publica y se marca "requiere_edicion".
+
+    El clip declara su aporte con `aporte_propio: true`, con una
+    lista `edits` no vacía (p. ej. ["subtitulos", "zoom"]), o con
+    las banderas `subtitles_burned` / `zoom` / `hook`. Sin
+    evidencia de aporte, False (no se asume).
+    """
+    if clip.get("aporte_propio"):
+        return True
+    edits = clip.get("edits") or []
+    if edits:
+        return True
+    return bool(clip.get("subtitles_burned") or clip.get("zoom")
+                or clip.get("hook"))
+
+
+def requires_editing(clip):
+    """Alias legible: True si el clip es un corte crudo sin
+    aporte propio (regla 5)."""
+    return not has_own_value(clip)
+
+
+def _normalize_text(text):
+    return " ".join((text or "").split()).strip().lower()
+
+
+# ---------------------------------------------------------------------------
+# Plan diario (regla 9, 2026-11-19)
+# ---------------------------------------------------------------------------
+def _slot_minutes(slot):
+    """(inicio, fin) de una franja en minutos desde medianoche."""
+    start, end = PUBLISH_WINDOW[slot]
+    def _to_min(hhmm):
+        h, m = hhmm.split(":")
+        return int(h) * 60 + int(m)
+    return _to_min(start), _to_min(end)
+
+
+def _jitter_minutes(clip_id, day_iso, span=10):
+    """Variación determinista de ±span min para la hora exacta
+    (nunca la misma hora exacta todos los días; regla 4b).
+
+    Depende del clip y del día, así que la misma cuenta no repite
+    la hora exacta día tras día.
+    """
+    import hashlib
+    digest = hashlib.md5(f"{day_iso}|{clip_id}".encode("utf-8")).hexdigest()
+    return (int(digest[:8], 16) % (2 * span + 1)) - span
+
+
+def _slot_times_for_count(count, platform):
+    """Franjas a usar según cuántos vídeos van ese día en la
+    cuenta: 1 -> noche; 2 -> mediodía + noche; 3 -> mediodía +
+    tarde + noche (regla 4b). En YouTube nunca tarde+noche
+    seguidas (3 h < 4 h de espaciamiento): con 2, mediodía+noche.
+    """
+    if count <= 1:
+        return ["night"]
+    if count == 2:
+        return ["morning", "night"]
+    return ["morning", "afternoon", "night"]
+
+
+def _time_in_slot(slot, clip_id, day_iso):
+    """Hora "HH:MM" dentro de una franja, con jitter ±10 min."""
+    start, end = _slot_minutes(slot)
+    mid = (start + end) // 2
+    moment = mid + _jitter_minutes(clip_id, day_iso, SLOT_JITTER_MINUTES)
+    moment = max(start, min(end - 1, moment))
+    return f"{moment // 60:02d}:{moment % 60:02d}"
+
+
+def _rest_weekday(platform, day_iso):
+    """Día libre semanal de una cuenta (0=lunes..6=domingo).
+
+    Determinista por plataforma y semana ISO: rota cada semana,
+    así cada cuenta tiene 1 día libre por semana (regla 7).
+    """
+    from datetime import date as _date
+    year, week, _wd = _date.fromisoformat(day_iso).isocalendar()
+    seed = sum(ord(c) for c in platform) + year * 53 + week
+    return seed % 7
+
+
+def _is_rest_day(platform, day_iso):
+    from datetime import date as _date
+    return _date.fromisoformat(day_iso).weekday() == _rest_weekday(
+        platform, day_iso)
+
+
+def _clip_platform(clip):
+    return clip.get("plataforma") or clip.get("platform")
+
+
+def _clip_viral(clip):
+    score = clip.get("viral_score")
+    if isinstance(score, dict):
+        return score.get("total", 0) or 0
+    return score or 0
+
+
+def _clip_texts(clip, platform):
+    """(título, descripción, hashtags) del clip para una
+    plataforma: versión por plataforma si la trae, si no la
+    general. Cada plataforma recibe su PROPIA versión (regla 5).
+    """
+    versions = clip.get("versions") or {}
+    entry = versions.get(platform) or {}
+    title = (entry.get("titulo") or entry.get("title")
+             or clip.get("titulo") or clip.get("title") or "")
+    desc = (entry.get("descripcion") or entry.get("description")
+            or clip.get("descripcion") or clip.get("description") or "")
+    tags = (entry.get("hashtags") or clip.get("hashtags") or [])
+    if isinstance(tags, str):
+        tags = tags.split()
+    return title, desc, [str(t) for t in tags]
+
+
+def _verify_plan(plan, limits=None):
+    """Verifica el plan contra las secciones 2, 3 y 4 (regla 9).
+
+    Devuelve [violaciones]: cada una es (clip_id, plataforma,
+    motivo). Un plan sin violaciones devuelve [].
+    """
+    limits = limits or _LIMITS
+    violations = []
+    per_account = {}
+    seen_texts = set()
+    seen_clip_platform = set()
+    clip_times = {}
+    for pub in plan["publicaciones"]:
+        clip_id = pub["clip_id"]
+        platform = pub["plataforma"]
+        per_account.setdefault(platform, []).append(pub)
+        plan_n, max_n = DAILY_LIMITS[platform]
+        if len(per_account[platform]) > max_n:
+            violations.append((clip_id, platform,
+                               f"supera el máximo duro {max_n}/día"))
+        if (clip_id, platform) in seen_clip_platform:
+            violations.append((clip_id, platform,
+                               "mismo clip repetido en la misma cuenta"))
+        seen_clip_platform.add((clip_id, platform))
+        key = _normalize_text(pub["titulo"] + "\n" + pub["descripcion"])
+        if key and key in seen_texts:
+            violations.append((clip_id, platform,
+                               "mismo texto exacto que otra publicación del día"))
+        seen_texts.add(key)
+        if len(pub["hashtags"]) > hashtag_limit(platform):
+            violations.append((clip_id, platform,
+                               f"{len(pub['hashtags'])} hashtags, "
+                               f"máx {hashtag_limit(platform)}"))
+        hh, mm = (int(x) for x in pub["hora_local"].split(":"))
+        moment = hh * 60 + mm
+        if not any(s <= moment < e for s, e in
+                   (_slot_minutes(slot) for slot in PUBLISH_WINDOW)):
+            violations.append((clip_id, platform,
+                               f"hora {pub['hora_local']} fuera de franja"))
+        prev = clip_times.get(clip_id)
+        if prev is not None:
+            gap = abs(moment - prev)
+            if gap < CROSS_PLATFORM_MIN_MINUTES:
+                violations.append((clip_id, platform,
+                                   f"mismo clip en otra plataforma a "
+                                   f"solo {gap} min (mín "
+                                   f"{CROSS_PLATFORM_MIN_MINUTES} min)"))
+        clip_times.setdefault(clip_id, moment)
+    for platform, pubs in per_account.items():
+        ordered_pubs = sorted(
+            pubs, key=lambda p: (int(p["hora_local"][:2]) * 60
+                                 + int(p["hora_local"][3:])))
+        spacing = spacing_hours_for(platform) * 60
+        for prev_pub, pub in zip(ordered_pubs, ordered_pubs[1:]):
+            prev_min = (int(prev_pub["hora_local"][:2]) * 60
+                        + int(prev_pub["hora_local"][3:]))
+            cur_min = (int(pub["hora_local"][:2]) * 60
+                       + int(pub["hora_local"][3:]))
+            if cur_min - prev_min < MIN_SPACING_MINUTES:
+                violations.append((pub["clip_id"], platform,
+                                   "dos vídeos a menos de 5 min"))
+            elif cur_min - prev_min < spacing:
+                violations.append((pub["clip_id"], platform,
+                                   f"espaciamiento {cur_min - prev_min} "
+                                   f"min < {spacing} min"))
+    return violations
+
+
+def plan_daily(clips, queue=None, day=None, accounts_info=None,
+               limits=None, platform_order=None):
+    """Plan diario de publicación (regla 9, 2026-11-19).
+
+    `clips`: lista de dicts con clip_id, viral_score (número o
+    {"total": n}), titulo/descripcion/hashtags (o versions por
+    plataforma), y opcionalmente plataforma (si no la trae, se
+    reparte entre plataformas). `accounts_info`: por plataforma,
+    {"age_days", "published_count", "restricted", "reach_trend"}
+    para decidir calentamiento y subida al máximo duro (regla 6);
+    sin él, la edad sale de accounts.yaml y el conteo de la cola.
+    `day`: fecha "YYYY-MM-DD" (hoy en Chile por defecto).
+
+    Devuelve {"fecha", "publicaciones": [{clip_id, plataforma,
+    cuenta, hora_local, titulo, descripcion, hashtags, motivo}],
+    "en_cola": [clip_id], "alertas": [...]}. Antes de devolverlo
+    se verifica contra las secciones 2, 3 y 4: lo que no cumple
+    va a la cola. NUNCA publica nada: solo planifica.
+    """
+    from datetime import date as _date
+    limits = limits or _LIMITS
+    day_iso = day or _now_chile().date().isoformat()
+    queue = queue or PublishQueue()
+    accounts_info = accounts_info or {}
+    order = list(platform_order or PLATFORMS)
+    alerts = []
+    queued = []
+    scheduled = []
+
+    # Capacidad por cuenta: plan normal, o 1/día en calentamiento,
+    # o máximo duro solo si cumple la regla 6 (cuenta > 30 días
+    # sin restricción + cola con viral alto + alcance en subida).
+    capacity = {}
+    for platform in order:
+        info = accounts_info.get(platform) or {}
+        stage = info.get("warmup_stage")
+        if stage is None:
+            try:
+                from .accounts import warmup_stage as _ws
+                stage = _ws(platform, queue=queue,
+                            published_count=info.get("published_count"))
+            except Exception:
+                stage = "normal"
+        if stage in ("week1", "week2"):
+            capacity[platform] = NEW_ACCOUNT_DAILY
+            alerts.append(f"{platform}: en calentamiento {stage} "
+                          f"(máx 1/día)")
+            continue
+        plan_n, max_n = DAILY_LIMITS[platform]
+        age = info.get("age_days")
+        if age is None:
+            try:
+                from .accounts import account_age_days as _aad
+                age = _aad(platform)
+            except Exception:
+                age = None
+        eligible_hard = (
+            age is not None and age > HARD_MAX_MIN_AGE_DAYS
+            and not info.get("restricted", False)
+            and info.get("reach_trend") in ("up", "stable"))
+        if eligible_hard:
+            capacity[platform] = max_n
+            alerts.append(f"{platform}: ritmo máximo {max_n}/día "
+                          f"(cuenta > 30 días sin restricción, "
+                          f"alcance en subida)")
+        else:
+            capacity[platform] = plan_n
+        if _is_rest_day(platform, day_iso):
+            capacity[platform] = 0
+            alerts.append(f"{platform}: día libre esta semana "
+                          f"(rotación, 1/semana)")
+
+    # Cola ordenada por puntaje viral (regla 7), repartida entre
+    # plataformas: no todo a una sola.
+    ordered = sorted(clips, key=_clip_viral, reverse=True)
+    per_platform = {p: [] for p in order}
+    used_texts = set()
+    clip_first_time = {}
+    for clip in ordered:
+        clip_id = clip.get("clip_id") or clip.get("clip") or ""
+        if requires_editing(clip):
+            queued.append(clip_id)
+            alerts.append(f"{clip_id}: requiere_edicion (corte "
+                          f"crudo sin subtítulos/zoom/edición/hook, "
+                          f"no se publica)")
+            continue
+        wanted = _clip_platform(clip)
+        candidates = [wanted] if wanted in order else order
+        placed = False
+        for platform in candidates:
+            if len(per_platform[platform]) >= capacity[platform]:
+                continue
+            if any(c.get("clip_id") == clip_id
+                   for c in per_platform[platform]):
+                continue
+            if queue._find(clip_id, platform) is not None and \
+                    queue._find(clip_id, platform)["state"] == "published":
+                continue
+            title, desc, tags = _clip_texts(clip, platform)
+            text_key = _normalize_text(title + "\n" + desc)
+            if text_key and text_key in used_texts:
+                continue
+            per_platform[platform].append(
+                dict(clip, _platform=platform, _title=title,
+                     _desc=desc, _tags=tags))
+            if text_key:
+                used_texts.add(text_key)
+            placed = True
+            break
+        if not placed:
+            queued.append(clip_id)
+            if wanted in order and capacity.get(wanted, 0) == 0:
+                alerts.append(f"{clip_id}: {wanted} sin capacidad "
+                              f"hoy (calentamiento, día libre o tope)")
+            else:
+                alerts.append(f"{clip_id}: sin hueco hoy, pasa al "
+                              f"día siguiente")
+
+    # Horas: 1/día -> noche; 2+ -> mediodía + noche (regla 4b).
+    for platform in order:
+        items = per_platform[platform]
+        if not items:
+            continue
+        slots = _slot_times_for_count(len(items), platform)
+        account_label = platform
+        try:
+            from .accounts import load_identifiers
+            ident = load_identifiers().get(platform) or {}
+            account_label = (ident.get("handle")
+                             or ident.get("page_name") or platform)
+        except Exception:
+            pass
+        for item, slot in zip(items, slots):
+            clip_id = item.get("clip_id") or item.get("clip") or ""
+            hora = _time_in_slot(slot, clip_id, day_iso)
+            # Mismo clip en otra plataforma: mínimo 15 min entre
+            # una y otra (regla 4). Si choca, se empuja dentro de
+            # la franja; si no cabe, a la cola.
+            hh, mm = (int(x) for x in hora.split(":"))
+            moment = hh * 60 + mm
+            prev = clip_first_time.get(clip_id)
+            if prev is not None and abs(moment - prev) < \
+                    CROSS_PLATFORM_MIN_MINUTES:
+                moment = prev + CROSS_PLATFORM_MIN_MINUTES
+                start, end = _slot_minutes(slot)
+                if moment >= end:
+                    queued.append(clip_id)
+                    alerts.append(f"{clip_id}: no cabe con 15 min "
+                                  f"de separación entre plataformas")
+                    continue
+                hora = f"{moment // 60:02d}:{moment % 60:02d}"
+            clip_first_time.setdefault(clip_id, moment)
+            tags = list(item["_tags"])
+            limit_tags = hashtag_limit(platform)
+            if len(tags) > limit_tags:
+                tags = tags[:limit_tags]
+                alerts.append(f"{clip_id} ({platform}): hashtags "
+                              f"recortados a {limit_tags}")
+            scheduled.append({
+                "clip_id": clip_id,
+                "plataforma": platform,
+                "cuenta": account_label,
+                "hora_local": hora,
+                "titulo": item["_title"],
+                "descripcion": item["_desc"],
+                "hashtags": tags,
+                "motivo": (f"viral {_clip_viral(item):.0f}, "
+                           f"franja {slot} ({PUBLISH_WINDOW[slot][0]}-"
+                           f"{PUBLISH_WINDOW[slot][1]}), "
+                           f"{len(per_platform[platform])}º del día "
+                           f"en {platform}"),
+            })
+
+    plan = {"fecha": day_iso, "publicaciones": scheduled,
+            "en_cola": queued, "alertas": alerts}
+    # Verificación final (regla 9): lo que no cumple las
+    # secciones 2, 3 y 4 sale del plan y pasa a la cola.
+    for clip_id, platform, why in _verify_plan(plan, limits):
+        plan["publicaciones"] = [
+            p for p in plan["publicaciones"]
+            if not (p["clip_id"] == clip_id
+                    and p["plataforma"] == platform)]
+        if clip_id not in plan["en_cola"]:
+            plan["en_cola"].append(clip_id)
+        plan["alertas"].append(
+            f"{clip_id} ({platform}): fuera del plan — {why}")
+    plan["publicaciones"].sort(key=lambda p: p["hora_local"])
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -786,7 +1383,7 @@ class YouTubePublisher:
                                     else "SIN client_secrets.json/token.json — no se puede subir")))
         ok_limits, limits_msg = check_limits(self.queue, "youtube_shorts")
         checks.append((ok_limits, f"topes: {limits_msg}"))
-        # Cuota: el plan (3-5/día) va contra el bucket propio de
+        # Cuota: el plan (1-2/día) va contra el bucket propio de
         # videos.insert (100 llamadas/día), no contra el pool de
         # 10.000 u. compartido.
         plan, _max = DAILY_LIMITS["youtube_shorts"]
@@ -1241,16 +1838,20 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     if is_paused(platform)[0]:
         return {"action": "paused",
                 "reason": f"{platform} pausada: {is_paused(platform)[1]}"}
-    # 6.5: cuenta nueva (menos de 7 días): ritmo reducido, 1/día.
-    from .accounts import is_new_account
-    if is_new_account(platform):
+    # 6.5 / reglas 2026-11-19: calentamiento (< 14 días o < 20
+    # publicaciones): semana 1 y 2 a 1/día, con el conteo real de
+    # la cola. La etapa sale de accounts.warmup_stage.
+    from .accounts import warmup_stage
+    stage = warmup_stage(platform, queue=queue)
+    if stage in ("week1", "week2"):
         today = queue.published_today(platform)
         if len(today) >= NEW_ACCOUNT_DAILY:
             return {"action": "limited",
-                    "reason": (f"cuenta nueva: ritmo reducido "
-                               f"({len(today)}/{NEW_ACCOUNT_DAILY} hoy, "
-                               f"primera semana)")}
-    ok, why = check_limits(queue, platform)
+                    "reason": (f"cuenta nueva ({stage}): ritmo "
+                               f"reducido ({len(today)}/"
+                               f"{NEW_ACCOUNT_DAILY} hoy, "
+                               f"calentamiento 1/día hasta la semana 3)")}
+    ok, why = check_limits(queue, platform, warmup_stage=stage)
     if not ok:
         return {"action": "limited", "reason": why}
     result = publish_direct(platform, clip_path, queue, live=live,
@@ -1280,16 +1881,23 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
         return {"action": "processing", "reason": reason}
     if result.get("mode") == "error" and result.get("retryable"):
         # Fallo transitorio (5xx, rate limit): se reintenta en el
-        # siguiente ciclo, hasta MAX_TRANSIENT_RETRIES. Después, cae
-        # al tratamiento normal (failed -> cuarentena en el 2º).
+        # siguiente ciclo, hasta MAX_TRANSIENT_RETRIES, con espera
+        # creciente 5, 15, 45 min (regla 8, 2026-11-19). Si el
+        # error es en realidad de spam/límite, se detiene la
+        # cuenta y se reprograma al día siguiente, SIN reintentar
+        # hoy. Después, cae al tratamiento normal (failed ->
+        # cuarentena en el 2º).
         attempts = _transient_attempts(item)
-        if attempts < MAX_TRANSIENT_RETRIES:
+        retry = next_retry(result.get("reason") or "", attempts)
+        if retry["action"] == "stop_today":
+            return {"action": "limited", "reason": retry["reason"]}
+        if retry["action"] == "retry":
             reason = result.get("reason") or "fallo transitorio"
             queue.add_note(
                 item,
                 f"fallo transitorio (intento {attempts + 1}/"
-                f"{MAX_TRANSIENT_RETRIES}): {reason}; se reintenta "
-                "en el siguiente ciclo")
+                f"{MAX_TRANSIENT_RETRIES}): {reason}; reintento en "
+                f"{retry['wait_minutes']} min, en el siguiente ciclo")
             return {"action": "failed", "reason": reason}
     if result.get("ok"):
         video_id = (result.get("video_id") or result.get("publish_id")
@@ -1488,6 +2096,21 @@ def main(argv=None):
     p.add_argument("--clip", required=True)
     p.add_argument("--platform", required=True, choices=list(PLATFORMS))
     p.add_argument("--reason", required=True)
+    p = sub.add_parser("plan", help="plan diario JSON (regla 9): "
+                       "qué subir, dónde y a qué hora, sin publicar")
+    p.add_argument("--clips", required=True,
+                   help="JSON con la lista de clips "
+                        "([{clip_id, viral_score, titulo, descripcion, "
+                        "hashtags, plataforma?, aporte_propio?}]) o "
+                        '{"clips": [...], "accounts": {...}}')
+    p.add_argument("--date", default=None,
+                   help="fecha YYYY-MM-DD (hoy en Chile por defecto)")
+    p.add_argument("--accounts", default=None,
+                   help="JSON con accounts_info por plataforma "
+                        "(opcional, ver plan_daily)")
+    p.add_argument("--queue", default=None,
+                   help="ruta de publish_queue.json (por defecto, "
+                        "la del repo; solo se lee el historial)")
     p = sub.add_parser("loop", help="bucle automático: evalúa la cola "
                        "por política y publica (6.3)")
     p.add_argument("--live", action="store_true",
@@ -1534,6 +2157,22 @@ def main(argv=None):
         item = queue._find(args.clip, args.platform) or queue.enqueue(args.clip, args.platform)
         queue.quarantine(item, args.reason)
         print(f"En cuarentena: {args.clip} [{args.platform}] — {args.reason}")
+        return 0
+    if args.cmd == "plan":
+        with open(args.clips, encoding="utf-8") as f:
+            payload = json.load(f)
+        clips = payload.get("clips", payload) if isinstance(
+            payload, dict) else payload
+        accounts_info = None
+        if args.accounts:
+            with open(args.accounts, encoding="utf-8") as f:
+                accounts_info = json.load(f)
+        elif isinstance(payload, dict):
+            accounts_info = payload.get("accounts")
+        plan_queue = PublishQueue(args.queue) if args.queue else queue
+        plan = plan_daily(clips, queue=plan_queue, day=args.date,
+                          accounts_info=accounts_info)
+        print(json.dumps(plan, indent=2, ensure_ascii=False))
         return 0
     if args.cmd == "loop":
         from .notify import notify
