@@ -164,7 +164,8 @@ class TestPanelBridgeMock(unittest.TestCase):
     def test_login_create_upload_tracking(self):
         calls = []
         bridge = PanelBridge(base_url="https://example.invalid",
-                             username="seba", password="x")
+                             username="seba", password="x",
+                             tenant="sebastian")
         with mock.patch("urllib.request.urlopen",
                         side_effect=self._fake_urlopen(calls)):
             clip = bridge.create_clip({"title": "t", "start_sec": 0,
@@ -306,6 +307,93 @@ class TestEnqueueDraftDefault(unittest.TestCase):
                 self.assertEqual(session._enqueue_publish(record), [])
             finally:
                 store.close()
+
+
+class TestEnqueuePanelRescue(unittest.TestCase):
+    """_enqueue_panel: un clip rescatado (viral 45-49 por gritos)
+    manda rescue: true + viralidad revisada + SEO al panel; un clip
+    normal no cambia su payload (sin rescue, sin viral_score)."""
+
+    def _session(self, tmp, bridge):
+        return LiveCutterSession(
+            "auronplay", platform="twitch", stream_id="2026-11-18",
+            out_dir=os.path.join(tmp, "clips"), base_dir=tmp,
+            bridge=bridge, dry_run=False, vod_id="123")
+
+    def _record(self, rescue):
+        pkg_path = os.path.join(tempfile.gettempdir(), "pkg.json")
+        with open(pkg_path, "w", encoding="utf-8") as f:
+            json.dump({"priority": {"youtube_shorts": {"priority": 45}}}, f)
+        return {
+            "clip_id": "live:auronplay:x:p167", "clip": __file__,
+            "title": "Auronplay grita", "start_sec": 100, "end_sec": 140,
+            "peak_ts": 167.0, "category": "Grand Theft Auto VI",
+            "category_source": "helix", "game": "GTA 6", "origin": "live",
+            "viral_total": 45.0, "viral_auto": 48.3,
+            "review": {"revision": "gemini", "viral_revisado": 48.3,
+                       "human": None, "motivo": "rescate",
+                       "shouts": 17, "rescate_gritos": rescue},
+            "streamer_hype": {"count": 0, "distinct": 0, "phrases": []},
+            "title": "Auronplay grita",
+            "subtitles_complete": True, "publish_blocked": False,
+            "seo": {"youtube_shorts": 94, "tiktok": 92,
+                    "instagram_reels": 91, "facebook_reels": 90},
+            "publish_status": {}, "package_path": pkg_path,
+            "hype_score": 8.0, "burst_score": 8.0, "hype_ratio": 4.0,
+        }
+
+    def test_rescatado_manda_marca_y_viralidad_real(self):
+        class FakeBridge:
+            def __init__(self):
+                self.payloads = []
+
+            def create_clip(self, payload):
+                self.payloads.append(payload)
+                return {"id": 99}
+
+            def upload_video(self, clip_id, path):
+                return {"ok": True}
+
+            def tracking_step(self, *a, **k):
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = FakeBridge()
+            session = self._session(tmp, bridge)
+            panel_id = session._enqueue_panel(self._record(True))
+            self.assertEqual(panel_id, 99)
+            payload = bridge.payloads[0]
+            self.assertTrue(payload["rescue"])
+            self.assertEqual(payload["rescue_shouts"], 17)
+            self.assertEqual(payload["viral_score"], 48.3)
+            self.assertEqual(payload["seo_scores"]["youtube_shorts"], 94)
+            self.assertEqual(payload["score"], 45)
+
+    def test_normal_no_manda_rescue(self):
+        class FakeBridge:
+            def __init__(self):
+                self.payloads = []
+
+            def create_clip(self, payload):
+                self.payloads.append(payload)
+                return {"id": 98}
+
+            def upload_video(self, clip_id, path):
+                return {"ok": True}
+
+            def tracking_step(self, *a, **k):
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = FakeBridge()
+            session = self._session(tmp, bridge)
+            record = self._record(False)
+            record["viral_total"] = 55.0
+            self.assertEqual(session._enqueue_panel(record), 98)
+            payload = bridge.payloads[0]
+            self.assertNotIn("rescue", payload)
+            self.assertNotIn("viral_score", payload)
+            self.assertNotIn("seo_scores", payload)
 
 
 if __name__ == "__main__":

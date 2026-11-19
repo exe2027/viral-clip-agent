@@ -839,6 +839,14 @@ class LiveCutterSession(LiveSession):
             _shouts = (record.get("review") or {}).get("shouts")
             if _shouts:
                 _reason += f" — gritos: {_shouts}"
+            # RESCATE por gritos (2026-11-18, decisión del usuario):
+            # el clip con viralidad revisada 45-49 y 2+ s de gritos
+            # entra a la Cola BLOQUEADO para revisión humana. El
+            # panel re-verifica la marca (viralidad, gritos, SEO);
+            # sin estos campos el POST 400 lo tira como antes.
+            _review = record.get("review") or {}
+            _is_rescue = bool(_review.get("rescate_gritos"))
+            _viral_revisado = _review.get("viral_revisado")
             payload = {
                 "title": record["title"],
                 "start_sec": record["start_sec"],
@@ -859,6 +867,18 @@ class LiveCutterSession(LiveSession):
                 "game": "GTA VI",
                 "reason": _reason,
             }
+            if _is_rescue:
+                # Solo en rescate se mandan viralidad real + SEO:
+                # sin ellos el panel no puede verificar la marca.
+                # En clips normales el payload no cambia (la puerta
+                # SEO del POST no debe empezar a tirar clips que
+                # antes entraban a la Cola y se frenaban al publicar).
+                payload["rescue"] = True
+                payload["rescue_shouts"] = int(_shouts or 0)
+                payload["viral_score"] = float(_viral_revisado) \
+                    if _viral_revisado is not None else float(
+                        record.get("viral_total") or 0)
+                payload["seo_scores"] = record.get("seo") or {}
             clip = self.bridge.create_clip(payload)
             panel_id = clip.get("id")
             if panel_id and os.path.isfile(record["clip"]):
