@@ -146,5 +146,106 @@ class TestKaraokeFontScale(unittest.TestCase):
         self.assertIn(",1,6,0,2,10,10,12,1", con)
 
 
+class TestTitleWiring(unittest.TestCase):
+    """Cableado del título (2026-11-19): subtitle_clip lo pasa a
+    burn_subtitles y _h_subtitulos lo saca del payload del job
+    (pre_corte_title del VOD o title del job)."""
+
+    def _video_con_srt(self, tmp):
+        src = os.path.join(tmp, "src.mp4")
+        srt = os.path.join(tmp, "src.srt")
+        out = os.path.join(tmp, "burned.mp4")
+        _black_video(src)
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write(SRT)
+        return src, srt, out
+
+    def test_subtitle_clip_pasa_titulo_a_burn_subtitles(self):
+        from unittest import mock
+
+        from clipagent.workers import subtitle_clip
+        with tempfile.TemporaryDirectory() as tmp:
+            src, srt, out = self._video_con_srt(tmp)
+            with mock.patch(
+                    "clipagent.transcribe.burn_subtitles") as burn:
+                res = subtitle_clip(src, srt=srt, burn=out,
+                                    cfg=load_config(),
+                                    title="Rubius descubre los cromos")
+            self.assertTrue(res["reused_srt"])
+            burn.assert_called_once()
+            self.assertEqual(burn.call_args.kwargs["title"],
+                             "Rubius descubre los cromos")
+
+    def test_subtitle_clip_sin_titulo_pasa_none(self):
+        from unittest import mock
+
+        from clipagent.workers import subtitle_clip
+        with tempfile.TemporaryDirectory() as tmp:
+            src, srt, out = self._video_con_srt(tmp)
+            with mock.patch(
+                    "clipagent.transcribe.burn_subtitles") as burn:
+                subtitle_clip(src, srt=srt, burn=out,
+                              cfg=load_config())
+            self.assertIsNone(burn.call_args.kwargs["title"])
+
+    def test_subtitle_clip_quema_titulo_en_la_franja(self):
+        from clipagent.workers import subtitle_clip
+        with tempfile.TemporaryDirectory() as tmp:
+            src, srt, out = self._video_con_srt(tmp)
+            subtitle_clip(src, srt=srt, burn=out, cfg=load_config(),
+                          title="Rubius descubre los cromos")
+            fr = _frame(out, 1.0)
+            self.assertGreater(_count_white(fr, *TestBurnRdjaviAuto.TITULO),
+                               50, "sin título en la franja")
+            self.assertEqual(_count_white(fr, 0, 351), 0,
+                             "título sobre la webcam")
+            self.assertEqual(_count_white(fr, 400, 795), 0,
+                             "título sobre el gameplay")
+            self.assertGreater(_count_yellow(fr, *TestBurnRdjaviAuto.BAR),
+                               50, "sin amarillo en la barra")
+
+    def test_h_subtitulos_usa_pre_corte_title(self):
+        from unittest import mock
+
+        from clipagent.workers import _h_subtitulos
+        with tempfile.TemporaryDirectory() as tmp:
+            src, srt, out = self._video_con_srt(tmp)
+            job = {"payload": {"video": src, "srt": srt, "burn": out,
+                               "pre_corte_title": "Título pre-corte",
+                               "title": "Título del job"}}
+            with mock.patch(
+                    "clipagent.transcribe.burn_subtitles") as burn:
+                _h_subtitulos(None, job, load_config())
+            self.assertEqual(burn.call_args.kwargs["title"],
+                             "Título pre-corte")
+
+    def test_h_subtitulos_cae_a_title_del_job(self):
+        from unittest import mock
+
+        from clipagent.workers import _h_subtitulos
+        with tempfile.TemporaryDirectory() as tmp:
+            src, srt, out = self._video_con_srt(tmp)
+            job = {"payload": {"video": src, "srt": srt, "burn": out,
+                               "pre_corte_title": None,
+                               "title": "Título del job"}}
+            with mock.patch(
+                    "clipagent.transcribe.burn_subtitles") as burn:
+                _h_subtitulos(None, job, load_config())
+            self.assertEqual(burn.call_args.kwargs["title"],
+                             "Título del job")
+
+    def test_h_subtitulos_sin_titulo_pasa_none(self):
+        from unittest import mock
+
+        from clipagent.workers import _h_subtitulos
+        with tempfile.TemporaryDirectory() as tmp:
+            src, srt, out = self._video_con_srt(tmp)
+            job = {"payload": {"video": src, "srt": srt, "burn": out}}
+            with mock.patch(
+                    "clipagent.transcribe.burn_subtitles") as burn:
+                _h_subtitulos(None, job, load_config())
+            self.assertIsNone(burn.call_args.kwargs["title"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1141,11 +1141,10 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
     64 px reales, en la barra negra 1740-1920, nunca sobre el
     gameplay (ver rdjavi.make_plain_ass). ``title`` quema además
     el título del clip en UNA línea en la franja 702-800 (sin
-    "GTA 6" delante, ver rdjavi.add_burned_title). PENDIENTE: el
-    flujo en vivo aún no pasa el título (live_cutter.py construye
-    el título DESPUÉS de quemar; workers.subtitle_clip no tiene
-    parámetro de título): sin ``title`` la franja queda en negro
-    y el mecanismo queda verificado pero sin cablear en producción.
+    "GTA 6" delante, ver rdjavi.add_burned_title). Cableado en
+    producción (2026-11-19): live_cutter.py calcula el título
+    ANTES de quemar y lo pasa por workers.subtitle_clip; el camino
+    VOD lo trae del payload (pre_corte_title o title).
 
     Arreglo 4 (2026-11-16): ``context_text`` quema además el banner
     de contexto arriba los primeros ``context_duration`` segundos

@@ -434,14 +434,17 @@ def _do_transcribe(video, model, lang, cfg, chat_lang):
 
 
 def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
-                  lang=None, model="tiny", chat_lang=None):
+                  lang=None, model="tiny", chat_lang=None, title=None):
     """Transcribe + SRT (+ quemado opcional). Idempotente: si el SRT
     ya existe, se reutiliza sin re-transcribir. Si el clip no tiene
     voz, termina OK marcado ``no_speech`` (no es un fallo del paso),
     PERO con ``needs_human_transcription=True`` y
     ``publish_blocked=True`` (regla 2026-11-17 22:10: SIEMPRE
     subtítulos completos, sin subtítulos no se publica). El estilo
-    sale del payload o de config.yaml (subtitles.default_style)."""
+    sale del payload o de config.yaml (subtitles.default_style).
+    ``title`` quema además el título en UNA línea en la franja
+    702-800 (plantilla v2, burn_subtitles con style rdjavi/karaoke);
+    sin él la franja queda en negro, como antes."""
     if not os.path.isfile(video):
         raise StepError(f"vídeo no existe: {video}", kind="permanent")
     cfg = cfg or {}
@@ -451,7 +454,7 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
     result = {"video": video, "srt": srt, "style": style,
               "burn": burn, "no_speech": False, "reused_srt": False,
               "needs_human_transcription": False,
-              "publish_blocked": False}
+              "publish_blocked": False, "title": title}
     transcript = None
     transcript_path = os.path.splitext(srt)[0] + ".transcript.json"
     if os.path.isfile(srt) and os.path.getsize(srt) > 0:
@@ -487,7 +490,8 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
             return result
     if burn:
         from .transcribe import burn_subtitles
-        burn_subtitles(video, srt, burn, style=style, config=cfg)
+        burn_subtitles(video, srt, burn, style=style, config=cfg,
+                       title=title)
         result["burned"] = burn
     if transcript is not None:
         result["no_speech"] = bool(transcript.get("no_speech"))
@@ -635,12 +639,17 @@ def _h_corte(store, job, cfg):
 def _h_subtitulos(store, job, cfg):
     payload = job["payload"]
     _require(payload, "video")
+    # El título ya existe ANTES del quemado en el camino
+    # automático: el VOD trae el pre_corte_title validado por la
+    # puerta pre-corte (o el título del job); sin él la franja
+    # 702-800 queda en negro.
     return subtitle_clip(
         payload["video"], srt=payload.get("srt"),
         burn=payload.get("burn"), style=payload.get("style"),
         cfg=cfg, lang=payload.get("lang"),
         model=payload.get("model", "tiny"),
-        chat_lang=payload.get("chat_lang"))
+        chat_lang=payload.get("chat_lang"),
+        title=payload.get("pre_corte_title") or payload.get("title"))
 
 
 def _h_empaquetar(store, job, cfg):

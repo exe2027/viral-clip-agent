@@ -641,11 +641,18 @@ class LiveCutterSession(LiveSession):
         cut = cut_clip(video_for_cut, cut_start, CLIP_DURATION_S,
                        raw_clip, layout_mode="auto", cfg=self.cfg)
         layout = cut.get("layout") or {}
+        # 5b. Título ANTES del quemado (port v2, 2026-11-19): la
+        # franja 702-800 se quema en el paso de subtítulos, así que
+        # el título tiene que existir ya aquí. El paquete del paso
+        # 7 reutiliza ESTE mismo título (nunca se recalcula).
+        title = build_title(detail, layout,
+                            payoff_ts_clip=CLIP_PRE_S, lang="es",
+                            game="GTA 6")
         # 6. Subtítulos quemados COMPLETOS. Sin voz verificable el
         # clip queda BLOQUEADO (nunca se publica, nunca se inventa).
         burned = os.path.join(work_dir, f"clip_{n:02d}_subs.mp4")
         sub = subtitle_clip(raw_clip, burn=burned, cfg=self.cfg,
-                            lang="es")
+                            lang="es", title=title)
         final_clip = burned if os.path.isfile(burned) else raw_clip
         blocked = bool(sub.get("publish_blocked"))
         # 6b. Frases hype del streamer en su propia voz (2026-11-18):
@@ -669,7 +676,8 @@ class LiveCutterSession(LiveSession):
                             transcript_text(json.load(f)))
             except Exception:  # noqa: BLE001 - señal opcional
                 pass
-        # 7. Título validado + paquete SEO + prioridad (intocable).
+        # 7. Paquete SEO + prioridad (intocable). El título es el
+        # del paso 5b (el mismo que se quemó en la franja).
         # Si hubo revisión, la viralidad post-corte usa sus valores
         # REALES (human Gemini + audio medido), no la estimación.
         if reviewed is not None:
@@ -679,9 +687,6 @@ class LiveCutterSession(LiveSession):
         else:
             viral = _score_clip(detail, multiple)
         viral_total = viral.get("total")
-        title = build_title(detail, layout,
-                            payoff_ts_clip=CLIP_PRE_S, lang="es",
-                            game="GTA 6")
         _desc = ""
         try:
             import auto_clips as _auto

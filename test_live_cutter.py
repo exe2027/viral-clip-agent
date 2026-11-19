@@ -11,10 +11,13 @@ Reglas que se verifican aquí:
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,6 +36,23 @@ RUBIUS_SEG = os.path.join(
 # chat real.
 FIXTURE_CHAT = os.path.join(
     REPO, "tests", "fixtures", "chat_rubius_capitulos.json")
+
+
+def _frame(video, t, w=540, h=960):
+    """Un fotograma como array RGB (w x h)."""
+    out = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", str(t), "-i", video,
+         "-frames:v", "1", "-vf", f"scale={w}:{h}",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True, check=True).stdout
+    return np.frombuffer(out, dtype=np.uint8).reshape(h, w, 3)
+
+
+def _count_white(arr, y0, y1):
+    r = arr[y0:y1, :, 0].astype(int)
+    g = arr[y0:y1, :, 1].astype(int)
+    b = arr[y0:y1, :, 2].astype(int)
+    return int(((r > 200) & (g > 200) & (b > 200)).sum())
 
 
 class FakeTwitchClient:
@@ -227,6 +247,17 @@ class TestProcessPeakReal(unittest.TestCase):
                 self.assertIn(record["publish_blocked"], (True, False))
                 if record["publish_blocked"]:
                     self.assertFalse(record["subtitles_complete"])
+                else:
+                    # Título cableado (2026-11-19): el título del
+                    # paso 5b se quemó en la franja 702-800 (en el
+                    # fotograma a 540x960, 351-400) del clip final.
+                    # Sin voz no hay quemado y no aplica.
+                    self.assertTrue(record.get("title"),
+                                    "sin título en el record")
+                    fr = _frame(record["clip"], 1.0)
+                    self.assertGreater(_count_white(fr, 351, 400), 50,
+                                       "sin título en la franja "
+                                       "del clip automático")
                 # Nada encolado en dry_run.
                 self.assertEqual(store.counts().get("pending", 0), 0)
             finally:
