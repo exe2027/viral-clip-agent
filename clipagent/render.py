@@ -2707,26 +2707,47 @@ def save_vod_layout(out_dir, data):
     return path
 
 
+# Tolerancia del voto de facecam, en px del fotograma de muestra
+# (160x90). La caja que devuelve Haar varía unos px entre muestras
+# aunque la webcam no se mueva; con igualdad exacta el voto se
+# quedaba en 1/5 y la facecam en None (backfill 0/9, 2026-11-19).
+FACECAM_VOTE_TOL = 10
+
+
+def _box_cercana(a, b, tol=FACECAM_VOTE_TOL):
+    """True si dos cajas [x, y, w, h] son la misma webcam (±tol px
+    en cada coordenada)."""
+    return all(abs(int(a[i]) - int(b[i])) <= tol for i in range(4))
+
+
+def _caja_mediana(cajas):
+    """Mediana por coordenada de un grupo de cajas (enteros)."""
+    import statistics
+    return [int(round(statistics.median([c[i] for c in cajas])))
+            for i in range(4)]
+
+
 def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
     """Detecta la facecam UNA vez por VOD (7.4).
 
     Muestrea `n_samples` fotogramas repartidos por el VOD y clasifica
-    cada uno; la caja que aparece en al menos 2 muestras (misma
-    posición, redondeada) es la facecam del VOD. Devuelve
-    {"facecam_box": [x, y, w, h] en el fotograma de muestra (160x90)
-    o None, "method": "detected"|"none", "samples": n, "hits": m}.
-    Si `facecam_box` ya está en config, no detecta nada (manda
-    siempre, ver decide_layout): devuelve method "config".
+    cada uno; las cajas que caen en el mismo grupo (misma esquina
+    ±10 px, ver _box_cercana) votan juntas y el grupo con al menos 2
+    votos es la facecam del VOD. Devuelve {"facecam_box": [x, y, w, h]
+    en el fotograma de muestra (160x90) o None, "method":
+    "detected"|"none", "samples": n, "hits": m, "boxes": cajas
+    votadas}. Si `facecam_box` ya está en config, no detecta nada
+    (manda siempre, ver decide_layout): devuelve method "config".
     """
     cfg = {**DEFAULTS, **(cfg or {})}
     if cfg.get("facecam_box"):
         return {"facecam_box": list(cfg["facecam_box"]),
-                "method": "config", "samples": 0, "hits": 0}
+                "method": "config", "samples": 0, "hits": 0, "boxes": []}
     if not duration or duration <= 0 or not os.path.isfile(video_path):
         return {"facecam_box": None, "method": "none",
-                "samples": 0, "hits": 0}
+                "samples": 0, "hits": 0, "boxes": []}
     fractions = [0.05, 0.25, 0.5, 0.75, 0.95][:max(1, n_samples)]
-    votes = {}
+    boxes = []
     samples = 0
     for frac in fractions:
         g = gray_frame(video_path, max(0.0, duration * frac))
@@ -2742,17 +2763,31 @@ def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
         box = (params or {}).get("box")
         if not box or len(box) < 4:
             continue
-        key = tuple(int(round(float(v))) for v in box[:4])
-        votes[key] = votes.get(key, 0) + 1
-    if not votes:
+        boxes.append(tuple(int(round(float(v))) for v in box[:4]))
+    voted = [list(b) for b in boxes]
+    if not boxes:
         return {"facecam_box": None, "method": "none",
-                "samples": samples, "hits": 0}
-    best, hits = max(votes.items(), key=lambda kv: kv[1])
+                "samples": samples, "hits": 0, "boxes": voted}
+    # Voto por proximidad (2026-11-19, backfill 0/9): la caja que
+    # devuelve Haar varía unos px entre muestras aunque la webcam no
+    # se mueva (38 vs 41 px de ancho en el mismo VOD); exigir la caja
+    # exacta dejaba el voto en 1/5 y la facecam en None. Se agrupa por
+    # misma esquina ±FACECAM_VOTE_TOL px (x, y, w y h).
+    clusters = []
+    for box in boxes:
+        for cluster in clusters:
+            if _box_cercana(box, _caja_mediana(cluster)):
+                cluster.append(box)
+                break
+        else:
+            clusters.append([box])
+    best = max(clusters, key=len)
+    hits = len(best)
     if hits < 2:
         return {"facecam_box": None, "method": "none",
-                "samples": samples, "hits": hits}
-    return {"facecam_box": list(best), "method": "detected",
-            "samples": samples, "hits": hits}
+                "samples": samples, "hits": hits, "boxes": voted}
+    return {"facecam_box": _caja_mediana(best), "method": "detected",
+            "samples": samples, "hits": hits, "boxes": voted}
 
 
 def cut_clip_with_layout(video_path, start_sec, duration, output_path,

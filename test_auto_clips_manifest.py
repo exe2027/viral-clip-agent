@@ -109,6 +109,10 @@ class TestManifiestoIncremental(unittest.TestCase):
                 layout = json.load(f)
             self.assertIn("method", layout)
             self.assertIn("facecam_box", layout)
+            # 2026-11-19: el manifiesto también registra el layout
+            # (caja/method/hits) para diagnosticar el voto de facecam.
+            self.assertIn("vod_layout", manifest)
+            self.assertEqual(manifest["vod_layout"], layout)
             self.assertFalse(os.path.exists(
                 os.path.join(out_dir, ".manifest.json.tmp")))
 

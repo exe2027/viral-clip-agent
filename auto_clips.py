@@ -1237,13 +1237,17 @@ def main() -> int:
                       "method": det["method"], "samples": det["samples"],
                       "hits": det["hits"], "source": source_label}
         save_vod_layout(out_dir, vod_layout)
+        manifest["vod_layout"] = vod_layout
         vod_box = det["facecam_box"]
+        boxes = det.get("boxes") or []
         if vod_box:
             print(f"Layout del VOD: facecam detectada {vod_box} "
-                  f"({det['hits']}/{det['samples']} muestras).")
+                  f"(method={det['method']}, {det['hits']}/"
+                  f"{det['samples']} muestras; cajas vistas: {boxes}).")
         else:
-            print("Layout del VOD: sin facecam estable; "
-                  "cada clip decide su layout solo.")
+            print(f"Layout del VOD: sin facecam estable (mejor grupo "
+                  f"{det['hits']}/{det['samples']} muestras; cajas "
+                  f"vistas: {boxes}); cada clip decide su layout solo.")
         return vod_layout
 
     try:
@@ -1251,14 +1255,18 @@ def main() -> int:
         vod_layout = load_vod_layout(out_dir)
         if vod_layout is not None:
             vod_box = vod_layout.get("facecam_box")
+            manifest["vod_layout"] = vod_layout
             print(f"Layout del VOD: reutilizado de layout.json "
-                  f"({vod_layout.get('method')}).")
+                  f"(method={vod_layout.get('method')}, facecam "
+                  f"{vod_box}, {vod_layout.get('hits')}/"
+                  f"{vod_layout.get('samples')} muestras).")
         elif (cfg or {}).get("facecam_box"):
             vod_box = list((cfg or {})["facecam_box"])
             vod_layout = {"vod_id": vod_id, "facecam_box": vod_box,
                           "method": "config", "samples": 0, "hits": 0,
                           "source": "config.yaml"}
             save_vod_layout(out_dir, vod_layout)
+            manifest["vod_layout"] = vod_layout
             print("Layout del VOD: facecam_box de config.yaml (manda).")
         elif args.video and video_path and os.path.isfile(video_path):
             _dur = None

@@ -67,7 +67,46 @@ class TestDetectVodFacecam(unittest.TestCase):
         self.assertEqual(result["method"], "detected")
         self.assertEqual(result["hits"], 3)
 
+    def test_cajas_con_jitter_leve_forman_un_grupo(self):
+        # Caso real del backfill 0/9 (2026-11-19): la caja varía unos
+        # px entre muestras (38 vs 41 px de ancho) aunque la webcam
+        # no se mueva; con voto exacto quedaba en 1/5 y sin facecam.
+        boxes = [[0, 0, 38, 38], [1, 0, 41, 38], [0, 2, 38, 40],
+                 None, [80, 50, 80, 40]]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "v.mp4")
+            open(path, "wb").close()
+            with mock.patch("clipagent.render.gray_frame",
+                            return_value=[[0] * 160 for _ in range(90)]), \
+                    mock.patch("clipagent.render.classify_frame",
+                               self._fake_classify(boxes)):
+                result = detect_vod_facecam(path, 3600, {})
+        self.assertEqual(result["facecam_box"], [0, 0, 38, 38])
+        self.assertEqual(result["method"], "detected")
+        self.assertEqual(result["hits"], 3)
+        self.assertEqual(result["boxes"],
+                         [[0, 0, 38, 38], [1, 0, 41, 38], [0, 2, 38, 40],
+                          [80, 50, 80, 40]])
+
+    def test_cajas_en_esquinas_distintas_no_se_agrupan(self):
+        boxes = [[0, 0, 38, 38], [80, 50, 80, 40], None, None,
+                 [0, 20, 80, 70]]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "v.mp4")
+            open(path, "wb").close()
+            with mock.patch("clipagent.render.gray_frame",
+                            return_value=[[0] * 160 for _ in range(90)]), \
+                    mock.patch("clipagent.render.classify_frame",
+                               self._fake_classify(boxes)):
+                result = detect_vod_facecam(path, 3600, {})
+        self.assertIsNone(result["facecam_box"])
+        self.assertEqual(result["method"], "none")
+        self.assertEqual(result["hits"], 1)
+
     def test_sin_mayoria_no_hay_facecam(self):
+        # Cajas lejos entre sí (>10 px en alguna coordenada): ningún
+        # grupo llega a 2 votos. (Antes del voto por proximidad este
+        # test usaba cajas a 1 px; hoy esas SÍ se agrupan.)
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "v.mp4")
             open(path, "wb").close()
@@ -75,8 +114,8 @@ class TestDetectVodFacecam(unittest.TestCase):
                             return_value=[[0] * 160 for _ in range(90)]), \
                     mock.patch("clipagent.render.classify_frame",
                                self._fake_classify(
-                                   [[1, 1, 5, 5], [2, 2, 6, 6], None, None,
-                                    [3, 3, 7, 7]])):
+                                   [[1, 1, 5, 5], [50, 50, 20, 20],
+                                    None, None, [100, 10, 15, 15]])):
                 result = detect_vod_facecam(path, 3600, {})
         self.assertIsNone(result["facecam_box"])
         self.assertEqual(result["method"], "none")
