@@ -451,6 +451,18 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
     """
     from .workers import subtitle_clip
     lang = lang if lang in ("es", "en") else "es"
+    if not cfg:
+        # 2026-11-19 (clip 23, TheGrefg): el fallback nunca cargaba
+        # config.yaml y subtitle_clip caia en su default silencioso
+        # "karaoke". La plantilla acordada es rdjavi
+        # (config.yaml subtitles.default_style). Se carga la config
+        # real para que el quemado y el validador final usen los
+        # mismos ajustes que el camino en vivo.
+        try:
+            from .config import load_config
+            cfg = load_config()
+        except Exception:  # noqa: BLE001 - sin config, sigue con {}
+            cfg = {}
     viral = clip.get("viral") or {}
     title_key = "title_en" if lang == "en" else "title_es"
     title = viral.get("best_title") or clip.get(title_key) or ""

@@ -342,6 +342,33 @@ class TestBurnAndEnqueue(unittest.TestCase):
         self.assertEqual(bridge.created, [])
         self.assertEqual(bridge.uploaded, [])
 
+    def test_burn_and_enqueue_usa_plantilla_rdjavi(self):
+        # 2026-11-19 (clip 23, TheGrefg): el fallback llamaba a
+        # subtitle_clip con cfg={} y el default silencioso era
+        # "karaoke". La plantilla acordada es rdjavi (config.yaml
+        # subtitles.default_style): el quemado VOD debe usarla
+        # igual que el camino en vivo.
+        sub_mock = self._patch_subtitles()
+        bridge = FakeBridge()
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "2932415021", self.tmp.name, _clip())
+        self.assertEqual(panel_id, 101, why)
+        cfg = sub_mock.call_args.kwargs.get("cfg") or {}
+        self.assertEqual(
+            (cfg.get("subtitles") or {}).get("default_style"),
+            "rdjavi")
+
+    def test_subtitle_clip_sin_cfg_usa_rdjavi(self):
+        # El default silencioso de subtitle_clip era "karaoke":
+        # cualquier llamada sin cfg quemaba karaoke. La plantilla
+        # acordada es rdjavi.
+        from clipagent.workers import subtitle_clip
+        srt = os.path.splitext(self.video)[0] + ".srt"
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,000 --> 00:00:02,000\nHola\n")
+        res = subtitle_clip(self.video, cfg={})
+        self.assertEqual(res["style"], "rdjavi")
+
 
 class TestRun(unittest.TestCase):
     def setUp(self):

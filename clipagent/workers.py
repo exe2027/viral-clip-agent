@@ -456,7 +456,10 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
     cfg = cfg or {}
     srt = srt or (os.path.splitext(video)[0] + ".srt")
     style = style or ((cfg.get("subtitles") or {}).get("default_style")
-                      or "karaoke")
+                      # Plantilla acordada (config.yaml): rdjavi. El
+                      # default silencioso era "karaoke" y el camino
+                      # VOD lo quemaba asi (clip 23, 2026-11-19).
+                      or "rdjavi")
     result = {"video": video, "srt": srt, "style": style,
               "burn": burn, "no_speech": False, "reused_srt": False,
               "needs_human_transcription": False,
