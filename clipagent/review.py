@@ -1,12 +1,15 @@
 """Revisión automática de los mejores picos (2026-11-18).
 
-Regla del usuario (APROBADA 2026-11-18): en el loop en vivo, los
-top 3 picos por directo con viralidad AUTO 40-49,9 pasan por
-revisión automática con fotogramas + transcripción (Gemini) y se
-re-calcula su viralidad. Si tras la revisión pasan >= 50 y
-SEO >= 90, se renderizan y se encolan en LIVE; si no, se
-descartan SIN render. La puerta de publicación sigue en 50: NO
-se baja.
+Regla del usuario (APROBADA 2026-11-18, LISTONES BAJADOS
+2026-11-19 por su orden directa): en el loop en vivo, los picos
+con viralidad AUTO >= 45 van directos a render; los top 3 por
+directo con AUTO 40-44,9 pasan por revisión automática con
+fotogramas + transcripción (Gemini) y se re-calcula su viralidad.
+Si tras la revisión pasan >= 45 y SEO >= 80, se renderizan y se
+encolan en LIVE; si no, se descartan SIN render. Por qué se bajó:
+la revisión bajaba picos de 48-49 a ~35 (alta varianza, no un
+sesgo sistemático) y el SEO 81-86 moría en el umbral 90; la
+prioridad es que salgan clips.
 
 Por qué hace falta: la viralidad AUTO pre-corte usa los 5
 componentes humanos y el audio en su estimación conservadora 5,0
@@ -46,7 +49,11 @@ import json
 import os
 
 REVIEW_VIRAL_MIN = 40.0
-REVIEW_VIRAL_MAX = 50.0
+# Listón de la revisión BAJADO 2026-11-19 (orden del usuario):
+# era 50,0; los picos auto 48-49 que Gemini bajaba a ~35 morían
+# aquí. Con 45,0 los picos auto 45-49,9 van directos (no pasan por
+# la revisión que los tumbaba) y la revisión solo ve 40-44,9.
+REVIEW_VIRAL_MAX = 45.0
 REVIEW_TOP_N = 3
 REVIEW_SEO_MIN = 90
 REVIEW_PEAK_REL_S = 20.0  # el pico cae a los 20 s de la ventana 40 s
@@ -112,7 +119,7 @@ def decide_render(viral_auto, reviewed_count):
     viral_auto = float(viral_auto or 0.0)
     if viral_auto >= REVIEW_VIRAL_MAX:
         return ("directo",
-                f"viralidad auto {viral_auto:.1f} >= 50: a render")
+                f"viralidad auto {viral_auto:.1f} >= 45: a render")
     if viral_auto >= REVIEW_VIRAL_MIN:
         if reviewed_count >= REVIEW_TOP_N:
             return ("descartar",
@@ -120,7 +127,7 @@ def decide_render(viral_auto, reviewed_count):
                     f"{REVIEW_TOP_N} revisiones en este directo "
                     f"(top 3)")
         return ("revision",
-                f"viralidad auto {viral_auto:.1f} en 40-49,9: "
+                f"viralidad auto {viral_auto:.1f} en 40-44,9: "
                 f"a revisión automática (top 3)")
     return ("descartar",
             f"viralidad auto {viral_auto:.1f} < 40: sin revisión "
@@ -312,7 +319,7 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
     viral = score_clip(detail, multiple, human=human,
                        audio=result["audio"])
     result["viral_revisado"] = float(viral.get("total") or 0.0)
-    # 5. Puerta REAL 50/90.
+    # 5. Puerta REAL 45/80 (bajada 2026-11-19, orden del usuario).
     gate = render_gate(result["viral_revisado"], seo_for_gate,
                        cfg=cfg, viral_min=REVIEW_VIRAL_MAX)
     result["pasa"] = bool(gate["pasa"])
@@ -323,9 +330,11 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
         f"; {gate['motivo']}")
     result["estados"] = gate["estados"]
     result["plataformas_publicables"] = gate["plataformas_publicables"]
-    # 5b. Rescate por gritos del streamer (punto aparte): si no
-    # llega a 50 pero sí a 45, con 2+ segundos de grito del
-    # streamer y SEO >= 90, pasa igual. Queda registrado.
+    # 5b. Rescate por gritos del streamer (punto aparte, 2026-11-18):
+    # SUBSUMIDO por la puerta 45 (2026-11-19): un revisado 45-49,9
+    # ya pasa por la puerta principal, así que este bloque solo se
+    # dispara si la puerta se vuelve a subir. Se conserva como red
+    # de seguridad, no se borra.
     streamer_shouts = int((result["audio"] or {}).get(
         "streamer_shout_count") or 0)
     result["streamer_shout_rescue"] = False
@@ -352,9 +361,9 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
 def _fallback(result, viral_auto, seo_for_gate, reason, cfg=None):
     """Fallback pre-corte cuando la revisión no se puede hacer.
 
-    Misma puerta que el flujo VOD (viral_auto >= 45, SEO >= 90):
+    Misma puerta que el flujo VOD (viral_auto >= 45, SEO >= 80):
     el umbral ya calibrado y aprobado, y la puerta de publicación
-    (50 real) sigue frenando lo que no llegue. Queda registrado
+    (45 real) sigue frenando lo que no llegue. Queda registrado
     como revisión "fallback-pre-corte" con el motivo.
     """
     from .policy import render_gate

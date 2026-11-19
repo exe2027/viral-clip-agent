@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Pruebas de la revisión automática de los mejores picos (2026-11-18).
 
-Regla del usuario (APROBADA): top 3 picos por directo con viralidad
-auto 40-49,9 -> revisión con fotogramas + transcripción (Gemini),
-se re-calcula la viralidad; >= 50 y SEO >= 90 -> render + LIVE;
-si no, descarte sin render. Puerta de publicación sigue en 50.
+Regla del usuario (APROBADA 2026-11-18, LISTONES BAJADOS
+2026-11-19 por su orden directa): picos con viralidad auto >= 45
+van directos a render; top 3 por directo con auto 40-44,9 ->
+revisión con fotogramas + transcripción (Gemini), se re-calcula
+la viralidad; revisado >= 45 y SEO >= 80 -> render + LIVE; si no,
+descarte sin render.
 
 Gemini/Whisper se simulan: sin red. El caso con datos reales de
 p3220 usa su chat (si existe) solo para el `detail`.
@@ -36,8 +38,9 @@ GEMINI_BAJO = json.dumps({
     "packaging": 4.0,
     "razones": {k: "flojo" for k in
                 ("hook", "claridad", "novedad", "loop", "packaging")}})
-# 4,5 en todo: viral revisado ~46,5 (entre 45 y 50): el rango del
-# rescate por gritos del streamer.
+# 4,5 en todo: viral revisado ~46,5 (entre 45 y 50): el rango que
+# antes rescataban los gritos y que ahora pasa directo por la
+# puerta 45 (2026-11-19: el rescate queda subsumido).
 GEMINI_MEDIO = json.dumps({
     "hook": 4.5, "claridad": 4.5, "novedad": 4.5, "loop": 4.5,
     "packaging": 4.5,
@@ -52,23 +55,26 @@ def p3220_detail():
 
 
 class TestDecideRender(unittest.TestCase):
-    def test_directo_50_o_mas(self):
+    def test_directo_45_o_mas(self):
+        # 2026-11-19: el listón bajó de 50 a 45; los picos auto
+        # 48-49 ya no pasan por la revisión que los tumbaba a ~35.
+        self.assertEqual(decide_render(45.0, 0)[0], "directo")
+        self.assertEqual(decide_render(48.5, 0)[0], "directo")
         self.assertEqual(decide_render(50.0, 0)[0], "directo")
         self.assertEqual(decide_render(53.8, 3)[0], "directo")
 
-    def test_revision_40_a_49(self):
-        self.assertEqual(decide_render(46.3, 0)[0], "revision")
+    def test_revision_40_a_44(self):
+        self.assertEqual(decide_render(44.9, 2)[0], "revision")
         self.assertEqual(decide_render(40.0, 0)[0], "revision")
-        self.assertEqual(decide_render(49.9, 2)[0], "revision")
 
     def test_descartar_menos_40(self):
         self.assertEqual(decide_render(39.9, 0)[0], "descartar")
         self.assertEqual(decide_render(30.0, 0)[0], "descartar")
 
     def test_top3_el_cuarto_se_descarta(self):
-        self.assertEqual(decide_render(46.3, REVIEW_TOP_N)[0],
+        self.assertEqual(decide_render(44.0, REVIEW_TOP_N)[0],
                          "descartar")
-        self.assertEqual(decide_render(46.3, REVIEW_TOP_N - 1)[0],
+        self.assertEqual(decide_render(44.0, REVIEW_TOP_N - 1)[0],
                          "revision")
 
 
@@ -187,17 +193,21 @@ class TestReviewPeak(unittest.TestCase):
         self.assertEqual(r["seo"]["youtube_shorts"], 92)
 
     def test_revision_falla_por_seo_bajo(self):
+        # 2026-11-19: la puerta SEO bajó de 90 a 80; el fixture
+        # viejo (85/88) ya pasa, así que el fallo se prueba con
+        # un SEO por debajo de 80.
         if not os.path.isfile(P3220_CHAT):
             self.skipTest("sin datos reales de p3220")
         r = self._run(self._patch_all(GEMINI_ALTO, seo={
-            "youtube_shorts": {"score": 85},
-            "tiktok": {"score": 88}}), p3220_detail())
+            "youtube_shorts": {"score": 75},
+            "tiktok": {"score": 78}}), p3220_detail())
         self.assertFalse(r["pasa"], r["motivo"])
-        self.assertGreaterEqual(r["viral_revisado"], 50.0)
+        self.assertGreaterEqual(r["viral_revisado"], 45.0)
 
-    def test_revision_rescate_por_gritos_del_streamer(self):
-        """Rescate (2026-11-18): viral revisado 45-49,9 + 2+ s de
-        grito DEL STREAMER + SEO >= 90 -> pasa como punto aparte."""
+    def test_revision_medio_pasa_directo_por_puerta_45(self):
+        """2026-11-19: viral revisado 45-49,9 + SEO >= 80 -> pasa
+        por la puerta principal (el rescate por gritos queda
+        subsumido: ya no hace falta gritar para pasar)."""
         if not os.path.isfile(P3220_CHAT):
             self.skipTest("sin datos reales de p3220")
         detail = p3220_detail()
@@ -209,35 +219,34 @@ class TestReviewPeak(unittest.TestCase):
         self.assertGreaterEqual(r["viral_revisado"], 45.0)
         self.assertLess(r["viral_revisado"], 50.0)
         self.assertTrue(r["pasa"], r["motivo"])
-        self.assertTrue(r["streamer_shout_rescue"])
-        self.assertIn("gritos", r["motivo"])
+        self.assertFalse(r["streamer_shout_rescue"])
 
-    def test_revision_sin_rescate_con_un_solo_grito(self):
-        """Con 1 solo segundo de grito no hay rescate."""
+    def test_revision_bajo_falla_aunque_grite(self):
+        """Por debajo de 45 no hay rescate: ni con 2 s de grito
+        pasa un revisado < 45."""
         if not os.path.isfile(P3220_CHAT):
             self.skipTest("sin datos reales de p3220")
         detail = p3220_detail()
         r = self._run(
-            self._patch_all(GEMINI_MEDIO, audio_extra={
-                "streamer_shout_count": 1,
-                "streamer_shout_seconds": [18]}),
+            self._patch_all(GEMINI_BAJO, audio_extra={
+                "streamer_shout_count": 2,
+                "streamer_shout_seconds": [18, 19]}),
             detail)
-        self.assertLess(r["viral_revisado"], 50.0)
+        self.assertLess(r["viral_revisado"], 45.0)
         self.assertFalse(r["pasa"], r["motivo"])
         self.assertFalse(r["streamer_shout_rescue"])
 
-    def test_revision_sin_rescate_sin_gritos(self):
-        """Sin gritos del streamer no hay rescate aunque esté en
-        45-49,9."""
+    def test_revision_bajo_falla_sin_gritos(self):
+        """Sin gritos y por debajo de 45 tampoco pasa."""
         if not os.path.isfile(P3220_CHAT):
             self.skipTest("sin datos reales de p3220")
         detail = p3220_detail()
         r = self._run(
-            self._patch_all(GEMINI_MEDIO, audio_extra={
+            self._patch_all(GEMINI_BAJO, audio_extra={
                 "streamer_shout_count": 0,
                 "streamer_shout_seconds": []}),
             detail)
-        self.assertLess(r["viral_revisado"], 50.0)
+        self.assertLess(r["viral_revisado"], 45.0)
         self.assertFalse(r["pasa"], r["motivo"])
         self.assertFalse(r["streamer_shout_rescue"])
 

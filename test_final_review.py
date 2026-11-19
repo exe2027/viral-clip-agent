@@ -299,5 +299,101 @@ class TestVodHook(unittest.TestCase):
         self.assertEqual(created[0]["payload"]["mode"], "api")
 
 
+class TestObserveOnly(unittest.TestCase):
+    """Modo observación (2026-11-19, orden del usuario): el
+    validador registra pero NO bloquea el encolado hasta calibrar
+    con 10-20 clips reales. Un rechazado se reescribe como
+    "observado" (pasa True, scores y fallos intactos)."""
+
+    def _rechazado(self):
+        scores = {c: 8.0 for c in fr.CRITERIA}
+        scores["webcam_visible"] = 0.0
+        return {
+            "decision": "rechazado", "pasa": False,
+            "revision": "gemini", "scores": scores,
+            "motivos": {c: "bien" for c in fr.CRITERIA},
+            "fallos": ["webcam_visible"],
+            "motivo": "validación final: webcam visible (0.0)",
+            "resumen": "sin webcam", "frames_n": 4,
+            "model": "x", "transcript_words": 5,
+        }
+
+    def _maybe(self, verdict, env=None, cfg=None):
+        with mock.patch.dict(os.environ, env or {}, clear=True), \
+                mock.patch.object(fr, "review_final_clip",
+                                  return_value=verdict):
+            return fr.maybe_review_final_clip(
+                "/clip.mp4", "Título", cfg=cfg)
+
+    def test_observa_por_defecto(self):
+        result = self._maybe(self._rechazado())
+        self.assertEqual(result["decision"], "observado")
+        self.assertTrue(result["pasa"])
+        self.assertEqual(result["fallos"], ["webcam_visible"])
+        self.assertEqual(result["scores"]["webcam_visible"], 0.0)
+        self.assertTrue(result["observe_only"])
+        self.assertIn("observación", result["motivo"])
+        self.assertIn("webcam visible (0.0)", result["motivo"])
+
+    def test_env_vuelve_a_bloquear(self):
+        result = self._maybe(
+            self._rechazado(),
+            env={"FINAL_REVIEW_OBSERVE_ONLY": "0"})
+        self.assertEqual(result["decision"], "rechazado")
+        self.assertFalse(result["pasa"])
+        self.assertFalse(result["observe_only"])
+
+    def test_cfg_manda_sobre_env(self):
+        # cfg False vence a env 1: vuelve a bloquear.
+        result = self._maybe(
+            self._rechazado(), env={"FINAL_REVIEW_OBSERVE_ONLY": "1"},
+            cfg={"final_review": {"observe_only": False}})
+        self.assertEqual(result["decision"], "rechazado")
+        # cfg True vence a env 0: observa.
+        result = self._maybe(
+            self._rechazado(), env={"FINAL_REVIEW_OBSERVE_ONLY": "0"},
+            cfg={"final_review": {"observe_only": True}})
+        self.assertEqual(result["decision"], "observado")
+
+    def test_aprobado_sigue_aprobado(self):
+        verdict = self._rechazado()
+        verdict["decision"] = "aprobado"
+        verdict["pasa"] = True
+        verdict["fallos"] = []
+        verdict["motivo"] = ""
+        result = self._maybe(verdict)
+        self.assertEqual(result["decision"], "aprobado")
+        self.assertTrue(result["pasa"])
+        self.assertTrue(result["observe_only"])
+
+    def test_prompt_acepta_avatar_vtuber(self):
+        # La webcam puede ser un avatar (theburntpeanut): el prompt
+        # exige "cara visible" y un avatar visible puntuaría 0 sin
+        # esta línea. La marca de agua NO va en el prompt: verificado
+        # 2026-11-19, no aparece en los fotogramas del clip 01:08 y
+        # no es la causa del webcam 0.0 (la causa era el recorte).
+        self.assertIn("VTuber", fr.FINAL_REVIEW_PROMPT)
+        self.assertIn("avatar", fr.FINAL_REVIEW_PROMPT)
+        self.assertNotIn("marca de agua", fr.FINAL_REVIEW_PROMPT)
+
+    def test_observe_only_por_defecto(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(fr.final_review_observe_only())
+            self.assertTrue(fr.final_review_observe_only({}))
+        with mock.patch.dict(os.environ,
+                             {"FINAL_REVIEW_OBSERVE_ONLY": "0"}):
+            self.assertFalse(fr.final_review_observe_only())
+
+    def test_desactivada_sigue_sin_validar(self):
+        # Apagar la validación sigue apagándola: observación no es
+        # lo mismo que desactivada.
+        with mock.patch.dict(
+                os.environ, {"FINAL_REVIEW_ENABLED": "0"}):
+            result = fr.maybe_review_final_clip(
+                "/no/existe.mp4", "Título")
+        self.assertEqual(result["decision"], "desactivada")
+        self.assertIsNone(result["pasa"])
+
+
 if __name__ == "__main__":
     unittest.main()

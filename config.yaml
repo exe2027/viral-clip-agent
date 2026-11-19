@@ -384,9 +384,12 @@ autopublish:
 
 # Umbrales duros del sistema de puntaje (6B.2): por defecto 90/50.
 # Si se bajan, queda registrado con fecha en scoring_changes.log.
+# BAJADOS 2026-11-19 por orden del usuario: el SEO 81-86 moría en
+# 90 y los picos con viralidad 48-49 morían en la revisión (Gemini
+# los bajaba a ~35); la prioridad es que salgan clips.
 scoring:
-  seo_gate: 90
-  viral_min: 50
+  seo_gate: 80
+  viral_min: 45
   # Pre-filtro rápido de Óscar Boix (2026-11-18, clipagent/prefilter.py):
   # 1 punto por mensaje, 2 por reacción, tramos de 10 s; un pico pasa
   # si su tramo llega a prefilter_min_multiple x la mediana de sus

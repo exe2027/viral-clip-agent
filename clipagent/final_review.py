@@ -17,6 +17,17 @@ Decisiones (``decision``):
 - ``aprobado``: Gemini vio el vídeo y todos los criterios pasan.
 - ``rechazado``: Gemini vio el vídeo y algún criterio duro falla.
   El clip NO se encola ni se publica; queda registrado con motivos.
+- ``observado`` (2026-11-19, ORDEN DEL USUARIO: MODO OBSERVACIÓN
+  POR DEFECTO hasta calibrar con 10-20 clips reales): Gemini vio
+  el vídeo y algún criterio falla, pero el veredicto SOLO SE
+  REGISTRA, no bloquea nada: el clip se encola y se publica como
+  si hubiera pasado, con los scores y fallos guardados para la
+  calibración. Para volver a bloquear hay que poner explícito
+  ``FINAL_REVIEW_OBSERVE_ONLY=0`` o
+  ``cfg["final_review"]["observe_only"] = False``. Sin calibración
+  real no se vuelve a bloquear: el validador sin calibrar tumbó
+  los 3 clips en vivo de la 01:08 (webcam 0.0 en los tres) y la
+  Cola se quedó seca.
 - ``pendiente_revision``: Gemini NO pudo validar (sin key, error
   de red, JSON inválido, sin fotogramas). El clip NO se aprueba
   nunca por esta vía: va a la Cola del panel para revisión humana
@@ -79,11 +90,13 @@ CRITERIA_ES = {
 
 FINAL_REVIEW_PROMPT = """Eres el validador final de un canal de clips de GTA 6 en español. Te paso 4 fotogramas REALES del vídeo final ya renderizado, en orden: 1 = inicio, 2 = payoff (el momento), 3 = reacción, 4 = final. El layout es vertical 9:16 en dos bandas: el streamer (webcam) ARRIBA y el gameplay ABAJO. El título es: {title}
 
+La webcam puede ser un avatar animado o VTuber (dibujo, sin cara humana): si se ve el avatar en la banda de arriba, webcam_visible puntúa alto, no cero.
+
 La transcripción de lo que se dice en el clip es:
 {transcript}
 
 Puntúa cada criterio de 0 a 10 (un decimal, sé exigente: un 5 es mediocre, un 8 es muy bueno, un 10 es excepcional) y explica cada nota en una frase corta:
-- webcam_visible: se ve la webcam del streamer en la banda de arriba, con su cara visible, sin que el gameplay invada esa banda ni que la banda quede negra o vacía.
+- webcam_visible: se ve la webcam del streamer en la banda de arriba, con su cara visible (o su avatar, si es VTuber), sin que el gameplay invada esa banda ni que la banda quede negra o vacía.
 - titulo_legible: el título está en una sola línea, se lee entero sin cortarse, sin duplicarse y sin tapar la cara del streamer ni el gameplay importante.
 - subtitulos_ok: los subtítulos amarillos están abajo, se leen bien, no tapan el diálogo del juego ni el minimapa ni el HUD importante, y no se salen de la pantalla.
 - sin_barras_negras: no hay barras negras laterales ni arriba/abajo, ni vídeo duplicado, ni la imagen repetida en dos bandas a la vez.
@@ -236,6 +249,29 @@ def final_review_enabled(cfg=None):
     return True
 
 
+def final_review_observe_only(cfg=None):
+    """¿La validación final solo observa (registra, no bloquea)?
+
+    Orden del usuario (2026-11-19): OBSERVACIÓN POR DEFECTO hasta
+    calibrar el validador con 10-20 clips reales. Sin calibrar
+    tumbó los 3 clips en vivo de la 01:08 (webcam 0.0 en los tres)
+    y la Cola se quedó seca: un juez sin calibrar no puede frenar
+    el encolado. Orden: ``cfg["final_review"]["observe_only"]``
+    si viene, si no la variable ``FINAL_REVIEW_OBSERVE_ONLY``
+    (1/true/yes/on = observa; 0/false/no/off = vuelve a bloquear),
+    y si no hay ni una ni otra, OBSERVA. Para volver a bloquear
+    hay que hacerlo explícito, con clips reales ya calibrados.
+    """
+    cfg = cfg or {}
+    flag = (cfg.get("final_review") or {}).get("observe_only")
+    if flag is not None:
+        return bool(flag)
+    raw = os.environ.get("FINAL_REVIEW_OBSERVE_ONLY", "").strip().lower()
+    if raw:
+        return raw not in ("0", "false", "no", "off")
+    return True
+
+
 def _pending(motivo, frames_n=0, model=MODEL_DEFAULT):
     """Resultado sin veredicto: a revisión humana, nunca aprobado."""
     return {
@@ -329,7 +365,13 @@ def maybe_review_final_clip(clip_path, title, transcript_text="",
 
     Devuelve ``decision == "desactivada"`` (sin veredicto) cuando
     la validación está apagada; si no, lo mismo que
-    ``review_final_clip``.
+    ``review_final_clip``, con una salvedad (2026-11-19, modo
+    observación por defecto): un ``rechazado`` se reescribe como
+    ``observado`` (``pasa`` True, scores y fallos intactos) para
+    que el clip se encole igual y el fallo quede registrado para
+    la calibración. Los tres enganches (live_cutter, workers,
+    vod_fallback) solo frenan con ``rechazado``, así que
+    ``observado`` fluye como un aprobado, con el motivo guardado.
     """
     if not final_review_enabled(cfg):
         return {
@@ -345,7 +387,23 @@ def maybe_review_final_clip(clip_path, title, transcript_text="",
             "frames_n": 0,
             "model": model or MODEL_DEFAULT,
             "transcript_words": len((transcript_text or "").split()),
+            "observe_only": final_review_observe_only(cfg),
         }
-    return review_final_clip(
+    result = review_final_clip(
         clip_path, title, transcript_text=transcript_text,
         out_dir=out_dir, gemini_fn=gemini_fn, model=model)
+    observe = final_review_observe_only(cfg)
+    result = dict(result)
+    result["observe_only"] = observe
+    if observe and result.get("decision") == "rechazado":
+        fallos = result.get("fallos") or []
+        scores = result.get("scores") or {}
+        detalle = result.get("motivo") or ", ".join(
+            f"{CRITERIA_ES[c]} ({scores.get(c, 0.0):.1f})"
+            for c in fallos)
+        result["decision"] = "observado"
+        result["pasa"] = True
+        result["motivo"] = (
+            "observación (no bloquea el encolado): " + detalle
+            if detalle else "observación (no bloquea el encolado)")
+    return result
