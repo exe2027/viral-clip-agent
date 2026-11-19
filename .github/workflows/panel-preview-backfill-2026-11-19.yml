@@ -1,0 +1,134 @@
+# Backfill de previews 2026-11-19 (Fallo 1) — SOLO LECTURA salvo lo indicado.
+#
+# Re-valida AHORA los renders ya guardados en R2 de los clips de la
+# Cola con la validación final del cerebro (final_review.py, Gemini
+# ve el MP4 final) y marca preview_seen SOLO en los que salen
+# "aprobado". Cualquier otro veredicto (pendiente/rechazado/
+# desactivada) NO marca nada y el freno sigue.
+#
+# EXCLUIDO SIEMPRE: clip 14 (freno de seguridad: estilo simple, no
+# v3 karaoke) — no se valida ni se marca por esta vía, se publique
+# o no por otro camino. Tampoco se publica nada en público.
+#
+# NO toca umbrales 50/90 ni Ajustes: solo lee los Ajustes (los
+# imprime, con require_preview y auto_publish_top en vivo) y marca
+# previews. Credenciales solo por entorno `sebastian`.
+name: Panel preview backfill 2026-11-19
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: sebastian
+    env:
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_TENANT: sebastian
+      PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache de pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
+      - name: Instalar ffmpeg y dependencias de vision
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install -q -e ".[vision]"
+      - name: Re-validar renders y marcar previews aprobados
+        run: |
+          cat > /tmp/preview_backfill.py <<'PYEOF'
+          import json, os, sys, urllib.error, urllib.request
+
+          BASE = os.environ["PANEL_BASE_URL"].rstrip("/")
+          USER = os.environ["PANEL_USERNAME"]
+          PW = os.environ["PANEL_PASSWORD"]
+          EXCLUIDOS = {14}  # freno de seguridad: estilo simple, no v3
+          UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
+
+          def req(method, path, body=None, token=None, binary=False):
+              data = json.dumps(body).encode() if body is not None else None
+              h = dict(UA)
+              if token:
+                  h["Authorization"] = f"Bearer {token}"
+              if data:
+                  h["Content-Type"] = "application/json"
+              r = urllib.request.Request(BASE + path, data=data, headers=h, method=method)
+              try:
+                  with urllib.request.urlopen(r, timeout=120) as resp:
+                      raw = resp.read()
+                      return raw if binary else json.loads(raw.decode("utf-8", "ignore") or "{}")
+              except urllib.error.HTTPError as e:
+                  raise RuntimeError(f"{method} {path} -> HTTP {e.code}: {e.read().decode('utf-8','ignore')[:300]}")
+
+          login = req("POST", "/api/auth/login", {"username": USER, "password": PW})
+          tok = login.get("token") or login.get("session_token") or login.get("session")
+          assert tok, "login sin token"
+          print("LOGIN: ok")
+          settings = req("GET", "/api/settings", token=tok)["settings"]
+          print("SETTINGS EN VIVO:", json.dumps(settings, ensure_ascii=False))
+          clips = req("GET", "/api/clips", token=tok).get("clips") or []
+          print(f"COLA: {len(clips)} clips")
+          from clipagent.final_review import maybe_review_final_clip
+          resultados = []
+          for c in sorted(clips, key=lambda x: x["id"]):
+              cid = c["id"]
+              if c.get("status") != "en_carpeta":
+                  continue
+              if c.get("preview_seen") == 1:
+                  print(f"clip {cid} ({(c.get('title') or '')[:40]}): ya visto, se salta")
+                  resultados.append((cid, "ya_visto"))
+                  continue
+              if cid in EXCLUIDOS:
+                  print(f"clip {cid} ({(c.get('title') or '')[:40]}): EXCLUIDO (freno de seguridad, no se valida ni se marca)")
+                  resultados.append((cid, "excluido_14"))
+                  continue
+              mp4 = f"/tmp/clip_{cid}.mp4"
+              try:
+                  raw = req("GET", f"/api/clips/{cid}/video", token=tok, binary=True)
+                  with open(mp4, "wb") as f:
+                      f.write(raw)
+                  print(f"clip {cid}: MP4 descargado ({len(raw)} bytes)")
+              except Exception as e:
+                  print(f"clip {cid}: SIN MP4 ({e})")
+                  resultados.append((cid, "sin_mp4"))
+                  continue
+              try:
+                  fr = maybe_review_final_clip(mp4, c.get("title") or "", transcript_text="", cfg={})
+              except Exception as e:  # noqa: BLE001 - sin veredicto no se marca
+                  fr = {"decision": "pendiente_revision", "motivo": f"excepcion: {e}"}
+              dec = fr.get("decision")
+              print(f"clip {cid}: final_review decision={dec} scores={json.dumps(fr.get('scores') or {}, ensure_ascii=False)} fallos={fr.get('fallos')} motivo={fr.get('motivo') or ''}")
+              if dec != "aprobado":
+                  resultados.append((cid, f"no_marcado:{dec}"))
+                  continue
+              try:
+                  req("POST", f"/api/clips/{cid}/preview-seen", token=tok)
+                  chk = req("GET", f"/api/clips/{cid}", token=tok).get("clip") or {}
+                  if chk.get("preview_seen") == 1:
+                      print(f"clip {cid}: MARCADO preview_seen=1 (verificado en vivo)")
+                      resultados.append((cid, "marcado"))
+                  else:
+                      print(f"clip {cid}: POST ok pero preview_seen sigue 0")
+                      resultados.append((cid, "marcado_sin_verificar"))
+              except Exception as e:
+                  print(f"clip {cid}: fallo al marcar ({e})")
+                  resultados.append((cid, "fallo_marcar"))
+          print("=== VEREDICTO BACKFILL ===")
+          for cid, r in resultados:
+              print(f"  clip {cid}: {r}")
+          marcados = [cid for cid, r in resultados if r == "marcado"]
+          print(f"MARCADOS: {marcados}")
+          PYEOF
+          python3 /tmp/preview_backfill.py
