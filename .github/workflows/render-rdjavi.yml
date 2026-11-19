@@ -4,12 +4,16 @@
 # runner ubuntu-latest tiene 4 vCPU (free tier, $0) y el tribunal estima
 # 2,5-3,5 min para este clip. Un solo pase (opción C, plantilla común
 # clipagent/rdjavi.py): layout + punch-in con overlay enable + subtítulos
-# karaoke al pie de la cámara + audio en una invocación, sin concat ni
-# segundo encode. El color de fondo lleva duración y la salida lleva -t
-# (sin eso ffmpeg no termina nunca: cola congelada de 193 s en p3220).
-# Subtítulos karaoke por defecto (2026-11-18): Alignment 8, MarginV 608,
-# banda 595..749 al pie de la cámara, nunca en el gameplay (ahí van los
-# subtítulos propios de GTA 6).
+# karaoke abajo del todo + título quemado en la franja + audio en una
+# invocación, sin concat ni segundo encode. El color de fondo lleva
+# duración y la salida lleva -t (sin eso ffmpeg no termina nunca: cola
+# congelada de 193 s en p3220).
+# Subtítulos karaoke por defecto (2026-11-18, corregido 20:13):
+# Alignment 2, MarginV 12, barra negra abajo del todo (y 1740..1920),
+# nunca sobre el gameplay (ahí van los subtítulos propios de GTA 6).
+# Título quemado en una sola línea en la franja negra entre la
+# webcam y el gameplay (y 702..800, 98 px), blanco Arial Black
+# 64 px reales (plantilla v2, 2026-11-18).
 #
 # Entrada: el intermedio h264 1080p30 ya transcodificado
 # (runs/2932415021-p3220/rdjavi/seg_1080p30.mp4, 74 MB, committeado
@@ -30,8 +34,8 @@ on:
         description: "Segmento de entrada (relativo al repo)"
         default: "runs/2932415021-p3220/rdjavi/seg_1080p30.mp4"
       ass:
-        description: "ASS de subtítulos karaoke al pie de la cámara (Alignment 8, MarginV 608)"
-        default: "runs/2932415021-p3220/rdjavi/subs_karaoke.ass"
+        description: "ASS karaoke + título quemado, layout Willyrex (Alignment 2, MarginV 12)"
+        default: "runs/2932415021-p3220/rdjavi/subs_willyrex.ass"
       gradient:
         description: "PNG gradiente Vice City"
         default: "runs/2932415021-p3220/rdjavi/vice_gradient.png"
@@ -64,7 +68,7 @@ jobs:
       - name: Instalar ffmpeg y fuentes
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-noto-core
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core python3-fonttools python3-pil
           # El ASS pide "Noto Sans Condensed"; si el paquete no la trae,
           # bajar la variable de google/fonts (fallback de libass si falla).
           if ! fc-list | grep -qi "Noto Sans Condensed"; then
@@ -74,6 +78,21 @@ jobs:
             fc-cache -f >/dev/null 2>&1 || true
           fi
           fc-list | grep -i "Noto Sans Condensed" | head -3 || echo "sin Noto Sans Condensed (libass usara fallback)"
+          # Arial Black GENUINA (plantilla v2, 2026-11-18): titulo y
+          # subtitulos usan SUBS_FONT = "Arial Black" (clipagent/rdjavi.py).
+          # No esta en apt: se baja el WOFF de cdnfonts (misma fuente que
+          # la instalada en la VM, Monotype Arial Black v2.35) y se
+          # convierte a TTF con fontTools; sin ella libass cae a otra
+          # fuente y el titulo/subs no salen iguales. Pillow (python3-pil)
+          # es para que fit_title() mida el ancho con el TTF real.
+          if ! fc-list | grep -qi "Arial Black"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/ariblk.woff \
+              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+            python3 -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')" || true
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
           ffmpeg -version | head -1
           python3 --version
 

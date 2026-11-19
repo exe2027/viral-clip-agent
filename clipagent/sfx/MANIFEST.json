@@ -1,0 +1,62 @@
+{
+  "audit": "SFX-AUDIT.md §5 (2026-11-18)",
+  "created": "2026-11-18",
+  "files": {
+    "airhorn.wav": {
+      "duration_s": 1.61,
+      "license": "CC0 (dominio publico). La pagina indica licencia CC0 y origen Freesound 414208 de jacksonacademyashmore (hecho en Audacity).",
+      "origin": "memesoundboards.org, 'airhorn sound effect', https://cdn.memesoundboards.org/sfx/airhorn-sound-effect.mp3",
+      "original_freesound": "https://freesound.org/s/414208/",
+      "peak_dbfs": -11.0,
+      "source_url": "https://www.memesoundboards.org/sound/airhorn-sound-effect/"
+    },
+    "bruh.wav": {
+      "duration_s": 2.02,
+      "license": "CC0 (dominio publico), segun soundinator.net: todos sus sonidos estan bajo CC0, sin atribucion ni uso comercial restringido.",
+      "origin": "Soundinator, sonido 'bruh' (bruhhh), https://cdn.soundinator.net/sounds/c9j1opmcgfqh.mp3",
+      "peak_dbfs": -11.0,
+      "source_url": "https://soundinator.net/for/youtube",
+      "substitution": "El Freesound recomendado en la auditoria (Autellaem 534387) no se pudo bajar: freesound.org devuelve 403 a bots y exige cuenta para descargar. Sustituido por el 'bruh' CC0 de Soundinator (misma funcion: fail tonto, regla 3)."
+    },
+    "riser.wav": {
+      "duration_s": 1.99,
+      "license": "Mixkit Sound Effects Free License (mixkit.co/license): gratis para proyectos comerciales y no comerciales, sin atribución. No se puede redistribuir el archivo suelto como stock ni dentro de un pack/plantilla.",
+      "origin": "Mixkit, 'Cinematic trailer riser' (id 790), recortado a los últimos 2,0 s (0,58-2,58 s) y normalizado con ganancia +11,3 dB y limitador -1 dBFS. Cola (último segundo) RMS -15,0 dBFS; ventana audible (últimos 0,5 s) RMS -13,3 dBFS; objetivo del mezclador -13,0 dBFS (no -11: el segundo del riser trae la voz del streamer y a -11 taparía la frase; ver sfx_mix.py).",
+      "source_url": "https://mixkit.co/free-sound-effects/riser/",
+      "processing": "Recorte + ganancia +11,3 dB + alimiter 0,89. Sin compresión adicional: la subida -29,5 -> -15,0 dBFS se conserva.",
+      "substitution": "El sintetizado anterior (ruido con lowpass + barrido) se sustituyó por el archivo real de Mixkit (2026-11-19, pedido del usuario: efectos reales, no sintetizados). Backup del sintetizado en /tmp/sfx-backup/riser_synth.wav."
+    },
+    "ding.wav": {
+      "duration_s": 1.0,
+      "license": "Mixkit Sound Effects Free License (mixkit.co/license): gratis para proyectos comerciales y no comerciales, sin atribución. No se puede redistribuir el archivo suelto como stock ni dentro de un pack/plantilla.",
+      "origin": "Mixkit, 'Bonus earned in video game' (id 2058), recortado a los primeros 1,0 s, ganancia +3,7 dB y limitador -1 dBFS (2026-11-19). Re-procesado 2026-11-19 (pedido del usuario: subir los dings para que se noten): tanh soft-clip T=0,7 + compresión ascendente p=0,9 + pico normalizado a -1,0 dBFS. Ventana audible (primeros 0,5 s) RMS -10,6 dBFS, pico -1,0 dBFS, crest 10,5 dB (antes 12,8 dB); centroide 3496 Hz. Objetivo del mezclador -11,5 dBFS. Backup del archivo anterior en clipagent/sfx/backup/ding_v13.wav.",
+      "source_url": "https://mixkit.co/free-sound-effects/discover/ding/",
+      "processing": "Recorte 0-1,0 s + volume +3,7 dB + alimiter 0,89 (2026-11-19); re-proceso 2026-11-19: y = sign(x)*|x|^0,9, tanh T=0,7, pico a -1,0 dBFS."
+    },
+    "whoosh.wav": {
+      "duration_s": 2.0,
+      "license": "Mixkit Sound Effects Free License (mixkit.co/license): gratis para proyectos comerciales y no comerciales, sin atribución. No se puede redistribuir el archivo suelto como stock ni dentro de un pack/plantilla.",
+      "origin": "Mixkit, 'Movie trailer whoosh hit' (id 2919), recortado a 1,5-3,5 s del original (4,53 s), ganancia +3,0 dB y limitador -1 dBFS. Sube -29,1 -> -25,5 -> -17,6 -> -13,4 dBFS por 0,5 s; ventana audible (últimos 0,5 s) RMS -13,4 dBFS, pico -1,0 dBFS. Re-procesado 2026-11-19 (pedido del usuario: subir el whoosh para que se note): tanh soft-clip T=0,7 + pico normalizado a -1,0 dBFS. Ventana audible RMS -11,1 dBFS, pico -1,0 dBFS, crest 10,1 dB (antes 12,4 dB). Objetivo del mezclador -11,5 dBFS. Backup del archivo anterior en clipagent/sfx/backup/whoosh_v13.wav.",
+      "source_url": "https://mixkit.co/free-sound-effects/discover/whoosh/",
+      "processing": "Recorte 1,5-3,5 s + volume +3,0 dB + alimiter 0,89. 0,1% de muestras cerca del límite. Re-proceso 2026-11-19: tanh T=0,7, pico a -1,0 dBFS."
+    },
+    "sad_trombone.wav": {
+      "duration_s": 2.5,
+      "license": "CC0 (dominio publico). La pagina indica licencia CC0 y grabacion original de TaranP via Freesound.",
+      "note": "Recortado de 3,19 s a 2,5 s (la cola a partir de s=2 esta a -26,8 dBFS, no se pierde frase).",
+      "origin": "memesoundboards.org, 'sad trombone sound effect', https://cdn.memesoundboards.org/sfx/sad-trombone-sound-effect.mp3",
+      "peak_dbfs": -11.0,
+      "source_url": "https://www.memesoundboards.org/sound/sad-trombone-sound-effect/"
+    },
+    "vine_boom.wav": {
+      "duration_s": 2.0,
+      "license": "Mixkit Sound Effects Free License (mixkit.co/license): gratis para proyectos comerciales y no comerciales, sin atribución. No se puede redistribuir el archivo suelto como stock ni dentro de un pack/plantilla.",
+      "origin": "Mixkit, 'Movie trailer epic impact' (id 2908), recortado a los primeros 2,0 s. Primer segundo RMS -11,0 dBFS, pico -3,6 dBFS (ya en el objetivo RMS del mezclador; ganancia 0 dB).",
+      "source_url": "https://mixkit.co/free-sound-effects/boom/",
+      "note": "Es un impacto de tráiler con ataque brillante (36% de energía >500 Hz; fracción ≤120 Hz 0,46), no un seno puro como el sintetizado anterior. Ese ataque es lo que lo hace audible en el parlante del celular (tramo de 100 ms a -15,7 dBFS tras highpass 250 Hz, mejor que el Mixkit 1143 con -20,7). El click añadido no aportaba nada medible y se descartó. Comparación 2908 vs 1143 medida el 2026-11-19.",
+      "substitution": "El sintetizado anterior (seno 120 -> 30 Hz) se sustituyó por el archivo real de Mixkit (2026-11-19, pedido del usuario: efectos reales, no sintetizados). Backup del sintetizado en /tmp/sfx-backup/vine_boom_synth.wav."
+    }
+  },
+  "note": "Objetivo de nivel por RMS (2026-11-19), no por pico: cada efecto tiene su target_rms_dbfs en sfx_mix.py y el mezclador aplica la ganancia (con techo de pico -1 dBFS). Boom (-11), riser (-13), ding y whoosh (-11,5) ya vienen normalizados a su objetivo; bruh/airhorn/trombone siguen normalizados por pico -11 dBFS como pedía la auditoría y el mezclador compensa con ganancia. Todos WAV 16-bit 44,1 kHz estéreo. Los rips con copyright (Roblox oof, error Windows XP, violín de TV, vine boom exacto de MyInstants) NO se usan: solo archivos CC0 / Mixkit License verificados en su página.",
+  "pack": "SFX inicial GTA 6 clips"
+}

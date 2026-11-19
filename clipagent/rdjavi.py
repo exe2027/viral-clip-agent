@@ -5,24 +5,46 @@ Un solo pase de ffmpeg, fondo desenfocado PRE-RENDERIZADO (una imagen
 fija por clip, cacheada) y subtitulos simples quemados en el mismo pase.
 Objetivo: un clip de ~48 s en pocos minutos, no en horas.
 
-Layout (reels de referencia Df4sy4bxlmr y Df4uyMVjDwq, decision del
-usuario 2026-11-18: estilo RDJavi TOTAL, DJ Mariio olvidado):
-  * Streamer ARRIBA centrado casi 1:1: 583x595 px (x=248, y=0),
-    ~54% ancho, ~31% alto, sobre fondo desenfocado morado/magenta +
-    gradiente atardecer Vice City (rosa-violeta-naranja).
-  * Gameplay ABAJO: y=749..1786 (39%-93%), 1080x1037, recorte 1:1.
-  * Barra negra abajo: y=1786..1920.
-  * Cortes duros; camara fija con un punch-in (zoom ~1,18x) en la
-    reaccion (por defecto 16-26 s del clip), con doble rama de
-    camara + overlay enable (opcion C, 2026-11-18): sin trim ni
-    concat de 3 tramos.
-  * Subtitulos KARAOKE por defecto (decision del usuario
-    2026-11-18 19:17): palabra por palabra, palabra activa
-    amarilla y resto blanco, 56 px negrita con contorno negro,
-    AL PIE DE LA CAMARA (Alignment 8, MarginV 608, banda
-    595..749), nunca en el gameplay, para no solapar los
-    subtitulos propios de GTA 6 (regla 2026-11-18 19:02).
-    Ver make_karaoke_ass(). Se queman en el mismo pase.
+Layout (reel de referencia @gta_vi_clips_v "Atropello una gaviota
+en GTA 6", decision del usuario 2026-11-18, CORREGIDO 20:13 con
+captura: la primera version ponia el titulo sobre la camara y NO
+era como Willyrex; REVISION v2 2026-11-18 21:01: la webcam
+llenaba poco, el titulo en 2 lineas con "GTA 6" sobraba y la
+franja negra era muy alta):
+  * Streamer ARRIBA a ANCHO COMPLETO: 1080x702 px (y=0..702),
+    COVER del rectangulo PiP (561x365 en p7775), sin barras
+    negras a los lados y sin cuadrado centrado: Rubius grande.
+    Sobre fondo desenfocado morado/magenta + gradiente
+    atardecer Vice City (hoy invisible: la webcam tapa todo
+    el ancho; el fondo queda por si la caja cambia).
+  * TITULO QUEMADO en UNA SOLA LINEA en la franja negra de
+    ancho completo ENTRE la webcam y el gameplay (y=702..800,
+    98 px): texto blanco Arial Black 64 px con contorno negro
+    grueso, centrado verticalmente en la franja. NUNCA "GTA 6"
+    delante (obvio y redundante: se limpia automaticamente) y
+    NUNCA dos lineas: si no cabe se acorta por palabras, nunca
+    se achica la letra por debajo de 64 px. Ver fit_title() /
+    add_burned_title().
+  * Gameplay ABAJO: y=800..1740 (940 px), recorte 1440x1252
+    (aspecto 1080:940, sin el aplastado vertical del 1:1
+    viejo). Zoom SUAVE 1,15x en el payoff (18-24 s, rampa de
+    2 s, anclado abajo para no recortar la zona de dialogo
+    del juego; la carta del payoff queda centrada).
+  * Subtitulos AMARILLOS FIJOS ABAJO DEL TODO, en la barra negra
+    y=1740..1920 (Alignment 2, MarginV 12): todo el texto amarillo
+    Arial Black 64 px con contorno negro grueso (6), como la
+    captura de Willyrex (en el ejemplo son mas grandes que los
+    56 px viejos). NUNCA sobre el gameplay: ahi van los
+    subtitulos propios de GTA 6 y se solaparian (REGLA DURA del
+    usuario 2026-11-18 20:13). Ver make_plain_ass(). Se queman
+    en el mismo pase. El karaoke palabra por palabra queda en
+    segundo plano (no se puede hacer con ese mismo estilo
+    amarillo: su resto blanco no es como la captura);
+    make_karaoke_ass() sigue disponible para otros usos.
+  * Cortes duros; camara con punch-in (zoom 1,30x, mas marcado
+    que el 1,18x anterior) en la reaccion (por defecto 16-26 s
+    del clip), con doble rama de camara + overlay enable
+    (opcion C, 2026-11-18): sin trim ni concat de 3 tramos.
 
 Por que es rapido (vs el render viejo de 4 pases):
   * 1 solo pase: layout + punch-in + subtitulos + audio en una
@@ -46,40 +68,125 @@ Por que es rapido (vs el render viejo de 4 pases):
 
 Uso:
     python -m clipagent.rdjavi --segment runs/.../segments/seg.mp4 \\
-        --start 0 --duration 48.01 --ass rdjavi/subs_simple.ass \\
-        --out clips/clip_rdjavi_subs.mp4 [--bg-frame 20] [--fps 30]
+        --start 0 --duration 48.02 --ass rdjavi/subs_simple.ass \\
+        --title "Rubius descubre los cromos coleccionables" \\
+        --cam-box 561:365:0:626 --cam-square 365:365:90:626 \\
+        --out clips/clip_rdjavi_subs.mp4 [--bg-frame 20] [--fps 60]
         [--preset veryfast] [--punch-in 16 26] [--no-punch-in]
+        [--game-zoom 18 24] [--no-game-zoom]
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
 
-# Geometria fija de la plantilla (1080x1920).
+# Geometria fija de la plantilla (1080x1920). Revision v2
+# (2026-11-18 21:01, pedido del usuario): la webcam LLENA la
+# banda superior de lado a lado (cover crop del rectangulo
+# PiP, sin barras negras ni cuadrado centrado: se veia muy
+# pequena), el titulo es UNA sola linea con letra mas grande
+# y la franja negra se achica.
 W, H = 1080, 1920
-CAM_W, CAM_H, CAM_X, CAM_Y = 583, 595, 248, 0
-BG_H = 749          # fondo desenfocado: y 0..749
-GAME_Y, GAME_H = 749, 1037   # gameplay: y 749..1786
-GAME_CROP = "1440:1440:620:0"  # recorte 1:1 centrado (x=620 evita el HUD izq.)
+CAM_W, CAM_H, CAM_X, CAM_Y = 1080, 702, 0, 0
+BG_H = 702          # fondo desenfocado: y 0..702 (detras de la webcam;
+                    # hoy invisible: la webcam cubre todo el ancho)
+GAME_Y, GAME_H = 800, 940    # gameplay: y 800..1740
+GAME_BOTTOM = GAME_Y + GAME_H  # 1740: empieza la barra negra inferior
+GAME_CROP = "1440:1252:620:94"  # recorte 1080:940 (sin aplastar: el
+    # 1:1 viejo escalado a 991 px aplastaba el gameplay ~8% en vertical)
 DEFAULT_CAM_BOX = "561:365:0:0"  # caja PiP del streamer en el segmento
-DEFAULT_CAM_SQUARE = "365:365:90:0"  # recorte cuadrado (cara centrada)
-# Recorte exacto del punch-in medido en p3220 (2026-11-18): el zoom
-# calculado (309:309:118:28) dejaba la cara 1 px descentrada; este es
-# el del script local verificado fotograma a fotograma (15,9/16,1 y
-# 25,9/26,1 s). Solo vale para DEFAULT_CAM_SQUARE; con otro recorte
-# se calcula con punch_crop().
-PUNCH_SQUARE_EXACT = "310:310:125:27"
-PUNCH_ZOOM = 1.18
+DEFAULT_CAM_SQUARE = "365:365:90:0"  # recorte cuadrado (cara centrada);
+    # en v2 solo se usa para el CENTRO DE LA CARA del punch-in
+# Punch-in de la webcam en la reaccion (por defecto 16-26 s):
+# zoom 1,30x, mas marcado que el 1,18x anterior. El recorte se
+# calcula centrado en la cara (ver punch_cover_crop); el exacto
+# de p3220 (310:310:125:27) era del cuadrado viejo y ya no vale.
+PUNCH_ZOOM = 1.30
+# Zoom SUAVE del gameplay en el payoff: 1,15x con rampa de 2 s
+# (sube 18->20, aguanta 20->22, baja 22->24). Anclado ABAJO: el
+# borde inferior del recorte no se mueve, asi no se recorta la
+# zona de dialogo del juego; la carta del payoff queda centrada
+# (medido en p7775: centro de la carta ~(1354, 795), dentro del
+# recorte con zoom 728..1952 x 282..1346).
+GAME_ZOOM = (18, 24)
+GAME_ZOOM_FACTOR = 1.15
 
-# Subtitulos al pie de la camara (regla del usuario 2026-11-18 19:02):
-# la webcam ocupa y 0..595 y el gameplay empieza en y 749, asi que el
-# texto cae en la banda 595..749. Alignment 8 = arriba-centrado,
-# MarginV medido desde arriba. Nunca en el gameplay: ahi van los
-# subtitulos propios de GTA 6 y se solaparian.
-SUBS_ALIGN = 8
-SUBS_MARGIN_V = 608
-SUBS_FONT = "Noto Sans"
+# Subtitulos ABAJO DEL TODO (correccion del usuario 2026-11-18
+# 20:13, layout Willyrex): en la barra negra y 1740..1920, debajo
+# del gameplay. Alignment 2 = abajo-centrado, MarginV medido desde
+# abajo. NUNCA sobre el gameplay: ahi van los subtitulos propios
+# de GTA 6 y se solaparian (regla dura). La version anterior los
+# ponia al pie de la camara (Alignment 8, MarginV 608) y NO era
+# como Willyrex.
+SUBS_ALIGN = 2
+SUBS_MARGIN_V = 12
+# Tipografia: Arial Black GENUINA, LA MISMA del ejemplo del
+# usuario (2026-11-18 20:33 y 20:47, captura del reel
+# @gta_vi_clips_v). Descargada de cdnfonts (ariblk, Monotype
+# Arial Black v2.35) e instalada en ~/.fonts/arial-black.ttf;
+# fc-list la resuelve como "Arial Black" (verificado 20:48).
+# Ancho a 56 px medido con PIL: las 2 lineas del titulo de
+# p7775 son 730/820 px (caben en los 1060 px utiles); la
+# Noto Sans Black (900) que se uso antes era solo parecida
+# (663/746 px) y el usuario la rechazo. Vale para titulo Y
+# subtitulos: los dos usan SUBS_FONT. OJO: la fuente vive en
+# la VM; un render en CI/GitHub Actions necesita el mismo
+# TTF instalado o libass cae a otra fuente.
+#
+# Calibracion libass (medido 2026-11-18 21:01, bug que explicaba
+# por que los subtitulos no se parecian al ejemplo aunque la
+# fuente fuera la misma): libass NO renderiza Fontsize como
+# pixeles EM (como PIL/FreeType), sino que hace que el span
+# hhea (ascent - descent) de la fuente sea igual a Fontsize.
+# Para Arial Black (upm 2048, hhea 2254/-634, span 2888) el
+# tamano real es Fontsize * 0,7091: un titulo a Fontsize 64 se
+# veia de 45 px reales y unos subtitulos a 56, de 40 px.
+# Verificado: Fontsize 90 renderiza 'Rubius descubre los
+# cromos' a 980 px de ancho (PIL a 64 px: 990 px); DejaVu Bold
+# tiene otro factor (0,859: span 2384/2048), asi que este
+# factor es DE ARIAL BLACK, no global. Los tamanos de esta
+# plantilla (SUBS_FONT_SIZE, TITLE_FONT_SIZE, OUTLINE) son
+# PIXELES REALES; ass_font_size() los convierte a unidades
+# ASS al escribir el estilo. Las posiciones (MarginV, bandas)
+# NO se escalan: son pixeles reales tal cual.
+ASS_FONT_SCALE = 2888 / 2048  # 1.41015625
+
+
+def ass_font_size(px):
+    """Fontsize ASS para que el texto se vea de ``px`` pixeles
+    reales (ver ASS_FONT_SCALE)."""
+    return max(1, round(px * ASS_FONT_SCALE))
+
+
+# Tamano de los subtitulos (v2 2026-11-18 21:01): 64 px REALES, no
+# 56 px: en la captura del ejemplo los subtitulos son mas
+# grandes; a 64 px la linea mas larga de p7775 mide 882 px
+# (< 1060 utiles), sin riesgo de envolver a 3 lineas. El ASS
+# lleva Fontsize 90 (= 64 * 1,4102, ver ass_font_size).
+SUBS_FONT = "Arial Black"
+SUBS_FONT_SIZE = 64
+SUBS_OUTLINE = 6  # contorno negro grueso, como la captura Willyrex
+SUBS_COLOR = "#FFFF00"  # amarillo fijo (todo el texto, no solo la activa)
+
+# Titulo quemado (2026-11-18 19:50, CORREGIDO 20:13, v2 21:01):
+# UNA SOLA LINEA en la franja negra de ancho completo ENTRE
+# la webcam y el gameplay (y 702..800, 98 px). Blanco, contorno
+# grueso (5 px reales). NUNCA "GTA 6" delante (se limpia en
+# clean_title_prefix) y NUNCA dos lineas: si no cabe se acorta
+# por palabras (ver fit_title), nunca se achica la letra por
+# debajo de 64 px reales. Se prueba 68 px primero y se baja a
+# 64 px si el titulo acortado no cabe. El ASS lleva Fontsize
+# 90/96 (= px * 1,4102, ver ass_font_size).
+TITLE_FONT_SIZE = 64
+TITLE_FONT_SIZES = (68, 64)
+TITLE_BAND_Y0 = 702
+TITLE_BAND_Y1 = 800
+TITLE_BAND_H = TITLE_BAND_Y1 - TITLE_BAND_Y0  # 98
+TITLE_MAX_W = 1060  # ancho util (1080 - 2*10 de margenes)
+TITLE_OUTLINE = 5
+TITLE_LINE_H = TITLE_FONT_SIZE + 12  # alto por linea con interlineado
 
 
 def _run(cmd, what):
@@ -110,32 +217,112 @@ def make_bg_still(segment, frame_t, cam_box, gradient_png, out_png):
     return out_png
 
 
-def punch_crop(square, zoom):
-    """Recorte cuadrado con zoom para el punch-in, centrado en la cara."""
-    w, h, x, y = (int(v) for v in square.replace(":", "x").split("x"))
-    nw = int(w / zoom)
-    nh = int(h / zoom)
-    nx = x + (w - nw) // 2
-    ny = y + (h - nh) // 2
-    return f"{nw}:{nh}:{nx}:{ny}"
+def _parse_crop(s):
+    """'w:h:x:y' -> (w, h, x, y) enteros."""
+    w, h, x, y = (int(v) for v in s.replace(":", "x").split("x"))
+    return w, h, x, y
 
 
-def build_filter(cam_square, punch_in, duration, ass_path, fps,
-                 game_crop=GAME_CROP):
+def _fmt_crop(w, h, x, y):
+    return f"{int(w)}:{int(h)}:{int(x)}:{int(y)}"
+
+
+def cam_cover_crop(cam_box, target_w=CAM_W, target_h=CAM_H):
+    """Recorte COVER del rectangulo PiP de la webcam a la banda
+    superior completa (1080x702): llena de lado a lado, sin
+    barras negras. Recorta el lado largo del rectangulo,
+    centrado; en p7775 (561x365) solo sobran 1-2 px de alto
+    (561:364:0:626). La cara queda donde estaba: el cuadrado
+    viejo (365:365:90:626) centraba la cara en x=272, y el
+    cover la deja en x~524 de 1080, centrada."""
+    w, h, x, y = _parse_crop(cam_box)
+    target_aspect = target_w / target_h
+    if w / h > target_aspect:
+        nw = int(h * target_aspect) // 2 * 2
+        return _fmt_crop(nw, h, x + (w - nw) // 2, y)
+    nh = int(w / target_aspect) // 2 * 2
+    return _fmt_crop(w, nh, x, y + (h - nh) // 2)
+
+
+def face_center(cam_square):
+    """Centro de la cara: centro del recorte cuadrado."""
+    w, h, x, y = _parse_crop(cam_square)
+    return x + w // 2, y + h // 2
+
+
+def punch_cover_crop(cover, cx, cy, zoom=PUNCH_ZOOM):
+    """Recorte del punch-in: zoom centrado en la cara, siempre
+    dentro del recorte cover (nunca fuera de el). En p7775:
+    cover 561:364:0:626 + cara (272, 808) + zoom 1,30 ->
+    430:280:57:668."""
+    w, h, x, y = _parse_crop(cover)
+    nw = max(2, int(w / zoom) // 2 * 2)
+    nh = max(2, int(h / zoom) // 2 * 2)
+    nx = min(max(cx - nw // 2, x), x + w - nw)
+    ny = min(max(cy - nh // 2, y), y + h - nh)
+    return _fmt_crop(nw, nh, nx, ny)
+
+
+def _game_filter(game_crop, game_zoom):
+    """Filtro de la rama del gameplay: recorte fijo + zoom SUAVE
+    en el payoff (scale con eval=frame + crop con ventana
+    animada).
+
+    Por que asi y no crop animado (2026-11-18 21:01): el crop
+    evalua w/h UNA VEZ en la configuracion (con t=NAN) y los
+    congela, asi que un crop=w='1440-216*f' nunca hace zoom
+    (probado: MAD 0,0 contra el estatico). Ademas, in_w/in_h
+    dentro del crop tambien son de configuracion:
+    '(in_w-1080)/2' se congela en 0 y el zoom queda anclado
+    arriba a la izquierda (probado: MAD 0,18 en offset (0,0)).
+    Lo que SI se evalua por fotograma: w/h del scale con
+    eval=frame, y x/y del crop cuando usan 't'. Por eso la
+    cadena es: crop fijo -> scale eval=frame -> crop con x/y
+    en funcion de t. La rampa usa if(between(...)) y NO
+    clip/min: con t=NAN, clip da NAN y el filtro no configura.
+
+    El zoom es 1,15x centrado en horizontal y anclado abajo:
+    el borde inferior del recorte no se mueve (no se recorta
+    la zona de dialogo del juego) y la carta del payoff queda
+    centrada (verificado en still: MAD 0,18 en offset (81,141)
+    contra el estatico escalado 1,15x). Sin game_zoom, recorte
+    fijo + escala estatica (igual que antes)."""
+    if not game_zoom:
+        return f"crop={game_crop},scale={W}:{GAME_H},setsar=1"
+    z0, z1 = (float(v) for v in game_zoom)
+    f = (f"if(between(t,{z0:g},{z0 + 2:g}),(t-{z0:g})/2,"
+         f"if(between(t,{z0 + 2:g},{z1 - 2:g}),1,"
+         f"if(between(t,{z1 - 2:g},{z1:g}),({z1:g}-t)/2,0)))")
+    k = GAME_ZOOM_FACTOR - 1  # 0.15
+    x_coef = W * k / 2         # 81: centra la ventana en horizontal
+    y_coef = GAME_H * k        # 141: ancla la ventana abajo
+    return (
+        f"crop={game_crop},"
+        f"scale=w='{W}*(1+{k:g}*{f})':h='{GAME_H}*(1+{k:g}*{f})':eval=frame,"
+        f"crop={W}:{GAME_H}:'{x_coef:g}*{f}':'{y_coef:g}*{f}',setsar=1"
+    )
+
+
+def build_filter(cam_box, cam_square, punch_in, duration, ass_path, fps,
+                 game_crop=GAME_CROP, game_zoom=GAME_ZOOM):
     """Grafo de un solo pase, opcion C (2026-11-18): doble rama de
     camara + overlay enable para el punch-in, sin trim ni concat.
 
-    El color de fondo lleva duracion (d=duration): sin ella es una
-    fuente infinita y ffmpeg no cierra nunca (cola congelada).
+    v2 (2026-11-18 21:01): la webcam es COVER a ancho completo
+    (1080x702, sin barras negras); el gameplay lleva zoom suave
+    en el payoff (ver _game_zoom_crop). El color de fondo lleva
+    duracion (d=duration): sin ella es una fuente infinita y
+    ffmpeg no cierra nunca (cola congelada).
     """
+    cover = cam_cover_crop(cam_box)
     p0, p1 = punch_in if punch_in else (None, None)
     if p0 is not None:
-        zc = (PUNCH_SQUARE_EXACT if cam_square == DEFAULT_CAM_SQUARE
-              else punch_crop(cam_square, PUNCH_ZOOM))
+        cx, cy = face_center(cam_square)
+        zc = punch_cover_crop(cover, cx, cy)
         head = (
             f"[0:v]fps={fps},split=2[cam_src][game_src];"
             f"[cam_src]split=2[cam_n][cam_z];"
-            f"[cam_n]crop={cam_square},scale={CAM_W}:{CAM_H},setsar=1[camN];"
+            f"[cam_n]crop={cover},scale={CAM_W}:{CAM_H},setsar=1[camN];"
             f"[cam_z]crop={zc},scale={CAM_W}:{CAM_H},setsar=1[camZ];")
         cam_overlay = (
             f"[step1][camN]overlay={CAM_X}:{CAM_Y}:"
@@ -145,12 +332,13 @@ def build_filter(cam_square, punch_in, duration, ass_path, fps,
     else:
         head = (
             f"[0:v]fps={fps},split=2[cam_src][game_src];"
-            f"[cam_src]crop={cam_square},scale={CAM_W}:{CAM_H},setsar=1[cam];")
+            f"[cam_src]crop={cover},scale={CAM_W}:{CAM_H},setsar=1[cam];")
         cam_overlay = (
             f"[step1][cam]overlay={CAM_X}:{CAM_Y}[step2];")
+    game_filt = _game_filter(game_crop, game_zoom)
     parts = [
         head,
-        f"[game_src]crop={game_crop},scale={W}:{GAME_H},setsar=1[game];"
+        f"[game_src]{game_filt}[game];"
         f"color=c=black:s={W}x{H}:r={fps}:d={duration}[base];"
         f"[base][1:v]overlay=0:0[step1];",
         cam_overlay,
@@ -165,17 +353,17 @@ def build_filter(cam_square, punch_in, duration, ass_path, fps,
 
 
 def build_render_cmd(segment, start, duration, ass_path, out_path, bg_png,
-                     cam_square=DEFAULT_CAM_SQUARE, punch_in=(16, 26),
-                     fps=30, preset="veryfast", crf=23,
-                     game_crop=GAME_CROP):
+                     cam_box=DEFAULT_CAM_BOX, cam_square=DEFAULT_CAM_SQUARE,
+                     punch_in=(16, 26), fps=30, preset="veryfast", crf=23,
+                     game_crop=GAME_CROP, game_zoom=GAME_ZOOM):
     """Comando ffmpeg del render RDJavi en un solo pase.
 
     La entrada ya lleva -t duration y la salida tambien: el -t de
     salida es el seguro por si alguna fuente del grafo no termina
     (sin el, un color sin duracion alargaba el render a 193 s).
     """
-    filt, vlabel = build_filter(cam_square, punch_in, duration, ass_path,
-                                fps, game_crop)
+    filt, vlabel = build_filter(cam_box, cam_square, punch_in, duration,
+                                ass_path, fps, game_crop, game_zoom)
     return ["ffmpeg", "-y", "-v", "error",
             "-ss", str(start), "-t", str(duration), "-i", segment,
             "-loop", "1", "-t", str(duration), "-i", bg_png,
@@ -187,29 +375,268 @@ def build_render_cmd(segment, start, duration, ass_path, out_path, bg_png,
             "-t", str(duration), out_path]
 
 
-def make_karaoke_ass(blocks, style, font_name=SUBS_FONT):
-    """ASS karaoke al pie de la camara a partir de bloques SRT.
+def _ass_time(t):
+    """Segundos -> H:MM:SS.cs (formato ASS)."""
+    t = max(0.0, float(t))
+    h, rem = divmod(t, 3600)
+    m, s = divmod(rem, 60)
+    return f"{int(h)}:{int(m):02d}:{s:05.2f}"
+
+
+_TITLE_PREFIX_RE = re.compile(r"^\s*(GTA\s*6|GTA6)\s*[:\-–—]?\s*",
+                               re.IGNORECASE)
+_ARIAL_BLACK_PATHS = (
+    os.path.expanduser("~/.fonts/arial-black.ttf"),
+    "/usr/share/fonts/truetype/arial-black.ttf",
+)
+
+
+def clean_title_prefix(title):
+    """Quita un 'GTA 6' inicial ('GTA 6:', 'GTA 6 -', 'GTA6 '):
+    es obvio y redundante (regla del usuario 2026-11-18 21:01).
+    Solo el prefijo inicial; un 'GTA 6' en medio del titulo
+    no se toca."""
+    return _TITLE_PREFIX_RE.sub("", title or "").strip()
+
+
+def _text_width_px(text, size):
+    """Ancho del texto en px con Arial Black real (PIL). Sin
+    PIL o sin el TTF, estimacion 0,60*size por caracter
+    (medido: 'Rubius descubre los cromos' a 64 px son 990 px,
+    0,595*size por caracter)."""
+    try:
+        from PIL import ImageFont
+        for path in _ARIAL_BLACK_PATHS:
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size).getlength(text)
+    except Exception:
+        pass
+    return len(text) * size * 0.60
+
+
+def fit_title(title, sizes=TITLE_FONT_SIZES, max_w=TITLE_MAX_W):
+    """Titulo en UNA SOLA LINEA (revision v2 2026-11-18 21:01):
+    limpia el prefijo 'GTA 6' y acorta por palabras hasta caber.
+    Prueba el tamano mas grande primero; se queda la variante
+    con MAS palabras y, en empate, la letra mas grande. La
+    letra nunca baja de sizes[-1]: antes acortar el titulo que
+    achicarla. Devuelve (texto, tamano) o (None, None).
+    Ej: 'GTA 6: Rubius descubre los cromos coleccionables' ->
+    ('Rubius descubre los cromos', 64): a 68 px solo caben
+    3 palabras ('Rubius descubre los'), a 64 px caben 4."""
+    words = clean_title_prefix(title).split()
+    if not words:
+        return None, None
+    limit = max_w - 2 * TITLE_OUTLINE  # el contorno ensancha el texto
+    best = None
+    for size in sizes:
+        kept = list(words)
+        while (len(kept) > 1
+               and _text_width_px(" ".join(kept), size) > limit):
+            kept.pop()
+        if _text_width_px(" ".join(kept), size) > limit:
+            continue
+        cand = (len(kept), size, " ".join(kept))
+        if (best is None or cand[0] > best[0]
+                or (cand[0] == best[0] and cand[1] > best[1])):
+            best = cand
+    if best is None:
+        return words[0], sizes[-1]
+    return best[2], best[1]
+
+
+def wrap_title(title, max_chars=None):
+    """Titulo en UNA SOLA LINEA (revision v2 2026-11-18 21:01):
+    nunca dos lineas y nunca con 'GTA 6' delante. Si no cabe,
+    se acorta por palabras (ver fit_title). Devuelve [linea]
+    por compatibilidad con el uso anterior. ``max_chars`` es
+    legado y ya no se usa: el ajuste es por ancho en px con
+    la fuente real."""
+    text, _size = fit_title(title)
+    return [text] if text else []
+
+
+def title_ass_lines(title, duration,
+                    font_size=None):
+    """Linea ASS del titulo quemado: estilo + evento 0..duration.
+
+    El titulo va en UNA SOLA LINEA, centrado verticalmente en
+    la franja negra entre la webcam y el gameplay (y 702..800):
+    a 64 px MarginV 714. Nunca dentro de la camara ni sobre los
+    subtitulos (que van abajo del todo). Blanco Arial Black,
+    contorno negro 5. El texto y el tamano los decide fit_title
+    (sin 'GTA 6' delante, acortado si no cabe en una linea).
+    """
+    text, size = fit_title(title)
+    if not text:
+        return None, None
+    size = font_size or size
+    line_h = int(size * 1.15)
+    margin_v = TITLE_BAND_Y0 + (TITLE_BAND_H - line_h) // 2
+    # ``size`` y TITLE_OUTLINE son pixeles REALES; el ASS lleva
+    # Fontsize/Outline convertidos (ver ASS_FONT_SCALE).
+    style = (
+        f"Style: Title,{SUBS_FONT},{ass_font_size(size)},&H00FFFFFF,"
+        f"&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,"
+        f"1,{ass_font_size(TITLE_OUTLINE)},0,8,10,10,{margin_v},1"
+    )
+    event = (f"Dialogue: 0,0:00:00.00,{_ass_time(duration)},Title,,"
+             f"0,0,0,,{text}")
+    return style, event
+
+
+def add_burned_title(ass_text, title, duration):
+    """Añade el titulo quemado a un ASS ya generado (karaoke).
+
+    Inserta el estilo Title despues del ultimo estilo existente
+    y el evento 0..duration al final. Sin titulo, devuelve el
+    ASS tal cual. No toca los eventos de subtitulos.
+
+    IDEMPOTENTE (bug 2026-11-18 20:47): si el ASS ya trae un
+    estilo Title (p. ej. generado por make_plain_ass con
+    title=... y luego --title en el CLI), NO se añade otro.
+    Dos eventos Title identicos no se superponen: libass los
+    apila por colision y el segundo titulo cae SOBRE el
+    gameplay, tapandolo. Un solo titulo, siempre.
+    """
+    if not title or not ass_text:
+        return ass_text
+    if "Style: Title," in ass_text:
+        return ass_text
+    style, event = title_ass_lines(title, duration)
+    if style is None:
+        return ass_text
+    lines = ass_text.rstrip("\n").split("\n")
+    style_idx = max((i for i, ln in enumerate(lines)
+                     if ln.startswith("Style:")), default=None)
+    if style_idx is None:
+        return ass_text
+    lines.insert(style_idx + 1, style)
+    lines.append(event)
+    return "\n".join(lines) + "\n"
+
+
+def make_karaoke_ass(blocks, style, font_name=SUBS_FONT,
+                     title=None, duration=None):
+    """ASS karaoke ABAJO DEL TODO a partir de bloques SRT.
 
     Usa el estilo karaoke de la config (default, 2026-11-18) con
-    Alignment 8 y MarginV 608: el subtitulo queda en la banda
-    595..749, justo bajo la webcam y siempre por encima del
-    gameplay. El generador base pone Alignment 2 / MarginV 230
-    (parte baja del gameplay); aqui se fuerza la posicion RDJavi.
+    Alignment 2 y MarginV 12: el subtitulo queda en la barra negra
+    y 1740..1920, debajo del gameplay, nunca sobre el (correccion
+    Willyrex del usuario 2026-11-18 20:13; la version anterior lo
+    ponia al pie de la camara, Alignment 8 / MarginV 608). El
+    generador base pone Alignment 2 / MarginV 230 (parte baja del
+    gameplay); aqui se fuerza la posicion RDJavi.
+
+    Con ``title`` se quema ademas el titulo del clip en la franja
+    negra entre la webcam y el gameplay (ver add_burned_title):
+    es el comportamiento por defecto de la plantilla desde
+    2026-11-18 19:50. ``duration`` es la duracion del clip; si no
+    se pasa, se toma el fin del ultimo bloque.
     """
     from .transcribe import srt_to_karaoke_ass
-    return srt_to_karaoke_ass(blocks, style, font_name=font_name,
-                              alignment=SUBS_ALIGN,
-                              margin_v=SUBS_MARGIN_V)
+    ass = srt_to_karaoke_ass(blocks, style, font_name=font_name,
+                             alignment=SUBS_ALIGN,
+                             margin_v=SUBS_MARGIN_V)
+    if title:
+        if duration is None:
+            ends = [b[1] for b in blocks
+                    if len(b) > 1 and isinstance(b[1], (int, float))]
+            duration = max(ends) if ends else 0.0
+        ass = add_burned_title(ass, title, duration)
+    return ass
+
+
+def make_plain_ass(blocks, title=None, duration=None, max_end=None,
+                   font_name=SUBS_FONT, font_size=SUBS_FONT_SIZE):
+    """ASS de subtitulos FIJOS amarillos estilo Willyrex.
+
+    Estilo por defecto de la plantilla desde la correccion del
+    usuario 2026-11-18 20:13 (captura del reel @gta_vi_clips_v),
+    con tamano subido a 64 px en la revision v2 (2026-11-18
+    21:01: en el ejemplo los subtitulos son mas grandes que
+    los 56 px viejos): todo el texto amarillo 64 px con contorno
+    negro grueso (6), Arial Black (la tipografia del ejemplo,
+    2026-11-18 20:33 y 20:47), ABAJO DEL TODO en la barra negra
+    (Alignment 2, MarginV 12), nunca sobre el gameplay. Sin
+    etiquetas \\k: el karaoke palabra por palabra no se puede
+    hacer con este estilo (su resto blanco no es como la
+    captura), asi que va fijo amarillo.
+
+    ``blocks`` son (start, end, text) como en parse_srt;
+    ``max_end`` recorta los bloques fuera del clip. Con
+    ``title`` se quema ademas el titulo en la franja (ver
+    add_burned_title). Las llaves se neutralizan: en ASS
+    serian etiquetas de anulacion.
+    """
+    from .transcribe import hex_to_ass_color
+    yellow = hex_to_ass_color(SUBS_COLOR, 1.0)
+    black = hex_to_ass_color("#000000", 1.0)
+    transparent = hex_to_ass_color("#000000", 0.0)
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 1080\n"
+        "PlayResY: 1920\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, "
+        "SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+        "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, "
+        "MarginV, Encoding\n"
+        # ``font_size`` y SUBS_OUTLINE son pixeles REALES; el ASS
+        # lleva Fontsize/Outline convertidos (ver ASS_FONT_SCALE).
+        f"Style: Subs,{font_name},{ass_font_size(font_size)},"
+        f"{yellow},{yellow},"
+        f"{black},{transparent},-1,0,0,0,100,100,0,0,1,"
+        f"{ass_font_size(SUBS_OUTLINE)},"
+        f"0,{SUBS_ALIGN},10,10,{SUBS_MARGIN_V},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+        "MarginV, Effect, Text\n"
+    )
+    lines = [header]
+    for start, end, text in blocks:
+        if max_end is not None and start >= max_end:
+            continue
+        if end <= 0:
+            continue
+        start = max(0.0, start)
+        if max_end is not None:
+            end = min(end, max_end)
+        if end <= start:
+            continue
+        clean = (text.replace("{", "(").replace("}", ")")
+                 .replace("\\N", " ").strip())
+        if not clean:
+            continue
+        lines.append(
+            f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Subs,,"
+            f"0,0,0,,{clean}\n"
+        )
+    ass = "".join(lines)
+    if title:
+        if duration is None:
+            ends = [b[1] for b in blocks
+                    if len(b) > 1 and isinstance(b[1], (int, float))]
+            duration = max(ends) if ends else 0.0
+        ass = add_burned_title(ass, title, duration)
+    return ass
 
 
 def render(segment, start, duration, ass_path, out_path, bg_png,
-           cam_square=DEFAULT_CAM_SQUARE, punch_in=(16, 26),
-           fps=30, preset="veryfast", crf=23, game_crop=GAME_CROP):
+           cam_box=DEFAULT_CAM_BOX, cam_square=DEFAULT_CAM_SQUARE,
+           punch_in=(16, 26), fps=30, preset="veryfast", crf=23,
+           game_crop=GAME_CROP, game_zoom=GAME_ZOOM):
     """Render RDJavi en un solo pase. Devuelve los segundos que tardo."""
     cmd = build_render_cmd(segment, start, duration, ass_path, out_path,
-                           bg_png, cam_square=cam_square,
+                           bg_png, cam_box=cam_box, cam_square=cam_square,
                            punch_in=punch_in, fps=fps, preset=preset,
-                           crf=crf, game_crop=game_crop)
+                           crf=crf, game_crop=game_crop,
+                           game_zoom=game_zoom)
     return _run(cmd, "render RDJavi")
 
 
@@ -219,23 +646,59 @@ def main(argv=None):
     p.add_argument("--start", type=float, default=0)
     p.add_argument("--duration", type=float, required=True)
     p.add_argument("--ass", default=None, help="ASS de subtitulos simples")
+    p.add_argument("--title", default=None,
+                   help="Titulo a quemar en la franja negra entre la "
+                        "webcam y el gameplay (por defecto de la "
+                        "plantilla; ver --no-title)")
+    p.add_argument("--no-title", action="store_true",
+                   help="No quemar titulo aunque se pase --title")
     p.add_argument("--out", required=True)
     p.add_argument("--bg", default=None, help="PNG de fondo ya hecho")
     p.add_argument("--gradient", default=None, help="PNG gradiente Vice City")
     p.add_argument("--bg-frame", type=float, default=20,
                    help="Segundo del clip para el fondo (default 20)")
-    p.add_argument("--cam-box", default=DEFAULT_CAM_BOX)
-    p.add_argument("--cam-square", default=DEFAULT_CAM_SQUARE)
+    # Sin default silencioso: los defaults son la caja de p3220
+    # (webcam arriba a la izquierda) y usarlos en otro clip
+    # RECORTA JUEGO en la banda de la webcam, no al streamer
+    # (bug 2026-11-18 20:47 en p7775: el re-render _black se hizo
+    # sin --cam-square y la webcam salio juego). Si no se pasan,
+    # se usan los de p3220 PERO con un aviso bien visible.
+    p.add_argument("--cam-box", default=None)
+    p.add_argument("--cam-square", default=None)
     p.add_argument("--game-crop", default=GAME_CROP,
                    help="Recorte 1:1 del gameplay (default 1440:1440:620:0 "
                         "para segmentos 2560x1440; 1080:1080:465:0 si el "
                         "segmento se pre-transcodifico a 1920x1080)")
     p.add_argument("--punch-in", type=float, nargs=2, default=[16, 26])
     p.add_argument("--no-punch-in", action="store_true")
+    p.add_argument("--game-zoom", type=float, nargs=2, default=[18, 24],
+                   help="Ventana del zoom suave del gameplay en el payoff "
+                        "(default 18 24)")
+    p.add_argument("--no-game-zoom", action="store_true",
+                   help="Sin zoom del gameplay en el payoff")
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--preset", default="veryfast")
     p.add_argument("--crf", type=int, default=23)
     args = p.parse_args(argv)
+
+    # Los defaults son la caja de p3220 (webcam arriba a la
+    # izquierda). Si no se pasaron, avisar FUERTE: en p7775 la
+    # webcam esta abajo a la izquierda (561:365:0:626 /
+    # 365:365:90:626) y el default recorta juego en la banda
+    # de la webcam (bug 2026-11-18 20:47).
+    cam_box = args.cam_box or DEFAULT_CAM_BOX
+    cam_square = args.cam_square or DEFAULT_CAM_SQUARE
+    if args.cam_box is None or args.cam_square is None:
+        print("AVISO: --cam-box/--cam-square no especificados: "
+              "usando los de p3220 (webcam arriba a la izquierda, "
+              f"cam-box {DEFAULT_CAM_BOX} / cam-square "
+              f"{DEFAULT_CAM_SQUARE}). Si la webcam de este clip "
+              "esta en otro sitio, pasa los valores medidos "
+              "(p7775: --cam-box 561:365:0:626 --cam-square "
+              "365:365:90:626); si no, la banda de la webcam "
+              "muestra JUEGO, no al streamer.",
+              file=sys.stderr)
+    print(f"cam-box {cam_box} / cam-square {cam_square}")
 
     workdir = os.path.dirname(os.path.abspath(args.out))
     bg = args.bg
@@ -245,14 +708,27 @@ def main(argv=None):
         bg = os.path.join(workdir, "bg.png")
         t0 = time.time()
         make_bg_still(args.segment, args.start + args.bg_frame,
-                      args.cam_box, args.gradient, bg)
+                      cam_box, args.gradient, bg)
         print(f"fondo pre-renderizado: {time.time()-t0:.1f} s -> {bg}")
+    ass_path = args.ass
+    if args.title and not args.no_title:
+        # Titulo quemado por defecto: se inyecta en una copia del
+        # ASS (el original no se toca) y se quema en el mismo pase.
+        with open(args.ass, encoding="utf-8") as f:
+            base_ass = f.read()
+        titled = add_burned_title(base_ass, args.title, args.duration)
+        ass_path = os.path.join(workdir, "subs_title.ass")
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(titled)
+        print(f"titulo quemado: {wrap_title(args.title)!r}")
     punch = None if args.no_punch_in else tuple(args.punch_in)
+    game_zoom = None if args.no_game_zoom else tuple(args.game_zoom)
     t0 = time.time()
-    dt = render(args.segment, args.start, args.duration, args.ass,
-                args.out, bg, cam_square=args.cam_square, punch_in=punch,
-                fps=args.fps, preset=args.preset, crf=args.crf,
-                game_crop=args.game_crop)
+    dt = render(args.segment, args.start, args.duration, ass_path,
+                args.out, bg, cam_box=cam_box, cam_square=cam_square,
+                punch_in=punch, fps=args.fps, preset=args.preset,
+                crf=args.crf, game_crop=args.game_crop,
+                game_zoom=game_zoom)
     print(f"render RDJavi: {dt:.1f} s ({args.duration:.1f} s de clip, "
           f"{args.duration/dt:.2f}x) -> {args.out}")
     return 0

@@ -94,8 +94,13 @@ def status_of(score: int) -> str:
 
 
 def _floor_total(value: float) -> int:
-    """Entero sin redondeo hacia arriba: 89,6 es 89, no 90."""
-    return int(math.floor(value))
+    """Entero sin redondeo hacia arriba: 89,6 es 89, no 90.
+
+    El redondeo a 9 decimales quita el polvo de coma flotante de
+    la renormalización de pesos (99,9999999999 -> 100, no 99):
+    94,99 sigue siendo 94.
+    """
+    return int(math.floor(round(value, 9)))
 
 
 def _words(text):

@@ -179,7 +179,9 @@ def instagram_cover(frames, out_path=None, vision_choice=None, vision_result=Non
 
 
 # Miniatura estilo GTA 6 / Vice City (2026-11-18, orden del usuario):
-# el texto de THUMBNAIL_TEXTS se quema sobre la portada con
+# el texto de miniatura (el del momento, no una exclamación
+# genérica — regla endurecida 2026-11-18, ver
+# metadata.GENERIC_THUMBNAIL_TEXTS) se quema sobre la portada con
 # tipografía condensada negrita, blanco con contorno negro grueso y
 # sombra rosa neón, centrado sobre el gameplay (y=780: bajo la
 # webcam RDJavi, 0-730, sin tapar la cara). La condensada es Noto
@@ -206,16 +208,25 @@ def thumbnail_with_text(frame_path, text, out_path=None, fontsize=None,
     """Quema el texto de miniatura (estilo GTA 6) sobre un fotograma.
 
     frame_path: portada 1080x1920 (la elegida por Gemini o el payoff).
-    text: uno de THUMBNAIL_TEXTS (<=3 palabras, en MAYÚSCULAS).
+    text: texto del momento, 1-4 palabras en MAYÚSCULAS, que nombra
+    el momento concreto (no una exclamación genérica: ver
+    metadata.GENERIC_THUMBNAIL_TEXTS).
     Devuelve {"path", "text", "fontfile"}. El texto va centrado,
     condensado negrita, blanco con contorno negro y sombra rosa
     neón, sobre el gameplay (no tapa la cara del streamer).
     """
-    from .metadata import THUMBNAIL_TEXTS
+    from .metadata import GENERIC_THUMBNAIL_TEXTS, _norm_title
     frame_path = Path(frame_path)
-    if not text or str(text).strip() not in THUMBNAIL_TEXTS:
-        raise ValueError(f"texto de miniatura no válido: {text!r} "
-                         f"(usa uno de {THUMBNAIL_TEXTS})")
+    text = str(text or "").strip()
+    words = text.replace("¡", "").replace("!", "").split()
+    generic = _norm_title(text).upper() in {
+        _norm_title(t).upper() for t in GENERIC_THUMBNAIL_TEXTS}
+    if (not text or not 1 <= len(words) <= 4 or generic
+            or text != text.upper()):
+        raise ValueError(
+            f"texto de miniatura no válido: {text!r} (1-4 palabras en "
+            "MAYÚSCULAS que nombren el momento, no una exclamación "
+            "genérica)")
     fontfile = (THUMBNAIL_TEXT_FONTFILE
                 if Path(THUMBNAIL_TEXT_FONTFILE).exists()
                 else THUMBNAIL_TEXT_FONTFILE_FALLBACK)
@@ -255,7 +266,7 @@ def main():
     p.add_argument("--game", default=None, help="Juego del clip")
     p.add_argument("--model", default=None, help="Modelo de Gemini (default: gemini-2.5-flash-lite)")
     p.add_argument("--vision-out", default=None, help="Dónde guardar el resultado de la visión (default: <out-dir>/vision.json)")
-    p.add_argument("--text", default=None, help="Texto de miniatura estilo GTA 6 (uno de THUMBNAIL_TEXTS): lo quema sobre la portada con tipografía condensada neón")
+    p.add_argument("--text", default=None, help="Texto de miniatura estilo GTA 6 (1-4 palabras en MAYÚSCULAS que nombren el momento): lo quema sobre la portada con tipografía condensada neón")
     args = p.parse_args()
 
     payoff = args.payoff

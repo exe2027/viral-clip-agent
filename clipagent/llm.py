@@ -323,7 +323,11 @@ def make_seo_variant(client, lang="es"):
         if worst == "thumbnail":
             prompt = ("Escribe un texto corto (máx. 4 palabras) para la "
                       f"miniatura de un Short sobre GTA 6 con este título: "
-                      f"{title}. Devuelve SOLO el texto.")
+                      f"{title}. El texto tiene que nombrar el momento "
+                      "concreto de este Short (usa la descripción: "
+                      f"{desc[:200]}), no una exclamación genérica como "
+                      "'¡QUÉ LOCURA!' o '¡INCREÍBLE!'. "
+                      "Devuelve SOLO el texto.")
             new = _clean_title(client.generate(prompt))
             if not new:
                 return None

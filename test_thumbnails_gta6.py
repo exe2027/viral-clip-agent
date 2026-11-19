@@ -3,13 +3,24 @@
 Texto de miniatura y elección del fotograma por Gemini con estética
 GTA 6 / Vice City: neón rosa-violeta-naranja, tipografía condensada,
 palmeras y escenario del juego.
+
+Regla endurecida 2026-11-18: el texto de miniatura NOMBRA el
+momento concreto del clip (qué pasó, qué objeto, qué reacción);
+las exclamaciones genéricas ("¡QUÉ LOCURA!", "VICE CITY", ...)
+están prohibidas y ya no hay lista fija de textos entre los que
+elegir: el texto se deriva de las palabras del propio momento.
 """
 import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
-from clipagent.metadata import THUMBNAIL_STYLE, THUMBNAIL_TEXTS, _best_thumbnail_text
+from clipagent.metadata import (
+    GENERIC_THUMBNAIL_TEXTS,
+    THUMBNAIL_STYLE,
+    _best_thumbnail_text,
+    _moment_thumbnail_text,
+)
 from clipagent.vision import _build_prompt
 
 
@@ -18,15 +29,35 @@ def _words(text):
 
 
 class TestTextosMiniaturaGta6(unittest.TestCase):
-    def test_textos_cortos_y_con_sabor_gta6(self):
-        self.assertIn("VICE CITY", THUMBNAIL_TEXTS)
-        self.assertIn("¡QUÉ LOCURA!", THUMBNAIL_TEXTS)
-        for text in THUMBNAIL_TEXTS:
-            # La puntuación SEO premia <=3 palabras (+40). Las
-            # mayúsculas son estilo del canal (<=2 en MAYÚSCULAS
-            # +30; con 3 solo +10, no es una regla dura).
-            self.assertLessEqual(len(_words(text)), 3, text)
-            self.assertEqual(text, text.upper(), text)
+    def test_exclamaciones_genericas_prohibidas(self):
+        for text in ("¡QUÉ LOCURA!", "¡INCREÍBLE!", "¡NO LO CREO!",
+                     "NO PUEDE SER", "VICE CITY", "MIRA ESTO",
+                     "ESPERA EL FINAL"):
+            self.assertIn(text, GENERIC_THUMBNAIL_TEXTS, text)
+
+    def test_texto_del_momento_no_es_generico(self):
+        card = {"transcript_text": "¡Goti! ¡Se puede coleccionar "
+                "cartas, gente! ¡A lo mejor hay cartas legendarias!",
+                "what": "Rubius descubre los cromos coleccionables",
+                "quote_streamer": {"text": "¡Se puede coleccionar!"}}
+        thumb = _moment_thumbnail_text(
+            card, "GTA 6: Rubius descubre los cromos coleccionables",
+            streamer="rubius", game_label="GTA 6")
+        self.assertTrue(thumb, "sin texto del momento")
+        self.assertLessEqual(len(_words(thumb)), 3, thumb)
+        self.assertEqual(thumb, thumb.upper(), thumb)
+        self.assertNotIn(thumb, GENERIC_THUMBNAIL_TEXTS)
+        # Nombra el momento (cartas legendarias) sin repetir el título.
+        self.assertIn("CARTAS", thumb)
+        self.assertNotIn("CROMOS", thumb)
+        self.assertNotIn("COLECCIONABLES", thumb)
+
+    def test_sin_palabras_del_momento_no_hay_texto_inventado(self):
+        card = {"transcript_text": "", "what": "", "quote_streamer": {}}
+        self.assertEqual(
+            _moment_thumbnail_text(card, "GTA 6: Rubius", streamer="rubius",
+                                   game_label="GTA 6"),
+            "")
 
     def test_estilo_gta6_definido(self):
         self.assertEqual(THUMBNAIL_STYLE["name"], "gta6")
@@ -36,9 +67,12 @@ class TestTextosMiniaturaGta6(unittest.TestCase):
         self.assertIn("#FF9E00", THUMBNAIL_STYLE["colors"])
         self.assertIn("palmeras", THUMBNAIL_STYLE["elements"])
 
-    def test_mejor_texto_sigue_eligiendo_de_la_lista(self):
-        best = _best_thumbnail_text("VICE CITY", "Rubius se ríe en Vice City")
-        self.assertIn(best, THUMBNAIL_TEXTS)
+    def test_mejor_texto_devuelve_el_del_momento_tal_cual(self):
+        best = _best_thumbnail_text("¡CARTAS LEGENDARIAS!",
+                                    "GTA 6: Rubius descubre los cromos")
+        self.assertEqual(best, "¡CARTAS LEGENDARIAS!")
+        self.assertEqual(_best_thumbnail_text("¡QUÉ LOCURA!", "título"), "")
+        self.assertEqual(_best_thumbnail_text("", "título"), "")
 
 
 class TestPromptGeminiGta6(unittest.TestCase):
@@ -67,7 +101,8 @@ class TestQuemadoTextoMiniatura(unittest.TestCase):
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
                         "-i", "color=c=0x2a1a4a:size=1080x1920:duration=0.1",
                         "-frames:v", "1", src], check=True)
-        out = thumbnail_with_text(src, "VICE CITY", "/tmp/test-thumb-gta6.jpg")
+        out = thumbnail_with_text(src, "¡CROMOS COLECCIONABLES!",
+                                  "/tmp/test-thumb-gta6.jpg")
         self.assertTrue(Path(out["path"]).exists())
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -75,10 +110,14 @@ class TestQuemadoTextoMiniatura(unittest.TestCase):
              out["path"]], capture_output=True, text=True, check=True)
         self.assertEqual(probe.stdout.strip(), "1080,1920")
 
-    def test_texto_fuera_de_lista_se_rechaza(self):
+    def test_texto_generico_se_rechaza(self):
         from clipagent.thumbnails import thumbnail_with_text
         with self.assertRaises(ValueError):
-            thumbnail_with_text("/tmp/test-thumb-src.jpg", "TEXTO INVENTADO")
+            thumbnail_with_text("/tmp/test-thumb-src.jpg", "¡QUÉ LOCURA!")
+        with self.assertRaises(ValueError):
+            # Más de 4 palabras tampoco vale.
+            thumbnail_with_text("/tmp/test-thumb-src.jpg",
+                                "ESTO NO TE LO VAS A CREER AMIGO")
 
 
 if __name__ == "__main__":

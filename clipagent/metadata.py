@@ -1292,17 +1292,107 @@ MAX_TAGS = 15
 
 # 7.5: textos de miniatura entre los que elegir (el que mejor puntúe
 # contra el título: sin palabras repetidas, <=2 en MAYÚSCULAS).
-# Estilo GTA 6 / Vice City (2026-11-18, orden del usuario): textos
-# cortos y de reacción, todos <=3 palabras; el RENDER (cuando se
-# quema sobre la portada) usa tipografía condensada, neón
-# rosa/violeta/naranja y estética Vice City (ver THUMBNAIL_STYLE
-# y thumbnails.thumbnail_with_text).
-THUMBNAIL_TEXTS = ("NO PUEDE SER", "¡QUÉ LOCURA!", "VICE CITY",
-                   "ESPERA EL FINAL", "LA REACCIÓN", "MIRA ESTO")
+# Textos de miniatura GENÉRICOS, PROHIBIDOS (2026-11-18, regla
+# endurecida por el usuario): exclamaciones que no nombran el
+# momento concreto del clip. Ni el prompt de Gemini (ver llm.py)
+# ni el fallback de reglas pueden devolverlos: el texto se deriva
+# de las palabras del propio momento (ver _moment_thumbnail_text).
+# El RENDER (cuando se quema sobre la portada) usa tipografía
+# condensada, neón rosa/violeta/naranja y estética Vice City
+# (ver THUMBNAIL_STYLE y thumbnails.thumbnail_with_text).
+GENERIC_THUMBNAIL_TEXTS = frozenset({
+    "NO PUEDE SER", "¡QUÉ LOCURA!", "VICE CITY", "ESPERA EL FINAL",
+    "LA REACCIÓN", "MIRA ESTO", "¡INCREÍBLE!", "¡NO LO CREO!",
+    "NO WAY", "WAIT FOR IT", "CHAT REACTION", "UNREAL", "INSANE",
+    "WOW",
+})
+
+# Los mismos, normalizados (sin tildes ni puntuación, en
+# MAYÚSCULAS) para compararlos con cualquier texto candidato.
+_GENERIC_THUMBNAIL_NORM = frozenset(
+    _norm_title(t).upper() for t in GENERIC_THUMBNAIL_TEXTS)
+
+# Palabras que nunca van en un texto de miniatura derivado del
+# momento: artículos/preposiciones, verbos vagos y exclamaciones
+# genéricas. Solo quedan sustantivos/adjetivos con contenido: el
+# objeto del momento ("cartas legendarias", "gaviota", "cromos").
+_THUMB_DROP_WORDS = frozenset("""
+el la los las un una unos unas de del en con por para a al se su sus
+este esta estos estas eso que y o es son fue hay mas muy ya no si mi tu
+le lo me te nos les cuando como pero
+descubre descubrir encuentra encontrar consigue conseguir pierde perder
+gana ganar mata matar roba robar compra comprar vende vender juega jugar
+hace hacer dice decir mira mirar pasa pasar llega llegar sale salir entra
+entrar coge coger agarra agarrar tira tirar rompe romper explota explotar
+rie reir llora llorar grita gritar corre correr salta saltar conduce
+conducir atropella atropellar choca chocar vuela volar nada nadar duerme
+dormir come comer bebe beber habla hablar canta cantar baila bailar
+graba grabar reacciona reaccionar queda quedar pone poner da dar va ir
+viene venir esta estar tiene tener ve ver oye oir prueba probar intenta
+intentar logra lograr puede puedo puedes creer cree acaba mejor claro
+gente despues antes luego siempre nunca tambien tampoco solo nada todo
+todos increible increíble locura imposible wow jaja jajaja
+discovers finds gets loses wins kills steals buys sells plays makes says
+looks happens comes goes takes breaks explodes laughs cries screams runs
+jumps drives hits flies sleeps eats talks sings reacts tries fails
+cannot believe incredible insane unreal wow haha chat
+""".split())
+
+
+def _thumb_content_words(text, extra_drop=()):
+    """Palabras con contenido de un texto, en orden de aparición y
+    sin duplicados: normalizadas (sin tildes ni puntuación) para
+    comparar, quitando las de _THUMB_DROP_WORDS y extra_drop."""
+    if not text:
+        return []
+    drop = _THUMB_DROP_WORDS | set(extra_drop)
+    out = []
+    for w in _norm_title(text).split():
+        if len(w) < 2 or w in drop or w.isdigit() or w in out:
+            continue
+        out.append(w)
+    return out
+
+
+def _moment_thumbnail_text(card, title, streamer=None, game_label=None):
+    """Texto de miniatura que nombra el momento concreto (2026-11-18,
+    regla endurecida por el usuario): se deriva de las palabras del
+    propio momento — primero la transcripción (lo que dijo el
+    streamer), luego su cita, luego `what` — quitando juego,
+    streamer, palabras del título y exclamaciones genéricas. Máx. 3
+    palabras (las más frecuentes, en orden de aparición), en
+    MAYÚSCULAS con ¡!. Sin palabras del momento, "" (sin texto
+    inventado: mejor sin miniatura que una genérica).
+    """
+    drop = set()
+    for src in (game_label, streamer):
+        if src:
+            drop |= set(_norm_title(src).split())
+    if title:
+        drop |= set(_norm_title(title).split())
+    sources = []
+    if card:
+        sources.append(card.get("transcript_text") or "")
+        quote = card.get("quote_streamer") or {}
+        sources.append(quote.get("text")
+                       if isinstance(quote, dict) else "")
+        sources.append(card.get("what") or "")
+    for text in sources:
+        words = _thumb_content_words(text, drop)
+        if not words:
+            continue
+        counts = {}
+        for w in _norm_title(text).split():
+            if w in words:
+                counts[w] = counts.get(w, 0) + 1
+        ranked = sorted(words, key=lambda w: (-counts[w], words.index(w)))
+        core = ranked[:3]
+        return "¡" + " ".join(w.upper() for w in core) + "!"
+    return ""
 
 # Estilo de miniatura GTA 6 / Vice City (2026-11-18). La miniatura
-# es el fotograma elegido por Gemini + el texto de THUMBNAIL_TEXTS
-# quemado con este estilo: condensada, neón atardecer Vice City,
+# es el fotograma elegido por Gemini + el texto de miniatura del
+# momento quemado con este estilo: condensada, neón atardecer Vice City,
 # contorno negro grueso, sin fondo de color. La tipografía
 # condensada es Barlow Condensed (la del panel); si el TTF no está
 # en disco, el render usa DejaVu Sans Bold (ver thumbnails.py).
@@ -1336,25 +1426,26 @@ def _prefer_ideal_length(titles):
 
 
 def _best_thumbnail_text(thumb, title):
-    """Miniatura que mejor puntúa contra el título (7.5).
+    """Valida el texto de miniatura derivado del momento (7.5).
 
-    thumbnail_component premia <=3 palabras, no repetir el título y
-    <=2 en MAYÚSCULAS. Se prueba el thumb elegido y los demás de la
-    lista; en empate manda el elegido (el primero).
+    Ya no hay lista de textos genéricos entre los que elegir
+    (2026-11-18, regla endurecida): el thumb llega de
+    _moment_thumbnail_text o de Gemini y se devuelve tal cual si
+    es válido (1-4 palabras, sin exclamación genérica). Si supera
+    las 4 palabras se recorta a las 4 primeras; si es genérico o
+    vacío, "" (sin texto inventado).
     """
     if not thumb:
-        return thumb
-    try:
-        from .seo_score import thumbnail_component
-    except ImportError:
-        return thumb
-    candidates = [thumb] + [t for t in THUMBNAIL_TEXTS if t != thumb]
-    best, best_value = thumb, -1.0
-    for cand in candidates:
-        value, _notes = thumbnail_component(cand, title)
-        if value is not None and value > best_value:
-            best, best_value = cand, value
-    return best
+        return ""
+    if _norm_title(thumb).upper() in _GENERIC_THUMBNAIL_NORM:
+        return ""
+    words = str(thumb).replace("¡", "").replace("!", "").split()
+    if not words:
+        return ""
+    if len(words) > 4:
+        words = words[:4]
+        return "¡" + " ".join(w.upper() for w in words) + "!"
+    return thumb
 
 
 def validate_metadata_lengths(pkg):
@@ -1601,7 +1692,10 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
 
     what = card.get("what") if card else None
     if lang == "en":
-        thumb = "NO WAY" if reaction == "risas" else ("WAIT FOR IT" if is_hype else "CHAT REACTION")
+        # Miniatura del momento (2026-11-18, regla endurecida): se
+        # deriva de las palabras del momento, nunca una exclamación
+        # genérica (ver _moment_thumbnail_text).
+        thumb = _moment_thumbnail_text(card, best, streamer, game_label)
         hook = ("Watch why chat lost it here." if reaction == "risas"
                 else "Watch this moment — chat went crazy in seconds.")
         onscreen = "CHAT REACTION"
@@ -1617,7 +1711,10 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                     "Full clip, vertical, no context needed.")
         queries = [f"{game_label.lower()} best moments", f"{game_label.lower()} funny clips"] if game else ["funny stream clips", "chat reaction clips"]
     else:
-        thumb = "NO PUEDE SER" if reaction == "risas" else ("ESPERA EL FINAL" if is_hype else "LA REACCIÓN")
+        # Miniatura del momento (2026-11-18, regla endurecida): se
+        # deriva de las palabras del momento, nunca una exclamación
+        # genérica (ver _moment_thumbnail_text).
+        thumb = _moment_thumbnail_text(card, best, streamer, game_label)
         hook = ("Mira por qué el chat se murió de risa acá." if reaction == "risas"
                 else "Mira este momento, el chat explotó en segundos.")
         onscreen = "LA REACCIÓN"

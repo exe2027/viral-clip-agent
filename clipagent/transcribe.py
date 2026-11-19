@@ -879,10 +879,10 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
     ``alignment`` / ``margin_v`` colocan el subtitulo: por defecto
     Alignment 2 (abajo-centrado) con el margin_v del estilo, que es
     la parte baja del gameplay. La plantilla RDJavi pasa
-    alignment=8, margin_v=608 (al pie de la camara, banda 595..749),
-    para no solapar los subtitulos propios de GTA 6 (regla del
-    usuario 2026-11-18 19:02). Si no se pasa margin_v, usa el del
-    estilo.
+    alignment=2, margin_v=12 (barra negra abajo del todo,
+    y 1740..1920), para no solapar nunca los subtitulos propios
+    de GTA 6 (regla dura del usuario 2026-11-18 20:13). Si no se
+    pasa margin_v, usa el del estilo.
 
     Cada bloque se reparte entre sus palabras en proporción a su
     longitud (palabra + espacio): la etiqueta ``\\k`` de cada palabra
