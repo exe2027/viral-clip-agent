@@ -446,7 +446,7 @@ class LiveCutterSession(LiveSession):
                  recorder=None, gate=None, store=None, bridge=None,
                  out_dir=None, cfg=None, dry_run=False,
                  latency_s=DEFAULT_LATENCY_S, vod_id=None,
-                 auto_publish=False):
+                 auto_publish=False, final_review_fn=None):
         super().__init__(streamer, platform=platform,
                          stream_id=stream_id, limits=limits,
                          notify_fn=notify_fn, base_dir=base_dir)
@@ -456,6 +456,9 @@ class LiveCutterSession(LiveSession):
         self.cfg = cfg or {}
         self.dry_run = dry_run
         self.auto_publish = auto_publish
+        # Juez visual final (final_review.py): callable(parts) ->
+        # texto, inyectable en tests; None = _call_gemini real.
+        self.final_review_fn = final_review_fn
         self.latency_s = latency_s
         self.vod_id = vod_id
         self.out_dir = out_dir or os.path.join(
@@ -746,13 +749,62 @@ class LiveCutterSession(LiveSession):
                 for p, s in statuses.items()},
             "at": datetime.now(timezone.utc).isoformat(),
         }
+        # 8b. Validación final del preview con Gemini (2026-11-18):
+        # ve el MP4 final y lo valida (webcam, título, subtítulos,
+        # barras negras, coherencia). ENCENDIDA por defecto (orden
+        # del usuario 2026-11-18 22:57, 100% automático; se apaga
+        # solo con FINAL_REVIEW_ENABLED=0 o cfg enabled=False).
+        # Rechazado -> no se encola nada. Pendiente
+        # (sin Gemini) -> solo Cola del panel, jobs en draft.
+        try:
+            from .final_review import (
+                maybe_review_final_clip, transcript_text_for_srt)
+            final_review = maybe_review_final_clip(
+                final_clip, title,
+                transcript_text=transcript_text_for_srt(sub.get("srt")),
+                out_dir=os.path.join(work_dir, "final_review"),
+                cfg=self.cfg, gemini_fn=self.final_review_fn)
+        except Exception as exc:  # noqa: BLE001 - sin validación
+            # no hay veredicto: a revisión humana, nunca aprobado.
+            final_review = {
+                "decision": "pendiente_revision", "pasa": False,
+                "revision": "no_disponible", "scores": {},
+                "motivos": {}, "fallos": [],
+                "motivo": f"validación final sin ejecutar: {exc}",
+                "resumen": f"validación final sin ejecutar: {exc}",
+                "frames_n": 0, "model": "",
+                "transcript_words": 0}
+        record["final_review"] = final_review
+        package["final_review"] = {
+            "decision": final_review.get("decision"),
+            "pasa": final_review.get("pasa"),
+            "fallos": final_review.get("fallos") or [],
+            "motivo": final_review.get("motivo") or "",
+            "resumen": final_review.get("resumen") or "",
+            "scores": final_review.get("scores") or {},
+            "frames_n": final_review.get("frames_n") or 0,
+        }
+        with open(pkg["package_path"], "w", encoding="utf-8") as f:
+            json.dump(package, f, ensure_ascii=False, indent=2)
         self._record(record)
         # 9. Panel web (Cola LIVE) + publicación automática.
+        fr_decision = (final_review or {}).get("decision")
+        if fr_decision == "rechazado":
+            self.skipped.append({
+                "ts": peak_ts,
+                "reason": f"validación final: "
+                          f"{final_review.get('motivo')}",
+                "viral_total": viral_total,
+                "final_review": final_review.get("fallos"),
+                "at": datetime.now(timezone.utc).isoformat()})
+            return record
         panel_clip_id = None
         if self.bridge is not None and not self.dry_run:
             panel_clip_id = self._enqueue_panel(record)
         if not self.dry_run:
-            self._enqueue_publish(record, panel_clip_id)
+            self._enqueue_publish(
+                record, panel_clip_id,
+                force_draft=(fr_decision == "pendiente_revision"))
         return record
 
     def _enqueue_panel(self, record):
@@ -833,7 +885,8 @@ class LiveCutterSession(LiveSession):
                  "at": datetime.now(timezone.utc).isoformat()})
             return None
 
-    def _enqueue_publish(self, record, panel_clip_id=None):
+    def _enqueue_publish(self, record, panel_clip_id=None,
+                         force_draft=False):
         """Publicación por plataforma (sin humano por clip).
 
         Orden del usuario 2026-11-18 14:37 (vigente): los clips van
@@ -846,7 +899,11 @@ class LiveCutterSession(LiveSession):
         if record.get("publish_blocked"):
             return []
         from .workers import enqueue_publish
-        mode = "api" if self.auto_publish else "draft"
+        # ``force_draft=True`` (validación final pendiente, sin
+        # Gemini): aunque auto_publish esté encendido, el clip solo
+        # queda en borrador para revisión humana.
+        mode = "draft" if force_draft else (
+            "api" if self.auto_publish else "draft")
         created = []
         for platform, st in (record.get("publish_status") or {}).items():
             if st.get("status") == "publicable":

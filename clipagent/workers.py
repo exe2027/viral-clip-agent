@@ -811,7 +811,8 @@ def advance_pipeline(store, job, result, cfg=None):
     if paso not in PIPELINE:
         return []
     if paso == "empaquetar":
-        return _advance_empaquetar_to_publish(store, job, result)
+        return _advance_empaquetar_to_publish(store, job, result,
+                                              cfg=cfg)
     idx = PIPELINE.index(paso)
     if idx + 1 >= len(PIPELINE):
         return []
@@ -876,7 +877,7 @@ def advance_pipeline(store, job, result, cfg=None):
     return created
 
 
-def _advance_empaquetar_to_publish(store, job, result):
+def _advance_empaquetar_to_publish(store, job, result, cfg=None):
     """empaquetar -> publicar (TikTok, mode api, automático).
 
     Puerta dura de subtítulos: publish_blocked (sin voz
@@ -887,6 +888,13 @@ def _advance_empaquetar_to_publish(store, job, result):
     (viralidad, SEO, duración, topes, lista blanca); si no las
     pasa, queda retenido/descartado, nunca se publica.
     Idempotente: store.enqueue no duplica por clave.
+
+    Validación final del preview (2026-11-18, final_review.py):
+    DESPUÉS del render y ANTES de auto-encolar. Rechazado -> no
+    se encola nada. Pendiente (sin Gemini) -> el job se encola
+    en modo draft para revisión humana, nunca en api. ENCENDIDA
+    por defecto (2026-11-18 22:57); desactivada explícitamente
+    (FINAL_REVIEW_ENABLED=0) -> comportamiento de antes (mode api).
     """
     payload = dict(job["payload"] or {})
     blocked = bool(payload.get("publish_blocked")
@@ -903,15 +911,35 @@ def _advance_empaquetar_to_publish(store, job, result):
                    "empaquetar: sin clip en disco: no se auto-encola "
                    "publicar")
         return []
+    from .final_review import (
+        maybe_review_final_clip, transcript_text_for_srt)
+    transcript = (payload.get("transcript_text") or
+                  transcript_text_for_srt(payload.get("srt")))
+    final_review = maybe_review_final_clip(
+        clip, payload.get("title") or "",
+        transcript_text=transcript, cfg=cfg)
+    decision = final_review.get("decision")
+    store._log(job["id"], "pipeline_advance",
+               f"validación final del preview: {decision} "
+               f"({final_review.get('motivo') or final_review.get('resumen') or ''})")
+    if decision == "rechazado":
+        store._log(job["id"], "pipeline_stop",
+                   "validación final: "
+                   f"{final_review.get('motivo')}: no se auto-encola "
+                   "publicar")
+        return []
+    mode = "draft" if decision == "pendiente_revision" else "api"
     pub = store.enqueue(
         job["clip_id"], "publicar", plataforma="tiktok",
-        payload={"clip": clip, "mode": "api",
+        payload={"clip": clip, "mode": mode,
                  "streamer": payload.get("streamer"),
-                 "vod_id": payload.get("vod_id")},
+                 "vod_id": payload.get("vod_id"),
+                 "final_review": decision},
         prioridad=job.get("prioridad", 0),
         vod_job_id=job.get("vod_job_id"))
     store._log(job["id"], "pipeline_advance",
-               "empaquetar -> publicar (tiktok, mode api, automático)")
+               f"empaquetar -> publicar (tiktok, mode {mode}, "
+               f"validación final: {decision})")
     return [pub]
 
 
