@@ -1405,7 +1405,8 @@ def _interp_knots(knots, t):
     return knots[-1][1]
 
 
-def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
+def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg,
+                  with_punch=False):
     """Caja de la webcam a partir de la CARA del streamer.
 
     La detección por bordes de esquina falla cuando la caja no toca
@@ -1427,8 +1428,24 @@ def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
     v2. Con 8 instantes la ve en 17, 22 y 32 s (la cara del juego
     en 27 s la descarta el filtro de mediana) y la caja sale.
 
+    La caja NO es un zoom sobre una sola foto de la cara: el
+    streamer mueve la cabeza durante el clip (p7775: la cara
+    viaja ~130 px a la derecha y ~90 px abajo en 2560x1440, y
+    Haar ni la ve en t=2,7,12,37 porque la gira/inclina) y el
+    cover crop 3,45x convierte ese viaje en la cara fuera del
+    encuadre (en el render automático la cara solo se veía en
+    t=15-21; en t=0-9 y t=24-45 salía cortada o no se veía).
+    Por eso el fallback es la UNION de todas las caras estables
+    + margen (ver _face_union_box), no la expansión 2,8x sobre
+    la cara mediana: la unión cubre el viaje medido y el margen
+    cubre el viaje entre muestras y los instantes que Haar no ve.
+
     Devuelve [x0, y0, w, h] en px del vídeo original, o None si no
-    hay detector OpenCV o no hay cara estable.
+    hay detector OpenCV o no hay cara estable. Con with_punch=True
+    devuelve (box, punch): punch es None (sin decisión, punch-in
+    desactivado en cfg), False (desactivar el punch-in: el viaje
+    de la cara en 16-26 s no cabe) o un dict {t0, t1, zoom, cx, cy}
+    con el centro en px del vídeo original (ver _punch_for_box).
     """
     times = [t for t in (2, 7, 12, 17, 22, 27, 32, 37) if t < duration]
     if len(times) < 3:
@@ -1438,6 +1455,17 @@ def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
                         for f in (0.1, 0.3, 0.5, 0.7, 0.9)})
     if not times:
         times = [min(2, duration / 2)]
+    # Muestreo denso en la ventana del punch-in (16-26 s): ahí el
+    # streamer reacciona y la cara baja de golpe (p7775: a t=24-25
+    # mira las cartas y la cara cae ~75 px); los 8 instantes
+    # regulares no lo ven y el punch-in la cortaría. Solo si el
+    # punch-in no está desactivado en cfg.
+    punch_win = _punch_window(cfg)
+    if punch_win is not None:
+        p0, p1 = punch_win
+        extra = [t for t in (p0, p0 + 3, p1 - 1)
+                 if 0 <= t < duration and t not in times]
+        times = sorted(times + extra)
     faces = []
     for t in times:
         found = _detect_faces_at(video_path, start_offset + t,
@@ -1445,8 +1473,14 @@ def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
         if found:
             faces.append((float(t), found))
     if not faces:
-        return None
-    # Cara seguida: la mayor de cada muestra; centro mediano.
+        return (None, None) if with_punch else None
+    # Cara seguida: el centro mediano se calcula con la mayor de
+    # cada muestra (así una cara del juego, aunque sea la mayor de
+    # su instante, no tira la mediana); pero se CONSERVAN todas
+    # las caras cerca de ese centro: en un instante puede haber
+    # dos (streamer + juego) y quedarse solo con la mayor
+    # perdería la del streamer (p7775 t=24-25: la del juego es
+    # mayor y la de Rubius se perdía).
     picks = []
     for (t, fl) in faces:
         biggest = max(fl, key=lambda b: b[2] * b[3])
@@ -1454,84 +1488,179 @@ def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
     cxs = sorted(x + w // 2 for (_t, (x, _y, w, _h)) in picks)
     cys = sorted(y + h // 2 for (_t, (_x, y, _w, h)) in picks)
     mcx, mcy = cxs[len(cxs) // 2], cys[len(cys) // 2]
-    kept = [(t, b) for (t, b) in picks
+    kept = [(t, b) for (t, fl) in faces for b in fl
             if abs(b[0] + b[2] // 2 - mcx) <= 0.25 * src_w
             and abs(b[1] + b[3] // 2 - mcy) <= 0.25 * src_h]
     if len(kept) < 3:
-        return None
+        return (None, None) if with_punch else None
     t_med, (fx, fy, fw, fh) = kept[len(kept) // 2]
     # Refinado de bordes en gris a 640x360.
     tw, th = 640, 360
     b = _gray_bytes(video_path, start_offset + t_med, tw, th)
     if b is None:
-        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
-    g = [list(b[y * tw:(y + 1) * tw]) for y in range(th)]
-    sx, sy = tw / src_w, th / src_h
-    fx0, fy0 = fx * sx, fy * sy
-    fx1, fy1 = (fx + fw) * sx, (fy + fh) * sy
-    fwc, fhc = fx1 - fx0, fy1 - fy0
+        box = _face_union_box(kept, src_w, src_h)
+    else:
+        g = [list(b[y * tw:(y + 1) * tw]) for y in range(th)]
+        sx, sy = tw / src_w, th / src_h
+        fx0, fy0 = fx * sx, fy * sy
+        fx1, fy1 = (fx + fw) * sx, (fy + fh) * sy
+        fwc, fhc = fx1 - fx0, fy1 - fy0
 
-    def _v_edge(x_lo, x_hi, y_lo, y_hi):
-        best, best_x = 0.0, None
-        for x in range(max(1, int(x_lo)), min(tw - 1, int(x_hi)) + 1):
-            s = sum(abs(g[y][x] - g[y][x - 1])
-                    for y in range(max(0, int(y_lo)), min(th, int(y_hi))))
-            if s > best:
-                best, best_x = s, x
-        return best_x, best
+        def _v_edge(x_lo, x_hi, y_lo, y_hi):
+            best, best_x = 0.0, None
+            for x in range(max(1, int(x_lo)), min(tw - 1, int(x_hi)) + 1):
+                s = sum(abs(g[y][x] - g[y][x - 1])
+                        for y in range(max(0, int(y_lo)), min(th, int(y_hi))))
+                if s > best:
+                    best, best_x = s, x
+            return best_x, best
 
-    def _h_edge(y_lo, y_hi, x_lo, x_hi):
-        best, best_y = 0.0, None
-        for y in range(max(1, int(y_lo)), min(th - 1, int(y_hi)) + 1):
-            s = sum(abs(g[y][x] - g[y - 1][x])
-                    for x in range(max(0, int(x_lo)), min(tw, int(x_hi))))
-            if s > best:
-                best, best_y = s, y
-        return best_y, best
+        def _h_edge(y_lo, y_hi, x_lo, x_hi):
+            best, best_y = 0.0, None
+            for y in range(max(1, int(y_lo)), min(th - 1, int(y_hi)) + 1):
+                s = sum(abs(g[y][x] - g[y - 1][x])
+                        for x in range(max(0, int(x_lo)), min(tw, int(x_hi))))
+                if s > best:
+                    best, best_y = s, y
+            return best_y, best
 
-    # Umbral relativo: el borde debe ser >= 2x el gradiente mediano
-    # de su banda de búsqueda; si no, expansión.
-    pad_x, pad_y = 1.5 * fwc, 1.5 * fhc
-    lx, ls = _v_edge(fx0 - pad_x, fx0, fy0 - 10, fy1 + 10)
-    rx, rs = _v_edge(fx1, fx1 + pad_x, fy0 - 10, fy1 + 10)
-    ty, ts = _h_edge(fy0 - pad_y, fy0, fx0 - 10, fx1 + 10)
-    by, bs = _h_edge(fy1, fy1 + pad_y, fx0 - 10, fx1 + 10)
-    med_v = sorted(abs(g[y][x] - g[y][x - 1])
-                   for y in range(int(fy0), int(fy1))
-                   for x in range(1, tw)) or [0]
-    med_v = med_v[len(med_v) // 2] * max(1, int(fy1 - fy0))
-    x0 = (lx / sx) if (lx is not None and ls >= 2 * med_v) else None
-    x1 = (rx / sx) if (rx is not None and rs >= 2 * med_v) else None
-    y0 = (ty / sy) if (ty is not None and ts >= 2 * med_v) else None
-    y1 = (by / sy) if (by is not None and bs >= 2 * med_v) else None
-    if x0 is None or x1 is None or y0 is None or y1 is None:
-        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
-    x0, y0 = max(0, int(x0)), max(0, int(y0))
-    x1, y1 = min(src_w, int(x1)), min(src_h, int(y1))
-    if x1 - x0 < fw or y1 - y0 < fh:
-        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
-    # La caja refinada no puede ser apenas mayor que la cara: los
-    # bordes encontrados son entonces interiores (silueta, pelo,
-    # fondo de la habitación) y no los de la webcam. p7775: la
-    # refinada era 172x208 desde una cara de 112x112 (1,5x) y el
-    # cover crop del split dejaba la cara cortada por los bordes
-    # en el punch-in; la webcam real es 561x365. La expansión
-    # 2,8x (cara + hombros) encuadra mejor. IlloJuan no se toca:
-    # su refinada es 400x408 desde cara 140 (2,9x).
-    if x1 - x0 < 2.0 * fw or y1 - y0 < 2.0 * fh:
-        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
-    return [x0, y0, x1 - x0, y1 - y0]
+        # Umbral relativo: el borde debe ser >= 2x el gradiente mediano
+        # de su banda de búsqueda; si no, expansión.
+        pad_x, pad_y = 1.5 * fwc, 1.5 * fhc
+        lx, ls = _v_edge(fx0 - pad_x, fx0, fy0 - 10, fy1 + 10)
+        rx, rs = _v_edge(fx1, fx1 + pad_x, fy0 - 10, fy1 + 10)
+        ty, ts = _h_edge(fy0 - pad_y, fy0, fx0 - 10, fx1 + 10)
+        by, bs = _h_edge(fy1, fy1 + pad_y, fx0 - 10, fx1 + 10)
+        med_v = sorted(abs(g[y][x] - g[y][x - 1])
+                       for y in range(int(fy0), int(fy1))
+                       for x in range(1, tw)) or [0]
+        med_v = med_v[len(med_v) // 2] * max(1, int(fy1 - fy0))
+        x0 = (lx / sx) if (lx is not None and ls >= 2 * med_v) else None
+        x1 = (rx / sx) if (rx is not None and rs >= 2 * med_v) else None
+        y0 = (ty / sy) if (ty is not None and ts >= 2 * med_v) else None
+        y1 = (by / sy) if (by is not None and bs >= 2 * med_v) else None
+        if x0 is None or x1 is None or y0 is None or y1 is None:
+            box = _face_union_box(kept, src_w, src_h)
+        else:
+            x0, y0 = max(0, int(x0)), max(0, int(y0))
+            x1, y1 = min(src_w, int(x1)), min(src_h, int(y1))
+            if x1 - x0 < fw or y1 - y0 < fh:
+                box = _face_union_box(kept, src_w, src_h)
+            # La caja refinada no puede ser apenas mayor que la cara: los
+            # bordes encontrados son entonces interiores (silueta, pelo,
+            # fondo de la habitación) y no los de la webcam. p7775: la
+            # refinada era 172x208 desde una cara de 112x112 (1,5x) y el
+            # cover crop del split dejaba la cara cortada por los bordes
+            # en el punch-in; la webcam real es 561x365. El fallback es
+            # la unión de las caras estables + margen (ver
+            # _face_union_box), no la expansión 2,8x sobre una sola cara:
+            # esa expansión dejaba la cara fuera del encuadre cuando el
+            # streamer movía la cabeza. IlloJuan no se toca: su refinada
+            # es 400x408 desde cara 140 (2,9x).
+            elif x1 - x0 < 2.0 * fw or y1 - y0 < 2.0 * fh:
+                box = _face_union_box(kept, src_w, src_h)
+            else:
+                box = [x0, y0, x1 - x0, y1 - y0]
+    if not with_punch:
+        return box
+    return box, _punch_for_box(box, kept, punch_win)
 
 
-def _face_box_expanded(fx, fy, fw, fh, src_w, src_h, factor=2.8):
-    """Caja de webcam = cara expandida ~2,8x alrededor de su centro."""
-    cx, cy = fx + fw // 2, fy + fh // 2
-    w, h = int(fw * factor), int(fh * factor)
-    x0 = max(0, cx - w // 2)
-    y0 = max(0, cy - h // 2)
+def _face_union_box(kept, src_w, src_h, margin_frac=0.6, min_factor=2.8):
+    """Caja de webcam = UNIÓN de las caras estables + margen.
+
+    ``kept``: [(t, (x, y, w, h)), ...] de las caras estables
+    (ya sin la cara del juego). La unión cubre el viaje medido
+    de la cabeza durante el clip; el margen (0,6x la cara mediana
+    por lado) cubre el viaje entre muestras y los instantes que
+    Haar no ve (cara girada/inclinada); el piso 2,8x la cara
+    mediana (el fallback viejo) evita un zoom aún más cerrado
+    cuando la cara apenas se mueve. La caja se centra en el
+    centro de la unión (el centro del viaje) y se recorta al
+    fotograma. Devuelve [x0, y0, w, h] en px del vídeo original.
+    """
+    boxes = [b for (_t, b) in kept]
+    ux0 = min(b[0] for b in boxes)
+    uy0 = min(b[1] for b in boxes)
+    ux1 = max(b[0] + b[2] for b in boxes)
+    uy1 = max(b[1] + b[3] for b in boxes)
+    ws = sorted(b[2] for b in boxes)
+    hs = sorted(b[3] for b in boxes)
+    mfw = ws[len(ws) // 2]
+    mfh = hs[len(hs) // 2]
+    mx = int(margin_frac * mfw)
+    my = int(margin_frac * mfh)
+    w = max((ux1 - ux0) + 2 * mx, int(min_factor * mfw))
+    h = max((uy1 - uy0) + 2 * my, int(min_factor * mfh))
+    ucx, ucy = (ux0 + ux1) // 2, (uy0 + uy1) // 2
+    x0 = max(0, ucx - w // 2)
+    y0 = max(0, ucy - h // 2)
     x1 = min(src_w, x0 + w)
     y1 = min(src_h, y0 + h)
     return [x0, y0, x1 - x0, y1 - y0]
+
+
+def _punch_window(cfg):
+    """Ventana del punch-in (t0, t1) en segundos del clip, o None si
+    el punch-in está desactivado en cfg."""
+    punch = (cfg or {}).get("punch_in")
+    if punch is False:
+        return None
+    if isinstance(punch, dict):
+        return (float(punch.get("t0", RDJAVI_PUNCH_WINDOW[0])),
+                float(punch.get("t1", RDJAVI_PUNCH_WINDOW[1])))
+    return RDJAVI_PUNCH_WINDOW
+
+
+def _punch_for_box(box, kept, punch_win):
+    """Punch-in automático para la caja de webcam dada.
+
+    Devuelve None (sin decisión: punch-in desactivado en cfg),
+    False (desactivar el punch-in) o un dict {t0, t1, zoom, cx, cy}
+    con el centro en px del vídeo original. La ventana del
+    punch-in (cover/zoom, centrada en el viaje de la cara en
+    16-26 s y recortada dentro del cover) tiene que contener
+    ENTERO ese viaje con un 10% de margen: el zoom se capa para
+    que la ventana sea bastante grande. Si el zoom que cabe es
+    < 1,12x (imperceptible), el punch-in se desactiva. p7775: el
+    viaje en 16-26 s mide 264x260 y el cover 420x273, así que ni
+    con zoom 0,95x cabe: desactivado (antes la cara se cortaba a
+    t=24-25 mirando las cartas). En un clip con el streamer
+    quieto en la reacción, el viaje es chico y el punch-in 1,30x
+    se mantiene.
+    """
+    if punch_win is None:
+        return None
+    from .rdjavi import cam_cover_crop
+    p0, p1 = punch_win
+    faces = [b for (t, b) in kept if p0 <= t <= p1]
+    if not faces:
+        return False
+    ux0 = min(b[0] for b in faces)
+    uy0 = min(b[1] for b in faces)
+    ux1 = max(b[0] + b[2] for b in faces)
+    uy1 = max(b[1] + b[3] for b in faces)
+    uw, uh = ux1 - ux0, uy1 - uy0
+    pcx, pcy = (ux0 + ux1) // 2, (uy0 + uy1) // 2
+    bx, by, bw, bh = box
+    cover = cam_cover_crop(f"{bw}:{bh}:{bx}:{by}")
+    cw, ch, cx0, cy0 = (int(v) for v in cover.split(":"))
+    cx1, cy1 = cx0 + cw, cy0 + ch
+    # La ventana del punch-in (cover/zoom, centrada en el viaje y
+    # recortada dentro del cover por punch_cover_crop) tiene que
+    # contener ENTERO el viaje con un 10% de margen: el zoom se
+    # capa para que la ventana sea bastante grande, y si el viaje
+    # está cerca de un borde del cover, para que llegue desde ese
+    # borde hasta el extremo opuesto del viaje. Si el zoom que
+    # cabe es < 1,12x (imperceptible), el punch-in se desactiva.
+    safety = 1.1  # la ventana tiene que sobrar un 10% al viaje
+    need_w = max(uw * safety, ux1 - cx0, cx1 - ux0)
+    need_h = max(uh * safety, uy1 - cy0, cy1 - uy0)
+    zoom = min(RDJAVI_PUNCH_ZOOM, cw / need_w, ch / need_h)
+    if zoom < 1.12:
+        return False
+    return {"t0": float(p0), "t1": float(p1), "zoom": round(zoom, 3),
+            "cx": pcx, "cy": pcy}
 
 
 def _split_params(box_sample, cfg):
@@ -2108,13 +2237,33 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                     src_size = None
             if src_size is not None:
                 sw, sh = src_size
-                fbox = _face_cam_box(
+                fbox, punch = _face_cam_box(
                     video_path, r["end"] - r["start"],
-                    start_offset + r["start"], sw, sh, cfg)
+                    start_offset + r["start"], sw, sh, cfg,
+                    with_punch=True)
                 if fbox is not None:
                     box_s = [fbox[0] * SAMPLE_W / sw, fbox[1] * SAMPLE_H / sh,
                              fbox[2] * SAMPLE_W / sw, fbox[3] * SAMPLE_H / sh]
                     r["params"] = _split_params(box_s, cfg)
+                    # Punch-in automático (ver _face_cam_box): centro
+                    # en el viaje de la cara en 16-26 s y zoom capado
+                    # para contenerlo; False lo desactiva cuando el
+                    # viaje no cabe. Solo manda si no hay punch_in
+                    # explícito en cfg. El centro va en coords de
+                    # muestra (160x90), como la caja.
+                    if cfg.get("punch_in") is None and punch is not None:
+                        if punch is False:
+                            r["params"]["punch_in"] = False
+                            r["reason"] += " | punch-in off (viaje cara)"
+                        else:
+                            pc = dict(punch)
+                            pc["cx"] = punch["cx"] * SAMPLE_W / sw
+                            pc["cy"] = punch["cy"] * SAMPLE_H / sh
+                            r["params"]["punch_in"] = pc
+                            r["reason"] += (f" | punch-in "
+                                           f"{punch['zoom']}x en "
+                                           f"({int(punch['cx'])},"
+                                           f"{int(punch['cy'])})")
                     r["layout"] = "split"
                     r["reason"] += (f" | webcam por cara en "
                                     f"{[int(v) for v in fbox]} -> split "
@@ -2328,7 +2477,14 @@ def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg,
     game_filt = _game_filter(_v2_game_crop(src_w, src_h), game_zoom)
     parts = [f"[{vin}]split=2[cam_src][game_src];"]
     if punch_win is not None:
-        cx, cy = bx + bw // 2, by + bh // 2
+        if "cx" in punch and "cy" in punch:
+            # Centro automático del punch-in (coords de muestra
+            # 160x90 -> px reales): el centro del viaje de la cara
+            # en 16-26 s, no el centro de la caja.
+            cx = round(float(punch["cx"]) * src_w / SAMPLE_W)
+            cy = round(float(punch["cy"]) * src_h / SAMPLE_H)
+        else:
+            cx, cy = bx + bw // 2, by + bh // 2
         zc = punch_cover_crop(cover, cx, cy, zoom=punch_zoom)
         p0, p1 = (f"{v:g}" for v in punch_win)
         parts.append(

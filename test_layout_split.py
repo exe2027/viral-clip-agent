@@ -22,7 +22,9 @@ import os
 import subprocess
 import unittest
 
-from clipagent.render import (DEFAULTS, _face_cam_box, _split_params,
+from clipagent.rdjavi import cam_cover_crop
+from clipagent.render import (DEFAULTS, _detect_faces_at, _face_cam_box,
+                    _face_union_box, _punch_for_box, _split_params,
                     cut_clip_with_layout, decide_layout, segment_filter_graph)
 
 SEG = "runs/2928823801-verify/segments/seg_01_t03h34m30s.mp4"
@@ -130,13 +132,112 @@ class TestFaceCamBoxRubius7775(unittest.TestCase):
         self.assertLessEqual(cx, 561)
         self.assertGreaterEqual(cy, 626)
         self.assertLessEqual(cy, 991)
-        # La caja es la expansión 2,8x (313x313), no la refinada
-        # 172x208 (bordes interiores): una caja apenas mayor que
-        # la cara deja la cara cortada en el punch-in.
+        # La caja es la UNIÓN de las caras estables + margen
+        # (420x358), no la refinada 172x208 (bordes interiores)
+        # ni la expansión 2,8x sobre una sola cara (313x313): esa
+        # expansión dejaba la cara fuera del encuadre cuando el
+        # streamer movía la cabeza (en el render automático la
+        # cara solo se veía en t=15-21).
         self.assertGreaterEqual(w, 250)
         self.assertGreaterEqual(h, 250)
         self.assertLessEqual(w, 700)
         self.assertLessEqual(h, 700)
+
+    def test_face_cam_box_cover_y_punch_contienen_las_caras(self):
+        # Regresión 2026-11-19 (usuario: "no se le ve la cara
+        # siempre al streamer"): la cara viaja ~130 px a la
+        # derecha y ~90 px abajo durante el clip y el cover crop
+        # 3,45x la sacaba del encuadre. La ventana de cover tiene
+        # que contener ENTERAS las caras detectadas (si no, la
+        # cara se corta o no se ve). El punch-in, en cambio, tiene
+        # que estar DESACTIVADO en p7775: el viaje de la cara en
+        # 16-26 s (264x260) no cabe en el cover ni con zoom 1,05x,
+        # y con el punch-in viejo (1,30x centrado en la caja) la
+        # cara se cortaba a t=24-25 mirando las cartas.
+        cfg = dict(DEFAULTS)
+        box, punch = _face_cam_box(SEG7775, 48.02, 0.0, 2560, 1440,
+                                   cfg, with_punch=True)
+        self.assertIsNotNone(box)
+        self.assertIs(punch, False)
+        bx, by, bw, bh = box
+        cover = cam_cover_crop(f"{bw}:{bh}:{bx}:{by}")
+        cw, ch, cx0, cy0 = (int(v) for v in cover.split(":"))
+        for t in (17, 22, 32):
+            found = _detect_faces_at(SEG7775, float(t), 2560, 1440,
+                                     cfg)
+            self.assertTrue(found, f"sin cara en t={t}")
+            fx, fy, fw, fh = max(found, key=lambda b: b[2] * b[3])
+            self.assertTrue(
+                fx >= cx0 and fy >= cy0
+                and fx + fw <= cx0 + cw and fy + fh <= cy0 + ch,
+                f"cara t={t} {(fx, fy, fw, fh)} fuera del cover "
+                f"{cover}")
+
+
+class TestPunchForBox(unittest.TestCase):
+    # _punch_for_box es pura: no necesita vídeo ni cv2.
+    def test_cara_quieta_mantiene_punch(self):
+        # Clip tranquilo: viaje chico, centrado en el cover.
+        # Caja 400x400 -> cover 400x260 (y 70-330): la ventana
+        # se capa a 1,13x porque el viaje está cerca del borde
+        # superior del cover y tiene que llegar desde ese borde
+        # hasta el extremo opuesto del viaje.
+        kept = [(17.0, (100, 100, 50, 50)),
+                (22.0, (110, 110, 50, 50)),
+                (25.0, (105, 105, 50, 50))]
+        self.assertEqual(_punch_for_box([0, 0, 400, 400], kept,
+                                        (16, 26)),
+                         {"t0": 16.0, "t1": 26.0, "zoom": 1.13,
+                          "cx": 130, "cy": 130})
+
+    def test_viaje_grande_desactiva_punch(self):
+        # p7775: viaje 264x260, cover 420x272 -> zoom 0,95x < 1,12.
+        kept = [(17.0, (132, 680, 128, 128)),
+                (22.0, (156, 692, 112, 112)),
+                (25.0, (268, 792, 128, 128))]
+        self.assertIs(_punch_for_box([56, 596, 420, 400], kept,
+                                     (16, 26)), False)
+
+    def test_sin_caras_en_la_ventana_desactiva_punch(self):
+        kept = [(30.0, (100, 100, 50, 50))]
+        self.assertIs(_punch_for_box([0, 0, 400, 400], kept,
+                                     (16, 26)), False)
+
+    def test_punch_desactivado_en_cfg_sin_decision(self):
+        kept = [(17.0, (100, 100, 50, 50))]
+        self.assertIsNone(_punch_for_box([0, 0, 400, 400], kept,
+                                         None))
+
+
+class TestFaceUnionBox(unittest.TestCase):
+    # _face_union_box es pura: no necesita vídeo ni cv2.
+    def test_union_cubre_viaje_mas_margen(self):
+        kept = [(17.0, (100, 100, 50, 50)),
+                (22.0, (120, 110, 50, 50)),
+                (32.0, (200, 180, 60, 60))]
+        # Unión [100,100,160,140] + margen 0,6x50=30 por lado.
+        self.assertEqual(_face_union_box(kept, 1000, 1000),
+                         [70, 70, 220, 200])
+
+    def test_piso_2_8x_cuando_la_cara_apenas_se_mueve(self):
+        kept = [(1.0, (500, 500, 100, 100)),
+                (2.0, (505, 505, 100, 100)),
+                (3.0, (500, 500, 100, 100))]
+        # Unión 105x105 + margen no llega al piso: la caja es
+        # 2,8x la cara mediana (280x280) centrada en la unión.
+        self.assertEqual(_face_union_box(kept, 1000, 1000),
+                         [412, 412, 280, 280])
+
+    def test_recorta_al_fotograma(self):
+        kept = [(1.0, (0, 0, 100, 100)),
+                (2.0, (10, 10, 100, 100)),
+                (3.0, (0, 0, 100, 100))]
+        box = _face_union_box(kept, 1000, 1000)
+        x0, y0, w, h = box
+        self.assertGreaterEqual(x0, 0)
+        self.assertGreaterEqual(y0, 0)
+        self.assertLessEqual(x0 + w, 1000)
+        self.assertLessEqual(y0 + h, 1000)
 
 
 @unittest.skipUnless(os.path.exists(SEG2), "falta el segmento 2 de IlloJuan")
