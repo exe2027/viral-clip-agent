@@ -130,16 +130,50 @@ jobs:
                   print("YOUTUBE REAL: no se encontro viewCount en la pagina publica")
           except Exception as e:
               print("YOUTUBE REAL: no leido:", e)
-          # 11. Localizar el clip del Short en la Cola
+          # 11. Localizar el clip del Short en la Cola. Ojo: los clips
+          # ya publicados (13/15) NO salen en GET /api/clips (la Cola
+          # lista solo en_carpeta no archivados); su evidence_url vive
+          # en los jobs (markPosted) y su titulo en /api/analytics
+          # (unmeasured). Orden: Cola -> jobs por evidence_url
+          # (definitivo) -> unmeasured de youtube por titulo exacto.
           target = None
           for c in clips:
               blob = json.dumps(c, ensure_ascii=False)
               if SHORT_ID in blob:
                   target = c; break
           if target is None:
-              for c in clips:
-                  if "borra" in (c.get("title") or "").lower():
-                      target = c; break
+              try:
+                  jobs = req("GET", "/api/jobs?limit=50", token=tok).get("jobs") or []
+                  print(f"JOBS revisados: {len(jobs)}")
+                  for j in jobs:
+                      if SHORT_ID in (j.get("evidence_url") or ""):
+                          target = {"id": j.get("clip_id"), "title": j.get("title")}
+                          print(f"JOBS: short {SHORT_ID} = clip id={target['id']} plataforma={j.get('platform')}")
+                          break
+              except Exception as e:
+                  print("JOBS: no leidos:", e)
+          if target is None:
+              yt_title = None
+              try:
+                  html2 = subprocess.run(["curl", "-s", "-m", "25", "-A", UA["User-Agent"],
+                                          f"https://www.youtube.com/shorts/{SHORT_ID}"],
+                                         capture_output=True, text=True, timeout=40).stdout
+                  t = re.search(r"<title>([^<]*)</title>", html2)
+                  if t:
+                      yt_title = t.group(1).replace(" - YouTube", "").strip()
+              except Exception:
+                  pass
+              cands = [u for u in (ana0.get("unmeasured") or [])
+                       if u.get("platform") == "youtube" and yt_title and u.get("title") == yt_title]
+              print(f"UNMEASURED youtube titulo={yt_title!r} candidatos={cands}")
+              if len(cands) == 1:
+                  target = {"id": cands[0]["clip_id"], "title": cands[0]["title"]}
+          if target is not None:
+              try:
+                  full = req("GET", f"/api/clips/{target['id']}", token=tok).get("clip") or {}
+                  print(f"CLIP OBJETIVO: id={target['id']} titulo={full.get('title')!r} status={full.get('status')}")
+              except Exception as e:
+                  print("CLIP OBJETIVO: no leido:", e)
           stats_status = "SKIP"
           if views is None or target is None:
               print(f"STATS: SKIP (vistas={views} clip={'id=%s' % target.get('id') if target else None})")
