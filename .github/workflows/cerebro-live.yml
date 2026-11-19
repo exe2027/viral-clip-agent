@@ -145,6 +145,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Cache de pip (sin caché, torch/whisper tarda hasta ~28 min)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
       - name: Instalar ffmpeg, streamlink y whisper
         run: |
           sudo apt-get update -qq
@@ -201,13 +208,20 @@ jobs:
     needs: detect
     if: needs.detect.outputs.es_count == '0'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     environment: sebastian
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Cache de pip (sin caché, torch/whisper tarda hasta ~28 min)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
       - name: Instalar ffmpeg y TwitchDownloaderCLI
         run: |
           sudo apt-get update -qq
