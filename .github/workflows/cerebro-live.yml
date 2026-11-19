@@ -43,6 +43,16 @@
 #   (clipagent.review) y encola en la Cola LIVE del panel vía
 #   PanelBridge. Sin publicar en público todavía (orden
 #   2026-11-18 14:37): quedan en draft.
+# - job `vod-fallback` (2026-11-19, corrección del usuario: el
+#   corte de VOD lo hace el CEREBRO, nunca un agente manual): si
+#   ningún ES está en vivo en GTA VI (es_count == 0), cambia solo
+#   a modo VOD y corta de los VOD más recientes (Rubius primero,
+#   después IlloJuan) con los mismos filtros (viralidad >= 50,
+#   SEO >= 90, 40-60 s, subtítulos completos). Máx. 2 VODs y 2
+#   clips por corrida, 6 h de enfriamiento por VOD (estado en el
+#   artefacto cerebro-live-vod-state). Los clips van a la Cola del
+#   panel con el MP4 (origin='vod'), SIN publicar. Nunca baja el
+#   VOD entero (solo el segmento del pico, vía auto_clips.py).
 # - cerebro-sebastian (VOD, 09:00) NO se toca: es el barrido
 #   diario de VODs, no el monitoreo en vivo.
 name: Cerebro — Live Cutter
@@ -79,6 +89,7 @@ jobs:
     outputs:
       live: ${{ steps.scan.outputs.live }}
       count: ${{ steps.scan.outputs.count }}
+      es_count: ${{ steps.scan.outputs.es_count }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -159,5 +170,80 @@ jobs:
           name: live-cutter-${{ matrix.target.name }}-${{ github.run_id }}
           path: |
             runs/live/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  vod-fallback:
+    name: Fallback VOD (sin ES en vivo en GTA VI)
+    needs: detect
+    if: needs.detect.outputs.es_count == '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: sebastian
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar ffmpeg y TwitchDownloaderCLI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-fonttools
+          TDL_VERSION="1.56.5"
+          curl -sSL -o /tmp/twitchdownloader.zip \
+            "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
+          sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
+          TwitchDownloaderCLI --help || true
+          python -m pip install -q -e ".[whisper]"
+          # Arial Black GENUINA (plantilla v2): el quemado de
+          # subtítulos + título (workers.subtitle_clip) usa Arial
+          # Black. Mismo bloque que el job `cut`.
+          if ! fc-list | grep -qi "Arial Black"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/ariblk.woff \
+              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+            python3 -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')" || true
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
+      # Estado persistente entre corridas (enfriamiento por VOD):
+      # el runner es efímero; se restaura del artefacto de la
+      # corrida anterior y se vuelve a subir al final. Separado
+      # del estado diario (cerebro-state-sebastian) para no pisarlo.
+      - name: Restaurar estado del fallback
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: cerebro-live-vod-state
+          path: .
+      - name: Modo VOD (Rubius, IlloJuan) -> Cola del panel, sin publicar
+        env:
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PANEL_TENANT: sebastian
+          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+        run: |
+          python -m clipagent vod-fallback \
+            --max-vods 2 --max-clips 2 --top-n 2 \
+            --streamers "${{ inputs.streamers || '' }}"
+      - name: Guardar estado del fallback
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-live-vod-state
+          path: runs/vod-fallback/state.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Guardar manifiestos (qué picos se cortaron/descartaron)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vod-fallback-${{ github.run_id }}
+          path: |
+            runs/vod-fallback/*/manifest.json
           if-no-files-found: ignore
           retention-days: 7

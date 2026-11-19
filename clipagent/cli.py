@@ -93,6 +93,22 @@ def build_parser():
     p_live.add_argument("--auto-publish", action="store_true",
                         help="con --cut: publicar por API lo publicable "
                         "(por defecto solo Cola + draft, sin público)")
+    p_vodfb = sub.add_parser(
+        "vod-fallback",
+        help="Fallback VOD del cerebro: sin ES en vivo en GTA VI, "
+             "corta de los VOD más recientes (Rubius, IlloJuan) y "
+             "encola en el panel SIN publicar")
+    p_vodfb.add_argument("--max-vods", type=int, default=2)
+    p_vodfb.add_argument("--max-clips", type=int, default=2)
+    p_vodfb.add_argument("--top-n", type=int, default=2)
+    p_vodfb.add_argument("--streamers", default="",
+                         help="Canales a considerar, separados por comas "
+                              "(vacío = todos los ES)")
+    p_vodfb.add_argument("--state", default=None)
+    p_vodfb.add_argument("--out-dir", default=None)
+    p_vodfb.add_argument("--dry-run", action="store_true",
+                         help="Solo decide (barrido + VODs + filtros), "
+                              "sin cortar ni encolar")
     p_replay = sub.add_parser(
         "live-replay",
         help="Replay de un VOD como si fuera en vivo (mismo cutter)")
@@ -364,6 +380,22 @@ def main(argv=None):
         for peak in peaks:
             print(f"  - {peak['ts']:.0f}s: {peak['score']} pts "
                   f"({peak['multiple']}x)")
+        return 0
+    if args.command == "vod-fallback":
+        from .vod_fallback import run as run_vod_fallback
+        kwargs = {
+            "max_vods": args.max_vods,
+            "max_clips": args.max_clips,
+            "top_n": args.top_n,
+            "only": [s for s in args.streamers.split(",") if s.strip()]
+                    or None,
+            "dry_run": args.dry_run,
+        }
+        if args.state:
+            kwargs["state_path"] = args.state
+        if args.out_dir:
+            kwargs["out_root"] = args.out_dir
+        _n, _summary = run_vod_fallback(**kwargs)
         return 0
     if args.command == "live-replay":
         from .jobs import StepJobs

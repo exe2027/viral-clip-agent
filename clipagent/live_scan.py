@@ -88,9 +88,17 @@ def main(argv=None) -> int:
     only = [s for s in os.environ.get("STREAMERS", "").split(",")
             if s.strip()]
     result = scan_live(only=only or None)
+    # Conteo ES (fallback VOD, 2026-11-19): el workflow dispara el
+    # modo VOD solo si es_count == 0. Se calcula aquí, con el mismo
+    # barrido, para no hacer una segunda lectura a Twitch/Kick.
+    from .streamers import load_streamers
+    _lang = {e["name"]: (e.get("language") or "")
+             for e in load_streamers()}
+    es_live = [x for x in result["live"]
+               if _lang.get(x["name"], "") == "es"]
     print(f"EN VIVO en GTA VI: {len(result['live'])}: "
           f"{[x['name'] for x in result['live']]} "
-          f"(revisados: {result['checked']}, "
+          f"(ES: {len(es_live)}, revisados: {result['checked']}, "
           f"twitch: {result['twitch_mode']})", flush=True)
     for s in result["skipped"]:
         print(f"salto: {s}", flush=True)
@@ -99,6 +107,8 @@ def main(argv=None) -> int:
         with open(out, "a", encoding="utf-8") as f:
             f.write("live=" + json.dumps(result["live"]) + "\n")
             f.write(f"count={len(result['live'])}\n")
+            f.write("es_live=" + json.dumps(es_live) + "\n")
+            f.write(f"es_count={len(es_live)}\n")
     else:
         print(json.dumps(result["live"], ensure_ascii=False))
     return 0
