@@ -1,0 +1,50 @@
+# Encolar + PUBLICAR el clip IlloJuan borra GTA 6 en las 4 cuentas ES.
+#
+# Por que existe un workflow propio: el enqueue-clip.yml de Rubius
+# aborta con duracion fuera de 40-60 s y con el influencer fijo en
+# Rubius; este clip dura 19 s, es de IlloJuan y no tiene medicion de
+# viralidad de chat (repost de Instagram), asi que no se inventa
+# score. El panel hoy tiene Ajustes temporales por decision del
+# usuario (min_duration_s 15, new_account_daily 2, spacing_hours 0)
+# para forzar la publicacion hoy rompiendo el tope de 1/dia.
+#
+# Flujo:
+#   1. enqueue_illojuan.py: POST /api/clips + PUT del MP4 a R2.
+#   2. publish_illojuan.py: POST /preview-seen, POST /publish,
+#      poll de GET /api/jobs hasta posted/failed/draft (max 14 min).
+#
+# Credenciales: PANEL_USERNAME/PANEL_PASSWORD viven solo como
+# secretos del entorno `sebastian` de GitHub; se inyectan en el
+# runner y nunca salen en logs.
+name: Enqueue IlloJuan borra GTA 6
+
+on:
+  workflow_dispatch:
+
+jobs:
+  enqueue-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: sebastian
+    env:
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+      PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Encolar clip IlloJuan (sin publicar todavia)
+        run: |
+          set -euo pipefail
+          python3 runs/live/illojuan-borra-gta6/enqueue_illojuan.py \
+            | tee /tmp/enqueue.log
+          grep -oP 'CLIP CREADO EN LA COLA: id = \K[0-9]+' /tmp/enqueue.log \
+            > /tmp/clip_id.txt
+          echo "CLIP_ID=$(cat /tmp/clip_id.txt)"
+      - name: Publicar en las 4 cuentas + verificar
+        run: |
+          set -euo pipefail
+          ID="$(cat /tmp/clip_id.txt)"
+          echo "Publicando clip $ID"
+          python3 runs/live/illojuan-borra-gta6/publish_illojuan.py \
+            "$ID" --wait-min=14
