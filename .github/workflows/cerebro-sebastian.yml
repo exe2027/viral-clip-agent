@@ -265,7 +265,7 @@ jobs:
               r"Resumen: en vivo=(?P<live>\d+)"
               r" \| VODs revisados=(?P<new_vods>\d+)"
               r" \| encolados=(?P<enqueued>\d+)"
-              r" \| encolarían \(dry-run\)=(?P<would_enqueue>\d+)"
+              r" \| encolar[ií]an? \(dry-run\)=(?P<would_enqueue>\d+)"
               r" \| descartados=(?P<skipped>\d+)"
               r" \| ya vistos=(?P<seen>\d+)"
               r" \| errores=(?P<errors>\d+)"

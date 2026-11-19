@@ -277,8 +277,12 @@ def _panel_payload(job: dict, manifest: dict, clip: dict):
         vod_id_int = int(manifest.get("vod_id") or job.get("vod_id") or 0)
     except (TypeError, ValueError):
         vod_id_int = 0
-    game = ((clip.get("moment_card") or {}).get("game")
-            or viral.get("game") or "GTA VI")
+    # El watcher solo encola VODs GTA VI y el panel solo acepta esa
+    # categoría: el juego del manifiesto no se propaga. auto_clips
+    # pone a veces "Unknown" y el panel lo rechaza con HTTP 400
+    # ("Categoría no permitida: solo GTA VI. Recibido: Unknown",
+    # run 44474668621), así que el juego es siempre "GTA VI".
+    game = "GTA VI"
     seo_txt = ", ".join(
         f"{p} {(seo.get(p) or {}).get('score')}" for p in
         ("youtube_shorts", "tiktok", "instagram_reels", "facebook_reels"))
@@ -582,6 +586,51 @@ def _fail(q: Queue, job: dict, error: str, kind: str, started: float):
     return state
 
 
+def retry_panel_uploads(q: Queue, bridge=None):
+    """Reintenta la subida al panel de jobs en ready_for_review.
+
+    Cubre el caso del run 44474668621: el job terminó bien pero la
+    subida falló (HTTP 400 por game="Unknown") y, como el worker
+    solo procesa jobs queued, esos clips quedaban en local para
+    siempre. Los jobs ya subidos se saltan (log panel_enqueued);
+    los fallidos se reintentan una vez por corrida. Devuelve
+    (subidos, fallidos). Nunca tumba el worker.
+    """
+    try:
+        jobs = q.list_jobs("ready_for_review")
+    except Exception as e:  # noqa: BLE001 - lista de jobs
+        _log(f"Reintento panel: no se pudo listar jobs ({e}).")
+        return 0, 0
+    if bridge is None:
+        try:
+            bridge = _resolve_panel_bridge()
+        except Exception as e:  # noqa: BLE001 - config del panel
+            _log(f"Reintento panel: puente no disponible ({e}).")
+            return 0, 0
+    if bridge is None:
+        return 0, 0
+    up = fail = 0
+    for job in jobs:
+        manifest_path = job.get("manifest_path")
+        if not manifest_path or not os.path.isfile(manifest_path):
+            continue
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, ValueError) as e:
+            _log(f"Reintento panel: manifiesto ilegible del job "
+                 f"#{job['id']} ({e}).")
+            continue
+        n_up, n_fail = _upload_clips_to_panel(
+            q, job, manifest, bridge=bridge)
+        up += n_up
+        fail += n_fail
+    if up or fail:
+        _log(f"Reintento panel: {up} clip(s) subido(s), "
+             f"{fail} fallido(s).")
+    return up, fail
+
+
 def run_worker(db_path: str, once: bool = False, max_jobs: int | None = None,
                top_n: int = 5, timeout_s: int = DEFAULT_TIMEOUT_S) -> int:
     """Bucle principal. Devuelve 0 si terminó sin error, 1 si se pausó."""
@@ -595,6 +644,10 @@ def run_worker(db_path: str, once: bool = False, max_jobs: int | None = None,
         if stale:
             _log(f"Recuperados {stale} job(s) en processing de un worker "
                  "muerto: vuelven a queued.")
+        try:
+            retry_panel_uploads(q)
+        except Exception as e:  # noqa: BLE001 - reintento opcional
+            _log(f"Reintento de subida al panel falló ({e}); se sigue.")
         done = 0
         while True:
             if kill_switch_active():

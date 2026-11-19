@@ -204,6 +204,59 @@ class TestWorkerPanelUpload(unittest.TestCase):
             finally:
                 q.close()
 
+    def test_payload_game_unknown_no_se_propaga(self):
+        # Run 44474668621: el panel rechazó los 2 clips con HTTP 400
+        # ("Categoría no permitida: solo GTA VI. Recibido: Unknown")
+        # porque auto_clips pone game="Unknown" en el manifiesto.
+        # El payload nunca debe llevar "Unknown".
+        import worker as worker_mod
+        job = {"streamer": "rubius", "vod_id": "2924180678",
+               "out_dir": "/tmp/no-existe"}
+        manifest = {"vod_id": "2924180678", "clips": []}
+        clip = {"n": 2, "file": "clips/clip_02.mp4", "start": 100,
+                "duration": 40, "score": 51,
+                "viral": {"game": "Unknown", "best_title": "t"},
+                "moment_card": {"game": "Unknown"}}
+        payload = worker_mod._panel_payload(job, manifest, clip)
+        self.assertEqual(payload["game"], "GTA VI")
+
+    def test_retry_sube_job_varado_en_ready_for_review(self):
+        # Job que terminó bien pero cuya subida falló: queda en
+        # ready_for_review con panel_upload_failed y sin
+        # panel_enqueued. retry_panel_uploads lo sube en la
+        # siguiente corrida sin reprocesar el VOD.
+        import worker as worker_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            q = Queue(os.path.join(tmp, "t.db"))
+            try:
+                job = self._job_en_cola(q, tmp)
+                _manifest(job["out_dir"])
+                manifest_path = os.path.join(job["out_dir"],
+                                             "manifest.json")
+                q.set_state(job["id"], "ready_for_review",
+                            manifest_path=manifest_path)
+                q.log(job["id"], "panel_upload_failed",
+                      "clip #1: POST /api/clips -> HTTP 400")
+                bridge = mock.MagicMock()
+                bridge.create_clip.return_value = {"id": 99}
+                bridge.upload_video.return_value = {}
+                up, fail = worker_mod.retry_panel_uploads(
+                    q, bridge=bridge)
+                self.assertEqual((up, fail), (1, 0))
+                self.assertEqual(bridge.create_clip.call_count, 1)
+                self.assertEqual(
+                    bridge.create_clip.call_args[0][0]["game"],
+                    "GTA VI")
+                self.assertEqual(q.count_log(job["id"],
+                                             "panel_enqueued"), 1)
+                # Segundo reintento: ya subido, no duplica.
+                up, fail = worker_mod.retry_panel_uploads(
+                    q, bridge=bridge)
+                self.assertEqual((up, fail), (0, 0))
+                self.assertEqual(bridge.create_clip.call_count, 1)
+            finally:
+                q.close()
+
     def test_payload_sin_viral_ni_seo_no_rompe(self):
         import worker as worker_mod
         job = {"streamer": "rubius", "vod_id": "2929669422",

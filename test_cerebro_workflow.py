@@ -21,19 +21,28 @@ WORKFLOW = os.path.join(
 GATE_STEP = "Puerta Iniciar (botón del panel)"
 WATCH_STEP = "Revisión de VODs"
 
+# Formato real de watcher.py:912-914: "encolaría (dry-run)" (singular,
+# sin 'n'). El run 44474668621 demostró que el parser con "encolarían"
+# no matcheaba nunca: la línea real es la de abajo.
 WATCH_LOG_OK = (
     "Watcher — 2026-11-19 09:00:00 (LIVE (encola lo que pase los frenos))\n"
     "[rubius] (twitch, permiso: concedido)\n"
     "\nResumen: en vivo=1 | VODs revisados=3 | encolados=2 | "
-    "encolarían (dry-run)=0 | descartados=1 | ya vistos=0 | errores=0\n"
+    "encolaría (dry-run)=0 | descartados=1 | ya vistos=0 | errores=0\n"
 )
 WATCH_LOG_ERROR_SIN_ENCOLADOS = (
     "\nResumen: en vivo=0 | VODs revisados=2 | encolados=0 | "
-    "encolarían (dry-run)=0 | descartados=1 | ya vistos=0 | errores=1\n"
+    "encolaría (dry-run)=0 | descartados=1 | ya vistos=0 | errores=1\n"
 )
 WATCH_LOG_ERROR_CON_ENCOLADOS = (
     "\nResumen: en vivo=0 | VODs revisados=2 | encolados=1 | "
-    "encolarían (dry-run)=0 | descartados=0 | ya vistos=0 | errores=1\n"
+    "encolaría (dry-run)=0 | descartados=0 | ya vistos=0 | errores=1\n"
+)
+# Variante con 'n' (por si watcher.py vuelve a "encolarían"): el
+# regex la tolera; el parser debe matchearla igual.
+WATCH_LOG_OK_PLURAL = (
+    "\nResumen: en vivo=1 | VODs revisados=3 | encolados=2 | "
+    "encolarían (dry-run)=0 | descartados=1 | ya vistos=0 | errores=0\n"
 )
 
 
@@ -195,6 +204,7 @@ def _run_parser(script, tmp_path, log, watch_exit):
 
 @pytest.mark.parametrize("log,watch_exit,code,enqueued,errors", [
     (WATCH_LOG_OK, 0, 0, "2", "0"),
+    (WATCH_LOG_OK_PLURAL, 0, 0, "2", "0"),
     (WATCH_LOG_ERROR_CON_ENCOLADOS, 2, 0, "1", "1"),
     (WATCH_LOG_ERROR_SIN_ENCOLADOS, 2, 1, "0", "1"),
     ("sin línea de resumen\n", 2, 1, "0", "1"),
