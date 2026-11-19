@@ -613,6 +613,24 @@ def retry_panel_uploads(q: Queue, bridge=None):
     for job in jobs:
         manifest_path = job.get("manifest_path")
         if not manifest_path or not os.path.isfile(manifest_path):
+            # El manifiesto (y los MP4) murieron con el runner
+            # anterior: no viajan en el artefacto de estado. Un job
+            # varado en ready_for_review por una subida fallida se
+            # reencola para recortarlo de nuevo, una sola vez (si
+            # vuelve a fallar, queda varado con el motivo en el log
+            # y no se reprocesa en bucle).
+            job_id = job["id"]
+            if (q.count_log(job_id, "panel_upload_failed") > 0
+                    and q.count_log(job_id,
+                                    "requeue_sin_manifiesto") == 0):
+                q.set_state(job_id, "queued",
+                            error=None, error_kind=None)
+                q.log(job_id, "requeue_sin_manifiesto",
+                      "manifiesto no disponible en este runner "
+                      "(murió con el runner anterior); el job vuelve "
+                      "a queued para recortarlo de nuevo")
+                _log(f"Job #{job_id}: varado sin manifiesto, vuelve "
+                     "a queued para recortarlo de nuevo.")
             continue
         try:
             with open(manifest_path, encoding="utf-8") as f:

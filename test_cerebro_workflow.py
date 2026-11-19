@@ -145,8 +145,14 @@ def test_gate(tmp_path, steps, event, action, force, prior,
 
 def test_watch_usa_live(steps):
     run = _step(steps, WATCH_STEP)["run"]
-    assert "python -m clipagent watch --once --live" in run
+    assert 'WATCH_ARGS="--once --live"' in run
+    assert "python -m clipagent watch $WATCH_ARGS" in run
     assert "--dry-run" not in run
+
+
+def test_watch_acepta_streamer_dirigido(steps):
+    run = _step(steps, WATCH_STEP)["run"]
+    assert "--streamer ${{ inputs.streamer }}" in run
 
 
 def test_restore_usa_run_id_del_ultimo_exitoso(steps):
@@ -158,8 +164,14 @@ def test_restore_usa_run_id_del_ultimo_exitoso(steps):
     assert "cerebro-sebastian.yml/runs" in run
     assert "GH_TOKEN" in prev.get("env", {})
     restore = _step(steps, "Restaurar estado del día anterior")
-    assert restore["with"]["run-id"] == (
-        "${{ steps.prev-run.outputs.run_id }}")
+    # download-artifact@v4 con run-id falló siempre en este repo
+    # ("Artifact not found") aunque el artefacto existe; se restaura
+    # con `gh run download` (runs 44474668621 y 44476907092).
+    assert "actions/download-artifact" not in str(restore)
+    assert "gh run download" in restore["run"]
+    assert "cerebro-state-sebastian" in restore["run"]
+    assert "steps.prev-run.outputs.run_id" in restore["run"]
+    assert "GH_TOKEN" in restore.get("env", {})
     assert restore.get("continue-on-error") is True
     assert restore.get("if") == "steps.prev-run.outputs.run_id != ''"
 
@@ -173,6 +185,12 @@ def test_dispatch_manual_tiene_input_force(workflow):
     force = workflow[True]["workflow_dispatch"]["inputs"]["force"]
     assert force["default"] == "true"
     assert force["type"] == "boolean"
+
+
+def test_dispatch_manual_tiene_input_streamer(workflow):
+    streamer = workflow[True]["workflow_dispatch"]["inputs"]["streamer"]
+    assert streamer["default"] == ""
+    assert streamer["type"] == "string"
 
 
 def test_pasos_de_trabajo_siguen_bajo_la_puerta(steps):

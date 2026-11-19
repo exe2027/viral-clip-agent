@@ -49,6 +49,11 @@ on:
         required: false
         default: "true"
         type: boolean
+      streamer:
+        description: "Solo este streamer (p. ej. rubius, para rescates); vacío = todos los vigilados"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: cerebro-sebastian
@@ -147,14 +152,24 @@ jobs:
             echo "Sin run previo exitoso: se arranca sin estado restaurado."
           fi
 
+      # C2: download-artifact@v4 con run-id falló SIEMPRE en este
+      # repo ("Artifact not found") aunque el artefacto existe y es
+      # listable por API (verificado en los runs 44474668621 y
+      # 44476907092: `gh run download` lo baja sin problema). Se
+      # restaura con `gh run download`, misma API REST, y se lista
+      # lo restaurado en el log para que un fallo no sea silencioso.
       - name: Restaurar estado del día anterior
         if: steps.prev-run.outputs.run_id != ''
-        uses: actions/download-artifact@v4
         continue-on-error: true
-        with:
-          name: cerebro-state-sebastian
-          path: .
-          run-id: ${{ steps.prev-run.outputs.run_id }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ steps.prev-run.outputs.run_id }}" \
+            -n cerebro-state-sebastian -D . \
+            --repo "${GITHUB_REPOSITORY}" || exit 0
+          echo "Estado restaurado:"
+          ls -la queue.db seen_vods.json publish_queue.json \
+            state/panel-state.json 2>/dev/null || true
 
       # Puerta Iniciar (C1/C3): SOLO repository_dispatch toca
       # state/panel-state.json (panel-start lo pone en true,
@@ -253,7 +268,14 @@ jobs:
         if: steps.gate.outputs.started == 'true'
         run: |
           set +e
-          python -m clipagent watch --once --live 2>&1 | tee watch.log
+          # Rescate dirigido (input streamer del workflow_dispatch,
+          # p. ej. rubius): solo ese streamer. Vacío = todos.
+          WATCH_ARGS="--once --live"
+          if [ -n "${{ inputs.streamer }}" ]; then
+            WATCH_ARGS="$WATCH_ARGS --streamer ${{ inputs.streamer }}"
+          fi
+          # shellcheck disable=SC2086
+          python -m clipagent watch $WATCH_ARGS 2>&1 | tee watch.log
           WATCH_EXIT="${PIPESTATUS[0]}"
           set -e
           WATCH_EXIT="$WATCH_EXIT" python - <<'PYEOF'

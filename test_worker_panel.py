@@ -257,6 +257,38 @@ class TestWorkerPanelUpload(unittest.TestCase):
             finally:
                 q.close()
 
+    def test_retry_reencola_job_varado_sin_manifiesto(self):
+        # El manifiesto y los MP4 mueren con el runner anterior (no
+        # viajan en el artefacto): un job en ready_for_review cuya
+        # subida falló no se puede reintentar tal cual; se reencola
+        # para recortarlo de nuevo, una sola vez.
+        import worker as worker_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            q = Queue(os.path.join(tmp, "t.db"))
+            try:
+                job = self._job_en_cola(q, tmp)
+                q.set_state(job["id"], "ready_for_review",
+                            manifest_path=os.path.join(
+                                tmp, "no-existe", "manifest.json"))
+                q.log(job["id"], "panel_upload_failed",
+                      "clip #1: POST /api/clips -> HTTP 400")
+                bridge = mock.MagicMock()
+                up, fail = worker_mod.retry_panel_uploads(
+                    q, bridge=bridge)
+                self.assertEqual((up, fail), (0, 0))
+                self.assertEqual(q.get_job(job["id"])["state"],
+                                 "queued")
+                self.assertEqual(q.count_log(
+                    job["id"], "requeue_sin_manifiesto"), 1)
+                bridge.create_clip.assert_not_called()
+                # Segunda pasada: ya está en queued, no se toca.
+                up, fail = worker_mod.retry_panel_uploads(
+                    q, bridge=bridge)
+                self.assertEqual(q.count_log(
+                    job["id"], "requeue_sin_manifiesto"), 1)
+            finally:
+                q.close()
+
     def test_payload_sin_viral_ni_seo_no_rompe(self):
         import worker as worker_mod
         job = {"streamer": "rubius", "vod_id": "2929669422",
