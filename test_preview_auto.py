@@ -113,6 +113,18 @@ class TestLivePreviewAuto(unittest.TestCase):
                 {"decision": "rechazado", "pasa": False}))
             self.assertEqual(bridge.seen, [])
 
+    def test_observado_no_marca(self):
+        # Modo observación (final_review.py, ON por defecto): un
+        # render que NO pasa el criterio visual se reescribe como
+        # "observado" (pasa True) para que se encole igual, pero NO
+        # pasó la validación: el preview NO se marca.
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = FakeBridge()
+            session = self._session(tmp, bridge)
+            session._enqueue_panel(self._record(
+                {"decision": "observado", "pasa": True}))
+            self.assertEqual(bridge.seen, [])
+
     def test_sin_registro_no_marca(self):
         with tempfile.TemporaryDirectory() as tmp:
             bridge = FakeBridge()
@@ -197,6 +209,17 @@ class TestVodPreviewAuto(unittest.TestCase):
         self.assertEqual(bridge.created, [])
         self.assertEqual(bridge.uploaded, [])
 
+    def test_observado_encola_sin_marcar(self):
+        # "observado" fluye como aprobado para el encolado, pero
+        # el render NO pasó el criterio: se encola sin marcar.
+        self._patch_subtitles()
+        self._patch_review("observado")
+        bridge = FakeBridge()
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "2932415021", self.tmp.name, _vod_clip())
+        self.assertEqual(panel_id, 101, why)
+        self.assertEqual(bridge.seen, [])
+
 
 class FakeQueue:
     def __init__(self):
@@ -259,6 +282,11 @@ class TestWorkerPreviewAuto(unittest.TestCase):
         self.assertEqual(bridge.uploaded, [])
         self.assertTrue(any(e == "panel_revision_rechazada"
                             for _, e, _ in q.logs))
+
+    def test_observado_sube_sin_marcar(self):
+        up, fail, bridge, _ = self._run("observado")
+        self.assertEqual((up, fail), (1, 0))
+        self.assertEqual(bridge.seen, [])
 
 
 if __name__ == "__main__":
