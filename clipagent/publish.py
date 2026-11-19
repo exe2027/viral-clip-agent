@@ -1075,7 +1075,6 @@ def plan_daily(clips, queue=None, day=None, accounts_info=None,
     se verifica contra las secciones 2, 3 y 4: lo que no cumple
     va a la cola. NUNCA publica nada: solo planifica.
     """
-    from datetime import date as _date
     limits = limits or _LIMITS
     day_iso = day or _now_chile().date().isoformat()
     queue = queue or PublishQueue()
