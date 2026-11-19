@@ -131,6 +131,28 @@ streamers:
     publish_platforms: [youtube, tiktok, instagram, facebook]
     notas: "Agregado por orden del usuario 2026-11-18 15:30, junto a los otros 7 nuevos. Categoría GTA VI."
     enabled: true
+  - name: peereira7
+    platform: twitch
+    channel_url: "https://www.twitch.tv/peereira7"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-19"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-19. Verificado 2026-11-16: canal en Twitch, ~2 M de seguidores, VOD reciente 2929058013 (14 nov 2026, maratón GTA IV, '5 DÍAS PARA GTA VI')."
+    enabled: true
+  - name: noni
+    platform: twitch
+    channel_url: "https://www.twitch.tv/noni"
+    game: "GTA VI"
+    language: es
+    estado: concedido
+    fecha_permiso: "2026-11-19"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "Agregado por orden del usuario 2026-11-19. Verificado en vivo 2026-11-19 18:13 -03: canal existe en Twitch, socio verificado, en directo en Grand Theft Auto VI (título GTA 6), idioma Español, 1,1 M seguidores."
+    enabled: true
   # --- EN INGLÉS (orden del usuario 2026-11-18) ---
   # Los 8 con language en, game "GTA VI", estado concedido,
   # fecha_permiso 2026-11-18, publish_platforms en las 4, enabled

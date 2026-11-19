@@ -46,6 +46,7 @@ class TestSingleList(unittest.TestCase):
         self.assertEqual(watched, {
             "illojuan", "rubius", "auronplay", "ibai", "thegrefg",
             "xokas", "djmariio", "knekro", "rdjavi", "westcol",
+            "peereira7", "noni",
             "kaicenat", "ishowspeed", "n3on", "xqc", "theburntpeanut",
             "burn", "kaysan", "willneff",
         })
@@ -72,9 +73,11 @@ class TestSingleList(unittest.TestCase):
             "knekro": "2026-11-18",
             "rdjavi": "2026-11-18",
             "westcol": "2026-11-18",
+            "peereira7": "2026-11-19",
+            "noni": "2026-11-19",
         }
         self.assertEqual(len([e for e in entries
-                              if e["language"] == "es"]), 10)
+                              if e["language"] == "es"]), 12)
         for name, fecha in esperado.items():
             with self.subTest(streamer=name):
                 e = streamers.get_streamer(name, entries)
