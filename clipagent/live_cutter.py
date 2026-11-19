@@ -464,6 +464,18 @@ def _visible_from_layout(layout):
     return "gameplay"
 
 
+def _seo_summary(seo):
+    """'YT 92 · TT 89 · IG 91 · FB 90' a partir de {plataforma: score}.
+
+    Para los mensajes de evento al panel (2026-11-19): una línea
+    con los 4 números SEO post-corte."""
+    short = {"youtube_shorts": "YT", "tiktok": "TT",
+             "instagram_reels": "IG", "facebook_reels": "FB"}
+    return " · ".join(
+        f"{short.get(p, p)} {float(v):.0f}"
+        for p, v in (seo or {}).items())
+
+
 class LiveCutterSession(LiveSession):
     """Sesión en vivo que CORTA: LiveSession + recorder + pipeline.
 
@@ -525,6 +537,11 @@ class LiveCutterSession(LiveSession):
         # top 3 por directo con viralidad auto 40-49,9. Cada entrada
         # es el dict que devuelve review.review_peak.
         self._reviewed_peaks = []
+        # Eventos de clip ya reportados al panel (2026-11-19): como
+        # máximo UN clip_descartado por clip (el primer motivo
+        # manda); un clip sin voz, por ejemplo, no vuelve a
+        # reportarse por SEO.
+        self._discard_reported = set()
 
     # -- store perezoso (StepJobs) ------------------------------------
     @property
@@ -541,6 +558,26 @@ class LiveCutterSession(LiveSession):
                 self.bridge.tracking_step(panel_clip_id, step, message)
             except Exception:  # noqa: BLE001 - el tracking no tumba
                 pass
+
+    def _report_event(self, kind, message):
+        """Evento de clip al panel (2026-11-19). En dry_run no se
+        reporta nada. Nunca levanta."""
+        if self.dry_run:
+            return
+        try:
+            from .panel_bridge import report_brain_event
+            report_brain_event(kind, message, bridge=self.bridge)
+        except Exception:  # noqa: BLE001 - el evento es informativo
+            pass
+
+    def _report_discard_once(self, clip_id, message):
+        """clip_descartado una sola vez por clip (el primer motivo
+        manda); los demás descartes del mismo clip solo quedan en
+        self.skipped."""
+        if clip_id in self._discard_reported:
+            return
+        self._discard_reported.add(clip_id)
+        self._report_event("clip_descartado", message)
 
     def _record(self, record):
         path = os.path.join(self.out_dir, "live_cuts.json")
@@ -600,6 +637,10 @@ class LiveCutterSession(LiveSession):
                 self.skipped.append(
                     {"ts": peak[0], "reason": f"fallo al cortar: {e}",
                      "at": datetime.now(timezone.utc).isoformat()})
+                self._report_event(
+                    "corte_fallido",
+                    f"{self.streamer}: corte fallido en pico "
+                    f"{peak[0]:.0f}s ({e})")
             finally:
                 self._cut_queue.task_done()
 
@@ -707,6 +748,12 @@ class LiveCutterSession(LiveSession):
                      "viral_revisado": reviewed.get("viral_revisado"),
                      "revision": reviewed.get("revision"),
                      "at": datetime.now(timezone.utc).isoformat()})
+                self._report_discard_once(
+                    clip_id,
+                    f"{self.streamer}: pico {peak_ts:.0f}s descartado "
+                    f"— revisión: {reviewed['motivo']} (viral auto "
+                    f"{viral_auto:.1f} -> revisado "
+                    f"{reviewed.get('viral_revisado')})")
                 return None
         # 5. Corte vertical split RDJavi (streamer arriba, gameplay abajo).
         raw_clip = os.path.join(work_dir, f"clip_{n:02d}.mp4")
@@ -750,6 +797,21 @@ class LiveCutterSession(LiveSession):
                             transcript_text(json.load(f)))
             except Exception:  # noqa: BLE001 - señal opcional
                 pass
+        # Clip cortado: el render con subtítulos ya existe; se
+        # reporta al panel (2026-11-19) aunque luego lo frenen el
+        # SEO o la validación final. Sin voz verificable el clip
+        # queda BLOQUEADO (nunca se publica, nunca se inventa):
+        # también se reporta el descarte, con el primer motivo.
+        self._report_event(
+            "clip_cortado",
+            f"{self.streamer}: «{title}» cortado (40 s, viral auto "
+            f"{viral_auto:.1f})")
+        if blocked:
+            self._report_discard_once(
+                clip_id,
+                f"{self.streamer}: «{title}» descartado — sin voz "
+                f"verificable: BLOQUEADO (queda en Cola para "
+                f"transcripción humana; viral auto {viral_auto:.1f})")
         # 7. Paquete SEO + prioridad (intocable). El SEO post-corte
         # se mide sobre el paquete de PUBLICACIÓN (título Gemini +
         # descripción + tags + miniatura), NO sobre el título de
@@ -828,7 +890,7 @@ class LiveCutterSession(LiveSession):
         with open(pkg["package_path"], "w", encoding="utf-8") as f:
             json.dump(package, f, ensure_ascii=False, indent=2)
         # 8. Puertas duras por plataforma (viralidad/SEO/duración).
-        from .priority import publish_status
+        from .priority import SEO_GATE, publish_status
         seo = package.get("seo") or {}
         statuses = {}
         for platform, s in seo.items():
@@ -917,7 +979,36 @@ class LiveCutterSession(LiveSession):
                 "viral_total": viral_total,
                 "final_review": final_review.get("fallos"),
                 "at": datetime.now(timezone.utc).isoformat()})
+            self._report_discard_once(
+                clip_id,
+                f"{self.streamer}: «{pub_title}» descartado — "
+                f"validación final: {final_review.get('motivo')} "
+                f"(viralidad {viral_total})")
             return record
+        # Puerta de publicación (2026-11-19): si ninguna plataforma
+        # es publicable y no hubo rescate por gritos, el clip no
+        # entra a la ruta de publicación: queda en la Cola como
+        # borrador sin jobs (igual que hoy) y se reporta el
+        # descarte con el motivo exacto de la puerta (viralidad o
+        # SEO, con los 4 números). Sin plataformas medidas no hay
+        # descarte que reportar. El umbral sale de la puerta
+        # misma (SEO_GATE), no va cableado: si el listón cambia,
+        # el evento lo sigue.
+        _rescue = bool((record.get("review") or {}).get(
+            "rescate_gritos"))
+        if (statuses and not _rescue
+                and not any(s[0] in ("publicable",
+                                     "publicable_override")
+                            for s in statuses.values())):
+            if all(s[0] == "descartado" for s in statuses.values()):
+                _why = next(iter(statuses.values()))[1]
+            else:
+                _why = (f"SEO post-corte < {SEO_GATE} "
+                        f"({_seo_summary(seo)}; viralidad "
+                        f"{viral_total})")
+            self._report_discard_once(
+                clip_id,
+                f"{self.streamer}: «{pub_title}» descartado — {_why}")
         panel_clip_id = None
         if self.bridge is not None and not self.dry_run:
             panel_clip_id = self._enqueue_panel(record)
@@ -1026,6 +1117,14 @@ class LiveCutterSession(LiveSession):
                         preview_ok = True
                     except Exception:  # noqa: BLE001 - no tumba
                         pass
+            # Encolado en la Cola del panel (2026-11-19): create_clip
+            # + upload_video con éxito, con viralidad y SEO.
+            if panel_id:
+                self._report_event(
+                    "clip_encolado",
+                    f"{self.streamer}: «{record['title']}» encolado "
+                    f"(viralidad {record.get('viral_total')}; SEO "
+                    f"{_seo_summary(record.get('seo'))})")
             for step, msg in (
                     ("detectado", f"LIVE {self.streamer}: pico a "
                      f"{record['peak_ts']:.0f}s"),
@@ -1051,6 +1150,10 @@ class LiveCutterSession(LiveSession):
                 {"ts": record["peak_ts"],
                  "reason": f"panel: no se pudo encolar ({e})",
                  "at": datetime.now(timezone.utc).isoformat()})
+            self._report_event(
+                "corte_fallido",
+                f"{self.streamer}: «{record['title']}» no se pudo "
+                f"encolar en el panel ({e})")
             return None
 
     def _enqueue_publish(self, record, panel_clip_id=None,

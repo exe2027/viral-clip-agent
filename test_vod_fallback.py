@@ -12,8 +12,9 @@ módulo no tiene ninguna llamada a publicar.
   el fallback (2026-11-19, fallo 3).
 - fallback_order: Rubius, IlloJuan, resto ES en orden de yaml,
   después EN en orden de yaml.
-- clip_passes_gates: viralidad >= 50, SEO >= 90 en las 4
-  plataformas, 40-60 s, juego GTA VI; falla cerrado sin datos.
+- clip_passes_gates: viralidad >= 45, SEO >= 80 en las 4
+  plataformas, 40-60 s, juego GTA VI; falla cerrado sin datos
+  (2026-11-19, orden del usuario: listones bajados de 50/90).
 - already_enqueued: dedup contra el panel por (VOD, inicio).
 - burn_and_enqueue: subtítulos completos o no se encola; nunca
   llama a publicar; el payload lleva language ("es"/"en").
@@ -183,17 +184,29 @@ class TestClipPassesGates(unittest.TestCase):
         self.assertTrue(ok, reasons)
 
     def test_viralidad_baja_no_pasa(self):
-        c = _clip(viral_score={"total": 49.9, "chat_multiple": 1.5})
+        c = _clip(viral_score={"total": 44.9, "chat_multiple": 1.5})
         ok, reasons = clip_passes_gates(c, "2932415021")
         self.assertFalse(ok)
         self.assertTrue(any("viralidad" in r for r in reasons))
 
+    def test_viralidad_45_pasa(self):
+        # Listones bajados 2026-11-19 (orden del usuario): 45/80.
+        c = _clip(viral_score={"total": 45.0, "chat_multiple": 1.5})
+        ok, reasons = clip_passes_gates(c, "2932415021")
+        self.assertTrue(ok, reasons)
+
     def test_seo_bajo_en_una_plataforma_no_pasa(self):
         seo = _seo(94)
-        seo["tiktok"] = {"score": 89, "status": "ok",
+        seo["tiktok"] = {"score": 79, "status": "ok",
                          "can_publish": False}
         ok, _ = clip_passes_gates(_clip(seo_scores=seo), "2932415021")
         self.assertFalse(ok)
+
+    def test_seo_80_pasa(self):
+        # Listones bajados 2026-11-19 (orden del usuario): 45/80.
+        ok, reasons = clip_passes_gates(
+            _clip(seo_scores=_seo(80)), "2932415021")
+        self.assertTrue(ok, reasons)
 
     def test_sin_viral_score_falla_cerrado(self):
         ok, _ = clip_passes_gates(_clip(viral_score=None), "2932415021")

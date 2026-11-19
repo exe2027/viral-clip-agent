@@ -25,6 +25,14 @@ DEFAULT_BASE_URL = "https://avc.vikingosfoodspa.workers.dev"
 USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
+# Eventos de clip al panel (2026-11-19): el cerebro reporta cada
+# resultado para que el usuario vea dónde se pierden los clips.
+# Contrato CONGELADO: POST /api/worker/event, body {kind, message},
+# message <= 500 caracteres, una línea en español.
+EVENT_KINDS = ("clip_cortado", "clip_encolado", "clip_descartado",
+               "corte_fallido")
+MAX_EVENT_MESSAGE = 500
+
 
 class PanelError(Exception):
     pass
@@ -142,6 +150,29 @@ class PanelBridge:
             print(f"[panel] fase {phase} no reportada ({e})", flush=True)
             return None
 
+    def report_event(self, kind, message):
+        """POST /api/worker/event: un resultado de clip (cortado,
+        encolado, descartado o corte fallido) para el feed de
+        actividad del cerebro en el panel.
+
+        El mensaje es una línea en español (<=500 caracteres):
+        streamer + título + resultado + números. Nunca levanta:
+        si el panel no responde, solo queda en el log y se sigue
+        (un evento no puede tumbar un corte ni una encolada).
+        Devuelve la respuesta del panel o None."""
+        try:
+            if kind not in EVENT_KINDS:
+                print(f"[panel] evento kind inválido: {kind!r}",
+                      flush=True)
+                return None
+            text = " ".join(str(message).split())[:MAX_EVENT_MESSAGE]
+            self._ensure_login()
+            return self._request("POST", "/api/worker/event", body={
+                "kind": kind, "message": text})
+        except Exception as e:  # noqa: BLE001 - el evento es informativo
+            print(f"[panel] evento {kind} no reportado ({e})", flush=True)
+            return None
+
     def list_clips(self):
         """GET /api/clips (Cola del tenant)."""
         self._ensure_login()
@@ -198,4 +229,27 @@ def report_brain_phase(phase, detail="", bridge=None):
         return res is not None
     except Exception as e:  # noqa: BLE001 - la fase es informativa
         print(f"[panel] fase {phase} no reportada ({e})", flush=True)
+        return False
+
+
+def report_brain_event(kind, message, bridge=None):
+    """Reporta un evento de clip al panel (2026-11-19).
+
+    Con el bridge dado (si tiene report_event) o con uno nuevo del
+    entorno (PANEL_USERNAME/PANEL_PASSWORD/PANEL_TENANT). Nunca
+    levanta: sin credenciales, sin panel o con error, solo un aviso
+    en el log y se sigue. Devuelve True si el panel aceptó el
+    evento.
+    """
+    try:
+        if bridge is not None and hasattr(bridge, "report_event"):
+            bridge.report_event(kind, message)
+            return True
+        b = PanelBridge.from_env()
+        if b is None:
+            return False
+        res = b.report_event(kind, message)
+        return res is not None
+    except Exception as e:  # noqa: BLE001 - el evento es informativo
+        print(f"[panel] evento {kind} no reportado ({e})", flush=True)
         return False

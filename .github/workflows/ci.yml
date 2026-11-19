@@ -14,24 +14,6 @@ jobs:
           python-version: "3.12"
       - name: Instalar ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
-      - name: Instalar Arial Black (plantilla v2)
-        # La plantilla v2 (clipagent/rdjavi.py) usa SUBS_FONT =
-        # "Arial Black" para título y subtítulos. Sin ella libass
-        # cae a otra fuente y el título se desborda sobre el
-        # gameplay en el runner (test_rdjavi_auto.py fallaba en CI
-        # con 2311 px blancos bajo la franja). Mismo bloque que
-        # render-rdjavi.yml: WOFF de cdnfonts (Monotype v2.35, la
-        # misma que en la VM) convertido a TTF con fontTools.
-        run: |
-          sudo apt-get install -y -qq python3-fonttools
-          if ! fc-list | grep -qi "Arial Black"; then
-            mkdir -p ~/.fonts
-            curl -fsSL -o ~/.fonts/ariblk.woff \
-              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
-            python3 -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')" || true
-            fc-cache -f >/dev/null 2>&1 || true
-          fi
-          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
       - name: Instalar dependencias de desarrollo
         run: |
           python -m pip install --upgrade pip
@@ -40,6 +22,34 @@ jobs:
           # None (no una lista) sin cv2, lo que rompía ese test en
           # CI mientras en local pasaba (el .venv sí tiene cv2 4.11).
           pip install -e .[dev,vision]
+      - name: Instalar Arial Black (plantilla v2)
+        # La plantilla v2 (clipagent/rdjavi.py) usa SUBS_FONT =
+        # "Arial Black" para título y subtítulos. Sin ella libass
+        # cae a otra fuente y el título se desborda sobre el
+        # gameplay en el runner (test_rdjavi_auto.py fallaba en CI
+        # con 2311 px blancos bajo la franja). Mismo bloque que
+        # render-rdjavi.yml: WOFF de cdnfonts (Monotype v2.35, la
+        # misma que en la VM) convertido a TTF con fontTools.
+        # fontTools viene de pyproject (dependencies), instalada
+        # por el paso anterior en el intérprete ACTIVO de
+        # setup-python; por eso este paso va DESPUÉS de instalar
+        # dependencias y la conversión corre con `python` (nunca
+        # `python3`) y SIN `|| true`: si el WOFF se descargó y la
+        # conversión falla, el paso falla con mensaje claro
+        # (2026-11-19: apt python3-fonttools no la dejaba en el
+        # intérprete de setup-python -> ModuleNotFoundError).
+        # El `|| true` queda SOLO en el curl de descarga.
+        run: |
+          if ! fc-list | grep -qi "Arial Black"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/ariblk.woff \
+              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+            test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+            python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+            test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
       - name: Ruff
         run: ruff check .
       - name: Tests

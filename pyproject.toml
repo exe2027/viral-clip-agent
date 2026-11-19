@@ -16,6 +16,16 @@ description = "Detector de clips virales de VODs de Twitch/Kick: chat -> picos -
 requires-python = ">=3.10"
 dependencies = [
     "PyYAML>=6.0",
+    # Render (plantilla v2): la conversión WOFF->TTF de Arial Black
+    # usa fontTools. Sin ella el runner cae a otra fuente: medido
+    # 2026-11-19, corrida 01:08, `ModuleNotFoundError: No module
+    # named 'fontTools'` en todos los jobs del live-cutter (tragado
+    # por `|| true`). Es dependencia real del pipeline, no opcional:
+    # `pip install -e .` (o .[whisper]) la instala en el intérprete
+    # activo de setup-python; `apt install python3-fonttools` solo
+    # la dejaba en el python del sistema, invisible para ese
+    # intérprete.
+    "fontTools>=4.0",
 ]
 
 [project.optional-dependencies]

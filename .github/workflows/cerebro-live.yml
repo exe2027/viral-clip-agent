@@ -157,7 +157,7 @@ jobs:
       - name: Instalar ffmpeg, streamlink y whisper
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg streamlink python3-fonttools
+          sudo apt-get install -y -qq ffmpeg streamlink
           python -m pip install -q -e ".[whisper]"
           # Arial Black GENUINA (plantilla v2, 2026-11-18): título y
           # subtítulos usan SUBS_FONT = "Arial Black". Sin ella
@@ -166,11 +166,23 @@ jobs:
           # desborda sobre el gameplay (medido en CI 2026-11-19:
           # 2311 px blancos bajo la franja). Mismo bloque que
           # render-rdjavi.yml (WOFF cdnfonts -> TTF con fontTools).
+          # fontTools viene de pyproject (dependencies): `pip
+          # install -e .` la deja en el intérprete ACTIVO de
+          # setup-python; `apt install python3-fonttools` solo la
+          # dejaba en el python del sistema, invisible para ese
+          # intérprete (medido 2026-11-19, corrida 01:08:
+          # ModuleNotFoundError en todos los jobs). Por eso la
+          # conversión corre con `python` (nunca `python3`) y SIN
+          # `|| true`: si el WOFF se descargó y la conversión
+          # falla, el paso falla con mensaje claro. El `|| true`
+          # queda SOLO en el curl de descarga.
           if ! fc-list | grep -qi "Arial Black"; then
             mkdir -p ~/.fonts
             curl -fsSL -o ~/.fonts/ariblk.woff \
               "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
-            python3 -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')" || true
+            test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+            python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+            test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
             fc-cache -f >/dev/null 2>&1 || true
           fi
           fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
@@ -228,7 +240,7 @@ jobs:
       - name: Instalar ffmpeg y TwitchDownloaderCLI
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg python3-fonttools
+          sudo apt-get install -y -qq ffmpeg
           TDL_VERSION="1.56.5"
           curl -sSL -o /tmp/twitchdownloader.zip \
             "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
@@ -239,11 +251,18 @@ jobs:
           # Arial Black GENUINA (plantilla v2): el quemado de
           # subtítulos + título (workers.subtitle_clip) usa Arial
           # Black. Mismo bloque que el job `cut`.
+          # fontTools viene de pyproject (dependencies): la
+          # conversión corre con `python` (nunca `python3`) y SIN
+          # `|| true`; el `|| true` queda SOLO en el curl.
+          # (2026-11-19: apt python3-fonttools no la dejaba en el
+          # intérprete de setup-python -> ModuleNotFoundError.)
           if ! fc-list | grep -qi "Arial Black"; then
             mkdir -p ~/.fonts
             curl -fsSL -o ~/.fonts/ariblk.woff \
               "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
-            python3 -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')" || true
+            test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+            python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+            test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
             fc-cache -f >/dev/null 2>&1 || true
           fi
           fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"

@@ -17,16 +17,23 @@ puntúa con lang=en). Se encolan con language="en" (columna
 clips.language del panel, migración 0019: sin ella el panel asume
 "es" y el clip EN caería en las cuentas ES al publicar).
 
-Reglas duras (las del usuario, no se tocan):
+Reglas duras (las del usuario, no se tocan salvo orden suya):
   * El corte de VOD es trabajo del CEREBRO, nunca de un agente
     manual (2026-11-19 02:18). Este módulo es el cerebro.
   * Solo se baja el SEGMENTO del clip, nunca el VOD entero, y del
     chat solo la ventana alrededor del momento (reutiliza
     auto_clips.py, que ya lo hace así con TwitchDownloaderCLI).
-  * Filtros: viralidad >= 50, SEO >= 90 en las 4 plataformas, clip
-    de 40 a 60 s, juego GTA VI, subtítulos completos verificados
-    (nada inventado, nada sin voz). Sin rescate por gritos: la
-    puerta es 50/90 tal cual.
+  * Filtros (2026-11-19, orden del usuario: listones bajados de
+    50/90 a 45/80): viralidad >= 45, SEO >= 80 en las 4
+    plataformas, clip de 40 a 60 s, juego GTA VI, subtítulos
+    completos verificados (nada inventado, nada sin voz). Sin
+    rescate por gritos: la puerta es 45/80 tal cual.
+  * Pre-chequeo de VOD (2026-11-19): un VOD que claramente no es
+    GTA VI (título sin mención de GTA VI y categoría Helix
+    conocida que no es GTA VI) se salta sin gastar el cupo de 2
+    VODs ni refrescar el enfriamiento. Ante la duda se procesa
+    (fail open: la puerta precisa sigue siendo el juego del
+    manifiesto por clip).
   * Los clips van a la Cola del panel con el MP4 (origin='vod'),
     SIN publicar: este módulo no tiene ninguna llamada a publicar
     (ni publish_clip del puente ni publish loop). La publicación la
@@ -55,8 +62,10 @@ from datetime import datetime
 # primero, después IlloJuan; el resto de ES en el orden de
 # streamers.yaml.
 FALLBACK_PRIORITY = ["rubius", "illojuan"]
-MIN_VIRALITY = 50
-MIN_SEO = 90
+# Listones duros del fallback (2026-11-19, orden del usuario:
+# bajados de 50/90 a 45/80).
+MIN_VIRALITY = 45
+MIN_SEO = 80
 MIN_DUR_S = 40
 MAX_DUR_S = 60
 PLATFORMS = ["youtube_shorts", "tiktok", "instagram_reels",
@@ -86,6 +95,38 @@ def _report_phase(phase, detail="", bridge=None, dry_run=False):
         report_brain_phase(phase, detail, bridge=bridge)
     except Exception:  # noqa: BLE001 - la fase es informativa
         pass
+
+
+def _report_event(kind, message, bridge=None, dry_run=False):
+    """Evento de clip al panel (2026-11-19): cortado, encolado o
+    descartado, para que el usuario vea dónde se pierden los
+    clips. Nunca levanta ni tumba la corrida; en dry-run no se
+    reporta."""
+    if dry_run:
+        return
+    try:
+        from .panel_bridge import report_brain_event
+        report_brain_event(kind, message, bridge=bridge)
+    except Exception:  # noqa: BLE001 - el evento es informativo
+        pass
+
+
+def _clip_title(clip, lang="es"):
+    """Título del manifiesto para los mensajes de evento (best_title
+    del paquete, o title_es/title_en según el idioma)."""
+    viral = clip.get("viral") or {}
+    title_key = "title_en" if lang == "en" else "title_es"
+    return viral.get("best_title") or clip.get(title_key) or ""
+
+
+def _seo_summary(seo_scores):
+    """'YT 92 · TT 89 · IG 91 · FB 90' a partir de
+    {plataforma: {score}} (manifiesto de auto_clips)."""
+    short = {"youtube_shorts": "YT", "tiktok": "TT",
+             "instagram_reels": "IG", "facebook_reels": "FB"}
+    return " · ".join(
+        f"{short.get(p, p)} {((seo_scores or {}).get(p) or {}).get('score')}"
+        for p in PLATFORMS)
 
 
 # ---------------------------------------------------------------------------
@@ -148,35 +189,64 @@ def fallback_order(streamers, only=None):
     return head + tail + _eligible("en")
 
 
+def _seo_score_value(entry):
+    """Score numérico de una entrada SEO del manifiesto ({score}).
+    Sin número -> 0 (falla cerrado, nunca rompe el min())."""
+    value = (entry or {}).get("score")
+    return value if isinstance(value, (int, float)) else 0
+
+
+def _gate_components(clip, vod_id):
+    """Componentes crudos de los filtros duros, para
+    clip_passes_gates. ``vod_id`` solo por simetría con
+    clip_passes_gates."""
+    dur = clip.get("duration")
+    dur_ok = (isinstance(dur, (int, float))
+              and MIN_DUR_S <= dur <= MAX_DUR_S)
+    viral = clip.get("viral_score") or {}
+    total = viral.get("total")
+    viral_ok = isinstance(total, (int, float)) and total >= MIN_VIRALITY
+    seo = clip.get("seo_scores") or {}
+    missing = [p for p in PLATFORMS if p not in seo]
+    if missing:
+        seo_min = None
+    else:
+        seo_min = min(_seo_score_value(seo.get(p)) for p in PLATFORMS)
+    seo_ok = seo_min is not None and seo_min >= MIN_SEO
+    game = ((clip.get("moment_card") or {}).get("game")
+            or (clip.get("viral") or {}).get("game"))
+    from .category import is_gta6
+    game_ok = bool(game) and bool(is_gta6(game))
+    return {"dur": dur, "dur_ok": dur_ok, "total": total,
+            "viral_ok": viral_ok, "seo": seo, "missing_seo": missing,
+            "seo_min": seo_min, "seo_ok": seo_ok,
+            "game": game, "game_ok": game_ok}
+
+
 def clip_passes_gates(clip, vod_id):
     """¿El clip del manifiesto pasa los filtros duros del fallback?
 
     Devuelve (ok, motivos). Falla cerrado: sin viral_score, sin SEO
     en alguna plataforma o sin juego verificado, no pasa.
     """
+    c = _gate_components(clip, vod_id)
     reasons = []
-    dur = clip.get("duration")
-    if not isinstance(dur, (int, float)) or not (MIN_DUR_S <= dur <= MAX_DUR_S):
-        reasons.append(f"duración {dur}s fuera de {MIN_DUR_S}-{MAX_DUR_S}s")
-    viral = clip.get("viral_score") or {}
-    total = viral.get("total")
-    if not isinstance(total, (int, float)) or total < MIN_VIRALITY:
-        reasons.append(f"viralidad {total} < {MIN_VIRALITY}")
-    seo = clip.get("seo_scores") or {}
-    missing = [p for p in PLATFORMS if p not in seo]
-    if missing:
-        reasons.append(f"sin SEO en: {', '.join(missing)}")
-    else:
-        worst = min((seo[p] or {}).get("score", 0) for p in PLATFORMS)
-        if worst < MIN_SEO:
-            detail = ", ".join(
-                f"{p} {(seo[p] or {}).get('score')}" for p in PLATFORMS)
-            reasons.append(f"SEO mínimo {worst} < {MIN_SEO} ({detail})")
-    game = ((clip.get("moment_card") or {}).get("game")
-            or (clip.get("viral") or {}).get("game"))
-    from .category import is_gta6
-    if not game or not is_gta6(game):
-        reasons.append(f"juego no verificado como GTA VI: {game!r}")
+    if not c["dur_ok"]:
+        reasons.append(
+            f"duración {c['dur']}s fuera de {MIN_DUR_S}-{MAX_DUR_S}s")
+    if not c["viral_ok"]:
+        reasons.append(f"viralidad {c['total']} < {MIN_VIRALITY}")
+    if c["missing_seo"]:
+        reasons.append(f"sin SEO en: {', '.join(c['missing_seo'])}")
+    elif not c["seo_ok"]:
+        detail = ", ".join(
+            f"{p} {(c['seo'].get(p) or {}).get('score')}"
+            for p in PLATFORMS)
+        reasons.append(
+            f"SEO mínimo {c['seo_min']} < {MIN_SEO} ({detail})")
+    if not c["game_ok"]:
+        reasons.append(
+            f"juego no verificado como GTA VI: {c['game']!r}")
     return (not reasons), reasons
 
 
@@ -286,6 +356,43 @@ def latest_vod_for(streamer_entry):
     if not vods:
         return None
     return vods[0]
+
+
+_GTA6_TITLE_TOKENS = ("gtavi", "gta6", "grandtheftautovi")
+
+
+def _title_mentions_gta6(title):
+    """¿El título menciona GTA VI? Búsqueda por subcadena sobre
+    el título compactado (minúsculas, sin espacios ni signos):
+    "GTA 6", "GTA VI", "GTA6", "Grand Theft Auto VI". Un título
+    como "GTA Vice City" también casa (fail open: se procesa)."""
+    compact = "".join(ch for ch in (title or "").lower()
+                      if ch.isalnum())
+    return any(tok in compact for tok in _GTA6_TITLE_TOKENS)
+
+
+def vod_clearly_not_gta6(vod):
+    """¿El VOD claramente NO es GTA VI (pre-chequeo, 2026-11-19)?
+
+    Devuelve el motivo o None. Se salta solo si el título NO
+    menciona GTA VI / GTA 6 / Grand Theft Auto VI Y la categoría
+    Helix es conocida y no es GTA VI (p. ej. GTA IV, Slots). Ante
+    la duda (título con mención, sin categoría o categoría GTA
+    VI) se procesa: la puerta precisa sigue siendo el juego del
+    manifiesto en clip_passes_gates. Un título vacío no menciona
+    nada: con categoría conocida no GTA VI, se salta igual.
+    """
+    vod = vod or {}
+    if _title_mentions_gta6(vod.get("title") or ""):
+        return None
+    category = (vod.get("category") or "").strip()
+    if not category:
+        return None
+    from .category import is_gta6
+    if is_gta6(category):
+        return None
+    return (f"título sin mención de GTA VI y categoría Helix "
+            f"{category!r} (no es GTA VI)")
 
 
 def run_auto_clips(vod_url, out_dir, top_n=TOP_N_PER_VOD,
@@ -515,6 +622,20 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             _log(f"{name}: VOD {vod_id} en enfriamiento (intentado "
                  "hace <6 h); se sigue.")
             continue
+        # Pre-chequeo de VOD (2026-11-19): si el VOD claramente NO
+        # es GTA VI, se salta SIN gastar el cupo de 2 VODs ni
+        # refrescar el enfriamiento (auto_clips quemaría ~20 min en
+        # un VOD de GTA IV o Slots que no deja ningún clip que pase
+        # la puerta de juego por pico). Ante la duda se procesa
+        # (fail open: la puerta precisa sigue siendo el juego del
+        # manifiesto en clip_passes_gates). La categoría Helix es
+        # la del ÚLTIMO tramo, así que por sí sola no veta: hace
+        # falta que el título tampoco mencione GTA VI.
+        skip_reason = vod_clearly_not_gta6(vod)
+        if skip_reason:
+            _log(f"{name}: VOD {vod_id} se salta ({skip_reason}); "
+                 "sin gastar cupo ni enfriamiento.")
+            continue
         vods_tried += 1
         # Fase en vivo: se refresca al empezar cada VOD (un VOD
         # tarda ~8 min; sin esto la fase envejece y el panel la
@@ -534,6 +655,16 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         if not manifest:
             mark_vod_attempted(state, vod_id)
             continue
+        _vl = manifest.get("vod_layout") or {}
+        if _vl.get("facecam_box"):
+            _log(f"  layout VOD: facecam {_vl.get('facecam_box')} "
+                 f"(method={_vl.get('method')}, {_vl.get('hits')}/"
+                 f"{_vl.get('samples')} muestras).")
+        else:
+            _log("  layout VOD: sin facecam estable "
+                 f"(mejor grupo {_vl.get('hits', 0)}/"
+                 f"{_vl.get('samples', 0)} muestras); cada clip decide "
+                 "su layout solo.")
         enqueued_here = []
         for clip in (manifest.get("clips") or [])[:top_n]:
             if enqueued >= max_clips:
@@ -543,6 +674,12 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             if not ok:
                 _log(f"  pico {clip.get('peak')}: descartado "
                      f"({'; '.join(reasons)})")
+                _report_event(
+                    "clip_descartado",
+                    f"{name}: «{_clip_title(clip, lang)}» "
+                    f"descartado — {'; '.join(reasons)} "
+                    f"(VOD {vod_id})",
+                    bridge=bridge, dry_run=dry_run)
                 continue
             if already_enqueued(panel_clips, vod_id, start):
                 _log(f"  pico {clip.get('peak')}: ya en la Cola del "
@@ -553,12 +690,24 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             if panel_id:
                 _log(f"  pico {clip.get('peak')}: en Cola del panel "
                      f"como clip #{panel_id} (VOD, sin publicar).")
+                _report_event(
+                    "clip_encolado",
+                    f"{name}: «{_clip_title(clip, lang)}» encolado "
+                    f"(VOD {vod_id}; viralidad "
+                    f"{(clip.get('viral_score') or {}).get('total')}; "
+                    f"SEO {_seo_summary(clip.get('seo_scores'))})",
+                    bridge=bridge, dry_run=dry_run)
                 enqueued += 1
                 enqueued_here.append(int(start))
                 panel_clips.append({"source_id": vod_id,
                                     "start_sec": int(start)})
             else:
                 _log(f"  pico {clip.get('peak')}: no encolado ({why})")
+                _report_event(
+                    "clip_descartado",
+                    f"{name}: «{_clip_title(clip, lang)}» descartado — "
+                    f"{why} (VOD {vod_id})",
+                    bridge=bridge, dry_run=dry_run)
         mark_vod_attempted(state, vod_id, enqueued_here)
     save_state(state_path, state)
     summary = (f"modo VOD: {vods_tried} VOD(s) procesado(s), "
