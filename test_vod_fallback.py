@@ -372,18 +372,32 @@ class TestRun(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertEqual(called, [])
 
-    def test_vod_no_gta_vi_se_salta(self):
+    def test_vod_just_chatting_se_procesa_la_puerta_es_por_pico(self):
+        # La categoría Helix del VOD es la del ÚLTIMO tramo (Rubius
+        # 2932415021 termina en Just Chatting tras horas de GTA VI):
+        # no veta el VOD. La puerta precisa es por pico (juego del
+        # manifiesto en clip_passes_gates).
         vod = {"vod_id": "2932415021",
                "url": "https://www.twitch.tv/videos/2932415021",
-               "title": "Just Chatting", "category": "Just Chatting",
+               "title": "GTA 6", "category": "Just Chatting",
                "live": False}
+        manifest = {"vod_id": "2932415021", "clips": [_clip()]}
+        enqueued = []
+
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip):
+            enqueued.append((streamer, vod_id, clip["peak"]))
+            return 101, ""
+
         n, _ = run(
-            state_path=self.state, out_root=self.out, dry_run=True,
+            max_vods=1, max_clips=2, top_n=2,
+            state_path=self.state, out_root=self.out,
+            bridge=FakeBridge(),
             scan_fn=self._scan([]),
             latest_vod_fn=lambda entry: vod,
-            auto_clips_fn=lambda *a, **k: (_ for _ in ()).throw(
-                AssertionError("VOD no GTA VI no se procesa")))
-        self.assertEqual(n, 0)
+            auto_clips_fn=lambda url, out_dir, top_n=2: manifest,
+            enqueue_fn=_enqueue)
+        self.assertEqual(n, 1)
+        self.assertEqual(enqueued, [("rubius", "2932415021", 3220.0)])
 
 
 class TestState(unittest.TestCase):

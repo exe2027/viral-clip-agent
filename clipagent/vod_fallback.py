@@ -419,18 +419,19 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         vod_id = str(vod.get("vod_id") or "")
         if not vod_id:
             continue
-        from .category import is_gta6
-        if not is_gta6(vod.get("category") or ""):
-            _log(f"{name}: su VOD más reciente ({vod_id}) es de "
-                 f"{vod.get('category')!r}, no GTA VI; se sigue.")
-            continue
+        # La categoría Helix del VOD es la del ÚLTIMO tramo (Rubius
+        # 2932415021 termina en Just Chatting tras horas de GTA VI),
+        # así que NO veta el VOD: la puerta precisa es por pico
+        # (capítulos del VOD en auto_clips) + el juego del manifiesto
+        # en clip_passes_gates. Un VOD entero de Just Chatting no
+        # deja ningún clip que pase esa puerta.
         if vod_on_cooldown(state, vod_id):
             _log(f"{name}: VOD {vod_id} en enfriamiento (intentado "
                  "hace <6 h); se sigue.")
             continue
         vods_tried += 1
         _log(f"{name}: VOD {vod_id} ({vod.get('title', '')[:60]!r}, "
-             f"{vod.get('category')})")
+             f"categoría Helix {vod.get('category')!r})")
         if dry_run:
             _log(f"{name}: dry-run, no se corta ni se encola.")
             mark_vod_attempted(state, vod_id)
