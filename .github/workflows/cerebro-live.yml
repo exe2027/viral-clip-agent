@@ -220,7 +220,13 @@ jobs:
         continue-on-error: true
         with:
           name: cerebro-live-vod-state
-          path: .
+          # El artefacto guarda state.json en su raíz: hay que
+          # bajarlo a runs/vod-fallback para que quede en
+          # runs/vod-fallback/state.json, donde lo lee vod-fallback.
+          # Con path: . quedaba en ./state.json y el enfriamiento
+          # de 6 h nunca se aplicaba (cada corrida reprocesaba
+          # los 2 VODs).
+          path: runs/vod-fallback
       - name: Modo VOD (Rubius, IlloJuan) -> Cola del panel, sin publicar
         env:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
