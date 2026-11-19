@@ -43,8 +43,15 @@ jobs:
             pip-${{ runner.os }}-py312-
       - name: Instalar ffmpeg y dependencias de vision
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          # apt en el runner falla a veces de forma transitoria
+          # ("Resource temporarily unavailable" al bajar los .deb
+          # de ffmpeg): reintentar 3 veces antes de rendirse.
+          for i in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg && break
+            echo "apt intento $i falló, reintentando en 20 s..."
+            sleep 20
+          done
+          ffmpeg -version | head -1
           python -m pip install -q -e ".[vision]"
       - name: Re-validar renders y marcar previews aprobados
         run: |
