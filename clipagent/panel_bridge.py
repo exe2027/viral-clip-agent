@@ -187,14 +187,14 @@ def report_brain_phase(phase, detail="", bridge=None):
     corre en Actions. Devuelve True si el panel aceptó el reporte.
     """
     try:
+        run_id = os.environ.get("GITHUB_RUN_ID", "")
         if bridge is not None and hasattr(bridge, "report_phase"):
-            bridge.report_phase(phase, detail=detail)
+            bridge.report_phase(phase, detail=detail, run_id=run_id)
             return True
         b = PanelBridge.from_env()
         if b is None:
             return False
-        res = b.report_phase(phase, detail=detail,
-                             run_id=os.environ.get("GITHUB_RUN_ID", ""))
+        res = b.report_phase(phase, detail=detail, run_id=run_id)
         return res is not None
     except Exception as e:  # noqa: BLE001 - la fase es informativa
         print(f"[panel] fase {phase} no reportada ({e})", flush=True)

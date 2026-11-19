@@ -95,7 +95,13 @@ class TestReportBrainPhase(unittest.TestCase):
         rec = _RecordingBridge()
         self.assertTrue(report_brain_phase("cortando_clip", "rubius",
                                            bridge=rec))
-        self.assertEqual(rec.phases, [("cortando_clip", "rubius", "")])
+        self.assertEqual(len(rec.phases), 1)
+        self.assertEqual(rec.phases[0][0], "cortando_clip")
+        self.assertEqual(rec.phases[0][1], "rubius")
+        # El run_id sale de GITHUB_RUN_ID cuando corre en Actions
+        # (en local, vacío); nunca se inventa.
+        self.assertEqual(rec.phases[0][2],
+                         os.environ.get("GITHUB_RUN_ID", ""))
 
     def test_error_del_bridge_no_levanta(self):
         class Broken:
