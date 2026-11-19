@@ -109,6 +109,10 @@ def build_parser():
     p_vodfb.add_argument("--dry-run", action="store_true",
                          help="Solo decide (barrido + VODs + filtros), "
                               "sin cortar ni encolar")
+    p_vodfb.add_argument("--ignore-cooldown", action="store_true",
+                         help="Reprocesa VODs intentados hace <6 h (para "
+                              "reintentos tras un arreglo; el cron normal "
+                              "nunca lo usa)")
     p_replay = sub.add_parser(
         "live-replay",
         help="Replay de un VOD como si fuera en vivo (mismo cutter)")
@@ -390,6 +394,7 @@ def main(argv=None):
             "only": [s for s in args.streamers.split(",") if s.strip()]
                     or None,
             "dry_run": args.dry_run,
+            "ignore_cooldown": args.ignore_cooldown,
         }
         if args.state:
             kwargs["state_path"] = args.state
