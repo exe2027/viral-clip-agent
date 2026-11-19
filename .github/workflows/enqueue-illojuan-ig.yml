@@ -1,0 +1,50 @@
+# Encolar + PUBLICAR el clip IlloJuan borra GTA 6 SOLO en Instagram.
+#
+# Repost del clip 13 (publicado el 2026-11-18 en YouTube, TikTok y
+# Facebook; en Instagram falló con la cuenta vieja baneada).
+# Prueba real del vínculo nuevo @elmegaclipgta6 con la credencial
+# Meta actualizada (token largo, ig_user_id 17841425387646573).
+# Autorizado por el dueño 2026-11-19. Solo Instagram: no se
+# republica en las otras 3 cuentas.
+#
+# Flujo:
+#   1. enqueue_illojuan_ig.py: POST /api/clips + PUT del MP4 a R2.
+#   2. publish_illojuan_ig.py: POST /preview-seen, POST /publish,
+#      poll de GET /api/jobs hasta posted/failed/draft (max 14 min).
+#
+# Credenciales: PANEL_USERNAME/PANEL_PASSWORD viven solo como
+# secretos del entorno `sebastian` de GitHub; se inyectan en el
+# runner y nunca salen en logs.
+name: Enqueue IlloJuan IG repost
+
+on:
+  workflow_dispatch:
+
+jobs:
+  enqueue-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: sebastian
+    env:
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_TENANT: sebastian
+      PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+      PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Encolar clon IlloJuan solo Instagram (sin publicar todavia)
+        run: |
+          set -euo pipefail
+          python3 runs/live/illojuan-borra-gta6-ig/enqueue_illojuan_ig.py \
+            | tee /tmp/enqueue-ig.log
+          grep -oP 'CLIP CREADO EN LA COLA: id = \K[0-9]+' /tmp/enqueue-ig.log \
+            > /tmp/clip_id_ig.txt
+          echo "CLIP_ID=$(cat /tmp/clip_id_ig.txt)"
+      - name: Publicar solo en Instagram + verificar
+        run: |
+          set -euo pipefail
+          ID="$(cat /tmp/clip_id_ig.txt)"
+          echo "Publicando clip $ID solo en Instagram"
+          python3 runs/live/illojuan-borra-gta6-ig/publish_illojuan_ig.py \
+            "$ID" --wait-min=14
