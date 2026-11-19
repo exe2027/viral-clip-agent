@@ -334,7 +334,6 @@ class TestEnqueuePanelRescue(unittest.TestCase):
                        "human": None, "motivo": "rescate",
                        "shouts": 17, "rescate_gritos": rescue},
             "streamer_hype": {"count": 0, "distinct": 0, "phrases": []},
-            "title": "Auronplay grita",
             "subtitles_complete": True, "publish_blocked": False,
             "seo": {"youtube_shorts": 94, "tiktok": 92,
                     "instagram_reels": 91, "facebook_reels": 90},
