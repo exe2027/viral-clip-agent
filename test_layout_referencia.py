@@ -1,27 +1,33 @@
-"""Layout GTA 6 personalizado — variante RDJavi (referencia del usuario).
+"""Layout GTA 6 personalizado — variante RDJavi v2 (plantilla
+2026-11-18 21:01, clipagent/rdjavi.py, portada al camino
+automático 2026-11-18).
 
 Referencia: Instagram reel https://www.instagram.com/reel/Df4sy4bxlmr/
-de RDJavi, desglose exacto fotograma a fotograma (2026-11-18).
-DJ Mariio (Df4uyMVjDwq) está APARCADO por orden del usuario
-2026-11-18: no se usa como layout.
+de RDJavi, desglose exacto fotograma a fotograma (2026-11-18),
+revisado con la captura de Willyrex. DJ Mariio (Df4uyMVjDwq)
+está APARCADO por orden del usuario 2026-11-18: no se usa como
+layout.
 
-Geometría RDJavi sobre 1080x1920:
-  * Zona superior 0-730: fondo desenfocado de la propia webcam.
-  * Webcam nítida centrada 580x590 en (250,190), casi 1:1, esquinas
-    redondeadas, solape 50 px sobre el gameplay.
-  * Gameplay 730-1770 (1080x1040, ~55-56%), sin marco.
-  * Banda inferior 1770-1920: gameplay difuminado + barra atardecer
-    Vice City (rosa/violeta/naranja) + handle del canal.
-  * Subtítulos: una línea centrada en y≈1690 (MarginV 230), letra
-    chica 32 px fina blanca con contorno negro, sin fondo ni
-    resaltado palabra por palabra (estilo "ref").
+Geometría v2 sobre 1080x1920:
+  * Webcam ARRIBA a ANCHO COMPLETO 1080x702 (y 0-702): COVER del
+    rectángulo PiP detectado por clip, sin barras negras, sin
+    esquinas redondeadas y sin fondo desenfocado (la webcam tapa
+    todo el ancho).
+  * Franja negra del TÍTULO 702-800 (98 px): una sola línea, sin
+    "GTA 6" delante (se quema en el paso de subtítulos).
+  * Gameplay 800-1740 (1080x940), con zoom suave 1,15x en el
+    payoff (18-24 s del clip) y punch-in de la webcam 1,30x en la
+    reacción (16-26 s).
+  * Barra negra de SUBTÍTULOS 1740-1920 (180 px): subtítulos
+    amarillos fijos abajo del todo, nunca sobre el gameplay.
+  * Sin handle del canal ni barra atardecer (geometría vieja
+    retirada con la v2).
 """
 import shutil
 import subprocess
 import unittest
 
 from clipagent.render import (
-    CHANNEL_HANDLE,
     DEFAULTS,
     RDJAVI_BAND_H,
     RDJAVI_BAND_Y0,
@@ -30,8 +36,10 @@ from clipagent.render import (
     RDJAVI_CAM_X,
     RDJAVI_CAM_Y,
     RDJAVI_GAME_H,
+    RDJAVI_GAME_Y0,
+    RDJAVI_TITLE_H,
+    RDJAVI_TITLE_Y0,
     RDJAVI_TOP_H,
-    SUNSET_COLORS,
     _split_params,
     detect_framing,
     resolve_split_variant,
@@ -91,42 +99,76 @@ class TestDeteccionEncuadre(unittest.TestCase):
         self.assertEqual(p2["split_variant"], "rdjavi")
 
 
-class TestGrafoRdjavi(unittest.TestCase):
-    def test_geometria_exacta_en_el_grafo(self):
+class TestGrafoRdjaviV2(unittest.TestCase):
+    def test_geometria_exacta_v2_en_el_grafo(self):
         f = _rdjavi_graph()
-        # Zona superior: fondo desenfocado 1080x730.
-        self.assertIn(f"scale=1080:{RDJAVI_TOP_H}", f)
-        self.assertIn("boxblur=", f)
-        # Webcam nítida 580x590, centrada en (250,190), con esquinas
-        # redondeadas (geq) y solape sobre el gameplay.
+        # Webcam a ancho completo 1080x702 en (0,0): COVER del PiP,
+        # sin barras negras, sin esquinas redondeadas (geq) ni fondo
+        # desenfocado (boxblur): la webcam tapa todo el ancho.
         self.assertIn(f"scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H}", f)
         self.assertIn(f"overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}", f)
-        self.assertIn("alpha_expr=", f)
-        # Gameplay 1080x1040 y banda inferior 1080x150.
-        self.assertIn(f"scale=1080:{RDJAVI_GAME_H}", f)
-        self.assertIn(f"scale=1080:{RDJAVI_BAND_H}", f)
-        # Barra atardecer Vice City (rosa/violeta/naranja) en la
-        # costura gameplay/banda (y=1764) y handle del canal.
-        for color in SUNSET_COLORS:
-            self.assertIn(color.lstrip("#").lower(), f.lower())
-        self.assertIn(CHANNEL_HANDLE, f)
-        self.assertIn("drawtext=", f)
-        self.assertIn(f"overlay=0:{RDJAVI_BAND_Y0 - 6}", f)
-        # Lienzo final 1080x1920: 730 + 1040 + 150.
-        self.assertEqual(RDJAVI_TOP_H + RDJAVI_GAME_H + RDJAVI_BAND_H, 1920)
+        self.assertNotIn("boxblur=", f)
+        self.assertNotIn("alpha_expr=", f)
+        self.assertNotIn("drawtext=", f)
+        # Gameplay 1080x940 con pad negro: el juego va a y=800 y la
+        # franja del título (702-800) y la barra de subtítulos
+        # (1740-1920) quedan en negro.
+        self.assertIn("crop=1080:940", f)
+        self.assertIn(f"pad=1080:1920:0:{RDJAVI_GAME_Y0}:black", f)
+        # Sin handle del canal ni barra atardecer (geometría vieja).
+        self.assertNotIn("ELCLIPDEGTA6", f)
+        self.assertNotIn("gradients=", f)
+        # Lienzo final 1080x1920: 702 + 98 + 940 + 180.
+        self.assertEqual(RDJAVI_TOP_H + RDJAVI_TITLE_H + RDJAVI_GAME_H
+                         + RDJAVI_BAND_H, 1920)
+        self.assertEqual(RDJAVI_TITLE_Y0, 702)
+        self.assertEqual(RDJAVI_GAME_Y0, 800)
+        self.assertEqual(RDJAVI_BAND_Y0, 1740)
         # Sin cámara en esquina sobre el juego (no hay PiP).
         self.assertNotIn("pip", f.lower())
 
-    def test_punch_in_solo_cuando_se_pide(self):
+    def test_punch_in_y_game_zoom_por_defecto_v2(self):
+        # Defaults v2: punch-in de la webcam 16-26 s y zoom suave
+        # del gameplay 18-24 s (el pico va en el segundo 20 del
+        # clip por construcción).
         f = _rdjavi_graph()
-        self.assertNotIn("between(t,", f)
+        self.assertIn("enable='lt(t,16)+gte(t,26)'", f)
+        self.assertIn("enable='gte(t,16)*lt(t,26)'", f)
+        self.assertIn("between(t,18,20)", f)
+        self.assertIn("between(t,22,24)", f)
+        # Explícito manda sobre el default.
         f2 = _rdjavi_graph(punch_in={"t0": 5.0, "t1": 7.0, "zoom": 1.25})
-        self.assertIn("between(t,5.0,7.0)", f2)
+        self.assertIn("enable='gte(t,5)*lt(t,7)'", f2)
+        self.assertNotIn("gte(t,16)*lt(t,26)", f2)
+        # False desactiva el punch-in (queda una sola rama de cámara).
+        f3 = _rdjavi_graph(punch_in=False)
+        self.assertNotIn("camZ", f3)
+        self.assertNotIn("gte(t,16)*lt(t,26)", f3)
+
+    def test_sin_caja_no_hay_default_silencioso_en_el_grafo(self):
+        # La caja del grafo es la que se pasa: dos cajas distintas
+        # (p3220 arriba-izquierda, p7775 abajo-izquierda) dan dos
+        # recortes distintos, nunca el mismo default.
+        f_arriba = segment_filter_graph(
+            "0:v", "vout", "split",
+            {"box": [0.0, 0.0, 35.06, 22.81], "game_x0": 20.0,
+             "game_h": 1320, "cam_h": 600, "split_variant": "rdjavi",
+             "framing": "face", "punch_in": False},
+            2560, 1440, dict(DEFAULTS))
+        f_abajo = segment_filter_graph(
+            "0:v", "vout", "split",
+            {"box": [0.0, 39.12, 35.06, 22.81], "game_x0": 20.0,
+             "game_h": 1320, "cam_h": 600, "split_variant": "rdjavi",
+             "framing": "face", "punch_in": False},
+            2560, 1440, dict(DEFAULTS))
+        self.assertIn("crop=561:364:0:0", f_arriba)
+        self.assertIn("crop=561:364:0:626", f_abajo)
+        self.assertNotEqual(f_arriba, f_abajo)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "falta ffmpeg")
 class TestRenderRdjaviReal(unittest.TestCase):
-    """Render real (sintético) de la variante RDJavi: 1080x1920."""
+    """Render real (sintético) de la variante RDJavi v2: 1080x1920."""
 
     def test_rdjavi_y_plain_renderizan_1080x1920(self):
         src = "/tmp/test-rdjavi-src.mp4"

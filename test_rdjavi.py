@@ -155,7 +155,9 @@ def test_make_karaoke_ass_abajo_del_todo():
     ass = make_karaoke_ass([(1.12, 5.18, "hola mundo")], KARAOKE_STYLE)
     assert SUBS_ALIGN == 2
     assert SUBS_MARGIN_V == 12
-    assert "Style: Karaoke,Arial Black,56" in ass
+    # 56 px REALES: el ASS lleva Fontsize 79 (56 * 1,4102,
+    # calibración libass de Arial Black, 2026-11-18).
+    assert "Style: Karaoke,Arial Black,79" in ass
     assert ",0,2,10,10,12,1" in ass
     assert "{\\k" in ass
     assert "hola" in ass
@@ -269,7 +271,8 @@ def test_fuente_pesada_tipo_arial_black_titulo_y_subtitulos():
     Noto Sans Black anterior era solo parecida y el usuario
     la rechazo: tiene que ser identica a la captura. En la
     revision v2 el titulo y los subtitulos van a 64 px (el
-    karaoke sigue a 56 px, que lo fija su estilo)."""
+    karaoke sigue a 56 px reales, que lo fija su estilo: el ASS
+    lleva Fontsize 79 por la calibración libass)."""
     from clipagent.rdjavi import SUBS_FONT
     assert SUBS_FONT == "Arial Black"
     ass = make_plain_ass(
@@ -281,7 +284,7 @@ def test_fuente_pesada_tipo_arial_black_titulo_y_subtitulos():
     assert "Style: Title,Arial Black,90" in ass
     karaoke = make_karaoke_ass([(1.12, 5.18, "hola mundo")],
                                KARAOKE_STYLE)
-    assert "Style: Karaoke,Arial Black,56" in karaoke
+    assert "Style: Karaoke,Arial Black,79" in karaoke
 
 
 def test_ass_font_size_calibracion_libass():

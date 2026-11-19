@@ -218,10 +218,15 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
             effective_subtitle_margin_v,
             subtitles_overlap_webcam,
         )
-        # Estilo RDJavi total (2026-11-18): referencia 230, mínimo 200.
-        self.assertFalse(subtitles_overlap_webcam(230))
-        self.assertEqual(effective_subtitle_margin_v(140), 200)
-        self.assertEqual(effective_subtitle_margin_v(230), 230)
+        # Estilo RDJavi v2 (2026-11-18): subtítulos en la barra
+        # negra 1740-1920 (referencia MarginV 12, mínimo 0); la
+        # referencia vieja 230 queda en el gameplay y solapa.
+        self.assertTrue(subtitles_overlap_webcam(230))
+        self.assertFalse(subtitles_overlap_webcam(12, fontsize=64))
+        self.assertEqual(effective_subtitle_margin_v(140), 140)
+        self.assertEqual(effective_subtitle_margin_v(230), 140)
+        self.assertEqual(effective_subtitle_margin_v(12, fontsize=64),
+                         12)
 
     def test_solo_segmento_y_chat_en_ventana(self):
         cfg = load_config()["clips"]

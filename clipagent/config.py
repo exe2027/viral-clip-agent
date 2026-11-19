@@ -83,10 +83,11 @@ DEFAULT_CONFIG = {
         "split_cam_h": 600,
     },
     "subtitles": {
-        # Estilo por defecto "karaoke" (decisión del usuario
-        # 2026-11-18 19:17): palabra por palabra, palabra activa
-        # amarilla y resto blanco, 56 px negrita con contorno negro.
-        "default_style": "karaoke",
+        # Estilo por defecto "rdjavi" (plantilla v2, 2026-11-18):
+        # subtítulos fijos amarillos, Arial Black 64 px reales,
+        # en la barra negra 1740-1920, nunca sobre el gameplay.
+        # El karaoke queda como opción secundaria.
+        "default_style": "rdjavi",
         "subtitle_lang": "auto",  # auto | es | en
         "translate": True,        # traducir a inglés lo que no sea español
         # Regla del usuario 2026-11-17 22:10: SIEMPRE subtítulos,
@@ -95,17 +96,15 @@ DEFAULT_CONFIG = {
         "complete": True,
         "block_without_subtitles": True,
         "needs_human_transcription_on_no_speech": True,
-        # Zona de subtítulos (decisión del usuario 2026-11-17,
-        # geometría RDJavi 2026-11-18): siempre en la zona de juego,
-        # nunca sobre la cara del influencer / la webcam (arriba,
-        # 0-730 px) ni sobre la banda inferior (1770-1920 px). La
-        # posición de referencia es MarginV 230 (borde inferior del
-        # texto en y≈1690, 87-89%); el mínimo que deja el texto fuera
-        # de la banda es 200. burn_subtitles() lo impone como rango.
-        "subtitle_zone": "gameplay",
+        # Zona de subtítulos (plantilla v2, 2026-11-18): siempre en
+        # la barra negra inferior (1740-1920 px, MarginV 12), nunca
+        # sobre la webcam (0-702 px) ni sobre el gameplay
+        # (800-1740 px, ahí van los subtítulos propios de GTA 6).
+        # burn_subtitles() deja el MarginV dentro de la barra.
+        "subtitle_zone": "bottom_bar",
         "subtitle_safe_gap_px": 80,
-        "subtitle_bottom_reserve_px": 50,
-        "subtitle_game_bottom_px": 1770,
+        "subtitle_bottom_reserve_px": 0,
+        "subtitle_game_bottom_px": 1740,
     },
     # Política de traducción (regla del usuario, 2026-11-16):
     # es -> transcribe-only; cualquier otro idioma -> translate-to-en.
@@ -114,35 +113,46 @@ DEFAULT_CONFIG = {
         "others": "translate-to-en",
     },
     "subtitle_styles": {
-        # Estilo "ref" (referencia RDJavi, 2026-11-18, default): una
-        # línea centrada en la parte baja del gameplay (MarginV 230,
-        # borde inferior en y≈1690), letra chica 32 px fina, blanca
-        # con contorno negro, sin fondo ni resaltado palabra por
-        # palabra, sin amarillo ni negrita. Los estilos viejos quedan
-        # disponibles pero ya no son el default.
+        # Plantilla v2 (2026-11-18): TODOS los estilos queman en la
+        # barra negra inferior (MarginV 12, texto en 1740-1920 px),
+        # nunca sobre el gameplay (ahí van los subtítulos propios
+        # de GTA 6). El clamp de burn_subtitles corrige cualquier
+        # MarginV viejo a la barra.
+        "rdjavi": {
+            # Estilo v2 (default): subtítulos fijos amarillos,
+            # Arial Black 64 px reales, contorno negro grueso (6),
+            # en la barra negra abajo del todo. Sin karaoke.
+            "font_color": "#FFFF00", "border_color": "#000000",
+            "border_width": 6, "fontsize": 64, "bold": True,
+            "margin_v": 12, "max_chars": 20, "max_duration": 2.0,
+            "box": False,
+        },
+        # Estilo "ref": una línea centrada en la barra negra,
+        # letra chica 32 px fina, blanca con contorno negro, sin
+        # fondo ni resaltado palabra por palabra.
         "ref": {
             "font_color": "#FFFFFF", "border_color": "#000000",
             "border_width": 2, "fontsize": 32, "bold": False,
-            "margin_v": 230, "max_chars": 42, "max_duration": 3.0,
+            "margin_v": 12, "max_chars": 42, "max_duration": 3.0,
             "box": False,
         },
         "tiktok": {
             "font_color": "#FFFFFF", "border_color": "#000000",
             "border_width": 3, "fontsize": 48, "bold": True,
-            "margin_v": 230, "max_chars": 20, "max_duration": 2.0,
+            "margin_v": 12, "max_chars": 20, "max_duration": 2.0,
             "box": False,
         },
         "highlight": {
             "font_color": "#FFFF00", "border_color": "#000000",
             "border_width": 2, "fontsize": 52, "bold": True,
-            "margin_v": 230, "max_chars": 20, "max_duration": 2.0,
+            "margin_v": 12, "max_chars": 20, "max_duration": 2.0,
             "box": True,
         },
         "karaoke": {
             "font_color": "#FFFFFF", "active_word_color": "#FFFF00",
             "border_color": "#000000",
             "border_width": 4, "fontsize": 56, "bold": True,
-            "margin_v": 230, "max_chars": 8, "max_duration": 1.0,
+            "margin_v": 12, "max_chars": 8, "max_duration": 1.0,
             "box": False,
         },
     },
@@ -284,16 +294,20 @@ RULES_PRE_ROLL_S = 20
 RULES_SPLIT_GAME_H = 1320
 RULES_SPLIT_CAM_H = 600
 RULES_SUBTITLE_SAFE_GAP_PX = 80
-# Geometría RDJavi (layout GTA 6 por defecto, 2026-11-18): la cámara
-# está ARRIBA (0-730 px) y el gameplay termina en 1770 px. El
-# MarginV mínimo deja el borde inferior del texto en y=1720 como
-# mucho (50 px de reserva sobre la banda inferior).
-RULES_RDJAVI_CAM_BOTTOM = 730
-RULES_RDJAVI_GAME_BOTTOM = 1770
-RULES_SUBTITLE_BOTTOM_RESERVE_PX = 50
-RULES_SUBTITLE_MIN_MARGIN_V = (1920 - RULES_RDJAVI_GAME_BOTTOM
-                               + RULES_SUBTITLE_BOTTOM_RESERVE_PX)  # 200
-RULES_SUBTITLE_REF_MARGIN_V = 230  # referencia RDJavi: texto en y≈1690
+# Geometría RDJavi v2 (layout GTA 6 por defecto, port 2026-11-18):
+# la cámara está ARRIBA a ancho completo (0-702 px), la franja de
+# título es 702-800 px, el gameplay es 800-1740 px y la barra de
+# subtítulos es 1740-1920 px. Los subtítulos viven ENTEROS en la
+# barra (nunca sobre el gameplay): el MarginV de referencia es 12
+# y el mínimo es 0 (el texto puede tocar el borde inferior); el
+# máximo lo da el tamaño de letra (ver effective_subtitle_margin_v
+# en transcribe.py). La corrección vieja (mínimo 200, referencia
+# 230, texto en el gameplay en y≈1690) queda retirada.
+RULES_RDJAVI_CAM_BOTTOM = 702
+RULES_RDJAVI_GAME_BOTTOM = 1740
+RULES_SUBTITLE_BOTTOM_RESERVE_PX = 0
+RULES_SUBTITLE_MIN_MARGIN_V = 0
+RULES_SUBTITLE_REF_MARGIN_V = 12  # referencia v2: texto en la barra
 
 
 def clip_duration_ok(duration_s, cfg=None):
@@ -324,21 +338,14 @@ def clip_duration_ok(duration_s, cfg=None):
 
 
 def subtitle_min_margin_v(cfg=None):
-    """MarginV mínimo para que el subtítulo no baje a la banda inferior.
+    """MarginV mínimo del subtítulo (plantilla v2, 2026-11-18).
 
-    Layout RDJavi (GTA 6 por defecto, 2026-11-18): streamer arriba
-    (0-730 px), gameplay 730-1770 px, banda inferior 1770-1920 px.
-    Con Alignment=2 el borde inferior del texto queda en
-    1920-MarginV; para que no pase de y=1720 (50 px de reserva
-    sobre la banda) hacen falta 1920 - 1770 + 50 = 200 px.
+    El texto vive en la barra de subtítulos 1740-1920 px: el
+    mínimo es 0 (el borde inferior del texto puede tocar y=1920)
+    y el máximo lo da el tamaño de letra (el borde superior no
+    puede subir de 1740; ver effective_subtitle_margin_v en
+    transcribe.py). ``cfg`` queda por compatibilidad.
     """
-    if cfg is not None:
-        subs = (cfg or {}).get("subtitles") or {}
-        reserve = int(subs.get("subtitle_bottom_reserve_px")
-                      or RULES_SUBTITLE_BOTTOM_RESERVE_PX)
-        game_bottom = int(subs.get("subtitle_game_bottom_px")
-                          or RULES_RDJAVI_GAME_BOTTOM)
-        return 1920 - game_bottom + reserve
     return RULES_SUBTITLE_MIN_MARGIN_V
 
 

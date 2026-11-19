@@ -98,7 +98,7 @@ clips:
   split_cam_h: 600        # alto del panel de cámara (split simple)
 
 subtitles:
-  default_style: "karaoke" # karaoke (default 2026-11-18) | ref | tiktok | highlight
+  default_style: "rdjavi" # rdjavi (default, plantilla v2 2026-11-18) | karaoke | ref | tiktok | highlight
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
   # REGLA DEL USUARIO 2026-11-17 22:10: SIEMPRE subtítulos, COMPLETOS.
@@ -109,18 +109,17 @@ subtitles:
   block_without_subtitles: true  # sin SRT quemado -> clip BLOQUEADO, no publicable
   needs_human_transcription_on_no_speech: true  # si Whisper no encuentra voz, lo revisa el usuario de oído, no se publica sin subtítulos ni se inventa texto
 
-  # ZONA DE SUBTÍTULOS (decisión del usuario 2026-11-17, geometría
-  # RDJavi 2026-11-18): los subtítulos NUNCA tapan la cara del
-  # influencer / la webcam (arriba, 0-730 px) ni bajan a la banda
-  # inferior (1770-1920 px). Con Alignment=2 (abajo, centrado)
-  # MarginV es la distancia desde el borde inferior: la posición de
-  # referencia es 230 (borde inferior del texto en y≈1690, 87-89%,
-  # parte baja del gameplay); el mínimo es 200 (borde en y=1720).
-  # burn_subtitles() deja el MarginV dentro del rango seguro.
-  subtitle_zone: "gameplay"  # gameplay | bottom (bottom = viejo, prohibido en split)
+  # ZONA DE SUBTÍTULOS (plantilla v2, 2026-11-18): los subtítulos
+  # viven ENTEROS en la barra negra inferior (1740-1920 px,
+  # MarginV 12), NUNCA sobre la webcam (0-702 px) ni sobre el
+  # gameplay (800-1740 px, ahí van los subtítulos propios de
+  # GTA 6). Con Alignment=2 (abajo, centrado) MarginV es la
+  # distancia desde el borde inferior. burn_subtitles() deja el
+  # MarginV dentro de la barra.
+  subtitle_zone: "bottom_bar"  # bottom_bar (v2) | gameplay (viejo, prohibido)
   subtitle_safe_gap_px: 80    # hueco entre el texto y la cámara (split simple)
-  subtitle_bottom_reserve_px: 50  # hueco entre el texto y la banda inferior
-  subtitle_game_bottom_px: 1770  # el gameplay termina en y=1770 (RDJavi)
+  subtitle_bottom_reserve_px: 0  # sin reserva: la barra ES la zona de subtítulos
+  subtitle_game_bottom_px: 1740  # el gameplay termina en y=1740 (RDJavi v2)
 
   # VAD + anti-alucinación — v2.6 (bloque 5 de la revisión interna):
   # faster-whisper con vad_filter y umbrales que cortan las
@@ -207,21 +206,32 @@ subtitle_policy:
 
 # Estilos de subtítulo elegibles (plantillas con
 # preview). Se eligen con --subtitle-style en subtitles.py.
-# margin_v 230 en todos (estilo RDJavi total, 2026-11-18):
-# con Alignment=2 el texto queda en la parte baja del gameplay
-# (borde inferior en y≈1690, 87-89%), nunca sobre la cámara
-# (0-730 px) ni sobre la banda inferior (1770-1920 px).
-# viejo traiga otro valor.
+# margin_v 12 en todos (plantilla v2, 2026-11-18): con
+# Alignment=2 el texto queda en la barra negra inferior
+# (1740-1920 px), nunca sobre el gameplay (ahí van los
+# subtítulos propios de GTA 6) ni sobre la cámara (0-702 px).
 subtitle_styles:
-  ref:                    # RDJavi (default): una línea, letra chica fina,
-    # blanca con contorno negro, sin fondo ni resaltado palabra por
-    # palabra, en la parte baja del gameplay.
+  rdjavi:                 # plantilla v2 (default): subtítulos fijos
+    # amarillos, Arial Black 64 px reales, contorno negro grueso,
+    # en la barra negra abajo del todo. Sin karaoke.
+    font_color: "#FFFF00"
+    border_color: "#000000"
+    border_width: 6
+    fontsize: 64
+    bold: true
+    margin_v: 12
+    max_chars: 20
+    max_duration: 2.0
+    box: false
+  ref:                    # una línea, letra chica fina, blanca con
+    # contorno negro, sin fondo ni resaltado palabra por palabra,
+    # en la barra negra inferior.
     font_color: "#FFFFFF"
     border_color: "#000000"
     border_width: 2
     fontsize: 32
     bold: false
-    margin_v: 230
+    margin_v: 12
     max_chars: 42
     max_duration: 3.0
     box: false
@@ -231,7 +241,7 @@ subtitle_styles:
     border_width: 3
     fontsize: 48
     bold: true
-    margin_v: 230
+    margin_v: 12
     max_chars: 20
     max_duration: 2.0
     box: false
@@ -241,21 +251,21 @@ subtitle_styles:
     border_width: 2
     fontsize: 52
     bold: true
-    margin_v: 230
+    margin_v: 12
     max_chars: 20
     max_duration: 2.0
     box: true
   karaoke:                # palabra por palabra con cambio de color (ASS \k real):
     # la palabra activa va en amarillo, el resto en blanco; grande,
-    # negrita, borde negro, centrado abajo. Es el estilo por defecto
-    # (2026-11-16, arreglo 5: el tiktok se veía "muy sobrio").
+    # negrita, borde negro, centrado abajo. Opción secundaria desde
+    # la v2 (2026-11-18): el default es rdjavi (fijo amarillo).
     font_color: "#FFFFFF"       # palabras pendientes: blanco
     active_word_color: "#FFFF00" # palabra activa: amarillo
     border_color: "#000000"
     border_width: 4
     fontsize: 56
     bold: true
-    margin_v: 230
+    margin_v: 12
     max_chars: 8
     max_duration: 1.0
     box: false

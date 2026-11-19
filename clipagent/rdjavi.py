@@ -546,9 +546,14 @@ def make_karaoke_ass(blocks, style, font_name=SUBS_FONT,
     se pasa, se toma el fin del ultimo bloque.
     """
     from .transcribe import srt_to_karaoke_ass
+    # Calibración libass (2026-11-18): el karaoke de la plantilla
+    # usa Arial Black, así que el Fontsize del ASS lleva el factor
+    # ASS_FONT_SCALE (56 px reales -> Fontsize 79); sin él el texto
+    # salía a 0,71x (40 px) aunque la fuente fuera la misma.
     ass = srt_to_karaoke_ass(blocks, style, font_name=font_name,
                              alignment=SUBS_ALIGN,
-                             margin_v=SUBS_MARGIN_V)
+                             margin_v=SUBS_MARGIN_V,
+                             font_scale=ASS_FONT_SCALE)
     if title:
         if duration is None:
             ends = [b[1] for b in blocks

@@ -171,41 +171,56 @@ class TestReglasDuracion20261117(unittest.TestCase):
 
 class TestReglasSubtitulos20261117(unittest.TestCase):
     def test_margin_v_minimo_200_en_config_y_estilos(self):
-        # Geometría RDJavi (2026-11-18): el mínimo es 200 (borde del
-        # texto en y=1720, fuera de la banda inferior); la referencia
-        # es 230 (y≈1690, parte baja del gameplay).
-        self.assertEqual(subtitle_min_margin_v(), 200)
-        self.assertEqual(subtitle_min_margin_v(load_config()), 200)
+        # Geometría RDJavi v2 (2026-11-18): los subtítulos viven
+        # en la barra negra 1740-1920 (MarginV 12); el mínimo es 0
+        # y el máximo lo da el tamaño de letra (ver
+        # effective_subtitle_margin_v). Todos los estilos llevan
+        # MarginV 12.
+        self.assertEqual(subtitle_min_margin_v(), 0)
+        self.assertEqual(subtitle_min_margin_v(load_config()), 0)
         for name, style in load_config()["subtitle_styles"].items():
-            self.assertGreaterEqual(style["margin_v"], 200, name)
+            self.assertEqual(style["margin_v"], 12, name)
         ref = load_config()["subtitle_styles"]["ref"]
-        self.assertEqual(ref["margin_v"], 230)
+        self.assertEqual(ref["margin_v"], 12)
         self.assertEqual(ref["fontsize"], 32)
         self.assertFalse(ref["bold"])
         self.assertFalse(ref["box"])
+        rdjavi = load_config()["subtitle_styles"]["rdjavi"]
+        self.assertEqual(rdjavi["margin_v"], 12)
+        self.assertEqual(rdjavi["fontsize"], 64)
+        self.assertEqual(load_config()["subtitles"]["default_style"],
+                         "rdjavi")
 
     def test_margin_v_viejo_140_tapaba_la_webcam(self):
-        # Con MarginV 140 el borde inferior del texto queda en
-        # y=1780, dentro de la banda inferior (1770-1920).
-        self.assertTrue(subtitles_overlap_webcam(140))
+        # Con MarginV 140 y letra 32 px el texto queda justo en
+        # 1740-1780 (borde de la barra): no solapa el gameplay.
+        self.assertFalse(subtitles_overlap_webcam(140))
+        # Con letra 48 px el mismo MarginV sube a 1720: solapa.
         self.assertTrue(subtitles_overlap_webcam(140, fontsize=48))
-        # Con 230 (referencia RDJavi) queda en y=1690, parte baja del
-        # gameplay (87-89%), sin tapar la cámara ni la banda.
-        self.assertFalse(subtitles_overlap_webcam(230))
-        self.assertFalse(subtitles_overlap_webcam(230, fontsize=32))
+        # Con 230 (referencia vieja) el texto queda en 1650-1690,
+        # en pleno gameplay: solapa los subtítulos propios de GTA 6.
+        self.assertTrue(subtitles_overlap_webcam(230))
+        self.assertTrue(subtitles_overlap_webcam(230, fontsize=32))
         # Con 1400 el borde superior subiría a la zona de cámara.
         self.assertTrue(subtitles_overlap_webcam(1400))
-        # La posición de referencia (230) sigue dentro del juego.
-        self.assertFalse(subtitles_overlap_webcam(230))
-        self.assertFalse(subtitles_overlap_webcam(230, fontsize=32))
+        # La posición v2 (12) queda en la barra, sin solapar.
+        self.assertFalse(subtitles_overlap_webcam(12))
+        self.assertFalse(subtitles_overlap_webcam(12, fontsize=64))
 
     def test_burn_corrige_el_margin_v_viejo_solo(self):
-        self.assertEqual(effective_subtitle_margin_v(140), 200)
-        self.assertEqual(effective_subtitle_margin_v(140, load_config()), 200)
-        self.assertEqual(effective_subtitle_margin_v(700), 700)
-        # Un MarginV demasiado alto baja al máximo (no tapa la cámara).
+        # El clamp deja el texto entero en la barra 1740-1920:
+        # máximo 180 - alto del texto (a 32 px: 140; a 64 px: 100).
+        self.assertEqual(effective_subtitle_margin_v(140), 140)
+        self.assertEqual(effective_subtitle_margin_v(140, load_config()),
+                         140)
+        self.assertEqual(effective_subtitle_margin_v(700), 140)
+        # Un MarginV demasiado alto baja al máximo (no tapa el juego).
         self.assertLess(effective_subtitle_margin_v(1400), 1400)
-        self.assertEqual(effective_subtitle_margin_v(230), 230)
+        self.assertEqual(effective_subtitle_margin_v(230), 140)
+        # La posición v2 (12) no se toca.
+        self.assertEqual(effective_subtitle_margin_v(12, fontsize=64), 12)
+        self.assertEqual(effective_subtitle_margin_v(230, fontsize=64),
+                         100)
 
     def test_transcripcion_corregida_manda_sobre_whisper(self):
         with tempfile.TemporaryDirectory() as tmp:

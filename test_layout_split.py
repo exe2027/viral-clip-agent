@@ -103,6 +103,41 @@ class TestSplitCut(unittest.TestCase):
 
 SEG2 = "runs/2928823801-verify/segments/seg_02_t07h03m00s.mp4"
 
+SEG7775 = "runs/2932415021-p7775/segments/seg_01_t02h09m15s.mp4"
+
+
+@unittest.skipUnless(os.path.exists(SEG7775), "falta el segmento de p7775")
+@unittest.skipUnless(HAS_CV2, "sin detector Haar (cv2 4.11 en .venv)")
+class TestFaceCamBoxRubius7775(unittest.TestCase):
+    # Regresión 2026-11-18 (port v2 al automático): la webcam de
+    # Rubius en p7775 está ABAJO a la izquierda (561:365:0:626 en
+    # 2560x1440) y Haar solo la ve en 2 de los 5 instantes que
+    # muestreaba _face_cam_box (17, 22 s): devolvía None y el clip
+    # caía a "center" (recorte del juego siguiendo una cara del
+    # juego), así que el camino automático nunca usaba el split v2.
+    # Con 8 instantes la ve en 17, 22 y 32 s (la cara del juego en
+    # 27 s la descarta el filtro de mediana) y la caja sale.
+    def test_face_cam_box_encuentra_webcam_abajo_izquierda(self):
+        box = _face_cam_box(SEG7775, 48.02, 0.0, 2560, 1440,
+                            dict(DEFAULTS))
+        self.assertIsNotNone(
+            box, "la cara de Rubius no dio caja de webcam")
+        x0, y0, w, h = box
+        # La caja cubre la cara de Rubius: su centro cae dentro de
+        # la webcam real [0, 626, 561x365].
+        cx, cy = x0 + w // 2, y0 + h // 2
+        self.assertGreaterEqual(cx, 0)
+        self.assertLessEqual(cx, 561)
+        self.assertGreaterEqual(cy, 626)
+        self.assertLessEqual(cy, 991)
+        # La caja es la expansión 2,8x (313x313), no la refinada
+        # 172x208 (bordes interiores): una caja apenas mayor que
+        # la cara deja la cara cortada en el punch-in.
+        self.assertGreaterEqual(w, 250)
+        self.assertGreaterEqual(h, 250)
+        self.assertLessEqual(w, 700)
+        self.assertLessEqual(h, 700)
+
 
 @unittest.skipUnless(os.path.exists(SEG2), "falta el segmento 2 de IlloJuan")
 class TestFacecamBoxForzado(unittest.TestCase):

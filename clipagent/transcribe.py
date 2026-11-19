@@ -159,26 +159,31 @@ DEFAULT_LANGUAGE_CHUNK_S = 30
 SAMPLE_RATE = 16000
 
 # REGLA DE SUBTÍTULOS (decisión del usuario 2026-11-17, geometría
-# actualizada 2026-11-18 por el layout RDJavi): los subtítulos NUNCA
-# tapan la cara del influencer / la webcam. Layout RDJavi sobre
-# 1080x1920: streamer ARRIBA (zona de cámara 0-730 px), gameplay
-# ABAJO (730-1770 px), banda inferior 1770-1920 px. Con Alignment=2
-# (abajo, centrado) MarginV es la distancia desde el borde inferior:
-# la posición de referencia es el borde inferior del texto en
-# y≈1690 (87-89%, MarginV 230), una línea centrada, letra chica
-# 30-35 px, blanca con contorno negro, sin fondo ni resaltado.
-# El texto no puede subir a la zona de cámara (borde superior del
-# texto < 730) ni bajar a la banda inferior (borde inferior > 1720).
+# actualizada 2026-11-18 por la plantilla v2 de RDJavi): los
+# subtítulos NUNCA tapan la cara del influencer / la webcam NI el
+# gameplay (ahí van los subtítulos propios de GTA 6 y se
+# solaparían). Plantilla v2 sobre 1080x1920: streamer ARRIBA a
+# ancho completo (zona de cámara 0-702 px), franja de título
+# 702-800 px, gameplay 800-1740 px, barra negra de subtítulos
+# 1740-1920 px. Con Alignment=2 (abajo, centrado) MarginV es la
+# distancia desde el borde inferior: la posición v2 es MarginV 12
+# (texto en la barra negra, borde inferior en y≈1908). El texto
+# NO puede subir a la zona de gameplay (borde superior del texto
+# < 1740) ni bajar del borde inferior (1920). La corrección vieja
+# (2026-11-18) prohibía la barra inferior y dejaba el texto en el
+# gameplay (MarginV 230, y≈1690): queda retirada con el port de la
+# v2 al camino automático.
 FRAME_W, FRAME_H = 1080, 1920
 SPLIT_GAME_H = 1320   # alto del panel de juego del split simple (fallback)
 SPLIT_CAM_H = 600     # alto del panel de cámara del split simple (fallback)
-# Geometría RDJavi (layout GTA 6 por defecto, 2026-11-18):
-RDJAVI_CAM_BOTTOM = 730    # la cámara ocupa 0-730 px (fondo + webcam)
-RDJAVI_GAME_BOTTOM = 1770  # el gameplay termina en 1770 px
-SUBTITLE_REF_MARGIN_V = 230  # posición de referencia: texto en y≈1690
-SUBTITLE_BOTTOM_RESERVE_PX = 50  # hueco entre el texto y la banda inferior
-SUBTITLE_MIN_MARGIN_V = (FRAME_H - RDJAVI_GAME_BOTTOM
-                         + SUBTITLE_BOTTOM_RESERVE_PX)  # 200
+# Geometría RDJavi v2 (layout GTA 6 por defecto, 2026-11-18):
+RDJAVI_CAM_BOTTOM = 702    # la cámara ocupa 0-702 px (ancho completo)
+RDJAVI_GAME_BOTTOM = 1740  # el gameplay termina en 1740 px
+RDJAVI_SUBS_BAR_Y0 = 1740  # la barra de subtítulos es 1740-1920 px
+RDJAVI_SUBS_BAR_H = 180
+SUBTITLE_REF_MARGIN_V = 12  # posición v2: texto en la barra negra
+SUBTITLE_MIN_MARGIN_V = 0  # el texto puede tocar el borde inferior
+SUBTITLE_BOTTOM_RESERVE_PX = 0
 SUBTITLE_SAFE_GAP_PX = 80
 
 
@@ -190,40 +195,37 @@ def _text_height(fontsize):
 def subtitles_overlap_webcam(margin_v, fontsize=32, frame_h=FRAME_H,
                              cam_bottom=RDJAVI_CAM_BOTTOM,
                              game_bottom=RDJAVI_GAME_BOTTOM):
-    """True si con ese MarginV el texto invadiría la zona de la cámara
-    (arriba) o la banda inferior (abajo).
-
-    Alignment=2: el borde inferior del texto queda en frame_h-margin_v
-    y el superior, una línea más arriba. Con MarginV 230 (referencia
-    RDJavi) el borde queda en 1690 (parte baja del gameplay, 87-89%);
-    con 140 queda en 1780 (dentro de la banda inferior); con 1400
-    queda en 520, con el borde superior dentro de la cámara.
+    """True si con ese MarginV el texto NO cabe entero en la barra
+    de subtítulos (1740-1920 px): sube a la zona de gameplay o de
+    cámara (borde superior < 1740) o baja del borde inferior.
+    Alignment=2: el borde inferior del texto queda en
+    frame_h-margin_v y el superior, una línea más arriba. Con
+    MarginV 12 y letra 64 px el texto queda en 1828-1908 (barra);
+    con 230 queda en 1650-1690 (gameplay: solapa los subtítulos
+    propios de GTA 6). ``cam_bottom`` queda por compatibilidad:
+    la única frontera que importa es el inicio de la barra
+    (``game_bottom`` = 1740).
     """
     text_bottom = frame_h - margin_v
     text_top = text_bottom - _text_height(fontsize)
-    if text_top < cam_bottom:
+    if text_top < game_bottom:
         return True
-    return text_bottom > game_bottom - SUBTITLE_BOTTOM_RESERVE_PX
+    return text_bottom > frame_h
 
 
 def effective_subtitle_margin_v(margin_v, config=None, fontsize=32):
-    """MarginV efectivo: dentro del rango seguro [mínimo, máximo].
+    """MarginV efectivo: el texto queda entero dentro de la barra
+    de subtítulos (1740-1920 px).
 
-    Mínimo 200: el borde inferior del texto no baja de y=1720 (no
-    invade la banda inferior). Máximo: el borde superior del texto
-    no sube a la zona de cámara (730 px). Un estilo viejo con
-    MarginV 140 se corrige solo a 200 en burn_subtitles(); uno con
-    MarginV 1400 baja al máximo. La posición de referencia es 230.
+    Mínimo 0: el borde inferior del texto no baja de 1920.
+    Máximo 180 - alto del texto: el borde superior no sube de
+    1740 (no invade el gameplay ni la cámara). Un estilo viejo
+    con MarginV 230 se corrige solo al máximo (a 64 px: 100; a
+    56 px: 110; a 32 px: 140) y la posición v2 es 12. ``config``
+    queda por compatibilidad (la geometría de la barra es fija).
     """
-    minimum = SUBTITLE_MIN_MARGIN_V
-    if config is not None:
-        try:
-            from .config import subtitle_min_margin_v
-            minimum = subtitle_min_margin_v(config)
-        except Exception:
-            pass
-    maximum = FRAME_H - RDJAVI_CAM_BOTTOM - _text_height(fontsize)
-    return min(max(int(margin_v), int(minimum)), int(maximum))
+    maximum = max(0, FRAME_H - RDJAVI_GAME_BOTTOM - _text_height(fontsize))
+    return min(max(int(margin_v), SUBTITLE_MIN_MARGIN_V), int(maximum))
 
 
 def load_user_corrected_transcript(run_dir, clip_stem):
@@ -873,7 +875,7 @@ def _ass_time(seconds):
 
 def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
                        offset=0.0, max_end=None, game_voice=None,
-                       alignment=2, margin_v=None):
+                       alignment=2, margin_v=None, font_scale=1.0):
     """Convierte bloques SRT en un ASS karaoke palabra por palabra.
 
     ``alignment`` / ``margin_v`` colocan el subtitulo: por defecto
@@ -883,6 +885,14 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
     y 1740..1920), para no solapar nunca los subtitulos propios
     de GTA 6 (regla dura del usuario 2026-11-18 20:13). Si no se
     pasa margin_v, usa el del estilo.
+
+    ``font_scale``: calibración libass de la fuente (ver
+    rdjavi.ASS_FONT_SCALE): libass no renderiza Fontsize como
+    píxeles EM sino como el span hhea de la fuente, así que un
+    tamaño en píxeles reales hay que multiplicarlo (Arial Black:
+    1,4102; DejaVu: 1,0 = sin calibrar, valor nominal). La
+    plantilla RDJavi pasa su factor; sin él, fontsize es nominal
+    (comportamiento viejo).
 
     Cada bloque se reparte entre sus palabras en proporción a su
     longitud (palabra + espacio): la etiqueta ``\\k`` de cada palabra
@@ -911,15 +921,20 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
     fontsize = style.get("fontsize", 64)
     margin_v = style.get("margin_v", 140) if margin_v is None else margin_v
     bold = -1 if style.get("bold", True) else 0
+    # Calibración libass (ver font_scale): Fontsize/Outline del ASS
+    # son fontsize/border_width reales multiplicados por el factor
+    # de la fuente; sin factor, valores nominales (viejo).
+    ass_fontsize = max(1, round(fontsize * font_scale))
+    ass_border = max(0, round(border_width * font_scale))
     game_spans = normalize_game_voice(
         game_voice, max_end) if game_voice else []
     game_style = (
-        f"Style: Game,{font_name},{fontsize},"
+        f"Style: Game,{font_name},{ass_fontsize},"
         f"{hex_to_ass_color('#7FE3FF', 1.0)},"
         f"{hex_to_ass_color(font_color, 1.0)},"
         f"{hex_to_ass_color(border_color, 1.0)},"
         f"{hex_to_ass_color('#000000', 0.0)},"
-        f"0,1,0,0,100,100,0,0,1,{border_width},0,2,10,10,{margin_v},1\n"
+        f"0,1,0,0,100,100,0,0,1,{ass_border},0,2,10,10,{margin_v},1\n"
     ) if game_spans else ""
     header = (
         "[Script Info]\n"
@@ -933,12 +948,12 @@ def srt_to_karaoke_ass(blocks, style, font_name="DejaVu Sans",
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Karaoke,{font_name},{fontsize},"
+        f"Style: Karaoke,{font_name},{ass_fontsize},"
         f"{hex_to_ass_color(active_color, 1.0)},"
         f"{hex_to_ass_color(font_color, 1.0)},"
         f"{hex_to_ass_color(border_color, 1.0)},"
         f"{hex_to_ass_color('#000000', 0.0)},"
-        f"{bold},0,0,0,100,100,0,0,1,{border_width},0,{alignment},10,10,{margin_v},1\n"
+        f"{bold},0,0,0,100,100,0,0,1,{ass_border},0,{alignment},10,10,{margin_v},1\n"
         + game_style +
         "\n"
         "[Events]\n"
@@ -1105,7 +1120,7 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
                    style=None, config=None, offset=0.0,
                    context_text=None,
                    context_duration=CONTEXT_BANNER_DEFAULT_DURATION,
-                   game_voice=None):
+                   game_voice=None, title=None):
     """Quema el SRT en el vídeo con ffmpeg (estilo openshorts, adaptado
     a vertical 1080x1920: PlayRes explícito y fuente grande).
 
@@ -1120,6 +1135,17 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
     palabra (ver srt_to_karaoke_ass) y quema ese ASS, sin
     force_style (el ASS ya lleva el estilo). ``offset`` desplaza los
     tiempos del SRT (p. ej. al quemar sobre un recorte del clip).
+
+    v2.8 (port v2, 2026-11-18): ``style="rdjavi"`` (default) quema
+    los subtítulos de la plantilla v2: amarillos fijos, Arial Black
+    64 px reales, en la barra negra 1740-1920, nunca sobre el
+    gameplay (ver rdjavi.make_plain_ass). ``title`` quema además
+    el título del clip en UNA línea en la franja 702-800 (sin
+    "GTA 6" delante, ver rdjavi.add_burned_title). PENDIENTE: el
+    flujo en vivo aún no pasa el título (live_cutter.py construye
+    el título DESPUÉS de quemar; workers.subtitle_clip no tiene
+    parámetro de título): sin ``title`` la franja queda en negro
+    y el mecanismo queda verificado pero sin cablear en producción.
 
     Arreglo 4 (2026-11-16): ``context_text`` quema además el banner
     de contexto arriba los primeros ``context_duration`` segundos
@@ -1152,15 +1178,15 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
             box, bold, active_word_color = False, True, None
     else:
         box, bold, active_word_color = False, True, None
-    # REGLA 2026-11-17, geometría RDJavi 2026-11-18: el subtítulo
-    # nunca tapa la cara del influencer / la webcam (arriba, 0-730)
-    # ni baja a la banda inferior (borde inferior > 1720). El
-    # MarginV efectivo queda dentro del rango seguro [200, máximo]:
-    # un estilo viejo con MarginV 140 sube solo a 200 y uno con
-    # MarginV 1400 baja al máximo. La posición de referencia es 230
-    # (texto en y≈1690, parte baja del gameplay). Vale para karaoke
-    # (ASS) y para SRT (force_style), porque el clamp va antes de
-    # las dos ramas.
+    # REGLA 2026-11-17, geometría RDJavi v2 2026-11-18: el subtítulo
+    # nunca tapa la webcam (arriba, 0-702) ni el gameplay
+    # (800-1740, ahí van los subtítulos propios de GTA 6): vive
+    # entero en la barra negra 1740-1920. El MarginV efectivo queda
+    # dentro de la barra ([0, 180 - alto del texto]): un estilo
+    # viejo con MarginV 230 baja solo al máximo (a 64 px: 100) y la
+    # posición v2 es 12 (texto en y≈1908). Vale para karaoke y
+    # rdjavi (ASS) y para SRT (force_style), porque el clamp va
+    # antes de las ramas.
     try:
         _margin_cfg = cfg if style else config
     except NameError:  # sin style no existe cfg: manda config o 200
@@ -1171,24 +1197,40 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
         print(f"MarginV {margin_v} -> {_safe_mv}: el subtítulo no puede "
               f"tapar la webcam ni bajar a la banda (regla del usuario)")
         margin_v = _safe_mv
-    if (style or "").lower() == "karaoke":
-        # Karaoke real: SRT -> ASS con \k por palabra. El ASS se
-        # escribe a un temporal y se borra tras quemar.
+    if (style or "").lower() in ("karaoke", "rdjavi"):
+        # ASS (karaoke palabra por palabra o rdjavi fijo amarillo):
+        # se escribe a un temporal y se borra tras quemar.
         import tempfile
 
-        ass_style = {
-            "font_color": font_color,
-            "active_word_color": active_word_color,
-            "border_color": border_color,
-            "border_width": border_width,
-            "fontsize": fontsize,
-            "margin_v": margin_v,
-            "bold": bold,
-        }
         duration = get_duration(video_path)
-        ass_text = srt_to_karaoke_ass(
-            parse_srt(srt_path), ass_style, font_name=font_name,
-            offset=offset, max_end=duration, game_voice=game_voice)
+        if (style or "").lower() == "rdjavi":
+            # Plantilla v2: subtítulos fijos amarillos, Arial Black
+            # 64 px reales, en la barra negra 1740-1920 (ver
+            # rdjavi.make_plain_ass); el título va en la franja
+            # 702-800 si se pasa title=...
+            from .rdjavi import make_plain_ass
+            ass_text = make_plain_ass(
+                parse_srt(srt_path), title=title, duration=duration,
+                max_end=duration, font_size=fontsize)
+        else:
+            # Karaoke real: SRT -> ASS con \k por palabra.
+            from .rdjavi import ASS_FONT_SCALE, add_burned_title
+            ass_style = {
+                "font_color": font_color,
+                "active_word_color": active_word_color,
+                "border_color": border_color,
+                "border_width": border_width,
+                "fontsize": fontsize,
+                "margin_v": margin_v,
+                "bold": bold,
+            }
+            ass_text = srt_to_karaoke_ass(
+                parse_srt(srt_path), ass_style, font_name=font_name,
+                offset=offset, max_end=duration, game_voice=game_voice,
+                font_scale=(ASS_FONT_SCALE
+                            if font_name == "Arial Black" else 1.0))
+            if title:
+                ass_text = add_burned_title(ass_text, title, duration)
         with tempfile.NamedTemporaryFile(
                 suffix=".ass", delete=False,
                 mode="w", encoding="utf-8") as tmp:
@@ -1209,7 +1251,7 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                 output_path,
             ]
-            print(f"Quemando subtítulos karaoke en {output_path}")
+            print(f"Quemando subtítulos {style} en {output_path}")
             result = subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.PIPE)
             if result.returncode != 0:

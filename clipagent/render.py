@@ -277,20 +277,46 @@ DEFAULTS = {
 # fotograma del usuario, 2026-11-18). Es el layout POR DEFECTO para
 # GTA 6 (el panel es solo GTA 6). DJ Mariio (Df4uyMVjDwq) queda
 # APARCADO por orden del usuario 2026-11-18: no se usa como layout.
+#
+# PLANTILLA v2 (revisión 2026-11-18 21:01, portada al camino
+# automático 2026-11-18): la geometría vieja (fondo desenfocado
+# 0-730, webcam 580x590 centrada con esquinas redondeadas,
+# gameplay 730-1770, banda inferior 1770-1920 con handle del canal
+# y barra atardecer) queda RETIRADA: la v2 es la de clipagent/rdjavi.py
+# (captura de Willyrex): webcam a ANCHO COMPLETO arriba, título en
+# UNA línea en la franja negra, gameplay abajo, subtítulos en la
+# barra negra inferior. Sin fondo desenfocado (la webcam tapa todo
+# el ancho), sin esquinas redondeadas, sin handle ni barra atardecer.
 # ---------------------------------------------------------------------------
-# Geometría exacta sobre el lienzo 1080x1920:
-RDJAVI_TOP_H = 730        # zona superior 0-730 (fondo desenfocado)
-RDJAVI_CAM_W = 580        # webcam nítida: ~54% del ancho
-RDJAVI_CAM_H = 590        # webcam nítida: ~31% de la altura, casi 1:1
-RDJAVI_CAM_X = 250        # centrada: (1080-580)/2
-RDJAVI_CAM_Y = 190        # margen superior ~10% (~190 px)
-RDJAVI_CAM_RADIUS = 24    # esquinas levemente redondeadas
-RDJAVI_GAME_Y0 = 730      # gameplay 730-1770 (1080x1040, ~55-56%)
-RDJAVI_GAME_H = 1040
-RDJAVI_BAND_Y0 = 1770     # banda inferior 1770-1920 (1080x150)
-RDJAVI_BAND_H = 150
-RDJAVI_CAM_OVERLAP = 50   # la webcam se superpone 25-50 px al gameplay
-# Branding propio del canal (Vice City: rosa/violeta/naranja atardecer):
+# Geometría exacta v2 sobre el lienzo 1080x1920:
+RDJAVI_TOP_H = 702        # banda de webcam 0-702 (ancho completo)
+RDJAVI_CAM_W = 1080       # webcam: cover del rect PiP a 1080x702
+RDJAVI_CAM_H = 702
+RDJAVI_CAM_X = 0
+RDJAVI_CAM_Y = 0
+RDJAVI_TITLE_Y0 = 702     # franja negra del título 702-800 (98 px)
+RDJAVI_TITLE_H = 98
+RDJAVI_GAME_Y0 = 800      # gameplay 800-1740 (1080x940)
+RDJAVI_GAME_H = 940
+RDJAVI_BAND_Y0 = 1740     # barra negra de subtítulos 1740-1920 (180 px)
+RDJAVI_BAND_H = 180
+# Recorte del gameplay (fracciones del fotograma original, las de
+# rdjavi.GAME_CROP 1440:1252:620:94 sobre 2560x1440): aspecto
+# 1080:940, centrado en vertical y desplazado a la derecha en
+# horizontal (en p7775 centra la carta del payoff).
+RDJAVI_GAME_CROP_FRACS = (1440 / 2560, 1252 / 1440,
+                           620 / 2560, 94 / 1440)  # w, h, x, y
+# Punch-in de la webcam en la reacción y zoom suave del gameplay en
+# el payoff (defaults v2 de rdjavi.py; el pico va en el segundo 20
+# del clip por construcción: corte pico -20 s / +40 s).
+RDJAVI_PUNCH_WINDOW = (16, 26)
+RDJAVI_PUNCH_ZOOM = 1.30
+RDJAVI_GAME_ZOOM_WINDOW = (18, 24)
+RDJAVI_GAME_ZOOM_FACTOR = 1.15
+# Branding viejo del canal (Vice City: rosa/violeta/naranja
+# atardecer): RETIRADO con la v2 (la plantilla no lleva handle ni
+# barra atardecer). Las constantes quedan por compatibilidad con
+# código que las importe, pero el grafo RDJavi ya no las usa.
 CHANNEL_HANDLE = "@ELCLIPDEGTA6 | GTA VI"
 SUNSET_BAR_H = 6          # barra atardecer en la costura gameplay/banda
 SUNSET_COLORS = ("#FF2E88", "#7B2FFF", "#FF9E00")  # rosa, violeta, naranja
@@ -1387,17 +1413,24 @@ def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
     y 412-820 en 2560x1440) y el escaneo por regiones estables falla
     cuando el streamer se mueve mucho hablando. Pero la cara SÍ se
     detecta siempre con Haar en la misma zona: se muestrea la cara
-    en 5 instantes, se exige que esté en la misma región en >= 3
+    en 8 instantes, se exige que esté en la misma región en >= 3
     (una cara del juego se mueve con la cámara y no se queda quieta)
     y se refinan los 4 bordes de la caja buscando el gradiente más
     fuerte alrededor de la cara. Si un borde no se encuentra, se
     usa la expansión calibrada (caja ~2,8x la cara, IlloJuan:
     cara 140x140 -> caja 400x408).
 
+    8 instantes (no 5): en p7775 (Rubius, webcam abajo-izquierda
+    561:365:0:626) Haar solo ve la cara en 2 de los 5 primeros
+    instantes (17, 22 s) y _face_cam_box devolvía None — el clip
+    caía a "center" y el camino automático nunca usaba el split
+    v2. Con 8 instantes la ve en 17, 22 y 32 s (la cara del juego
+    en 27 s la descarta el filtro de mediana) y la caja sale.
+
     Devuelve [x0, y0, w, h] en px del vídeo original, o None si no
     hay detector OpenCV o no hay cara estable.
     """
-    times = [t for t in (2, 7, 12, 17, 22) if t < duration]
+    times = [t for t in (2, 7, 12, 17, 22, 27, 32, 37) if t < duration]
     if len(times) < 3:
         # Clip corto: 5 instantes repartidos por la duración, para
         # tener >= 3 muestras de cara aunque dure pocos segundos.
@@ -1477,6 +1510,16 @@ def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg):
     x1, y1 = min(src_w, int(x1)), min(src_h, int(y1))
     if x1 - x0 < fw or y1 - y0 < fh:
         return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
+    # La caja refinada no puede ser apenas mayor que la cara: los
+    # bordes encontrados son entonces interiores (silueta, pelo,
+    # fondo de la habitación) y no los de la webcam. p7775: la
+    # refinada era 172x208 desde una cara de 112x112 (1,5x) y el
+    # cover crop del split dejaba la cara cortada por los bordes
+    # en el punch-in; la webcam real es 561x365. La expansión
+    # 2,8x (cara + hombros) encuadra mejor. IlloJuan no se toca:
+    # su refinada es 400x408 desde cara 140 (2,9x).
+    if x1 - x0 < 2.0 * fw or y1 - y0 < 2.0 * fh:
+        return _face_box_expanded(fx, fy, fw, fh, src_w, src_h)
     return [x0, y0, x1 - x0, y1 - y0]
 
 
@@ -1498,17 +1541,24 @@ def _split_params(box_sample, cfg):
     Devuelve params con la caja, la ventana de juego (game_x0, en
     muestra) y las alturas de los paneles. El streamer va ARRIBA
     y el juego ABAJO; la variante por defecto para GTA 6 es RDJavi
-    (webcam centrada 580x590 sobre fondo desenfocado, gameplay
-    730-1770, banda inferior con branding Vice City). Si la caja de
-    la cámara es muy ancha (> 45% del frame, el juego no se vería)
-    la cámara se achica a 480 px y el juego crece a 1440 px (split
-    simple). La cámara nunca se superpone al juego salvo los 50 px
-    de solape de la webcam RDJavi sobre el gameplay. El encuadre
-    ("framing": face/setup) se detecta y se guarda en params; la
-    variante se resuelve con resolve_split_variant (DJ Mariio
-    aparcado: siempre RDJavi para GTA 6).
+    (plantilla v2, 2026-11-18: webcam a ancho completo 0-702,
+    franja de título 702-800, gameplay 800-1740, barra de
+    subtítulos 1740-1920). Si la caja de la cámara es muy ancha
+    (> 45% del frame, el juego no se vería) la cámara se achica
+    a 480 px y el juego crece a 1440 px (split simple). El
+    encuadre ("framing": face/setup) se detecta y se guarda en
+    params; la variante se resuelve con resolve_split_variant
+    (DJ Mariio aparcado: siempre RDJavi para GTA 6).
     (Orden invertido 2026-11-18 por el usuario: antes juego arriba
     y cámara abajo; referencia RDJavi Df4sy4bxlmr.)
+
+    ``punch_in`` / ``game_zoom``: ventanas de zoom de la v2
+    (punch-in de la webcam en la reacción, zoom suave del gameplay
+    en el payoff). Si no vienen en cfg, el grafo usa los defaults
+    v2 (punch 16-26 s zoom 1,30; game zoom 18-24 s 1,15x: el pico
+    va en el segundo 20 del clip por construcción). ``False`` los
+    desactiva; un dict {"t0","t1","zoom"} (punch) o {"t0","t1"}
+    (game zoom) los fija.
     """
     game_h = int(cfg.get("split_game_h", 1320))
     cam_h = int(cfg.get("split_cam_h", 600))
@@ -1525,12 +1575,16 @@ def _split_params(box_sample, cfg):
         game_x0 = max(0.0, bx0 - gw_s - 2)
     game_x0 = max(0.0, min(float(game_x0), SAMPLE_W - gw_s))
     framing = detect_framing(box_sample, cfg)
+    punch = cfg.get("punch_in")
+    punch = punch if (isinstance(punch, dict) or punch is False) else None
+    zoom = cfg.get("game_zoom")
+    zoom = zoom if (isinstance(zoom, (dict, tuple, list))
+                   or zoom is False) else None
     return {"box": [float(v) for v in box_sample[:4]],
             "game_x0": float(game_x0), "game_h": game_h, "cam_h": cam_h,
             "framing": framing,
             "split_variant": resolve_split_variant(cfg, framing),
-            "punch_in": (cfg.get("punch_in")
-                         if isinstance(cfg.get("punch_in"), dict) else None)}
+            "punch_in": punch, "game_zoom": zoom}
 
 
 def _scan_frames(video_path, duration, start_offset, cfg):
@@ -2189,102 +2243,148 @@ def _scale_to_sample(params, src_w, src_h):
     return out
 
 
-def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg):
-    """Grafo de filtros de la variante RDJavi (GTA 6, 1080x1920).
+def _v2_game_crop(src_w, src_h):
+    """Recorte del gameplay v2 ('w:h:x:y'): las fracciones de
+    rdjavi.GAME_CROP (1440:1252:620:94 sobre 2560x1440), aspecto
+    1080:940. Valores pares (yuv420p) y dentro del fotograma."""
+    fw, fh, fx, fy = RDJAVI_GAME_CROP_FRACS
+    gw = max(2, int(src_w * fw) // 2 * 2)
+    gh = max(2, int(src_h * fh) // 2 * 2)
+    gx0 = max(0, min(int(src_w * fx) // 2 * 2, src_w - gw))
+    gy0 = max(0, min(int(src_h * fy) // 2 * 2, src_h - gh))
+    return f"{gw}:{gh}:{gx0}:{gy0}"
 
-    Replica el reel de referencia de RDJavi (Df4sy4bxlmr), desglose
-    exacto del usuario 2026-11-18:
-      * Zona superior 0-730: fondo desenfocado a ancho completo,
-        ampliado de la propia webcam (morado/magenta/rosa del setup).
-      * Webcam nítida centrada 580x590 en (250,190), casi cuadrada
-        1:1, esquinas redondeadas (r=24), plano medio cabeza y
-        hombros; su borde inferior (~40%) se superpone 50 px sobre
-        el gameplay. Sin cámara en esquina sobre el juego.
-      * Gameplay 730-1770 (1080x1040, recorte casi cuadrado 1:1,
-        sin marco), ancho completo.
-      * Franja inferior 1770-1920: banda difuminada que sigue el
-        color del gameplay, sin texto del juego.
-      * Branding propio GTA 6 / Vice City: barra atardecer
-        (rosa/violeta/naranja, 6 px) en la costura gameplay/banda y
-        handle del canal centrado en la banda, blanco con contorno
-        negro. Sin emojis, sin título grande, sin barra de progreso.
-      * Cortes duros entre ángulos del juego, sin fundidos (eso lo
-        da el corte, no este grafo). Cámara FIJA por tramo; punch-in
-        opcional vía params["punch_in"] (zoom puntual en reacción).
+
+def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg,
+                        t_offset=0.0):
+    """Grafo de filtros de la variante RDJavi v2 (GTA 6, 1080x1920).
+
+    PLANTILLA v2 (revisión 2026-11-18 21:01, clipagent/rdjavi.py),
+    portada al camino automático: la geometría vieja (fondo
+    desenfocado 0-730, webcam 580x590 centrada con esquinas
+    redondeadas, gameplay 730-1770, banda 1770-1920 con handle y
+    barra atardecer) queda RETIRADA. Ahora:
+      * Webcam ARRIBA a ANCHO COMPLETO 1080x702 (y 0-702): COVER
+        del rectángulo PiP detectado por clip (params["box"], nunca
+        un default silencioso: la caja varía por clip, p3220
+        arriba-izquierda, p7775 abajo-izquierda 561:365:0:626).
+        Sin barras negras, sin esquinas redondeadas, sin fondo
+        desenfocado (la webcam tapa todo el ancho: el fondo es
+        negro liso detrás).
+      * Franja negra del TÍTULO 702-800 (98 px): el texto se quema
+        después, en el paso de subtítulos (burn_subtitles con
+        title=...); el grafo solo deja la franja en negro.
+      * Gameplay 800-1740 (1080x940, recorte 1080:940 sin
+        aplastar), con zoom SUAVE 1,15x en el payoff (18-24 s del
+        clip, rampa de 2 s, anclado abajo para no recortar la zona
+        de diálogo del juego) — ver rdjavi._game_filter.
+      * Barra negra de SUBTÍTULOS 1740-1920 (180 px): los
+        subtítulos se queman después, abajo del todo, nunca sobre
+        el gameplay (ahí van los subtítulos propios de GTA 6).
+      * Punch-in de la webcam 1,30x en la reacción (16-26 s del
+        clip, centrado en la cara = centro de la caja detectada),
+        con doble rama + overlay enable (opción C de rdjavi.py).
+    El pico va en el segundo 20 del clip por construcción (corte
+    pico -20 s / +40 s), así que las ventanas 16-26 y 18-24 son
+    relativas al clip; ``t_offset`` las desplaza al tramo (en
+    multi-tramo, t es relativo al tramo).
+
+    Sin paso de fondo pre-renderizado ni boxblur por fotograma:
+    el lienzo es el gameplay con pad negro (el juego a y=800, negro
+    arriba —franja del título— y abajo —barra de subtítulos—) y la
+    webcam encima. Un solo grafo, sin fuentes generadas.
     """
+    from .rdjavi import _game_filter, cam_cover_crop, punch_cover_crop
     p = _scale_to_sample(params, src_w, src_h)
     bx, by, bw, bh = p["box"]
-    blur = int(cfg.get("blur_radius", 20))
-    # Ventana de juego: recorte casi cuadrado del gameplay.
-    gw = int(src_h * OUT_W / RDJAVI_GAME_H)
-    gx0 = min(max(p.get("game_x0", (src_w - gw) // 2), 0), src_w - gw)
+    cam_box = f"{bw}:{bh}:{bx}:{by}"
+    cover = cam_cover_crop(cam_box)
+    # Ventanas relativas al tramo (t_offset = inicio del tramo en
+    # el clip; 0 en un solo tramo).
     punch = (params or {}).get("punch_in")
-    zoom = float((punch or {}).get("zoom", 1.25)) if punch else 1.0
-    cw = _punch_crop_expr(bw, int(bw / zoom), punch)
-    ch = _punch_crop_expr(bh, int(bh / zoom), punch)
-    cx = _punch_crop_expr(bx, int(bx + (bw - bw / zoom) / 2), punch)
-    cy = _punch_crop_expr(by, int(by + (bh - bh / zoom) / 2), punch)
-    handle = str(cfg.get("channel_handle", CHANNEL_HANDLE))
-    fontfile = str(cfg.get("channel_handle_fontfile",
-                           CHANNEL_HANDLE_FONTFILE))
-    if os.path.exists(fontfile):
-        font_arg = f"fontfile={fontfile}"
-    else:  # sin el TTF en disco, nombre de fuente por fontconfig
-        font_arg = "font='DejaVu Sans'"
-    c0, c1, c2 = (c.lstrip("#") for c in SUNSET_COLORS)
-    alpha = _rounded_cam_alpha_expr(RDJAVI_CAM_W, RDJAVI_CAM_H,
-                                    RDJAVI_CAM_RADIUS)
-    return (
-        f"[{vin}]split=4[rj_bg][rj_c][rj_g][rj_bb];"
-        f"[rj_bg]crop={cw}:{ch}:{cx}:{cy},"
-        f"scale={OUT_W}:{RDJAVI_TOP_H}:force_original_aspect_ratio=increase,"
-        f"crop={OUT_W}:{RDJAVI_TOP_H},boxblur={blur}:2[rj_bgv];"
-        f"[rj_c]crop={cw}:{ch}:{cx}:{cy},"
-        f"scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H}:force_original_aspect_ratio=increase,"
-        f"crop={RDJAVI_CAM_W}:{RDJAVI_CAM_H},"
-        f"format=yuva420p,geq=lum_expr='p(0,0)':alpha_expr='{alpha}'[rj_cv];"
-        f"[rj_g]crop={gw}:{src_h}:{gx0}:0,"
-        f"scale={OUT_W}:{RDJAVI_GAME_H},setsar=1[rj_gv];"
-        f"[rj_bb]crop={gw}:{src_h}:{gx0}:0,"
-        f"scale={OUT_W}:{RDJAVI_BAND_H}:force_original_aspect_ratio=increase,"
-        f"crop={OUT_W}:{RDJAVI_BAND_H},boxblur={blur}:2,"
-        f"drawtext={font_arg}:text='{handle}':"
-        f"fontsize={CHANNEL_HANDLE_FONTSIZE}:fontcolor=white:"
-        f"borderw=2:bordercolor=black:x=(w-text_w)/2:"
-        f"y=({RDJAVI_BAND_H}-{CHANNEL_HANDLE_FONTSIZE})/2[rj_bbv];"
-        f"gradients=s={OUT_W}x{SUNSET_BAR_H}:c0=0x{c0}:c1=0x{c1}:c2=0x{c2}:"
-        f"x0=0:y0=0:x1={OUT_W}:y1=0:nb_colors=3[rj_bar];"
-        f"[rj_bgv][rj_gv]vstack[rj_mid];"
-        f"[rj_mid][rj_bbv]vstack[rj_base];"
-        f"[rj_base][rj_bar]overlay=0:{RDJAVI_BAND_Y0 - SUNSET_BAR_H}[rj_barred];"
-        f"[rj_barred][rj_cv]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y},"
-        f"format=yuv420p[{vout}]"
-    )
+    if punch is False:
+        punch_win, punch_zoom = None, RDJAVI_PUNCH_ZOOM
+    else:
+        punch_win = (float((punch or {}).get("t0", RDJAVI_PUNCH_WINDOW[0])),
+                     float((punch or {}).get("t1", RDJAVI_PUNCH_WINDOW[1])))
+        punch_zoom = float((punch or {}).get("zoom", RDJAVI_PUNCH_ZOOM))
+        punch_win = (punch_win[0] - t_offset, punch_win[1] - t_offset)
+        if punch_win[1] <= 0:
+            punch_win = None
+    gz = (params or {}).get("game_zoom")
+    if gz is False:
+        game_zoom = None
+    else:
+        if isinstance(gz, (tuple, list)):
+            game_zoom = (float(gz[0]), float(gz[1]))
+        elif isinstance(gz, dict):
+            game_zoom = (float(gz.get("t0", RDJAVI_GAME_ZOOM_WINDOW[0])),
+                         float(gz.get("t1", RDJAVI_GAME_ZOOM_WINDOW[1])))
+        else:
+            game_zoom = RDJAVI_GAME_ZOOM_WINDOW
+        game_zoom = (game_zoom[0] - t_offset, game_zoom[1] - t_offset)
+        if game_zoom[1] <= 0:
+            game_zoom = None
+    game_filt = _game_filter(_v2_game_crop(src_w, src_h), game_zoom)
+    parts = [f"[{vin}]split=2[cam_src][game_src];"]
+    if punch_win is not None:
+        cx, cy = bx + bw // 2, by + bh // 2
+        zc = punch_cover_crop(cover, cx, cy, zoom=punch_zoom)
+        p0, p1 = (f"{v:g}" for v in punch_win)
+        parts.append(
+            f"[cam_src]split=2[cam_n][cam_z];"
+            f"[cam_n]crop={cover},scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H},"
+            f"setsar=1[camN];"
+            f"[cam_z]crop={zc},scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H},"
+            f"setsar=1[camZ];")
+        cam_overlay = (
+            f"[canvas][camN]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
+            f"enable='lt(t,{p0})+gte(t,{p1})'[step2a];"
+            f"[step2a][camZ]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
+            f"enable='gte(t,{p0})*lt(t,{p1})'[step2];")
+    else:
+        parts.append(
+            f"[cam_src]crop={cover},scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H},"
+            f"setsar=1[cam];")
+        cam_overlay = (
+            f"[canvas][cam]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}[step2];")
+    parts.append(
+        f"[game_src]{game_filt}[game];"
+        f"[game]pad={OUT_W}:{OUT_H}:0:{RDJAVI_GAME_Y0}:black[canvas];")
+    parts.append(cam_overlay)
+    parts.append(f"[step2]format=yuv420p[{vout}]")
+    return "".join(parts)
 
 
 def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
-                         crop="center"):
-    """Devuelve (filtro, ) que transforma [vin] en [vout] 1080x1920."""
+                         crop="center", t_offset=0.0):
+    """Devuelve (filtro, ) que transforma [vin] en [vout] 1080x1920.
+
+    ``t_offset``: inicio del tramo dentro del clip (0 en un solo
+    tramo): las ventanas de zoom de la variante RDJavi v2 (punch-in
+    16-26 s, zoom del gameplay 18-24 s) son relativas al clip y se
+    desplazan al tramo con este offset.
+    """
     p = _scale_to_sample(params, src_w, src_h)
     if layout == "split":
         # Split vertical (regla 2026-11-16, INVERTIDO 2026-11-18):
         # STREAMER ARRIBA y JUEGO ABAJO, sin superponerse nunca.
-        # Variante por defecto para GTA 6: RDJavi (desglose exacto
-        # del reel de RDJavi, 2026-11-18): fondo desenfocado arriba
-        # (0-730), webcam nítida centrada 580x590 en (250,190) con
-        # esquinas redondeadas y 50 px de solape sobre el gameplay,
-        # gameplay 730-1770 (1080x1040), banda inferior 1770-1920
-        # (gameplay difuminado + barra atardecer Vice City + handle
-        # del canal). La cámara es FIJA por tramo; solo se mueve el
-        # streamer dentro del encuadre. Punch-in opcional (zoom
+        # Variante por defecto para GTA 6: RDJavi v2 (plantilla
+        # 2026-11-18, clipagent/rdjavi.py): webcam a ancho completo
+        # 0-702, franja de título 702-800, gameplay 800-1740 con
+        # zoom suave en el payoff, barra de subtítulos 1740-1920.
+        # Sin fondo desenfocado, sin handle ni barra atardecer.
+        # La cámara es FIJA por tramo salvo el punch-in (zoom
         # puntual sobre la webcam en un momento de reacción) vía
         # params["punch_in"] = {"t0", "t1", "zoom"} (tiempos
-        # relativos al tramo). Variante "plain": split simple
-        # (cámara 600 arriba / juego 1320 abajo).
+        # relativos al clip; el default v2 es 16-26 s, zoom 1,30)
+        # y params["game_zoom"] = {"t0", "t1"} (default 18-24 s).
+        # Variante "plain": split simple (cámara 600 arriba /
+        # juego 1320 abajo).
         variant = (params or {}).get("split_variant") or resolve_split_variant(cfg)
         if variant == "rdjavi":
             return _split_rdjavi_graph(vin, vout, params, src_w, src_h,
-                                       cfg)
+                                       cfg, t_offset=t_offset)
         bx, by, bw, bh = p["box"]
         game_h = p.get("game_h", 1320)
         cam_h = p.get("cam_h", 600)
@@ -2542,7 +2642,8 @@ def cut_clip_with_layout(video_path, start_sec, duration, output_path,
             s1 = start_sec + seg["end"]
             graph = segment_filter_graph(f"v{i}_in", f"v{i}",
                                          seg["layout"], seg["params"],
-                                         src_w, src_h, cfg, crop)
+                                         src_w, src_h, cfg, crop,
+                                         t_offset=float(seg["start"]))
             parts.append(
                 f"[0:v]trim=start={s0:.3f}:end={s1:.3f},"
                 f"setpts=PTS-STARTPTS[{f'v{i}_in'}];{graph}")
@@ -2633,10 +2734,21 @@ def _crop_rects_for_frame(src_w, src_h, layout, params, cfg, t=None):
         cx = (src_w - cw) // 2
         return [("gameplay", cx, 0, cw, src_h)]
     if layout == "split":
-        game_h = p.get("game_h", 1320)
-        gw = int(src_h * OUT_W / game_h)
-        gx0 = min(max(p.get("game_x0", (src_w - gw) // 2), 0), src_w - gw)
-        rects = [("gameplay", gx0, 0, gw, src_h)]
+        # Variante RDJavi v2: el gameplay es el recorte 1080:940
+        # (_v2_game_crop); la variante "plain" usa la ventana
+        # game_x0/game_h. La cara es la caja detectada.
+        variant = (params or {}).get("split_variant")
+        if variant == "rdjavi" or variant is None:
+            fw, fh, fx, fy = RDJAVI_GAME_CROP_FRACS
+            gw, gh = int(src_w * fw), int(src_h * fh)
+            gx0, gy0 = int(src_w * fx), int(src_h * fy)
+            rects = [("gameplay", gx0, gy0, gw, gh)]
+        else:
+            game_h = p.get("game_h", 1320)
+            gw = int(src_h * OUT_W / game_h)
+            gx0 = min(max(p.get("game_x0", (src_w - gw) // 2), 0),
+                      src_w - gw)
+            rects = [("gameplay", gx0, 0, gw, src_h)]
         if "box" in p:
             rects.append(("facecam", *p["box"]))
         return rects
