@@ -69,8 +69,12 @@ también se guarda lo visto (con outcome ``would_enqueue`` o
 ``skipped:<motivo>``), para que una segunda pasada no vuelva a
 proponer lo mismo; en ``--live`` un VOD marcado ``would_enqueue`` se
 re-evalúa y se encola de verdad (el dry-run nunca "gasta" un VOD).
-Un VOD marcado ``skipped:juego_no_permitido`` no se re-evalúa (el
-juego de un VOD terminado no cambia).
+Un VOD marcado ``skipped:juego_no_permitido`` no se re-evalúa
+(el juego de un VOD terminado no cambia), SALVO que se marcara sin
+categoría verificada (categoría vacía: Helix /videos no devuelve
+juego, bug C4 del 2026-11-19) o estando en curso (bug C5): en esos
+dos casos el salto no era una decisión sobre el juego, sino sobre
+la falta de datos, y la siguiente pasada lo re-evalúa (ver decide()).
 
 Sin push, sin publicar, sin contactar streamers: esto solo LEE datos
 públicos y encola en la cola local.
@@ -79,6 +83,7 @@ públicos y encola en la cola local.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -127,6 +132,43 @@ RETRYABLE_SKIPS = ("kill_switch", "tope_diario",
                    "error_red")
 # Motivo definitivo: el juego de un VOD terminado no cambia.
 PERMANENT_SKIP = "juego_no_permitido"
+
+# Lista blanca EXPLÍCITA de GTA VI en el TÍTULO (fallback C4,
+# 2026-11-19). Solo se usa cuando Helix/GQL no traen categoría Y la
+# categoría del canal es GTA VI: el título solo NUNCA basta (ver
+# detect_game en jobqueue.py: "10 DÍAS DESCARGA DE GTA VI" sin
+# categoría no es GTA 6). El \b evita falsos positivos como "GTA VIDA".
+TITLE_GTA6_RE = re.compile(r"\bgta\s*(vi|6)\b", re.IGNORECASE)
+
+
+def title_mentions_gta6(title):
+    """True si el título menciona GTA VI / GTA 6 (lista blanca explícita)."""
+    return bool(title and TITLE_GTA6_RE.search(str(title)))
+
+
+def resolve_vod_category(vod, live_game="", channel_game=""):
+    """Categoría efectiva de un VOD de Twitch (C4, 2026-11-19).
+
+    Helix /videos NO devuelve juego, así que la categoría que trae el
+    VOD puede venir vacía. Orden de resolución:
+      1. la categoría que ya trae el VOD (GQL / Kick),
+      2. si es el VOD del directo en curso, el juego del vivo
+         (/streams sí trae game_name),
+      3. fallback título + canal: el título menciona GTA VI/GTA 6
+         (lista blanca explícita) Y la categoría del canal es GTA VI.
+         El título solo nunca basta.
+    Devuelve (categoría, origen): origen en {"api",
+    "directo-en-curso", "fallback-titulo+canal", "sin-categoria"}.
+    """
+    cat = (vod.get("category") or "").strip()
+    if cat:
+        return cat, "api"
+    if vod.get("live") and (live_game or "").strip():
+        return live_game.strip(), "directo-en-curso"
+    from clipagent.category import is_gta6
+    if title_mentions_gta6(vod.get("title")) and is_gta6(channel_game):
+        return (channel_game or "").strip(), "fallback-titulo+canal"
+    return "", "sin-categoria"
 
 
 class WatcherError(Exception):
@@ -393,21 +435,64 @@ class TwitchHelix:
         vods = []
         for v in videos:
             start = parse_dt(v.get("created_at"))
+            # C5 (2026-11-19): el VOD del directo en curso NO tiene la
+            # misma id que el stream (id de vídeo vs id de stream, nunca
+            # coinciden). El que coincide es ``stream_id``: se guarda y
+            # se compara contra live["id"].
+            stream_id = str(v.get("stream_id") or "")
             vods.append({
                 "platform": "twitch",
                 "vod_id": str(v["id"]),
+                "stream_id": stream_id,
                 "url": f"https://www.twitch.tv/videos/{v['id']}",
                 "title": v.get("title") or "",
-                "category": v.get("game_name") or "",
+                # C4 (2026-11-19): Helix /videos NO devuelve game_name:
+                # aquí siempre es "" y se resuelve abajo con
+                # _enrich_categories (GQL, vivo, fallback título+canal).
+                "category": "",
+                "category_source": "helix-sin-dato",
                 "start_time": start,
                 "duration_s": int(v.get("duration") or 0) if str(v.get("duration") or "").isdigit()
                              else _twitch_duration_s(v.get("duration") or ""),
                 "views": v.get("view_count") or 0,
-                # El VOD del directo en curso existe con la misma id que
-                # el stream: en curso hasta que el directo termine.
-                "live": bool(live and str(v["id"]) == str(live["id"])),
+                "live": bool(live and stream_id
+                             and stream_id == str(live["id"])),
             })
+        self._enrich_categories(login, live, vods)
         return live, vods
+
+    def _enrich_categories(self, login, live, vods):
+        """Rellena la categoría de los VODs Helix (sin game_name).
+
+        1. GQL público: game.name por vídeo (misma fuente que la web
+           de Twitch; watcher.py:470 ya lo devolvía por vídeo).
+        2. VOD en curso: juego del directo vivo (/streams).
+        3. Fallback título + canal (ver resolve_vod_category).
+        Best-effort: si GQL o /channels fallan, el VOD queda sin
+        categoría y decide() lo salta como juego_no_permitido, que ya
+        no es permanente cuando la categoría estaba vacía (C4/C5).
+        """
+        try:
+            _, gql_vods = TwitchPublicGQL().check(login)
+            gql_cat = {v["vod_id"]: (v.get("category") or "")
+                       for v in gql_vods}
+        except Exception:
+            gql_cat = {}
+        channel_game = None  # perezoso: solo si algún VOD lo necesita
+        live_game = (live or {}).get("game") or ""
+        for vod in vods:
+            if gql_cat.get(vod["vod_id"]):
+                vod["category"] = gql_cat[vod["vod_id"]]
+                vod["category_source"] = "gql"
+                continue
+            if channel_game is None:
+                try:
+                    channel_game = (self.channel_category(login)
+                                    .get("game_name") or "")
+                except Exception:
+                    channel_game = ""
+            vod["category"], vod["category_source"] = resolve_vod_category(
+                vod, live_game=live_game, channel_game=channel_game)
 
 
 def _twitch_duration_s(raw):
@@ -468,11 +553,20 @@ class TwitchPublicGQL:
                 "url": f"https://www.twitch.tv/videos/{vid}",
                 "title": node.get("title") or "",
                 "category": (node.get("game") or {}).get("name") or "",
+                "category_source": ("gql" if (node.get("game") or {})
+                                    .get("name") else ""),
                 "start_time": start,
                 "duration_s": int(node.get("lengthSeconds") or 0),
                 "views": node.get("viewCount") or 0,
                 "live": is_live_vod,
             })
+        # C4: el VOD del directo en curso toma el juego del vivo si
+        # GQL no trae su categoría (mismo criterio que Helix).
+        if live:
+            for vod in vods:
+                if vod.get("live") and not (vod.get("category") or "").strip():
+                    vod["category"], vod["category_source"] = (
+                        resolve_vod_category(vod, live_game=live["game"]))
         return live, vods
 
 
@@ -524,6 +618,7 @@ def kick_check(slug):
             "url": f"https://kick.com/{slug}/videos/{uuid}",
             "title": item.get("session_title") or "",
             "category": cats[0].get("name") if cats else "",
+            "category_source": "kick-api" if cats else "",
             "start_time": parse_kick_datetime(item["start_time"])
                           if item.get("start_time") else None,
             "duration_s": duration_s,
@@ -542,24 +637,49 @@ def decide(vod, influencer, state, queue, cfg, kill_switch, dry_run):
 
     accion: 'enqueue' | 'would_enqueue' | 'skip' | 'seen'.
     """
+    # C5 (2026-11-19): decide() nunca decide sobre un VOD vivo: la
+    # rama vod_en_curso de run_once lo registra y lo reintenta en la
+    # siguiente pasada. Si decide() se llama directo (tests, otro
+    # flujo), que sea un salto reintentable, nunca un encolado ni un
+    # skip permanente.
+    if vod.get("live"):
+        return "skip", "vod_en_curso"
     vod_id = vod["vod_id"]
     prev = state["vods"].get(vod_id)
     if prev:
         outcome = prev.get("outcome") or ""
         if outcome == "enqueued":
             return "seen", "ya encolado antes (job #%s)" % prev.get("job_id")
+        reevaluate = False
         if outcome == f"skipped:{PERMANENT_SKIP}":
-            return "seen", "ya visto: juego fuera de la lista (definitivo)"
-        if dry_run:
-            if outcome == "skipped:vod_en_curso":
-                pass  # re-evaluar: el VOD pudo terminar desde la última pasada
+            # C4/C5 (2026-11-19): el skip NO es permanente cuando se
+            # marcó sin categoría verificada (categoría vacía + juego
+            # None: Helix no devolvía juego) o cuando el VOD estaba en
+            # curso al evaluarse (su juego aún podía cambiar). En esos
+            # casos no fue una decisión sobre el juego, sino sobre la
+            # falta de datos, y se re-evalúa con los datos de esta
+            # pasada; si el juego sigue sin ser GTA 6, se vuelve a
+            # marcar (ya con la categoría real). Con juego confirmado
+            # (categoría no vacía) sigue siendo definitivo.
+            prev_cat = (prev.get("category") or "").strip()
+            prev_game = prev.get("game")
+            if (not prev_cat and prev_game is None) or prev.get("live"):
+                reevaluate = True
             else:
-                return "seen", f"ya visto ({outcome})"
-        elif outcome.startswith("skipped:") and outcome[8:] not in RETRYABLE_SKIPS:
-            return "seen", "ya visto (%s)" % outcome[8:]
+                return "seen", "ya visto: juego fuera de la lista (definitivo)"
+        if not reevaluate:
+            if dry_run:
+                if outcome == "skipped:vod_en_curso":
+                    pass  # re-evaluar: el VOD pudo terminar desde la última pasada
+                else:
+                    return "seen", f"ya visto ({outcome})"
+            elif outcome.startswith("skipped:") and outcome[8:] not in RETRYABLE_SKIPS:
+                return "seen", "ya visto (%s)" % outcome[8:]
         # En --live se re-evalúan los saltos reintentables (permiso,
         # kill-switch, tope, en curso, en processing...) y los VODs
-        # marcados would_enqueue en un dry-run anterior.
+        # marcados would_enqueue en un dry-run anterior; y en ambos
+        # modos, los skipped:juego_no_permitido sin categoría o en
+        # curso (ver reevaluate arriba).
 
     if kill_switch:
         return "skip", "kill_switch"
@@ -597,6 +717,8 @@ def record_vod(state, vod, influencer, outcome, job_id=None):
         "platform": vod["platform"],
         "title": vod.get("title") or "",
         "category": vod.get("category") or "",
+        "category_source": vod.get("category_source") or "",
+        "stream_id": vod.get("stream_id") or "",
         "game": detect_game(vod.get("category"), vod.get("title")),
         "start_time": vod["start_time"].isoformat() if vod.get("start_time") else "",
         "duration_s": vod.get("duration_s") or 0,
@@ -624,7 +746,11 @@ def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
     tw_client = None
     tw_mode = None
     summary = {"live": 0, "new_vods": 0, "would_enqueue": 0,
-               "enqueued": 0, "skipped": 0, "seen": 0, "errors": 0}
+               "enqueued": 0, "skipped": 0, "seen": 0, "errors": 0,
+               # C7 (2026-11-19): avisos por influencer (plataforma no
+               # soportada, fallo de un influencer no-ES): se salta ese
+               # influencer con motivo visible, sin tumbar la pasada.
+               "warnings": 0, "skipped_influencers": []}
     # 2026-11-16: en la lista = permiso ya dado; solo denegado/revocado excluyen.
     conceded = {i["usuario"] for i in influencers
                 if i["estado"] not in ("denegado", "revocado")}
@@ -632,6 +758,20 @@ def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
     def log(msg):
         if verbose:
             print(msg)
+
+    def note_failure(inf, msg):
+        """Fallo al consultar un influencer (C7, 2026-11-19).
+
+        Solo suma a ``errors`` (exit 2) si impide vigilar a un
+        streamer ES; si el influencer es EN, es un aviso visible en
+        el resumen y la pasada sigue con los demás.
+        """
+        if inf["idioma"] == "es":
+            summary["errors"] += 1
+        else:
+            summary["warnings"] += 1
+            summary["skipped_influencers"].append(
+                f"{inf['usuario']} [{inf['plataforma']}]: {msg}")
 
     log(f"Watcher — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
         f"({'DRY-RUN (no encola nada)' if dry_run else 'LIVE (encola lo que pase los frenos)'})")
@@ -660,16 +800,26 @@ def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
                 live, vods = tw_client.check(slug)
                 mode = f"twitch-{tw_mode}"
             else:
-                log(f"  Plataforma no soportada: {platform!r} (solo kick/twitch).")
-                summary["errors"] += 1
+                # C7 (2026-11-19): plataforma no soportada (hoy: youtube,
+                # ej. ishowspeed) es un AVISO por influencer, no un error
+                # fatal: se salta ese influencer con motivo visible en el
+                # resumen y la pasada sigue con los demás. Nunca suma a
+                # errors: exit 2 es solo para fallos que impidan vigilar
+                # a los streamers ES.
+                msg = (f"plataforma no soportada {platform!r} "
+                       "(solo kick/twitch en el monitoreo en vivo)")
+                log(f"  AVISO: {msg} — se salta este influencer.")
+                summary["warnings"] += 1
+                summary["skipped_influencers"].append(
+                    f"{slug} [{platform}]: {msg}")
                 continue
         except WatcherError as e:
             log(f"  ERROR al consultar {platform}: {e}")
-            summary["errors"] += 1
+            note_failure(inf, str(e))
             continue
         except Exception as e:  # red, JSON roto, etc.: no tumbar la pasada
             log(f"  ERROR al consultar {platform}: {type(e).__name__}: {e}")
-            summary["errors"] += 1
+            note_failure(inf, f"{type(e).__name__}: {e}")
             continue
 
         log(f"  Fuente: {mode}")
@@ -763,7 +913,9 @@ def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
         f"{summary['new_vods']} | encolados={summary['enqueued']} | "
         f"encolaría (dry-run)={summary['would_enqueue']} | "
         f"descartados={summary['skipped']} | ya vistos={summary['seen']} | "
-        f"errores={summary['errors']}")
+        f"errores={summary['errors']} | avisos={summary['warnings']}")
+    for w in summary["skipped_influencers"]:
+        log(f"  AVISO: {w}")
     log(f"Estado guardado en {state_path}")
     return summary, summary["errors"]
 

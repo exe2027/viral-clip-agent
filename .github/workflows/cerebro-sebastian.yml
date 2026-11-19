@@ -22,10 +22,14 @@ name: Cerebro — Sebastián
 # Cómo se cumple: el botón Iniciar del panel dispara este workflow con
 # un repository_dispatch (el Worker del panel llama a la API de GitHub
 # con un token guardado como secreto del Worker, nunca en el repo).
-# El dispatch deja `started=true` en state/panel-state.json; el cron
-# diario solo trabaja si started=true (si no, termina registrando
-# "panel no iniciado", sin hacer nada). El botón Detener manda
-# panel-stop-sebastian y el cron vuelve a quedar en espera.
+# Solo repository_dispatch lee/escribe state/panel-state.json:
+# panel-start-sebastian pone started=true y panel-stop-sebastian lo
+# quita. Un workflow_dispatch manual y el cron trabajan directamente
+# (un dispatch manual es una orden de trabajar) y NUNCA reescriben el
+# estado del panel, así que un run que no trabaja no puede apagarlo
+# subiendo un panel-state.json con started=false (auditoría 19 nov
+# 2026, C1/C3). El input `force` del dispatch manual permite respetar
+# el estado del panel con force=false.
 # La instalación (Playwright/Chromium, sesión TikTok) es parte única
 # de "configurar cuentas", ANTES de Iniciar; después no hay terminal.
 
@@ -39,6 +43,12 @@ on:
   repository_dispatch:
     types: [panel-start-sebastian, panel-stop-sebastian]
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Trabajar aunque el panel esté detenido (true: orden de trabajar; false: respetar state/panel-state.json)"
+        required: false
+        default: "true"
+        type: boolean
 
 concurrency:
   group: cerebro-sebastian
@@ -46,6 +56,9 @@ concurrency:
 
 permissions:
   contents: read
+  # C2: el paso "Resolver run previo exitoso" lista runs del workflow
+  # con `gh api` usando GITHUB_TOKEN.
+  actions: read
 
 jobs:
   vod-check-and-publish:
@@ -58,6 +71,13 @@ jobs:
       IG_USER_ID: ${{ secrets.IG_USER_ID }}
       FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
       CLIP_PUBLIC_BASE_URL: ${{ secrets.CLIP_PUBLIC_BASE_URL }}
+      PANEL_TENANT: sebastian
+      # C8: el worker sube los clips terminados a la Cola del panel
+      # con PanelBridge; sin estas dos el puente devuelve None y
+      # los clips quedan solo en el runner. Ambos secretos ya
+      # existen en el entorno `sebastian` (solo faltaba mapearlos).
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
       # Zernio (TikTok por agregador, draft-first): la clave y la
       # cuenta existen como secretos del entorno `sebastian`
       # (ZERNIO_API_KEY, ZERNIO_TIKTOK_ACCOUNT_ID). Sin ellas,
@@ -108,50 +128,101 @@ jobs:
       # seen_vods.json / publish_queue.json están gitignored. Se
       # restauran del artefacto del día anterior y se vuelven a subir
       # al final. (Migración pendiente a D1, plan §6.4.)
+      # C2: download-artifact sin run-id busca el artefacto en el run
+      # en curso y siempre falla. Se resuelve el último run exitoso
+      # de este workflow (el run actual aún no es exitoso, así que el
+      # primero de la lista es siempre un run anterior). Sin run
+      # previo exitoso, o si la API falla, se sigue sin estado: el
+      # workflow no falla por esto.
+      - name: Resolver run previo exitoso
+        id: prev-run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cerebro-sebastian.yml/runs?status=success&per_page=1" --jq '.workflow_runs[0].id // empty' || true)"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          if [ -n "$RUN_ID" ]; then
+            echo "Último run exitoso: ${RUN_ID}"
+          else
+            echo "Sin run previo exitoso: se arranca sin estado restaurado."
+          fi
+
       - name: Restaurar estado del día anterior
+        if: steps.prev-run.outputs.run_id != ''
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           name: cerebro-state-sebastian
           path: .
+          run-id: ${{ steps.prev-run.outputs.run_id }}
 
-      # Puerta Iniciar: sin el botón Iniciar del panel no se procesa
-      # nada. El dispatch panel-start-sebastian pone started=true; el
-      # dispatch panel-stop-sebastian lo quita; el cron solo sigue si
-      # started=true. Nunca un paro silencioso: queda en el log.
+      # Puerta Iniciar (C1/C3): SOLO repository_dispatch toca
+      # state/panel-state.json (panel-start lo pone en true,
+      # panel-stop en false). Un workflow_dispatch manual y el cron
+      # trabajan directamente — un dispatch manual es una orden de
+      # trabajar — y nunca reescriben el estado del panel, así que
+      # "Guardar estado" jamás sube un panel-state.json con
+      # started=false generado por un run que no trabajó (sube, como
+      # mucho, el valor restaurado del run anterior, sin tocarlo).
+      # Solo con force=false el dispatch manual respeta el estado
+      # del panel. Nunca un paro silencioso: queda en el log.
       - name: Puerta Iniciar (botón del panel)
         id: gate
         env:
           EVENT: ${{ github.event_name }}
           DISPATCH_TYPE: ${{ github.event.action }}
+          FORCE: ${{ inputs.force }}
         run: |
           python - <<'EOF'
           import json, os
           state_path = "state/panel-state.json"
-          started = False
-          try:
-              with open(state_path) as f:
-                  started = json.load(f).get("started", False)
-          except (OSError, ValueError):
-              started = False
           event = os.environ.get("EVENT")
           action = os.environ.get("DISPATCH_TYPE")
+          force_raw = os.environ.get("FORCE", "")
+
+
+          def _force():
+              # workflow_dispatch con type:boolean entrega
+              # "true"/"false"; schedule y repository_dispatch no
+              # tienen inputs -> "" se trata como True (trabajar).
+              return force_raw.strip().lower() not in ("false", "0", "no")
+
+
+          def _read_started():
+              try:
+                  with open(state_path) as f:
+                      return bool(json.load(f).get("started", False))
+              except (OSError, ValueError):
+                  return False
+
+
+          started = False
+          persist = False
           if event == "repository_dispatch" \
                   and action == "panel-start-sebastian":
-              started = True
-          if event == "repository_dispatch" \
+              started, persist = True, True
+          elif event == "repository_dispatch" \
                   and action == "panel-stop-sebastian":
-              started = False
-          os.makedirs("state", exist_ok=True)
-          with open(state_path, "w") as f:
-              json.dump({"started": started}, f)
+              started, persist = False, True
+          elif event == "workflow_dispatch":
+              started = True if _force() else _read_started()
+          elif event == "schedule":
+              started = True
+
+          if persist:
+              os.makedirs("state", exist_ok=True)
+              with open(state_path, "w") as f:
+                  json.dump({"started": started}, f)
           print(f"Panel iniciado: {started} "
-                f"(evento={event} acción={action})")
+                f"(evento={event} acción={action} "
+                f"force={force_raw!r} estado_persistido={persist})")
           if not started:
               print("Panel no iniciado: esperando el botón Iniciar; "
                     "sin procesar nada.")
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"started={'true' if started else 'false'}\n")
+              out.write("persist_panel_state="
+                        f"{'true' if persist else 'false'}\n")
           EOF
 
       - name: Credenciales YouTube (solo si existen los secretos)
@@ -168,9 +239,100 @@ jobs:
           fi
 
       # Revisión diaria de VODs nuevos (09:00 America/Santiago).
+      # --live es obligatorio (C6): sin él watch es dry-run y jamás
+      # encola nada (watcher.py: dry_run = not args.live).
+      # Observabilidad (C9): el resumen que imprime watch
+      # ("Resumen: ... encolados=N | ... | errores=M", watcher.py)
+      # se parsea a salidas del job y al resumen del paso; el run
+      # falla con mensaje claro solo si encolados==0 y errores>0.
+      # Un watch con errores pero algún encolado avisa y sigue: un
+      # influencer roto no tumba la pasada (el exit 2 propio de
+      # watch se absorbe y se re-decide desde el resumen).
       - name: Revisión de VODs
+        id: watch
         if: steps.gate.outputs.started == 'true'
-        run: python -m clipagent watch --once
+        run: |
+          set +e
+          python -m clipagent watch --once --live 2>&1 | tee watch.log
+          WATCH_EXIT="${PIPESTATUS[0]}"
+          set -e
+          WATCH_EXIT="$WATCH_EXIT" python - <<'PYEOF'
+          import os
+          import re
+          import sys
+
+          SUMMARY_RE = re.compile(
+              r"Resumen: en vivo=(?P<live>\d+)"
+              r" \| VODs revisados=(?P<new_vods>\d+)"
+              r" \| encolados=(?P<enqueued>\d+)"
+              r" \| encolarían \(dry-run\)=(?P<would_enqueue>\d+)"
+              r" \| descartados=(?P<skipped>\d+)"
+              r" \| ya vistos=(?P<seen>\d+)"
+              r" \| errores=(?P<errors>\d+)"
+          )
+          KEYS = ("live", "new_vods", "enqueued", "would_enqueue",
+                  "skipped", "seen", "errors")
+          LABELS = (("En vivo", "live"), ("VODs revisados", "new_vods"),
+                    ("Encolados", "enqueued"),
+                    ("Encolarían (dry-run)", "would_enqueue"),
+                    ("Descartados", "skipped"), ("Ya vistos", "seen"),
+                    ("Errores", "errors"))
+
+          watch_exit = int(os.environ.get("WATCH_EXIT", "0"))
+          summary = None
+          try:
+              with open("watch.log", encoding="utf-8",
+                        errors="replace") as f:
+                  for line in f:
+                      match = SUMMARY_RE.search(line)
+                      if match:
+                          summary = {k: int(v) for k, v in
+                                     match.groupdict().items()}
+          except OSError as exc:
+              print(f"No se pudo leer watch.log: {exc}")
+
+
+          def _emit(name, value):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write(f"{name}={value}\n")
+
+
+          if summary is None:
+              _emit("enqueued", 0)
+              _emit("errors", 1 if watch_exit else 0)
+              _emit("watch_exit", watch_exit)
+              if watch_exit != 0:
+                  print(f"::error::watch terminó con exit {watch_exit} "
+                        "y no emitió la línea 'Resumen:' (watcher.py); "
+                        "no se puede saber cuántos VODs se encolaron.")
+                  sys.exit(1)
+              print("::warning::watch no emitió la línea 'Resumen:' "
+                    "(p. ej. lista de influencers vacía); se sigue "
+                    "sin contadores.")
+              sys.exit(0)
+
+          for key in KEYS:
+              _emit(key, summary[key])
+          _emit("watch_exit", watch_exit)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("## Revisión de VODs (watch --live)\n\n")
+              s.write("| Métrica | Valor |\n|---|---:|\n")
+              for label, key in LABELS:
+                  s.write(f"| {label} | {summary[key]} |\n")
+              s.write(f"\nExit de watch: `{watch_exit}`\n")
+
+          print(f"Watch: encolados={summary['enqueued']} "
+                f"descartados={summary['skipped']} "
+                f"errores={summary['errors']} (exit {watch_exit})")
+          if summary["enqueued"] == 0 and summary["errors"] > 0:
+              print("::error::watch no encoló ningún VOD y tuvo "
+                    f"{summary['errors']} error(es); revisa watch.log.")
+              sys.exit(1)
+          if summary["errors"] > 0:
+              print(f"::warning::watch tuvo {summary['errors']} "
+                    "error(es) pero encoló "
+                    f"{summary['enqueued']} VOD(s); se sigue.")
+          PYEOF
 
       # Cadena completa en una pasada (tras pulsar Iniciar no hay
       # pasos manuales): el worker monolítico corre auto_clips
@@ -224,6 +386,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+      # C1/C3: state/panel-state.json solo lo reescribe la puerta en
+      # repository_dispatch; un run manual o de cron lo re-sube, como
+      # mucho, con el valor restaurado del run anterior, sin tocarlo.
+      # Nunca se sube un started=false generado por un run que no
+      # trabajó.
       - name: Guardar estado para mañana
         if: always()
         uses: actions/upload-artifact@v4

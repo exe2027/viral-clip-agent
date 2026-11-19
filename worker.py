@@ -246,11 +246,168 @@ def _enqueue_clips_for_publish(job: dict, manifest: dict, reds):
     return n
 
 
+def _panel_score(viral_total, seo_scores, chat_multiple):
+    """Score de la Cola: prioridad de YouTube (misma fórmula que el
+    cortador en vivo y vod_fallback: viralidad^0,5 x SEO^0,3 x
+    chat_norm^0,2). No se toca la fórmula ni los umbrales."""
+    from clipagent.priority import priority as priority_fn
+    seo_yt = (seo_scores or {}).get("youtube_shorts") or {}
+    p = priority_fn(viral_total, seo_yt.get("score", 0), chat_multiple)
+    return int(round(p["priority"]))
+
+
+def _panel_payload(job: dict, manifest: dict, clip: dict):
+    """Payload POST /api/clips para un clip del manifiesto.
+
+    Mismo patrón que vod_fallback.py (origin='vod'): el clip va a
+    la Cola del panel para aprobación, SIN publicar. auto_clips ya
+    quemó los subtítulos en el MP4 final, igual que subtitle_clip
+    en vod_fallback (por eso subtitles_complete=1).
+    """
+    viral = clip.get("viral") or {}
+    viral_score = clip.get("viral_score") or {}
+    seo = clip.get("seo_scores") or {}
+    total = viral_score.get("total") or clip.get("score") or 0
+    chat_multiple = (viral.get("viral_multiple") or 1.0)
+    start = int(clip.get("start", 0))
+    end = int(start + (clip.get("duration") or 0))
+    title = (viral.get("best_title") or clip.get("title_es")
+             or f"GTA 6 — {job.get('streamer') or 'directo'}")
+    try:
+        vod_id_int = int(manifest.get("vod_id") or job.get("vod_id") or 0)
+    except (TypeError, ValueError):
+        vod_id_int = 0
+    game = ((clip.get("moment_card") or {}).get("game")
+            or viral.get("game") or "GTA VI")
+    seo_txt = ", ".join(
+        f"{p} {(seo.get(p) or {}).get('score')}" for p in
+        ("youtube_shorts", "tiktok", "instagram_reels", "facebook_reels"))
+    return {
+        "title": title,
+        "start_sec": start,
+        "end_sec": end,
+        "score": _panel_score(total, seo, chat_multiple),
+        "platforms": ["youtube_shorts", "tiktok", "instagram_reels",
+                      "facebook_reels"],
+        "influencer_id": job.get("streamer"),
+        "source_id": vod_id_int,
+        "seo_title": title,
+        "seo_description": (viral.get("description_first_2_lines")
+                            or clip.get("desc_es") or ""),
+        "seo_tags": viral.get("tags") or [],
+        "subtitles_complete": 1,
+        "needs_human_transcription": 0,
+        "origin": "vod",
+        "game": game,
+        "reason": (f"VOD GTA VI ({job.get('streamer')}, VOD "
+                   f"{manifest.get('vod_id')}) — viralidad {total} — "
+                   f"SEO {seo_txt} — subtítulos completos (worker)"),
+    }
+
+
+def _resolve_panel_bridge():
+    """PanelBridge desde el entorno, o None sin credenciales.
+
+    Sin PANEL_USERNAME/PANEL_PASSWORD (ni PANEL_SESSION_TOKEN),
+    from_env() devuelve None: el worker sigue sin fingir la subida
+    y el motivo queda registrado. Un TenantError (credenciales sin
+    PANEL_TENANT válido) NO se traga aquí: lo registra quien llama.
+    """
+    from clipagent.panel_bridge import PanelBridge
+    return PanelBridge.from_env()
+
+
+def _upload_clips_to_panel(q: Queue, job: dict, manifest: dict,
+                           bridge=None):
+    """Sube los clips del job a la Cola del panel (C8).
+
+    create_clip + upload_video por clip, mismo patrón que
+    live_cutter.py:887. Solo encola para aprobación: nunca llama
+    a publish_clip. Devuelve (subidos, fallidos).
+
+    Sin credenciales del panel, registra el motivo en el log del
+    job y devuelve (0, 0) sin fingir la subida. Un fallo de subida
+    (red, login, tenant) nunca pierde el clip local ni tumba el
+    job: queda registrado por clip y el job sigue en
+    ready_for_review. Si el job ya se subió antes (reencolado
+    manual), no se duplica: se registra y se salta.
+    """
+    job_id = job["id"]
+    clips = manifest.get("clips") or []
+    if not clips:
+        return 0, 0
+    if q.count_log(job_id, "panel_enqueued") > 0:
+        _log(f"Job #{job_id}: ya subido al panel antes "
+             "(panel_enqueued en el log); no se duplica.")
+        q.log(job_id, "panel_ya_encolado",
+              "el job ya se subió al panel en una corrida anterior; "
+              "no se vuelve a subir para no duplicar clips")
+        return 0, 0
+    if bridge is None:
+        try:
+            bridge = _resolve_panel_bridge()
+        except Exception as e:  # noqa: BLE001 - config del panel
+            # (p. ej. TenantError: credenciales sin PANEL_TENANT
+            # válido). No tumba el job: los clips quedan en local.
+            _log(f"Job #{job_id}: panel no disponible ({e}); los "
+                 "clips quedan solo en local.")
+            q.log(job_id, "panel_config_error",
+                  f"no se pudo resolver el puente al panel: {e}")
+            return 0, 0
+    if bridge is None:
+        _log(f"Job #{job_id}: sin credenciales del panel "
+             "(PANEL_USERNAME/PANEL_PASSWORD): los clips quedan "
+             "solo en local, no se finge la subida.")
+        q.log(job_id, "panel_sin_credenciales",
+              "sin PANEL_USERNAME/PANEL_PASSWORD (ni "
+              "PANEL_SESSION_TOKEN) en el entorno: los clips quedan "
+              "solo en local; no se finge la subida al panel")
+        return 0, 0
+    uploaded, failed = 0, 0
+    for clip in clips:
+        clip_path = os.path.join(job["out_dir"], clip.get("file", ""))
+        if not os.path.isfile(clip_path):
+            _log(f"Job #{job_id}: sin MP4 para el clip "
+                 f"#{clip.get('n')}, no se sube.")
+            q.log(job_id, "panel_upload_failed",
+                  f"clip #{clip.get('n')}: falta el MP4 {clip_path}")
+            failed += 1
+            continue
+        try:
+            payload = _panel_payload(job, manifest, clip)
+            created = bridge.create_clip(payload)
+            panel_id = created.get("id")
+            if not panel_id:
+                raise ValueError(
+                    f"POST /api/clips sin id: {str(created)[:200]}")
+            bridge.upload_video(panel_id, clip_path)
+        except Exception as e:  # noqa: BLE001 - el panel no tumba
+            # el job ni pierde el clip local (sigue en out_dir y
+            # en el manifiesto).
+            _log(f"Job #{job_id}: no se pudo subir el clip "
+                 f"#{clip.get('n')} al panel ({e}); el clip queda "
+                 "en local.")
+            q.log(job_id, "panel_upload_failed",
+                  f"clip #{clip.get('n')}: panel: no se pudo encolar "
+                  f"({e})")
+            failed += 1
+            continue
+        uploaded += 1
+        _log(f"Job #{job_id}: clip #{clip.get('n')} en la Cola del "
+             f"panel (id {panel_id}).")
+        q.log(job_id, "panel_enqueued",
+              f"clip #{clip.get('n')} -> panel id {panel_id} "
+              f"({clip.get('file')})")
+    return uploaded, failed
+
+
 def process_job(q: Queue, job: dict, top_n: int = 5,
-                timeout_s: int = DEFAULT_TIMEOUT_S):
+                timeout_s: int = DEFAULT_TIMEOUT_S, bridge=None):
     """Procesa un job: queued -> processing -> ready_for_review/failed/dead.
 
-    Devuelve el estado final del job.
+    Devuelve el estado final del job. ``bridge``: PanelBridge ya
+    resuelto (tests) o None para resolverlo del entorno (C8: al
+    terminar con éxito, los clips se suben a la Cola del panel).
     """
     job_id = job["id"]
     started = time.monotonic()
@@ -342,6 +499,25 @@ def process_job(q: Queue, job: dict, top_n: int = 5,
         except Exception as e:
             _log(f"Job #{job_id}: no se pudo encolar para publicar "
                  f"({e}); los clips quedan en el manifiesto.")
+        # 5. A la Cola del panel (C8, auditoría 2026-11-19): solo
+        # encolar para aprobación, NUNCA publicar. Un fallo aquí
+        # no cambia el estado del job: los clips quedan en local
+        # y el motivo queda en el log del job.
+        try:
+            n_up, n_fail = _upload_clips_to_panel(
+                q, job, manifest, bridge=bridge)
+            if n_up:
+                _log(f"Job #{job_id}: {n_up} clip(s) subido(s) a la "
+                     "Cola del panel")
+            if n_fail:
+                _log(f"Job #{job_id}: {n_fail} clip(s) NO subidos al "
+                     "panel (ver log del job); quedan en local.")
+        except Exception as e:  # noqa: BLE001 - el panel no tumba
+            # un job que ya terminó bien.
+            _log(f"Job #{job_id}: subida al panel falló ({e}); los "
+                 "clips quedan en local.")
+            q.log(job_id, "panel_upload_failed",
+                  f"subida al panel falló: {e}")
         return "ready_for_review"
     except KillSwitchRaised:
         raise
