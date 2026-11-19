@@ -1,0 +1,176 @@
+# Verificación + arreglo puntual del día 2026-11-19 (SOLO LECTURA salvo lo indicado).
+#
+# Qué hace (nada publica en público):
+#   1. Lee salud, Ajustes (ANTES), estado del Worker/fase, Cola y analíticas.
+#   2. PUT /api/settings {min_duration_s} — devuelve el mínimo a 40 tras
+#      el reintento temporal de IG del clip 15 (estaba en 15). Verifica
+#      con un GET posterior que el valor efectivo es el pedido.
+#   3. Verificación del formulario manual de analíticas: lee las vistas
+#      REALES de la página pública del Short dado, guarda UNA medición
+#      manual (POST /api/clips/:id/stats, lo mismo que pegar a mano en
+#      el panel) y comprueba que queda persistida (GET stats) y que el
+#      resumen la refleja (GET /api/analytics). Si no encuentra el clip
+#      o no puede leer las vistas, NO inventa cifras: salta ese paso.
+#   4. NO toca min_virality/min_seo (50/90), NO publica, NO toca credenciales.
+#
+# Credenciales solo por entorno `sebastian` (secretos de GitHub), nunca
+# en el repo ni en logs. Se llama a la URL DIRECTA del Worker, no al
+# front de Pages (Pages corta las llamadas API desde Actions).
+name: Panel día 2026-11-19
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_duration_s:
+        description: "Valor al que devolver min_duration_s (40 = regla)"
+        default: "40"
+      short_id:
+        description: "ID del Short de YouTube para la medición manual real"
+        default: "w22VlP5Wn2g"
+
+jobs:
+  verify-and-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: sebastian
+    env:
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_TENANT: sebastian
+      PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+      MIN_DURATION_S: ${{ inputs.min_duration_s }}
+      SHORT_ID: ${{ inputs.short_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verificar y arreglar (Ajustes + medición manual)
+        run: |
+          cat > /tmp/panel_dia.py <<'PYEOF'
+          import json, os, re, subprocess, sys, urllib.error, urllib.request
+
+          BASE = os.environ["PANEL_BASE_URL"].rstrip("/")
+          USER = os.environ["PANEL_USERNAME"]
+          PW = os.environ["PANEL_PASSWORD"]
+          WANT_MIN = int(os.environ.get("MIN_DURATION_S", "40"))
+          SHORT_ID = os.environ.get("SHORT_ID", "w22VlP5Wn2g")
+          UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
+          fails = []
+          def req(method, path, body=None, token=None):
+              data = json.dumps(body).encode() if body is not None else None
+              h = dict(UA)
+              if token:
+                  h["Authorization"] = f"Bearer {token}"
+              if data:
+                  h["Content-Type"] = "application/json"
+              r = urllib.request.Request(BASE + path, data=data, headers=h, method=method)
+              try:
+                  with urllib.request.urlopen(r, timeout=60) as resp:
+                      return json.loads(resp.read().decode("utf-8", "ignore") or "{}")
+              except urllib.error.HTTPError as e:
+                  raise RuntimeError(f"{method} {path} -> HTTP {e.code}: {e.read().decode('utf-8','ignore')[:300]}")
+          # 1. Login (token de sesion, nunca se imprime)
+          login = req("POST", "/api/auth/login", {"username": USER, "password": PW})
+          tok = login.get("token") or login.get("session_token") or login.get("session")
+          assert tok, f"login sin token: {str(login)[:200]}"
+          print("LOGIN: ok")
+          # 2. Salud
+          print("HEALTH:", json.dumps(req("GET", "/api/health")))
+          # 3. Ajustes ANTES
+          before = req("GET", "/api/settings", token=tok)["settings"]
+          print("SETTINGS ANTES: min_duration_s=%s max_duration_s=%s min_virality=%s min_seo=%s" % (
+              before.get("min_duration_s"), before.get("max_duration_s"),
+              before.get("min_virality"), before.get("min_seo")))
+          # 4. Estado Worker / fase
+          st = req("GET", "/api/worker/state", token=tok)
+          print("WORKER STATE: running=%s phase=%s lastSweepAt=%s lastClipAt=%s" % (
+              st.get("running"), json.dumps(st.get("phase")), st.get("lastSweepAt"), st.get("lastClipAt")))
+          print("WORKER VALIDATION:", json.dumps(st.get("validation"))[:800])
+          # 5. Cola
+          clips = req("GET", "/api/clips", token=tok).get("clips") or []
+          print(f"COLA: {len(clips)} clips")
+          for c in clips:
+              ps = c.get("publish_states")
+              print("  id=%s titulo=%r estado=%s publish_states=%s" % (
+                  c.get("id"), (c.get("title") or "")[:70], c.get("state"), json.dumps(ps)[:400]))
+          with open("/tmp/cola.json", "w") as f:
+              json.dump(clips, f, ensure_ascii=False, indent=1)
+          # 6. Analiticas ANTES
+          ana0 = req("GET", "/api/analytics", token=tok)
+          for p in ana0.get("platforms", []):
+              print("ANALYTICS ANTES: %(platform)s publicados=%(published_clips)s medidos=%(measured_clips)s mediana_vistas=%(median_views)s" % p)
+          print("ANALYTICS ANTES sin medir:", json.dumps(ana0.get("unmeasured"))[:600])
+          # 7. Telegram status (solo lectura)
+          try:
+              print("TELEGRAM STATUS:", json.dumps(req("GET", "/api/telegram/status", token=tok))[:500])
+          except Exception as e:
+              print("TELEGRAM STATUS: no leido:", e)
+          # 8. PUT min_duration_s
+          put = req("PUT", "/api/settings", {"min_duration_s": WANT_MIN}, token=tok)
+          print("PUT SETTINGS: min_duration_s=%s" % put["settings"].get("min_duration_s"))
+          # 9. Verificacion en vivo
+          after = req("GET", "/api/settings", token=tok)["settings"]
+          print("SETTINGS DESPUES: min_duration_s=%s max_duration_s=%s min_virality=%s min_seo=%s" % (
+              after.get("min_duration_s"), after.get("max_duration_s"),
+              after.get("min_virality"), after.get("min_seo")))
+          settings_ok = after.get("min_duration_s") == WANT_MIN
+          print("SETTINGS:", "PASS" if settings_ok else "FAIL")
+          if not settings_ok:
+              fails.append("min_duration_s efectivo != %s" % WANT_MIN)
+          # 10. Vistas REALES del Short (pagina publica, sin inventar)
+          views = None
+          try:
+              html = subprocess.run(["curl", "-s", "-m", "25", "-A", UA["User-Agent"],
+                                     f"https://www.youtube.com/shorts/{SHORT_ID}"],
+                                    capture_output=True, text=True, timeout=40).stdout
+              m = re.search(r'"viewCount":"(\d+)"', html)
+              title = re.search(r"<title>([^<]*)</title>", html)
+              if m:
+                  views = int(m.group(1))
+                  print(f"YOUTUBE REAL: short {SHORT_ID} titulo={title.group(1) if title else '?'} vistas={views}")
+              else:
+                  print("YOUTUBE REAL: no se encontro viewCount en la pagina publica")
+          except Exception as e:
+              print("YOUTUBE REAL: no leido:", e)
+          # 11. Localizar el clip del Short en la Cola
+          target = None
+          for c in clips:
+              blob = json.dumps(c, ensure_ascii=False)
+              if SHORT_ID in blob:
+                  target = c; break
+          if target is None:
+              for c in clips:
+                  if "borra" in (c.get("title") or "").lower():
+                      target = c; break
+          stats_status = "SKIP"
+          if views is None or target is None:
+              print(f"STATS: SKIP (vistas={views} clip={'id=%s' % target.get('id') if target else None})")
+          else:
+              cid = target["id"]
+              print(f"STATS: clip objetivo id={cid} titulo={target.get('title')!r}")
+              saved = req("POST", f"/api/clips/{cid}/stats",
+                          {"platform": "youtube", "views": views, "window": "7d"}, token=tok)
+              print("POST STATS:", json.dumps(saved)[:400])
+              rows = req("GET", f"/api/clips/{cid}/stats", token=tok).get("stats") or []
+              last = [r for r in rows if r.get("platform") == "youtube"]
+              print("GET STATS youtube:", json.dumps(last[-1]) if last else "SIN FILAS")
+              ana1 = req("GET", "/api/analytics", token=tok)
+              yt = [p for p in ana1.get("platforms", []) if p.get("platform") == "youtube"]
+              print("ANALYTICS DESPUES youtube:", json.dumps(yt[0]) if yt else "sin youtube")
+              if last and last[-1].get("views") == views and yt and yt[0].get("measured_clips", 0) >= 1 and yt[0].get("median_views") == views:
+                  stats_status = "PASS"
+              else:
+                  stats_status = "FAIL"
+                  fails.append("medicion manual no reflejada en analytics")
+              print("STATS:", stats_status)
+          print("=== VEREDICTO === SETTINGS=%s STATS=%s" % ("PASS" if settings_ok else "FAIL", stats_status))
+          if fails:
+              print("FALLOS:", "; ".join(fails))
+              sys.exit(1)
+          PYEOF
+          python3 /tmp/panel_dia.py
+      - name: Subir Cola como artefacto
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cola-2026-11-19
+          path: /tmp/cola.json
+          if-no-files-found: warn
