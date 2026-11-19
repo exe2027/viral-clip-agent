@@ -133,7 +133,8 @@ class TestFetchPanelSettings(unittest.TestCase):
 
     def test_url_invalida_devuelve_none_sin_romper(self):
         self.assertIsNone(fetch_panel_settings(
-            worker_url="http://127.0.0.1:1", bridge_token="x", timeout=1))
+            worker_url="http://127.0.0.1:1", bridge_token="x",
+            tenant="sebastian", timeout=1))
 
 
 if __name__ == "__main__":
