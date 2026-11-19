@@ -227,10 +227,14 @@ def test_pipeline_advances_vod_to_picos_to_corte(store, tmp_path,
                for c in cortes)
 
 
-def test_pipeline_empaquetar_autoencola_tiktok(store, tmp_path):
-    # 2026-11-18 (100% automático): al terminar empaquetar, la
-    # cadena auto-encola publicar en TikTok (mode api). El resto
+def test_pipeline_empaquetar_autoencola_tiktok(store, tmp_path,
+                                               monkeypatch):
+    # 2026-11-18 (100% automático): validación final del preview
+    # ENCENDIDA por defecto. Sin GEMINI_API_KEY, Gemini no puede
+    # validar y el clip queda pendiente: se auto-encola publicar
+    # en modo draft para revisión humana, nunca en api. El resto
     # de puertas las aplica publish_one al ejecutar ese job.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"v" * 10)
     job = store.enqueue("c1", "empaquetar", payload={
@@ -241,6 +245,25 @@ def test_pipeline_empaquetar_autoencola_tiktok(store, tmp_path):
     pubs = store.list_jobs(paso="publicar")
     assert len(pubs) == 1
     assert pubs[0]["plataforma"] == "tiktok"
+    assert pubs[0]["payload"]["mode"] == "draft"
+    assert pubs[0]["payload"]["final_review"] == "pendiente_revision"
+    assert pubs[0]["payload"]["clip"] == str(clip)
+
+
+def test_pipeline_empaquetar_validacion_apagada_autoencola_api(
+        store, tmp_path):
+    # Con la validación apagada explícitamente, el comportamiento
+    # de antes: publicar en modo api.
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"v" * 10)
+    job = store.enqueue("c1", "empaquetar", payload={
+        "clip": str(clip), "title": "GTA 6: jugada increíble",
+        "out_path": str(tmp_path / "clip.package.json")})
+    done = run_step(store, job["id"],
+                    cfg={"final_review": {"enabled": False}})
+    assert done["estado"] == "done"
+    pubs = store.list_jobs(paso="publicar")
+    assert len(pubs) == 1
     assert pubs[0]["payload"]["mode"] == "api"
     assert pubs[0]["payload"]["clip"] == str(clip)
 
