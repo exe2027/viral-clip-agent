@@ -13,6 +13,18 @@ El cerebro es este repo, pero **todo se usa y se verifica desde la web, nada loc
 - **Cuentas del canal:** Twitch `tu-cuenta`, YouTube "Tu canal de clips" (@tu-cuenta), TikTok @tu-cuenta, Instagram @tu-cuenta, Facebook TuCanal. Correo del canal: TU_EMAIL. Las claves y tokens **nunca** van en este repo: van en secretos de GitHub (entorno `tu-entorno`) y cifrados en el panel (D1).
 - **Streamers:** los configuras tú en `streamers.yaml` (lista única; estar en la lista = permiso ya dado) y en Influencers del panel. Ejemplo: `tu-streamer, twitch, GTA 6, es, TU_FECHA_PERMISO (activo)`.
 
+### Meta / Instagram: vincular la Página y sacar el token largo (procedimiento verificado 2026-11-19)
+
+La cuenta Meta del panel publica en la Página del canal y en la cuenta de Instagram vinculada a esa Página, con un solo token de Página. Los IDs reales viven solo en el Extra de la cuenta Meta, cifrados en el panel (D1); nunca van en este repo ni en la documentación.
+
+1. **Confirmar el vínculo en 3 lugares:** Business Suite → Cuentas de Instagram (1 activo conectado: la Página del canal); la Página → Configuración → Cuentas vinculadas → Instagram (Conectada); y el Centro de cuentas. Si en alguno no aparece, el vínculo no está hecho: vincúlalo ahí primero.
+2. **La regla que costó una noche (2026-11-19): si Graph no devuelve `instagram_business_account` aunque en pantalla diga conectado, el token se generó ANTES de la (re)vinculación y sus ámbitos de Instagram no tienen ningún objeto asociado (se ve vacío en el Depurador de token).** Solución: re-vincular Instagram a la Página y DESPUÉS generar el token nuevo. Un token anterior a la vinculación nunca va a ver la cuenta, por más permisos que tenga.
+3. **Generar el token en el Explorador de Graph:** elegir la app, marcar los 8 permisos (`instagram_basic`, `pages_show_list`, `pages_read_engagement`, `instagram_content_publish`, `pages_manage_posts`, `instagram_manage_comments`, `instagram_manage_insights`, `business_management`), confirmar la Página, el negocio y "Activar todos los Cuentas de Instagram actuales y futuros".
+4. **Ampliar a larga duración:** en el Depurador, "Ampliar token de acceso" con el token de usuario y verificar que diga que no caduca nunca; después pedir el token de la Página con `me/accounts`. El token corto vence en 1 hora: nunca guardes el corto.
+5. **Guardar en el panel el token + el Extra JUNTOS en una sola operación.** El Extra lleva `ig_user_id` y `page_id` en JSON. Guardar solo el token borra el Extra (el endpoint sobrescribe el Extra en cada guardado).
+6. **Verificación:** `me/accounts?fields=id,name,instagram_business_account` debe devolver el campo con el `ig_user_id`; el panel debe mostrar "Meta aceptó el token. Instagram @... accesible" y la tarjeta en verde.
+7. **Errores y qué significan:** "Meta no aceptó la clave" = token corto o vencido → sacar el LARGO. "Aceptó el token pero la cuenta de Instagram no es accesible" = falta el Extra o el vínculo no está en Graph → revisar el Extra y re-vincular + regenerar el token.
+
 ### Reglas vigentes (2026-11-18)
 
 - **Clips de 40 a 60 segundos**: nunca menos de 40, nunca más de 60, nunca 30 exacto; el rango 25-35 s está prohibido (regla de oro). Objetivo 40 s (20 s antes del pico + 20 s después). `config.yaml > clips.min_duration_s: 40, target_duration_s: 40, max_duration_s: 60`.
