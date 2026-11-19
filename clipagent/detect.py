@@ -85,6 +85,73 @@ ESTIMATED_DEFAULT = 5.0
 MIN_MULTIPLE = 3.0
 MAX_RANK = 5
 
+# Puerta hype v2 (chat caliente): mismos umbrales que la puerta live
+# (clipagent/live.py, commit de7e905, aprobado por el usuario el
+# 2026-11-18). En un directo con el chat siempre caliente el múltiplo
+# 3x es inalcanzable — medido 2026-11-18 en el VOD de Rubius
+# 2932415021: mediana global 110 pts/10 s, máximo 173, mayor múltiplo
+# 2,23x; los picos buenos conocidos (3220: 1,19x, viralidad 53,8;
+# 7775: 1,87x, viralidad 52,5) tampoco llegan a 3x. La ráfaga de hype
+# (hype_ratio contra el baseline rodante + score alto + hype_score)
+# es la vía que los deja pasar. Los umbrales viven duplicados en
+# live.py por el import circular (live importa de detect); si cambian,
+# cambiar en los dos sitios.
+HYPE_RATIO_MIN = 1.3
+HYPE_SCORE_MIN = 1.0
+SCORE_MIN = 14.0
+
+# Salvaguarda anti-cero (chat caliente): mismos umbrales que el
+# ``best_fallback`` de la puerta live (live.py). Si NINGÚN pico pasa
+# la puerta principal, el mejor pico con hype_ratio >= 1,2 y score
+# >= 13 pasa igual — la viralidad posterior puede descartarlo antes
+# del render, pero un VOD caliente nunca se queda en cero por la
+# puerta barata. Sin comprobación de hype_score (como en live).
+FALLBACK_HYPE_RATIO_MIN = 1.2
+FALLBACK_SCORE_MIN = 13.0
+
+
+def _anti_spam_ok(detail):
+    """Anti-spam duro, mismo criterio que la puerta live: con
+    mensajes y no solo emote-spam sin risas ni hype."""
+    d = detail or {}
+    if (d.get("msgs") or 0) <= 0:
+        return False
+    if ((d.get("emote_ratio") or 0.0) > 0.6
+            and (d.get("risas") or 0) + (d.get("hype") or 0) == 0):
+        return False
+    return True
+
+
+def hype_way_passes(detail, score):
+    """True si el pico pasa por la vía hype (chat caliente).
+
+    ``detail``: detail[ventana] de score_windows (hype_ratio,
+    hype_score); ``score``: score de la ventana en score_windows.
+    Sin score (None) la vía hype no se puede evaluar: False.
+    """
+    if score is None:
+        return False
+    d = detail or {}
+    return ((d.get("hype_ratio") or 0.0) >= HYPE_RATIO_MIN
+            and score >= SCORE_MIN
+            and (d.get("hype_score") or 0.0) >= HYPE_SCORE_MIN)
+
+
+def fallback_way_passes(detail, score):
+    """True si el pico pasa por la vía anti-cero (salvaguarda).
+
+    Umbrales relajados (hype_ratio >= 1,2 + score >= 13) con el
+    anti-spam en vigor. Solo se usa cuando ningún pico pasó la
+    puerta principal del VOD.
+    """
+    if score is None:
+        return False
+    if not _anti_spam_ok(detail):
+        return False
+    d = detail or {}
+    return ((d.get("hype_ratio") or 0.0) >= FALLBACK_HYPE_RATIO_MIN
+            and score >= FALLBACK_SCORE_MIN)
+
 # Topes del componente de chat.
 CAP_LOW_SIGNAL = 4.0    # (risas+hype)/msgs < 10%
 CAP_NO_SIGNAL = 3.0     # 0 risas y 0 hype
@@ -182,27 +249,70 @@ def chat_component(detail, multiple: float):
     return round(min(value, 10.0), 2), razones, topes
 
 
-def filter_passed(detail, multiple: float, rank=None):
-    """Filtro previo para encolar: top-5 del VOD, múltiplo >= 3x,
-    no solo emote-spam. Devuelve (pasa, motivos)."""
+def filter_passed(detail, multiple: float, rank=None, score=None):
+    """Filtro previo para encolar: top-5 del VOD, múltiplo >= 3x O
+    ráfaga hype (vía hype v2, chat caliente: hype_ratio >= 1,3 +
+    score >= 14 + hype_score >= 1,0 — mismos umbrales que la puerta
+    live), no solo emote-spam. ``score`` es el score de la ventana en
+    score_windows; sin él (None) solo se evalúa la vía del múltiplo
+    (compatibilidad con llamadas antiguas). Devuelve (pasa, motivos)."""
     motivos = []
     ok = True
     if rank is not None and rank > MAX_RANK:
         ok = False
         motivos.append(f"puesto {rank} del VOD (solo top-{MAX_RANK})")
-    if (multiple or 0.0) < MIN_MULTIPLE:
+    via_hype = hype_way_passes(detail, score)
+    if (multiple or 0.0) < MIN_MULTIPLE and not via_hype:
         ok = False
         motivos.append(f"múltiplo {multiple:.1f}x < {MIN_MULTIPLE:.0f}x la mediana")
+        if score is not None:
+            motivos.append(
+                "sin ráfaga hype "
+                f"(hype_ratio {(detail or {}).get('hype_ratio')}, "
+                f"score {score}, hype_score {(detail or {}).get('hype_score')})")
+    elif via_hype and (multiple or 0.0) < MIN_MULTIPLE:
+        motivos.append(
+            "pasa por ráfaga hype "
+            f"(hype_ratio {(detail or {}).get('hype_ratio')} >= {HYPE_RATIO_MIN}, "
+            f"score {score} >= {SCORE_MIN}, "
+            f"hype_score {(detail or {}).get('hype_score')} >= {HYPE_SCORE_MIN})")
     msgs = (detail or {}).get("msgs") or 0
-    if msgs <= 0:
+    if not _anti_spam_ok(detail):
         ok = False
-        motivos.append("sin mensajes en la ventana")
-    elif ((detail or {}).get("emote_ratio") or 0.0) > 0.6 \
-            and ((detail or {}).get("risas") or 0) + ((detail or {}).get("hype") or 0) == 0:
-        ok = False
-        motivos.append("solo emote-spam (emote_ratio > 60% sin risas ni hype)")
+        if msgs <= 0:
+            motivos.append("sin mensajes en la ventana")
+        else:
+            motivos.append("solo emote-spam (emote_ratio > 60% sin risas ni hype)")
     if ok:
         motivos.append("pasa el filtro previo")
+    return ok, motivos
+
+
+def filter_passed_relaxed(detail, score, rank=None):
+    """Puerta anti-cero para un pico: solo se usa cuando ningún pico
+    del VOD pasó ``filter_passed``. Umbrales relajados (hype_ratio
+    >= 1,2 + score >= 13) con el anti-spam y el top-5 en vigor.
+    Devuelve (pasa, motivos)."""
+    motivos = []
+    ok = True
+    if rank is not None and rank > MAX_RANK:
+        ok = False
+        motivos.append(f"puesto {rank} del VOD (solo top-{MAX_RANK})")
+    if not fallback_way_passes(detail, score):
+        ok = False
+        motivos.append(
+            "sin ráfaga ni siquiera relajada "
+            f"(hype_ratio {(detail or {}).get('hype_ratio')}, "
+            f"score {score})")
+    if not _anti_spam_ok(detail):
+        ok = False
+        motivos.append("anti-spam: sin mensajes o solo emote-spam")
+    if ok:
+        motivos.append(
+            "pasa por la vía anti-cero "
+            f"(hype_ratio {(detail or {}).get('hype_ratio')} >= "
+            f"{FALLBACK_HYPE_RATIO_MIN}, score {score} >= "
+            f"{FALLBACK_SCORE_MIN})")
     return ok, motivos
 
 
@@ -324,12 +434,14 @@ def _human_value(human, name):
 
 
 def score_clip(detail, chat_multiple, rank=None, human=None, audio=None,
-               audio_weight=None, platform=None):
+               audio_weight=None, platform=None, score=None):
     """Score de viralidad completo de un clip.
 
     detail: detail[ventana] de score_windows (o None si no hay chat).
     chat_multiple: múltiplo pico/mediana (score / mediana).
     rank: puesto del pico en el VOD (1 = el mejor).
+    score: score de la ventana en score_windows (opcional; sin él el
+        campo filter_passed solo evalúa la vía del múltiplo).
     human: dict {hook, claridad, novedad, loop, packaging} con
         valores 0-10 (número o {"value", "reason"}).
     audio: ver audio_component (None = pendiente).
@@ -396,7 +508,8 @@ def score_clip(detail, chat_multiple, rank=None, human=None, audio=None,
     total = round(
         sum(components[name]["value"] * weights[name] for name in weights)
         * 10.0 / sum(weights.values()), 1)
-    pasa, motivos = filter_passed(detail, chat_multiple, rank=rank)
+    pasa, motivos = filter_passed(detail, chat_multiple, rank=rank,
+                                  score=score)
 
     return {
         "total": total,

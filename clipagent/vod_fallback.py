@@ -360,7 +360,7 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         top_n=TOP_N_PER_VOD, only=None, state_path=DEFAULT_STATE_PATH,
         out_root=DEFAULT_OUT_DIR, dry_run=False, bridge=None,
         scan_fn=None, latest_vod_fn=None, auto_clips_fn=None,
-        enqueue_fn=None):
+        enqueue_fn=None, ignore_cooldown=False):
     """Una corrida del fallback. Devuelve (n_enqueued, resumen).
 
     Las funciones *_fn existen para los tests (sin red ni panel).
@@ -425,7 +425,7 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         # (capítulos del VOD en auto_clips) + el juego del manifiesto
         # en clip_passes_gates. Un VOD entero de Just Chatting no
         # deja ningún clip que pase esa puerta.
-        if vod_on_cooldown(state, vod_id):
+        if vod_on_cooldown(state, vod_id) and not ignore_cooldown:
             _log(f"{name}: VOD {vod_id} en enfriamiento (intentado "
                  "hace <6 h); se sigue.")
             continue
@@ -491,13 +491,18 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true",
                    help="Solo decide (barrido + VODs + filtros), sin "
                         "cortar ni encolar")
+    p.add_argument("--ignore-cooldown", action="store_true",
+                   help="Reprocesa VODs intentados hace <6 h (para "
+                        "reintentos tras un arreglo; el cron normal "
+                        "nunca lo usa)")
     args = p.parse_args(argv)
     only = [s for s in args.streamers.split(",") if s.strip()] \
         or None
     _n, _summary = run(
         max_vods=args.max_vods, max_clips=args.max_clips,
         top_n=args.top_n, only=only, state_path=args.state,
-        out_root=args.out_dir, dry_run=args.dry_run)
+        out_root=args.out_dir, dry_run=args.dry_run,
+        ignore_cooldown=args.ignore_cooldown)
     return 0
 
 

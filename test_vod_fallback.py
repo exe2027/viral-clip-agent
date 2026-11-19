@@ -322,6 +322,24 @@ class TestRun(unittest.TestCase):
             latest_vod_fn=lambda entry: vod)
         self.assertEqual(n, 0)
 
+    def test_ignore_cooldown_reprocesa_el_vod(self):
+        # Reintento tras un arreglo (2026-11-19: la puerta 3x tumbaba
+        # los VODs y había que reprocesarlos sin esperar 6 h).
+        vod = {"vod_id": "2932415021",
+               "url": "https://www.twitch.tv/videos/2932415021",
+               "title": "GTA 6", "category": "Grand Theft Auto VI",
+               "live": False}
+        save_state(self.state, {"vods": {"2932415021": {
+            "attempted_at": 9999999999}}})
+        n, summary = run(
+            state_path=self.state, out_root=self.out, dry_run=True,
+            ignore_cooldown=True,
+            scan_fn=self._scan([]),
+            latest_vod_fn=lambda entry: (
+                vod if entry.get("name") == "rubius" else None))
+        self.assertEqual(n, 0)  # dry-run no encola, pero SÍ procesa
+        self.assertIn("1 VOD(s) procesado(s)", summary)
+
     def test_encola_solo_el_que_pasa(self):
         vod = {"vod_id": "2932415021",
                "url": "https://www.twitch.tv/videos/2932415021",

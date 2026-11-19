@@ -45,6 +45,8 @@ import json
 import re
 import statistics
 
+from .detect import fallback_way_passes, hype_way_passes
+
 # Regex de reacciones del clips_chat.py original, tal cual la pegó el
 # usuario (no la versión posterior de LAUGH_RE en clips_chat.py del
 # proyecto, que es otra lista). 2 puntos si casa, 1 si no.
@@ -181,18 +183,25 @@ def prefilter_peaks_from_chat(chat_path: str, window: int = WINDOW_S,
 
 
 def prefilter_gate(peaks, prefilter_peaks, window: int = WINDOW_S,
-                   tolerance_windows: int = 1, multiples=None):
+                   tolerance_windows: int = 1, multiples=None,
+                   detail=None):
     """Puerta del pre-filtro sobre los picos ya seleccionados.
 
     ``peaks``: [(peak_ts, score)] de ``select_top_peaks``.
     ``prefilter_peaks``: lista de ``find_prefilter_peaks``.
     ``multiples``: lista opcional de ``multiples_per_bucket`` para
     registrar en cada descarte el múltiplo de su PROPIO tramo.
-    Un pico pasa si su tramo (``peak_ts // window``) está a
-    ``tolerance_windows`` tramos o menos de un tramo del pre-filtro
-    (tolerancia ±1 tramo: la rejilla deslizante de v2.5 es de 5 s y
-    el pre-filtro de 10 s, un pico real puede caer en el tramo
-    vecino). Devuelve (passed, discarded, summary):
+    ``detail``: detail de score_windows (opcional; sin él solo se
+    evalúa la vía del múltiplo). Un pico pasa si su tramo
+    (``peak_ts // window``) está a ``tolerance_windows`` tramos o
+    menos de un tramo del pre-filtro (tolerancia ±1 tramo: la rejilla
+    deslizante de v2.5 es de 5 s y el pre-filtro de 10 s, un pico real
+    puede caer en el tramo vecino) O por la vía hype v2 (chat
+    caliente: hype_ratio >= 1,3 + score >= 14 + hype_score >= 1,0,
+    mismos umbrales que la puerta live) — en un chat siempre caliente
+    ningún tramo llega a 3x y la vía del múltiplo tumbaría picos
+    buenos conocidos (Rubius 3220: 1,19x; 7775: 1,87x).
+    Devuelve (passed, discarded, summary):
 
       * passed: [(peak_ts, score)] en el mismo orden de entrada.
       * discarded: [{"peak", "score", "multiple", "rank", "motivos"}]
@@ -227,23 +236,50 @@ def prefilter_gate(peaks, prefilter_peaks, window: int = WINDOW_S,
     passed, discarded = [], []
     for peak_ts, score in peaks:
         dist, closest = nearest[peak_ts]
-        if dist <= tolerance_windows:
+        via_hype = hype_way_passes(
+            (detail or {}).get(peak_ts) if detail else None, score)
+        if dist <= tolerance_windows or via_hype:
             passed.append((peak_ts, score))
         else:
             bucket = int(peak_ts // window)
             own = (round(multiples[bucket], 2)
                    if multiples is not None and 0 <= bucket < len(multiples)
                    else closest["multiple"])
+            motivos = [
+                "pre-filtro Óscar: sin tramo >= 3x la mediana en "
+                f"±{tolerance_windows} tramo(s) "
+                f"(tramo propio {peak_ts}s, {own}x; tramo más cercano "
+                f"{closest['peak_sec']}s, {closest['multiple']}x)"]
+            if detail is not None:
+                d = (detail or {}).get(peak_ts) or {}
+                motivos.append(
+                    "sin ráfaga hype "
+                    f"(hype_ratio {d.get('hype_ratio')}, "
+                    f"score {score}, hype_score {d.get('hype_score')})")
             discarded.append({
                 "peak": peak_ts, "score": score,
                 "multiple": own,
                 "rank": None,
-                "motivos": [
-                    "pre-filtro Óscar: sin tramo >= 3x la mediana en "
-                    f"±{tolerance_windows} tramo(s) "
-                    f"(tramo propio {peak_ts}s, {own}x; tramo más cercano "
-                    f"{closest['peak_sec']}s, {closest['multiple']}x)"],
+                "motivos": motivos,
             })
+    if not passed and discarded and detail is not None:
+        # Salvaguarda anti-cero (como el best_fallback live): si
+        # ningún pico pasó la puerta principal, se re-evalúan con la
+        # vía relajada (hype_ratio >= 1,2 + score >= 13).
+        rescued, still = [], []
+        for dc in discarded:
+            if fallback_way_passes((detail or {}).get(dc["peak"]),
+                                  dc["score"]):
+                rescued.append((dc["peak"], dc["score"]))
+            else:
+                d = (detail or {}).get(dc["peak"]) or {}
+                dc["motivos"] = dc["motivos"] + [
+                    "sin ráfaga ni siquiera relajada "
+                    f"(hype_ratio {d.get('hype_ratio')}, "
+                    f"score {dc['score']})"]
+                still.append(dc)
+        if rescued:
+            passed, discarded = rescued, still
     return passed, discarded, {
         "active": True,
         "prefilter_peaks": [p["peak_sec"] for p in prefilter_peaks],

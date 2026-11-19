@@ -116,6 +116,49 @@ class TestPrefilterGate(unittest.TestCase):
         self.assertEqual(discarded, [])
         self.assertFalse(summary["active"])
 
+    def test_via_hype_pasa_lejos_del_prefiltro(self):
+        # Chat caliente (2026-11-19, VOD IlloJuan 2932866051): el pico
+        # 15350 tenía 2,99x — a una centésima del 3x — y moría. Con la
+        # vía hype v2 (mismos umbrales que la puerta live) pasa si
+        # hype_ratio >= 1,3 + score >= 14 + hype_score >= 1,0 aunque
+        # su tramo no esté cerca de ningún tramo 3x.
+        msgs = _cold_chat_with_burst(burst_ts=300, burst_msgs=60)
+        pf = find_prefilter_peaks(count_windows(msgs))
+        detail = {500: {"hype_ratio": 1.5, "hype_score": 2.0}}
+        passed, discarded, _ = prefilter_gate(
+            [(500, 20.0)], pf, detail=detail)
+        self.assertEqual(passed, [(500, 20.0)])
+        self.assertEqual(discarded, [])
+
+    def test_via_hype_no_pasa_sin_rafaga(self):
+        # Mismo pico lejos del pre-filtro pero sin ráfaga (hype_ratio
+        # 1,2 < 1,3): se descarta como antes.
+        msgs = _cold_chat_with_burst(burst_ts=300, burst_msgs=60)
+        pf = find_prefilter_peaks(count_windows(msgs))
+        detail = {500: {"hype_ratio": 1.2, "hype_score": 2.0}}
+        passed, discarded, _ = prefilter_gate(
+            [(500, 20.0)], pf, detail=detail)
+        self.assertEqual(passed, [])
+        self.assertEqual([d["peak"] for d in discarded], [500])
+        self.assertTrue(any("sin ráfaga hype" in m
+                            for m in discarded[0]["motivos"]))
+
+    def test_anti_cero_rescata_con_rafaga_relajada(self):
+        # Si NINGÚN pico pasa la puerta principal, la vía relajada
+        # (1,2/13) rescata el mejor: el de 1,25x pasa, el de 1,15x no.
+        msgs = _cold_chat_with_burst(burst_ts=300, burst_msgs=60)
+        pf = find_prefilter_peaks(count_windows(msgs))
+        detail = {500: {"msgs": 50, "risas": 5, "hype": 5,
+                        "emote_ratio": 0.1,
+                        "hype_ratio": 1.25, "hype_score": 2.0},
+                  700: {"msgs": 50, "risas": 5, "hype": 5,
+                        "emote_ratio": 0.1,
+                        "hype_ratio": 1.15, "hype_score": 2.0}}
+        passed, discarded, _ = prefilter_gate(
+            [(500, 15.0), (700, 14.0)], pf, detail=detail)
+        self.assertEqual(passed, [(500, 15.0)])
+        self.assertEqual([d["peak"] for d in discarded], [700])
+
     def test_tolerancia_un_tramo_vecino(self):
         # La rejilla v2.5 es de 5 s y el pre-filtro de 10 s: un pico
         # a 305 s (tramo 300) pasa aunque el tramo del pre-filtro

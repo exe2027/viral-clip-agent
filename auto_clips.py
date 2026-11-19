@@ -230,12 +230,14 @@ try:
     # Score de viralidad 0-100 + señales MVP (7 componentes, banda,
     # filtro previo). Distinto del score de chat: no se mezclan.
     from clipagent.detect import (audio_weight_for, compute_signals,
-                                  filter_passed, score_clip)
+                                  filter_passed, filter_passed_relaxed,
+                                  score_clip)
     viral_score_mod = True
 except ImportError:
     audio_weight_for = None
     compute_signals = None
     filter_passed = None
+    filter_passed_relaxed = None
     score_clip = None
     viral_score_mod = False
 
@@ -472,6 +474,11 @@ def filter_candidates(peaks, detail, rank_map, median_score):
     La mediana tiene suelo 1.0: con mediana 0 un pico con puntos
     queda a score/1 x (si no, por división por cero ningún pico
     pasaría y un chat casi vacío no daría clips nunca).
+    Salvaguarda anti-cero (como el best_fallback live): si NINGÚN
+    pico pasa la puerta principal, se re-evalúan con la vía relajada
+    (hype_ratio >= 1,2 + score >= 13); un VOD caliente nunca se
+    queda en cero por la puerta barata — la viralidad/SEO posterior
+    sigue mandando antes del render.
     """
     floor = max(median_score or 0.0, 1.0)
     selected = []
@@ -479,13 +486,29 @@ def filter_candidates(peaks, detail, rank_map, median_score):
     for peak_ts, score in peaks:
         multiple = round(score / floor, 2)
         rank = rank_map.get(peak_ts)
-        pasa, motivos = filter_passed(detail[peak_ts], multiple, rank=rank)
+        pasa, motivos = filter_passed(detail[peak_ts], multiple, rank=rank,
+                                      score=score)
         if pasa:
             selected.append((peak_ts, score, multiple))
         else:
             discarded.append({"peak": peak_ts, "score": score,
                               "multiple": multiple, "rank": rank,
                               "motivos": motivos})
+    if not selected and discarded:
+        rescued = []
+        still = []
+        for dc in discarded:
+            pasa, motivos = filter_passed_relaxed(
+                detail[dc["peak"]], dc["score"], rank=dc["rank"])
+            if pasa:
+                rescued.append((dc["peak"], dc["score"], dc["multiple"]))
+            else:
+                dc["motivos"] = dc["motivos"] + motivos
+                still.append(dc)
+        if rescued:
+            print("  Anti-cero: ningún pico pasó la puerta principal; "
+                  f"{len(rescued)} pico(s) pasan por la vía relajada.")
+            return rescued, still
     return selected, discarded
 
 
@@ -770,7 +793,10 @@ def main() -> int:
     if os.environ.get("PANEL_WORKER_URL") and os.environ.get("PANEL_BRIDGE_TOKEN"):
         try:
             from clipagent.panel_settings import load_config_with_panel
+            from clipagent.tenant import TenantError
             cfg = load_config_with_panel()
+        except TenantError:
+            raise
         except Exception:
             pass
     clip_cfg = (cfg or {}).get("clips") or {}
@@ -1029,7 +1055,8 @@ def main() -> int:
                 multiple = score / median if median > 0 else score
                 vs = score_clip(detail[ts], multiple, rank=rank_map.get(ts),
                                 human=(human_scores.get("all")
-                                       or human_scores.get(str(ts))))
+                                       or human_scores.get(str(ts))),
+                                score=score)
                 print(f"  {fmt_ts(ts)} — viral {vs['total']}/100 "
                       f"({vs['band']}) | chat {vs['components']['chat']['value']}/10 "
                       f"({multiple:.1f}x) | filtro: "
@@ -1115,7 +1142,8 @@ def main() -> int:
                 _pf_points, min_multiple=_pf_min, separation=_pf_sep)
             peaks, prefilter_discarded, prefilter_summary = prefilter_gate(
                 peaks, _pf_peaks,
-                multiples=multiples_per_bucket(_pf_points))
+                multiples=multiples_per_bucket(_pf_points),
+                detail=detail)
             print(f"Pre-filtro Óscar: {prefilter_summary['reason']}")
         except Exception as e:  # noqa: BLE001 - el pre-filtro nunca tumba el job
             print(f"Pre-filtro Óscar: no se pudo aplicar ({e}); "
@@ -1709,7 +1737,7 @@ def main() -> int:
                                      rank=rank_map.get(peak_ts),
                                      human=human, audio=audio_in,
                                      audio_weight=_audio_w,
-                                     platform=platform)
+                                     platform=platform, score=score)
             print(f"    Viralidad: {viral_score['total']}/100 "
                   f"({viral_score['band']})"
                   + (" [BETA: componentes estimados]" if viral_score["beta"] else "")

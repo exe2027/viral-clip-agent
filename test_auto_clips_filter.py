@@ -60,6 +60,38 @@ class TestFilterCandidates(unittest.TestCase):
         self.assertEqual(len(selected), 1)
         self.assertEqual(discarded, [])
 
+    def test_anti_cero_rescata_con_rafaga_relajada(self):
+        # VOD caliente (Rubius 2932415021, medido 2026-11-19): ningún
+        # pico llega a 3x ni a la ráfaga principal (1,3/14/1,0). La
+        # salvaguarda anti-cero rescata el que tiene hype_ratio >= 1,2
+        # y score >= 13; el de 1,15x se queda fuera.
+        peaks = [(6360, 19.1), (5975, 18.6)]
+        detail = {
+            6360: dict(_detail(msgs=134, risas=9, hype=12),
+                       hype_ratio=1.2, hype_score=2.76),
+            5975: dict(_detail(msgs=120, risas=8, hype=10),
+                       hype_ratio=1.15, hype_score=2.58),
+        }
+        rank_map = {6360: 1, 5975: 2}
+        selected, discarded = filter_candidates(peaks, detail, rank_map,
+                                                10.94)
+        self.assertEqual([ts for ts, _, _ in selected], [6360])
+        self.assertEqual([d["peak"] for d in discarded], [5975])
+        self.assertTrue(any("ni siquiera relajada" in m
+                            for m in discarded[0]["motivos"]))
+
+    def test_anti_cero_sin_rafaga_no_rescata_nada(self):
+        peaks = [(6360, 19.1), (5975, 18.6)]
+        detail = {
+            6360: dict(_detail(), hype_ratio=1.1, hype_score=2.0),
+            5975: dict(_detail(), hype_ratio=1.05, hype_score=2.0),
+        }
+        rank_map = {6360: 1, 5975: 2}
+        selected, discarded = filter_candidates(peaks, detail, rank_map,
+                                                10.94)
+        self.assertEqual(selected, [])
+        self.assertEqual(len(discarded), 2)
+
 
 def _chat_1_3(path, dur_s=200):
     comments = []

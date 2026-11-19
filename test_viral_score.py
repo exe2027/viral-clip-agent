@@ -144,6 +144,81 @@ class TestFilter(unittest.TestCase):
         self.assertTrue(any("emote-spam" in m for m in motivos))
 
 
+class TestFilterHypeWay(unittest.TestCase):
+    """Vía hype v2 (chat caliente, mismos umbrales que la puerta
+    live): múltiplo < 3x pero ráfaga de hype -> pasa. Medido
+    2026-11-19: el VOD de Rubius 2932415021 no tiene ningún tramo
+    3x (máx. 2,23x) y sus picos buenos (3220: 1,19x; 7775: 1,87x)
+    morían en este filtro."""
+    HOT = {"msgs": 134, "risas": 9, "hype": 12, "users": 90,
+           "emote_ratio": 0.1, "rep_ratio": 0.2, "lex_diversity": 0.6,
+           "penalty_factor": 1.0, "motivo_penalizacion": None,
+           "hype_ratio": 1.92, "hype_score": 5.9}
+
+    def test_pasa_por_rafaga_con_multiplo_bajo(self):
+        ok, motivos = filter_passed(self.HOT, 1.9, rank=1, score=20.0)
+        self.assertTrue(ok)
+        self.assertTrue(any("ráfaga hype" in m for m in motivos))
+
+    def test_sin_score_no_hay_via_hype(self):
+        # Sin el score de la ventana no se puede evaluar la ráfaga:
+        # comportamiento antiguo (solo múltiplo).
+        ok, _ = filter_passed(self.HOT, 1.9, rank=1)
+        self.assertFalse(ok)
+
+    def test_hype_ratio_bajo_no_pasa(self):
+        d = dict(self.HOT, hype_ratio=1.2)
+        ok, motivos = filter_passed(d, 1.9, rank=1, score=20.0)
+        self.assertFalse(ok)
+        self.assertTrue(any("sin ráfaga hype" in m for m in motivos))
+
+    def test_score_bajo_no_pasa(self):
+        ok, _ = filter_passed(self.HOT, 1.9, rank=1, score=13.9)
+        self.assertFalse(ok)
+
+    def test_hype_score_bajo_no_pasa(self):
+        d = dict(self.HOT, hype_score=0.9)
+        ok, _ = filter_passed(d, 1.9, rank=1, score=20.0)
+        self.assertFalse(ok)
+
+    def test_anti_spam_manda_tambien_con_rafaga(self):
+        d = dict(self.HOT, msgs=50, risas=0, hype=0, emote_ratio=0.8)
+        ok, motivos = filter_passed(d, 1.9, rank=1, score=20.0)
+        self.assertFalse(ok)
+        self.assertTrue(any("emote-spam" in m for m in motivos))
+
+
+class TestFilterRelaxed(unittest.TestCase):
+    """Vía anti-cero: solo cuando ningún pico pasó la puerta
+    principal. Umbrales relajados (hype_ratio >= 1,2 + score >= 13),
+    como el best_fallback live."""
+    def test_pasa_relajado(self):
+        from clipagent.detect import filter_passed_relaxed
+        d = dict(TestFilterHypeWay.HOT, hype_ratio=1.2, hype_score=0.5)
+        ok, motivos = filter_passed_relaxed(d, score=13.0, rank=1)
+        self.assertTrue(ok)
+        self.assertTrue(any("anti-cero" in m for m in motivos))
+
+    def test_hype_ratio_bajo_no_pasa_relajado(self):
+        from clipagent.detect import filter_passed_relaxed
+        d = dict(TestFilterHypeWay.HOT, hype_ratio=1.19)
+        ok, _ = filter_passed_relaxed(d, score=20.0, rank=1)
+        self.assertFalse(ok)
+
+    def test_score_bajo_no_pasa_relajado(self):
+        from clipagent.detect import filter_passed_relaxed
+        d = dict(TestFilterHypeWay.HOT, hype_ratio=1.5)
+        ok, _ = filter_passed_relaxed(d, score=12.9, rank=1)
+        self.assertFalse(ok)
+
+    def test_anti_spam_manda_en_relajado(self):
+        from clipagent.detect import filter_passed_relaxed
+        d = dict(TestFilterHypeWay.HOT, hype_ratio=1.5, msgs=50,
+                 risas=0, hype=0, emote_ratio=0.8)
+        ok, _ = filter_passed_relaxed(d, score=20.0, rank=1)
+        self.assertFalse(ok)
+
+
 class TestScoreClipFixtures(unittest.TestCase):
     def test_coker_prioritario(self):
         r = score_clip(COKER_DETAIL, 8.5, rank=1,
