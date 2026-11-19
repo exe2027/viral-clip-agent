@@ -329,12 +329,12 @@ archivo y test por regla). Resumen:
   capítulos del VOD); el gate de publicación la exige.
 - **SIN franja horaria**: se publica a cualquier hora; los topes
   diarios se respetan igual.
-- **Layout RDJavi personalizado GTA 6 / Vice City** (default para
+- **Layout estilo Willyrex (plantilla rdjavi v2) personalizado GTA 6 / Vice City** (default para
   GTA 6; DJ Mariio aparcado): streamer ARRIBA, gameplay ABAJO; fondo
   desenfocado 0–730, webcam centrada 580×590 en (250,190), gameplay
   730–1770, banda inferior 1770–1920 con barra atardecer
-  rosa/violeta/naranja + handle @ELCLIPDEGTA6 | GTA VI. Subtítulos
-  estilo RDJavi total (una línea, 32 px, MarginV 230, mínimo 200;
+  rosa/violeta/naranja + handle @TU-CANAL | GTA VI. Subtítulos
+  estilo Willyrex total (una línea, 32 px, MarginV 230, mínimo 200;
   la regla vieja de 680 queda reemplazada). Miniaturas estilo GTA 6.
 - **Configuración desde la web**: Ajustes del panel (D1 por tenant,
   leídos por Worker/brain); nada de editar código para cambiar

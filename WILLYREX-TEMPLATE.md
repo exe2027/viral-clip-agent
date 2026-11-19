@@ -1,9 +1,11 @@
-# Plantilla RDJavi (GTA 6 / Vice City)
+# Plantilla estilo Willyrex (GTA 6 / Vice City)
+
+En el código es la plantilla `rdjavi` v2 (`clipagent/rdjavi.py`).
 
 Estilo TOTAL por decisión del usuario (2026-11-18) para todos los clips
-de GTA 6. DJ Mariio queda olvidado por ahora. Referencias: reels
-`Df4sy4bxlmr` (RDJavi) y `Df4uyMVjDwq` (DJ Mariio, solo confirma
-streamer arriba / gameplay abajo).
+de GTA 6. El layout ancho alternativo (DJ Mariio) queda aparcado por ahora.
+Sin referencias externas: el estilo es webcam a ancho completo arriba,
+banda negra con título, gameplay abajo, subtítulos fijos amarillos.
 
 ## Layout (1080×1920, ver `clipagent/rdjavi.py`)
 
@@ -21,12 +23,12 @@ Si el streamer muestra su setup en plano ancho, el estilo DJ Mariio
 (webcam ancha arriba, banda, gameplay 72%) es la alternativa — por ahora
 no se usa.
 
-## Subtítulos simples RDJavi
+## Subtítulos simples estilo Willyrex
 
 - Una línea centrada, `Noto Sans Condensed` 42, blanca con contorno
   negro 2,5, sin fondo de color, sin karaoke ni resaltado palabra por
   palabra, solo con cada frase.
-- **MarginV 200** (referencia RDJavi 230; el 680 viejo queda prohibido).
+- **MarginV 200** (referencia 230; el 680 viejo queda prohibido).
 - En la parte baja del gameplay, sin tapar la webcam ni el subtítulo
   propio del juego en pantalla (que queda visible en el recorte 1:1).
 - Completos y verificados: si Whisper no encuentra voz verificable, el
@@ -104,17 +106,17 @@ python -m clipagent.rdjavi --segment runs/.../rdjavi/seg_1080p30.mp4 \
   superfast, crf 23) y luego correr la plantilla sobre ese
   intermedio con `--cam-box 421:274:0:0 --cam-square 274:274:68:0
   --game-crop 1080:1080:465:0` (coordenadas ×0,75). El transcode es
-  decode-bound (~10 min), pero el pase RDJavi sobre h264 1080p
+  decode-bound (~10 min), pero el pase estilo Willyrex sobre h264 1080p
   debería tardar ~2-3 min. Tiempo total estimado ~12-15 min por
   clip la primera vez; el intermedio se puede reutilizar para
   re-renders.
 - **ACTUALIZACIÓN 21:03 UTC — la vía transcode-first TAMPOCO terminó:**
   transcode OK en 7m47s (intermedio `rdjavi/seg_1080p30.mp4`, 74 MB,
-  h264 1920×1080 30 fps, REUTILIZABLE), pero el pase RDJavi sobre el
+  h264 1920×1080 30 fps, REUTILIZABLE), pero el pase estilo Willyrex sobre el
   intermedio (veryfast, crf 23) llegó a 120 MB en 31 min y se mató
   antes de superar el límite de 128 MB del Worker. Mediciones de
   diagnóstico (10 s): encode plano sin filtros = **12 fps** (24 s);
-  grafo RDJavi completo = **~1 fps** (>5 min para 10 s); grafo sin
+  grafo de la plantilla (rdjavi v2) completo = **~1 fps** (>5 min para 10 s); grafo sin
   `ass` también ~1 fps; layout simple sin punch-in también ~1 fps.
   **PERO la medición está contaminada:** en ese momento había 4-5
   ffmpeg a la vez en la VM (1,5 CPU compartidas; otros agentes

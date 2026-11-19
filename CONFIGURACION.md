@@ -192,7 +192,7 @@ live hype v2 (ver §4): múltiplo ≥ 3,0 O `hype_ratio ≥ 1,3 + score ≥ 14
 # Solo se baja el trozo del clip, nunca el VOD entero.
 ```
 
-### 9.5 Render RDJavi C (plantilla común, `clipagent/rdjavi.py`)
+### 9.5 Render estilo Willyrex (plantilla común rdjavi v2, `clipagent/rdjavi.py`)
 
 ```bash
 # Una sola vez por clip: fondo pre-renderizado (bg.png)
@@ -372,7 +372,7 @@ CLIPS
 - Segundos antes del pico: 20
 - Ventana de chat: 10 s
 - Separación mínima: 60 s
-- Recorte: auto (layout RDJavi: streamer arriba, gameplay abajo)
+- Recorte: auto (layout estilo Willyrex: streamer arriba, gameplay abajo)
 - Hype: por ráfaga rápida (mensajes por 10 s / por minuto contra el baseline rodante)
 
 SUBTÍTULOS
@@ -402,7 +402,7 @@ ENTORNO
 PENDIENTE
 - Crear las cuentas API de YouTube y TikTok en Cuentas (tu-usuario) y verificarlas
 - Clip fuerte (viralidad ≥ 50, 40-60 s, subtítulos verificados) en la Cola de la web: el 3220 de Rubius ya está listo (v3 karaoke, 48,02 s, viralidad 53,8, SEO 92/94/94/94) pero el encolado está bloqueado por falta de PANEL_SESSION_TOKEN
-- Re-render del 7775 con la plantilla RDJavi C + karaoke (pasa scores: viralidad 52,5, SEO 100/100/100/100)
+- Re-render del 7775 con la plantilla estilo Willyrex (rdjavi C en el código) + karaoke (pasa scores: viralidad 52,5, SEO 100/100/100/100)
 - Primera publicación real desde la web
 - Cortador en vivo y TikTok en público automático (auditoría en curso)
 ```

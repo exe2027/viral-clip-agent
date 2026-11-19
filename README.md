@@ -20,7 +20,7 @@
   <a href="#cómo-se-usa--panel-web-plantilla-para-un-usuario-nuevo">Panel web</a> ·
   <a href="#meta--instagram-vincular-la-página-y-sacar-el-token-largo-procedimiento-verificado-2026-11-19">Meta / Instagram</a> ·
   <a href="#reglas-vigentes-2026-11-19">Reglas vigentes</a> ·
-  <a href="#formato-del-clip-referencia-rdjavi-estilo-gta-6">Formato del clip</a> ·
+  <a href="#formato-del-clip-estilo-willyrex-gta-6">Formato del clip</a> ·
   <a href="#5-configuración">Configuración</a>
 </p>
 
@@ -55,7 +55,7 @@ La cuenta Meta del panel publica en la Página del canal y en la cuenta de Insta
 
 - **Clips de 40 a 60 segundos**: nunca menos de 40, nunca más de 60, nunca 30 exacto; el rango 25-35 s está prohibido (regla de oro). Objetivo 40 s (20 s antes del pico + 20 s después). `config.yaml > clips.min_duration_s: 40, target_duration_s: 40, max_duration_s: 60`.
 - **Subtítulos SIEMPRE y COMPLETOS**, quemados, de TODO lo que dice el influencer, no solo del pico; nunca inventar texto. Sin voz verificable el clip queda BLOQUEADO (`needs_human_transcription` + `publish_blocked`) hasta transcribirlo de oído.
-- **Layout split vertical RDJavi (GTA 6, 2026-11-18)**: streamer ARRIBA, gameplay ABAJO (ver [Formato del clip](#formato-del-clip-referencia-rdjavi-estilo-gta-6)). Si el juego no se ve, la cámara se achica, nunca al revés.
+- **Layout split vertical estilo Willyrex (GTA 6, elegido 2026-11-18)**: streamer ARRIBA, gameplay ABAJO (ver [Formato del clip](#formato-del-clip-estilo-willyrex-gta-6)). Si el juego no se ve, la cámara se achica, nunca al revés.
 - **Descargar SOLO la parte del clip**, nunca el vídeo entero; del chat, solo la ventana alrededor del pico (`--peak`, ±120 s).
 - **Hype por ráfaga rápida**: se mide la velocidad del chat (mensajes por 10 s / por minuto) y su pico contra el baseline rodante, no solo el total de comentarios. Una ráfaga repentina pesa más.
 - **Pre-filtro rápido (2026-11-18, `clipagent/prefilter.py`, commit `eda2798`)**: puerta BARATA entre la detección y el trabajo caro (Whisper, viralidad, SEO, render). 1 punto por mensaje, 2 si es reacción (`ja{2,}|j{2,}a|xd+|kekw|lul|omegalul|lmao+|clip|noo+|wtf|pog|😂|🤣|💀`), tramos de 10 s; un pico es un tramo ≥ 3x la mediana de sus vecinos de ±5 min, separación mínima 90 s. Solo los picos que pasan llegan a la puntuación completa. Config: `config.yaml > scoring.prefilter_min_multiple: 3.0`, `prefilter_separation_s: 90`; `--no-prefilter` lo apaga. **Salvaguarda de chat caliente**: si NO encuentra ningún pico en todo el VOD, se desactiva solo y deja pasar todo a la puntuación completa (nunca tumba un VOD entero). Medido en el VOD de Rubius 2932415021 (75.483 mensajes): mayor múltiplo 2,23x, 3220 solo 1,19x, 7775 1,87x — el 3x literal habría tumbado todos los clips; con la salvaguarda el ahorro en ese VOD es 0 y no se pierde ningún clip. En un VOD frío sí ahorra: descarta los flojos antes de transcribir y renderizar.
@@ -64,7 +64,7 @@ La cuenta Meta del panel publica en la Página del canal y en la cuenta de Insta
 - **Gritos por decibeles (2026-11-18, `clipagent/audio.py::shout_spikes`)**: un grito es un SUBIDÓN, no un nivel alto constante. Un segundo cuenta como grito si su RMS es ≥ +8 dB sobre la mediana de los 10 s anteriores y ≥ -30 dBFS. Queda en `audio_verdict` (`shout_seconds`/`shout_count`), en la revisión y en el clip live. NO toca el scoring (el componente audio ya premiaba el rango).
 - **Gritos SOLO del streamer + rescate (2026-11-18 19:23, commit `33ce30f`)**: `audio.streamer_shout_spikes` — un salto de decibeles cuenta solo si cae dentro de un tramo de VOZ de la transcripción Whisper; una explosión del juego con el streamer callado NO cuenta; sin voz no hay gritos. Límite honesto: la pista viene mezclada, si el streamer habla encima de una explosión ese segundo sí cuenta. **Rescate como punto aparte** (`review.py`): un clip borderline (viralidad revisada 45–49,9) con **2+ segundos de grito del streamer y SEO ≥ 90 pasaba aunque no llegara a 50**; con 1 solo segundo no había rescate (un grito aislado puede ser una risa o un fallo). **2026-11-19: subsumido por las puertas 45/80** — un clip 45–49,9 ya pasa directo, así que el rescate ya no decide nada; la medición de gritos se sigue registrando.
 - **Repetición en el chat (2026-11-18, `clipagent/ingest.py`)**: ya se mide — `rep_ratio` (1 − cuerpos distintos / mensajes) y el `hype_score` tiene el componente "repetición" (`rep_ratio × 4`, máx. +2 al score). Matiz: si más del 40% del chat es idéntico se penaliza ×0,5 como spam (`repetition_spam`); la diferencia es que lo repitan muchos usuarios distintos (hype) vs pocos (spam).
-- **Subtítulos RDJavi por defecto (desde 2026-11-19; el karaoke fue el default el 2026-11-18 y quedó reemplazado)**: amarillos fijos (`#FFFF00`, Arial Black 64 px, borde negro grueso), en la barra negra inferior, nunca en el gameplay: ahí van los subtítulos propios de GTA 6 y se solaparían. Ver [Subtítulos estilo RDJavi](#formato-del-clip-referencia-rdjavi-estilo-gta-6).
+- **Subtítulos estilo Willyrex por defecto (plantilla rdjavi v2 en el código; desde 2026-11-19; el karaoke fue el default el 2026-11-18 y quedó reemplazado)**: amarillos fijos (`#FFFF00`, Arial Black 64 px, borde negro grueso), en la barra negra inferior, nunca en el gameplay: ahí van los subtítulos propios de GTA 6 y se solaparían. Ver [Subtítulos estilo Willyrex](#formato-del-clip-estilo-willyrex-gta-6).
 - **Filtros duros**: viralidad ≥ 45 y SEO ≥ 80 por plataforma, si no no se publica (salvo override del usuario). Prioridad **LIVE sobre VOD** en la Cola. Fórmula intocable: `viralidad^0,5 × SEO^0,3 × chat_norm^0,2`. Clip de más de 7 días: −10 pts/día.
 - **Puerta de render PRE-CORTE (2026-11-18)**: el clip SOLO se corta/renderiza si ya pasa las puertas con el paquete provisional (viralidad estimada ≥ 45 pre-corte — calibrado, ver abajo — y SEO ≥ 80 en al menos una plataforma). Si no pasa, se descarta SIN descargar el segmento ni renderizar. Calibración medida: p3220 estima 46,3 (real 53,8) y su SEO pre-corte es 89/91/92/92; p2010 estima 44,5. Con el 50 literal pre-corte, p3220 se descartaría; por eso el umbral pre-corte es 45 y el 45 real sigue vigente en publicación.
 - **Revisión automática de los mejores picos (2026-11-18, aprobado)**: en el loop en vivo, los top 3 picos por directo con viralidad auto 40–44,9 pasan por revisión automática (3 fotogramas + transcripción Whisper + juez Gemini con los 5 componentes humanos) y se re-calcula su viralidad; si tras la revisión pasan ≥ 45 y SEO ≥ 80, se renderizan y se encolan en LIVE; si no, se descartan SIN render. ≥ 45 va directo a render; < 40 se descarta sin revisión. Si Gemini no está disponible, fallback a la puerta pre-corte (≥ 45), registrado como tal. La puerta de publicación sigue en 45, no se baja.
@@ -72,18 +72,18 @@ La cuenta Meta del panel publica en la Página del canal y en la cuenta de Insta
 - **Nuevas reglas de publicación 2026-11-19 (en `limits.yaml`, PENDIENTES de despliegue en el panel)**: TikTok 2/día (máx 3), Instagram 1/día (máx 2), YouTube 1/día (máx 2), Facebook 1/día (máx 2); máx 3 publicaciones por cuenta en 24 h móviles; cuenta nueva si <14 días o <20 publicaciones (semanas 1–2 a 1/día); espaciamiento 3 h (4 h en YouTube), mín 5 min; franjas hora Chile 12–14 / 18–20 / 21–23 (revoca el "sin franja" del 2026-11-18); 1 día libre/semana por cuenta; reintentos 5/15/45 min máx 3; spam/límite = pausa 48 h sin reintentar el mismo día. Hasta que el panel se despliegue con estas reglas, mandan los frenos vigentes de arriba.
 - **"Publicar ahora" (manual) pasa por encima del freno automático**: salta los topes diarios y el espaciamiento, con aviso y registro en el Tracking; NUNCA pasa por encima de las puertas de calidad (viralidad/SEO/subtítulos/permiso). Los frenos gobiernan solo la publicación automática.
 - **Preview de la Cola con marco por plataforma**: "Ver preview" despliega un marco que imita la app — pestañas por plataforma asignada al clip, cabecera con la plataforma y el handle de la cuenta, vídeo 9:16 reproducible con botones Me gusta/Comentar/Compartir, pie con título, descripción y hashtags, y línea de datos (duración, SEO por plataforma, caracteres de título/descripción, nº de tags, subtítulos, texto de miniatura). Honestidad: el panel guarda UN solo juego de título/descripción/tags por clip, así que los textos son los mismos en las 4 pestañas; lo que cambia es el marco, el handle y el SEO — y el marco lo dice. Estado: implementado en el frontend del panel, pendiente de despliegue.
-- **El camino VOD usa el mismo render y el mismo validador que el vivo**: el fallback VOD (cuando nadie está en directo) carga `config.yaml` igual que el vivo, usa la plantilla RDJavi v2 y el mismo validador final de Gemini; los subtítulos por defecto son RDJavi (amarillos fijos, sin karaoke). Commit `344a715`.
+- **El camino VOD usa el mismo render y el mismo validador que el vivo**: el fallback VOD (cuando nadie está en directo) carga `config.yaml` igual que el vivo, usa la plantilla estilo Willyrex (rdjavi v2 en el código) y el mismo validador final de Gemini; los subtítulos por defecto son estilo Willyrex (amarillos fijos, sin karaoke). Commit `344a715`.
 - **Validador final en modo observación (2026-11-19)**: un "rechazado" de Gemini queda como "observado" — se registra con sus scores, no bloquea. El bloqueo se reactiva con `FINAL_REVIEW_OBSERVE_ONLY=0`.
 - **Publicación automática con puertas**: sin aprobación humana por clip, pero solo si pasa todas las puertas (viralidad, SEO, subtítulos completos, permiso del streamer, lista blanca, topes, preview visto). Lo que no pasa queda en borrador con el motivo visible, nunca se finge una publicación.
 
-### Formato del clip (referencia RDJavi, estilo GTA 6)
+### Formato del clip (estilo Willyrex, GTA 6)
 
 Formato base: split apilado (streamer arriba, gameplay abajo), descrito abajo. El layout ancho alternativo queda APARCADO por orden del usuario 2026-11-18: no se usa como layout.
 
-**Layout RDJavi — personalizado GTA 6 / Vice City (default para
+**Layout estilo Willyrex — personalizado GTA 6 / Vice City (default para
 GTA 6, el panel es solo GTA 6)**, lienzo 1080×1920, split apilado
 streamer ARRIBA / gameplay ABAJO, sin cámara en esquina sobre el
-juego. Código: `clipagent/render.py` (`split_variant: "rdjavi"`,
+juego. En el código es la plantilla `rdjavi` v2: `clipagent/render.py` (`split_variant: "rdjavi"`,
 `_split_rdjavi_graph`); tests: `test_layout_referencia.py`.
 
 | Zona | Geometría exacta |
@@ -96,17 +96,17 @@ juego. Código: `clipagent/render.py` (`split_variant: "rdjavi"`,
 | Cortes | Duros entre ángulos del juego, sin fundidos. Cámara mayormente FIJA en posición/tamaño (solo se mueve el streamer dentro del encuadre); excepción: un punch-in/zoom cerrado puntual sobre la webcam en un momento de reacción (`params["punch_in"] = {"t0","t1","zoom"}`, tiempos relativos al tramo) |
 
 **Encuadre adaptativo**: el detector (`detect_framing`) distingue
-si el streamer muestra SOLO LA CARA (plano medio, RDJavi) o su
+si el streamer muestra SOLO LA CARA (plano medio, estilo Willyrex) o su
 SETUP en plano ancho (habitación/PC/luces, aspecto ≥ 1,8 y ancho ≥
 60% del frame). Se registra en el manifiesto; mientras DJ Mariio
-esté aparcado, el layout sigue siendo RDJavi en los dos casos.
+esté aparcado, el layout sigue siendo el estilo Willyrex en los dos casos.
 
-**Subtítulos RDJavi por defecto, en la barra negra inferior (desde 2026-11-19)**.
+**Subtítulos estilo Willyrex por defecto, en la barra negra inferior (desde 2026-11-19)**.
 Decisiones del usuario: 19:02 — los subtítulos van en la parte de
 ABAJO de la cámara del influencer, estilo TikTok, porque si van en el
 gameplay se solapan con los subtítulos del GTA 6; 19:17 — karaoke
 por defecto (vigente hasta 2026-11-19; desde entonces el default es
-RDJavi, ver tabla). La webcam ocupa y 0–595 y el gameplay empieza en y 749,
+el estilo Willyrex, ver tabla). La webcam ocupa y 0–595 y el gameplay empieza en y 749,
 así que el subtítulo cae en la banda 595–749, justo al pie de la
 cámara: `Alignment 8` (arriba-centrado), `MarginV 608`
 (`clipagent/rdjavi.py`: `SUBS_ALIGN = 8`, `SUBS_MARGIN_V = 608`).
@@ -117,7 +117,7 @@ Kingfishers…") queda abajo en el gameplay, separados; a los 34 s
 del juego en español se ve limpio. La posición vieja (parte baja del
 gameplay, MarginV 230, borde en y≈1690) queda PROHIBIDA: ahí se
 solapa con el juego. La regla vieja de MarginV mínimo 680 también
-queda reemplazada. La banda 595–749 descrita arriba era del layout anterior; la plantilla RDJavi v2 pone los subtítulos en la barra negra inferior (1740–1920).
+queda reemplazada. La banda 595–749 descrita arriba era del layout anterior; la plantilla estilo Willyrex (rdjavi v2 en el código) pone los subtítulos en la barra negra inferior (1740–1920).
 
 Estilos disponibles (`clipagent/config.py > subtitle_styles`,
 `config.yaml > subtitles.default_style`; se eligen con
@@ -128,13 +128,13 @@ Estilos disponibles (`clipagent/config.py > subtitle_styles`,
 | `ref` (default hasta 2026-11-18 19:17) | 32 px fina | Blanco | No | 2 | No | Una línea, sin resaltado palabra por palabra |
 | `tiktok` | 48 px | Blanco | Sí | 3 | No | Una línea (v2 del clip 3220) |
 | `highlight` | 52 px | Amarillo `#FFFF00` | Sí | 2 | Sí (caja) | Palabras clave en amarillo con caja |
-| `rdjavi` (**default desde 2026-11-19**) | 64 px Arial Black | Amarillo `#FFFF00` fijo | Sí | 6 | No (barra negra inferior) | Texto fijo completo, sin resaltado palabra por palabra; `max_chars: 20`, `max_duration: 2.0 s` por bloque |
+| `rdjavi` — estilo Willyrex (**default desde 2026-11-19**) | 64 px Arial Black | Amarillo `#FFFF00` fijo | Sí | 6 | No (barra negra inferior) | Texto fijo completo, sin resaltado palabra por palabra; `max_chars: 20`, `max_duration: 2.0 s` por bloque |
 | `karaoke` (default hasta 2026-11-19) | 56 px | Palabra activa amarilla `#FFFF00`, resto blanco | Sí | 4 | No | Palabra por palabra: cada palabra se ilumina al decirla (`\k` por palabra, reparto proporcional por longitud; no necesita tiempos por palabra de Whisper). `max_chars: 8`, `max_duration: 1.0 s` por bloque |
 
-El default es `rdjavi` en `clipagent/config.py` (`DEFAULT_CONFIG`) y
+El default es el estilo Willyrex, implementado como `rdjavi` en `clipagent/config.py` (`DEFAULT_CONFIG`) y
 en `config.yaml` (`subtitles.default_style: "rdjavi"`); se verifica
 con `get_subtitle_style()` sin argumento. El estilo `karaoke` sigue
-disponible: la plantilla RDJavi genera su ASS con `make_karaoke_ass()`
+disponible: la plantilla (rdjavi v2 en el código) genera su ASS con `make_karaoke_ass()`
 (`clipagent/rdjavi.py`). Subtítulos
 SIEMPRE y COMPLETOS: de TODO lo que dice el influencer, nunca
 inventar texto; sin voz verificable el clip queda BLOQUEADO
@@ -253,7 +253,7 @@ python clips_chat_v2.py chat.json --video vod.mp4 --out clips
 3. Si el título promete algo que no se ve en el clip (una jugada, un juego), no lo uses: el check anti-clickbait de `viral_package.py` lo rechaza y lo degrada a un título de reacción.
 4. Sube a mano solo lo que quedó en borrador (ver "Fan-out" más abajo): si una plataforma no tiene token, auditoría o URL pública, el paquete manual está en `drafts/<clip>_<plataforma>/`.
 
-### 4b. Verificar un render RDJavi antes de encolar (ffprobe + fotogramas)
+### 4b. Verificar un render estilo Willyrex antes de encolar (ffprobe + fotogramas)
 
 Un MP4 que sigue creciendo en disco NO es un MP4 válido: hasta que
 ffmpeg escribe el `moov` al final, `ffprobe` dice `moov atom not
@@ -341,7 +341,7 @@ python jobqueue.py approve 3      # o: python jobqueue.py reject 3
 
 ### 5. Configuración
 
-Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hashtags ES/EN, duración del corte, estilos de subtítulo (`ref`, `tiktok`, `highlight`, `karaoke`, `rdjavi`; **default: `rdjavi`**, en la barra negra inferior) y zonas seguras del HUD. Edítalo antes de tu primera corrida y no subas tus datos personales al repo. La plantilla RDJavi vive en `clipagent/rdjavi.py` (opción C, un solo pase) y su uso está en `RDJAVI-TEMPLATE.md` — OJO: ese archivo aún describe los subtítulos simples viejos en el gameplay; lo vigente es el RDJavi en la barra negra inferior de este README (v2.8).
+Todo lo del canal vive en `config.yaml`, no en el código: juego, streamer, hashtags ES/EN, duración del corte, estilos de subtítulo (`ref`, `tiktok`, `highlight`, `karaoke`, `rdjavi`; **default: estilo Willyrex (`rdjavi` en el código)**, en la barra negra inferior) y zonas seguras del HUD. Edítalo antes de tu primera corrida y no subas tus datos personales al repo. La plantilla estilo Willyrex vive en `clipagent/rdjavi.py` (opción C, un solo pase) y su uso está en `WILLYREX-TEMPLATE.md` — OJO: ese archivo aún describe los subtítulos simples viejos en el gameplay; lo vigente es el estilo Willyrex en la barra negra inferior de este README (v2.8).
 
 ### 6. API de Gemini (opcional, solo para la visión)
 
@@ -467,14 +467,14 @@ Top-5 nuevo completo: Locones 03h10m45s (z 8.99), 12m15s (8.65), 04h45m35s (8.65
 python auto_clips.py https://kick.com/coker/videos/TU_VIDEO_UUID --top-n 5 --audio-check --precise-cut
 ```
 
-## Qué cambió en la v2.8 (2026-11-18) — plantilla RDJavi C, karaoke, pre-filtro, puerta live v2
+## Qué cambió en la v2.8 (2026-11-18) — plantilla estilo Willyrex (rdjavi C en el código), karaoke, pre-filtro, puerta live v2
 
 Tag `v2.8` en GitHub (HEAD `124bfdc`; `v2.7-beta` era solo local). El
 tribunal de render (5 agentes + juez, 2026-11-18 16:33) falló: 1º C un
 solo pase, 2º D GitHub Actions, 3º A preset/CRF; descartados B
 (pre-render de fondo, solo 10–20%) y E (proxy 30 fps, pierde 60 fps).
 
-### Plantilla RDJavi, opción C — un solo pase (commit `d21cca5`)
+### Plantilla estilo Willyrex, opción C — un solo pase (commit `d21cca5`)
 
 El render viejo hacía 3 renders por tramo (0–16 s normal, 16–26 s
 zoom, 26–48 s normal) + `concat` + un 2º encode completo para quemar
@@ -520,10 +520,10 @@ que queda solo como backup; `runs/` está en el `.gitignore`):
   OOM/swap, ganancia cero) y no renderizar en Cloudflare Workers
   (sin ffmpeg, 128 MB, límite de CPU).
 
-### Subtítulos: RDJavi por defecto, en la barra negra inferior
+### Subtítulos: estilo Willyrex por defecto, en la barra negra inferior
 
-Ver [Subtítulos RDJavi por defecto](#formato-del-clip-referencia-rdjavi-estilo-gta-6).
-Resumen: default `rdjavi` (amarillo fijo `#FFFF00`, Arial Black 64 px,
+Ver [Subtítulos estilo Willyrex por defecto](#formato-del-clip-estilo-willyrex-gta-6).
+Resumen: default estilo Willyrex (`rdjavi` en el código; amarillo fijo `#FFFF00`, Arial Black 64 px,
 borde negro grueso 6, barra negra inferior 1740–1920), nunca en el
 gameplay. La posición vieja al pie de la cámara (banda 595–749,
 `MarginV 608`) era del layout anterior; v3 del 3220 verificada con

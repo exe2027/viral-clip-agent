@@ -87,11 +87,10 @@ nunca la sesión del usuario.
 
 El cutter no tiene layout propio: llama a `cut_clip` con
 `layout_mode="auto"`, así que hereda el layout por defecto del
-momento. Desde 2026-11-18 14:54 el por defecto es el **RDJavi
-personalizado GTA 6 / Vice City** (webcam centrada arriba, fondo
+momento. Desde 2026-11-18 14:54 el por defecto es el **estilo Willyrex (plantilla rdjavi v2)** (webcam centrada arriba, fondo
 desenfocado morado/magenta, gameplay abajo, neón rosa-violeta-
 naranja, palmeras). Los subtítulos también salen del pipeline
-compartido (`subtitle_clip`): estilo RDJavi simple, una línea
+compartido (`subtitle_clip`): estilo Willyrex simple, una línea
 blanca con contorno negro, sin karaoke, sin fondo. Si el layout
 por defecto cambia, el cutter cambia con él sin tocar código.
 
