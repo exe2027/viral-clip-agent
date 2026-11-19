@@ -1,4 +1,30 @@
-# Viral Clip Agent — Twitch + Kick
+<p align="center">
+  <img src="docs/banner.jpg" alt="Viral Clip Agent — GTA 6" width="100%">
+</p>
+
+<h1 align="center">Viral Clip Agent — Twitch + Kick</h1>
+
+<p align="center"><strong>El cerebro que convierte directos de GTA 6 en clips verticales de 40–60 s, listos para publicar.</strong></p>
+
+<p align="center">Automático, con panel web y publicación por API en TikTok, Instagram, Facebook y YouTube.</p>
+
+<p align="center">
+  <a href="https://github.com/exe2027/viral-clip-agent/actions/workflows/ci.yml"><img src="https://github.com/exe2027/viral-clip-agent/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/clips-1080x1920-ff69b4.svg" alt="Clips 1080x1920">
+</p>
+
+<p align="center">
+  <a href="#tutorial-cómo-usarlo-paso-a-paso">Inicio rápido</a> ·
+  <a href="#cómo-se-usa--panel-web-plantilla-para-un-usuario-nuevo">Panel web</a> ·
+  <a href="#meta--instagram-vincular-la-página-y-sacar-el-token-largo-procedimiento-verificado-2026-11-19">Meta / Instagram</a> ·
+  <a href="#reglas-vigentes-2026-11-19">Reglas vigentes</a> ·
+  <a href="#formato-del-clip-referencia-rdjavi-estilo-gta-6">Formato del clip</a> ·
+  <a href="#5-configuración">Configuración</a>
+</p>
+
+---
 
 Herramienta en Python para detectar automáticamente los mejores momentos de un directo de **Twitch o de Kick** a partir del chat (`chat.json`) y recortarlos en vertical `1080x1920`, listos para TikTok, Reels o Shorts.
 
