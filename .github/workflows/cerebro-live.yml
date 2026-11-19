@@ -114,12 +114,28 @@ jobs:
       - name: Instalar ffmpeg, streamlink y whisper
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg streamlink
+          sudo apt-get install -y -qq ffmpeg streamlink python3-fonttools
           python -m pip install -q -e ".[whisper]"
+          # Arial Black GENUINA (plantilla v2, 2026-11-18): título y
+          # subtítulos usan SUBS_FONT = "Arial Black". Sin ella
+          # libass cae a otra fuente: los subtítulos salen en la
+          # fuente equivocada y el título (al cablearlo) se
+          # desborda sobre el gameplay (medido en CI 2026-11-19:
+          # 2311 px blancos bajo la franja). Mismo bloque que
+          # render-rdjavi.yml (WOFF cdnfonts -> TTF con fontTools).
+          if ! fc-list | grep -qi "Arial Black"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/ariblk.woff \
+              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+            python3 -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')" || true
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
       - name: Seguir directo y cortar picos (Cola LIVE del panel)
         env:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          PANEL_TENANT: sebastian
           PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
           PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
           # Sin esta key la revisión de picos no tiene juez Gemini y
