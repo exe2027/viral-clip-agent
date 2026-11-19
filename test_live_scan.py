@@ -68,7 +68,7 @@ class TestLiveScan(unittest.TestCase):
         with tw, kick:
             r = live_scan.scan_live()
         self.assertEqual(r["live"], [])
-        self.assertEqual(r["checked"], 18)
+        self.assertEqual(r["checked"], 20)
 
     def test_matriz_lleva_el_idioma_del_canal(self):
         # 2026-11-19, calibración: el workflow pasa --lang al corte

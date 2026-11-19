@@ -1,0 +1,15 @@
+# tenants.yaml — lista blanca de tenants del panel (solo IDs, sin secretos).
+#
+# Regla 2026-11-18 (MEJORAS-PENDIENTES.md 2.1): el tenant NUNCA tiene
+# valor por defecto. Todo proceso que hable con el panel debe traer
+# PANEL_TENANT del entorno del workflow (GitHub Environment) y el
+# valor debe estar en esta lista; si no, el proceso aborta con error
+# claro y sin tocar la red. Así un workflow sin esa variable no puede
+# leer ni escribir la configuración de otro tenant por accidente.
+#
+# Tenants reales (verificados en D1 `panel_users`, 2026-11-17):
+#   sebastian — usuario `seba` (dueño)
+#   colega    — usuario `chacal` (dueño)
+tenants:
+  - sebastian
+  - colega

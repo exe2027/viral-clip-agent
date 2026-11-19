@@ -280,12 +280,15 @@ def fetch_panel_settings(worker_url=None, bridge_token=None, tenant=None,
     levanta TenantError y el proceso aborta sin tocar la red (regla
     2026-11-18: sin tenant por defecto).
     """
-    from .tenant import require_tenant
-
     worker_url = (worker_url or os.environ.get("PANEL_WORKER_URL") or "").rstrip("/")
     bridge_token = bridge_token or os.environ.get("PANEL_BRIDGE_TOKEN")
     if not worker_url or not bridge_token:
         return None
+    # Sin panel no hace falta tenant (regla 2026-11-18); el import va
+    # aqui, despues del retorno temprano, para no exigir el modulo
+    # cuando no hay nada que leer.
+    from .tenant import require_tenant
+
     tenant = require_tenant(tenant)
     url = f"{worker_url}/api/bridge/settings?tenant={tenant}"
     req = urllib.request.Request(url, headers={
