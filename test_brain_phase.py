@@ -133,21 +133,27 @@ class TestLiveScanPhase(unittest.TestCase):
                     return rep
 
     def test_con_es_en_vivo_reporta_buscando_picos(self):
+        # Fallo 3 (2026-11-19): la fase ya no es solo ES — con EN
+        # en vivo también se está buscando/cortando picos.
         rep = self._run_main([{"name": "rubius", "platform": "twitch"},
                               {"name": "kaicenat", "platform": "twitch"}])
         rep.assert_called_once()
         args = rep.call_args[0]
         self.assertEqual(args[0], "buscando_picos")
         self.assertIn("rubius", args[1])
-        self.assertNotIn("kaicenat", args[1])
+        self.assertIn("kaicenat", args[1])
 
-    def test_sin_es_en_vivo_reporta_sin_directos(self):
+    def test_solo_en_en_vivo_reporta_buscando_picos(self):
+        # Fallo 3 (2026-11-19): con solo EN en vivo ya no se
+        # reporta "sin directos" (antes el panel lo decía mientras
+        # se cortaba EN).
         rep = self._run_main([{"name": "kaicenat", "platform": "twitch"}])
-        rep.assert_called_once_with("sin_directos", "ningún ES en GTA VI")
+        rep.assert_called_once_with("buscando_picos",
+                                    "en vivo: kaicenat")
 
     def test_sin_nadie_en_vivo_reporta_sin_directos(self):
         rep = self._run_main([])
-        rep.assert_called_once_with("sin_directos", "ningún ES en GTA VI")
+        rep.assert_called_once_with("sin_directos", "nadie en GTA VI")
 
 
 class TestLiveCutPhase(unittest.TestCase):
