@@ -53,6 +53,13 @@
 #   artefacto cerebro-live-vod-state). Los clips van a la Cola del
 #   panel con el MP4 (origin='vod'), SIN publicar. Nunca baja el
 #   VOD entero (solo el segmento del pico, vía auto_clips.py).
+# - Fase en vivo (2026-11-19, corrección del usuario: el panel
+#   tiene que mostrar qué hace el cerebro AHORA, no solo un piloto
+#   verde/rojo): detect reporta buscando_picos / sin_directos, cut
+#   reporta cortando_clip y el fallback modo_vod (y sin_directos
+#   al terminar), todo a POST /api/worker/phase. La fase nunca
+#   tumba una corrida: si el panel no responde, solo queda en el
+#   log. ATASCADO lo decide solo el validador del Worker.
 # - cerebro-sebastian (VOD, 09:00) NO se toca: es el barrido
 #   diario de VODs, no el monitoreo en vivo.
 name: Cerebro — Live Cutter
@@ -107,6 +114,15 @@ jobs:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
           STREAMERS: ${{ inputs.streamers || '' }}
+          # Fase en vivo (2026-11-19): el barrido reporta al panel
+          # buscando_picos (hay ES en vivo) o sin_directos (nadie
+          # ES en GTA VI); el job cut reporta cortando_clip y el
+          # fallback modo_vod. Sin estas credenciales el barrido
+          # sigue igual, solo no reporta la fase.
+          PANEL_TENANT: sebastian
+          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          PANEL_URL: https://avc.vikingosfoodspa.workers.dev
         run: python -m clipagent.live_scan
 
   cut:

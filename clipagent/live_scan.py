@@ -100,6 +100,18 @@ def main(argv=None) -> int:
           f"{[x['name'] for x in result['live']]} "
           f"(ES: {len(es_live)}, revisados: {result['checked']}, "
           f"twitch: {result['twitch_mode']})", flush=True)
+    # Fase en vivo (2026-11-19): el panel muestra qué hace el
+    # cerebro AHORA. Sin credenciales del panel no se reporta (el
+    # barrido sigue igual); nunca tumba el barrido.
+    try:
+        from .panel_bridge import report_brain_phase
+        if es_live:
+            names = ", ".join(x["name"] for x in es_live)
+            report_brain_phase("buscando_picos", f"en vivo: {names}")
+        else:
+            report_brain_phase("sin_directos", "ningún ES en GTA VI")
+    except Exception:  # noqa: BLE001 - la fase es informativa
+        pass
     for s in result["skipped"]:
         print(f"salto: {s}", flush=True)
     out = os.environ.get("GITHUB_OUTPUT", "")

@@ -126,6 +126,22 @@ class PanelBridge:
             "message": message, "estado": estado,
             "actor": "live-cutter"})
 
+    def report_phase(self, phase, detail="", run_id=""):
+        """POST /api/worker/phase: qué está haciendo el cerebro AHORA.
+
+        La fase se ve en el panel (Worker) en tiempo real:
+        buscando_picos / cortando_clip / modo_vod / sin_directos.
+        Nunca levanta: si el panel no responde, solo queda en el
+        log y se sigue (un reporte de fase no puede tumbar un
+        corte ni una encolada)."""
+        try:
+            self._ensure_login()
+            return self._request("POST", "/api/worker/phase", body={
+                "phase": phase, "detail": detail, "run_id": run_id})
+        except Exception as e:  # noqa: BLE001 - la fase es informativa
+            print(f"[panel] fase {phase} no reportada ({e})", flush=True)
+            return None
+
     def list_clips(self):
         """GET /api/clips (Cola del tenant)."""
         self._ensure_login()
@@ -159,3 +175,27 @@ class PanelBridge:
     def health(self):
         """GET /api/health (sin auth)."""
         return self._request("GET", "/api/health")
+
+
+def report_brain_phase(phase, detail="", bridge=None):
+    """Reporta la fase del cerebro al panel (2026-11-19).
+
+    Con el bridge dado (si tiene report_phase) o con uno nuevo del
+    entorno (PANEL_USERNAME/PANEL_PASSWORD/PANEL_TENANT). Nunca
+    levanta: sin credenciales, sin panel o con error, solo un aviso
+    en el log y se sigue. El run_id sale de GITHUB_RUN_ID cuando
+    corre en Actions. Devuelve True si el panel aceptó el reporte.
+    """
+    try:
+        if bridge is not None and hasattr(bridge, "report_phase"):
+            bridge.report_phase(phase, detail=detail)
+            return True
+        b = PanelBridge.from_env()
+        if b is None:
+            return False
+        res = b.report_phase(phase, detail=detail,
+                             run_id=os.environ.get("GITHUB_RUN_ID", ""))
+        return res is not None
+    except Exception as e:  # noqa: BLE001 - la fase es informativa
+        print(f"[panel] fase {phase} no reportada ({e})", flush=True)
+        return False

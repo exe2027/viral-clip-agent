@@ -66,6 +66,19 @@ def _log(msg):
           flush=True)
 
 
+def _report_phase(phase, detail="", bridge=None, dry_run=False):
+    """Fase al panel (2026-11-19): el panel muestra qué hace el
+    cerebro AHORA (Modo VOD al entrar, Sin directos al terminar).
+    Nunca levanta ni tumba la corrida; en dry-run no se reporta."""
+    if dry_run:
+        return
+    try:
+        from .panel_bridge import report_brain_phase
+        report_brain_phase(phase, detail, bridge=bridge)
+    except Exception:  # noqa: BLE001 - la fase es informativa
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Decisión pura (testeable sin red ni panel)
 # ---------------------------------------------------------------------------
@@ -402,6 +415,9 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             _log(f"No se pudo listar la Cola del panel ({e}); se "
                  "sigue sin dedup contra el panel.")
             panel_clips = []
+    # Fase en vivo: entrando en modo VOD (Rubius, IlloJuan).
+    _report_phase("modo_vod", ", ".join(e["name"] for e in order),
+                  bridge=bridge, dry_run=dry_run)
     enqueued = 0
     vods_tried = 0
     for entry in order:
@@ -472,6 +488,9 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
     summary = (f"modo VOD: {vods_tried} VOD(s) procesado(s), "
                f"{enqueued} clip(s) en la Cola del panel (sin publicar)")
     _log(summary)
+    # Fase en vivo: corrida VOD terminada, de vuelta a espera.
+    _report_phase("sin_directos", summary, bridge=bridge,
+                  dry_run=dry_run)
     return enqueued, summary
 
 

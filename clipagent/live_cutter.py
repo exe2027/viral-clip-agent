@@ -1053,6 +1053,14 @@ def run_live_cut(streamer, platform="twitch", minutes=25,
         streamer, platform=platform, limits=limits, gate=gate,
         out_dir=out_dir, cfg=cfg, dry_run=dry_run, bridge=bridge,
         auto_publish=auto_publish)
+    # Fase en vivo (2026-11-19): el panel muestra "Cortando clip".
+    # Nunca tumba la sesión: sin credenciales o sin panel, solo
+    # queda en el log y se corta igual.
+    try:
+        from .panel_bridge import report_brain_phase
+        report_brain_phase("cortando_clip", streamer, bridge=bridge)
+    except Exception:  # noqa: BLE001 - la fase es informativa
+        pass
     peaks = session.run_live(duration_s=minutes * 60)
     return {"peaks": peaks, "clips": session.cut_clips,
             "skipped": session.skipped,
