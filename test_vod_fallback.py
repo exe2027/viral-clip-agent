@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """Pruebas del fallback VOD del cerebro (2026-11-19).
 
-Sin ES en vivo en GTA VI, el cerebro cambia solo a modo VOD y corta
-de los VOD más recientes (Rubius primero, después IlloJuan) con los
-mismos filtros de siempre. Los clips van a la Cola del panel con el
-MP4, SIN publicar: este módulo no tiene ninguna llamada a publicar.
+Sin directos en GTA VI en ningún idioma, el cerebro cambia solo a
+modo VOD y corta de los VOD más recientes (ES primero: Rubius,
+IlloJuan, resto ES; después EN) con los mismos filtros de siempre.
+Los clips van a la Cola del panel con el MP4, SIN publicar: este
+módulo no tiene ninguna llamada a publicar.
 
-- es_live_gta6: solo ES en vivo en GTA VI dispara "hay directos".
-- fallback_order: Rubius, IlloJuan, resto ES en orden de yaml.
+- es_live_gta6: solo ES en vivo en GTA VI dispara "hay directos ES".
+- live_gta6: cualquier idioma conocido en vivo en GTA VI bloquea
+  el fallback (2026-11-19, fallo 3).
+- fallback_order: Rubius, IlloJuan, resto ES en orden de yaml,
+  después EN en orden de yaml.
 - clip_passes_gates: viralidad >= 50, SEO >= 90 en las 4
   plataformas, 40-60 s, juego GTA VI; falla cerrado sin datos.
 - already_enqueued: dedup contra el panel por (VOD, inicio).
 - burn_and_enqueue: subtítulos completos o no se encola; nunca
-  llama a publicar.
-- run: sin ES en vivo -> modo VOD; con ES en vivo -> no hace nada.
+  llama a publicar; el payload lleva language ("es"/"en").
+- run: sin directos en GTA VI -> modo VOD (ES y EN); con directos
+  (ES o EN) -> no hace nada.
 """
 
 import os
@@ -32,6 +37,7 @@ from clipagent.vod_fallback import (  # noqa: E402
     clip_passes_gates,
     es_live_gta6,
     fallback_order,
+    live_gta6,
     load_state,
     panel_score,
     run,
@@ -125,10 +131,36 @@ class TestEsLiveGta6(unittest.TestCase):
         self.assertEqual(es_live_gta6(live, STREAMERS), [])
 
 
+class TestLiveGta6(unittest.TestCase):
+    """Puerta del fallback (2026-11-19, fallo 3): cualquier idioma
+    conocido en vivo en GTA VI bloquea el modo VOD."""
+
+    def test_en_en_vivo_bloquea_fallback(self):
+        live = [{"name": "kaicenat", "platform": "twitch"}]
+        self.assertEqual(live_gta6(live, STREAMERS), live)
+
+    def test_es_en_vivo_bloquea_fallback(self):
+        live = [{"name": "rubius", "platform": "twitch"}]
+        self.assertEqual(live_gta6(live, STREAMERS), live)
+
+    def test_sin_directos(self):
+        self.assertEqual(live_gta6([], STREAMERS), [])
+
+    def test_nombre_sin_ficha_no_bloquea(self):
+        live = [{"name": "desconocido", "platform": "twitch"}]
+        self.assertEqual(live_gta6(live, STREAMERS), [])
+
+
 class TestFallbackOrder(unittest.TestCase):
     def test_rubius_primero_illojuan_despues(self):
         names = [e["name"] for e in fallback_order(STREAMERS)]
-        self.assertEqual(names, ["rubius", "illojuan", "auronplay"])
+        self.assertEqual(names, ["rubius", "illojuan", "auronplay",
+                                 "kaicenat"])
+
+    def test_en_despues_de_es(self):
+        names = [e["name"] for e in fallback_order(STREAMERS)]
+        self.assertLess(names.index("auronplay"),
+                        names.index("kaicenat"))
 
     def test_deshabilitado_fuera(self):
         names = [e["name"] for e in fallback_order(STREAMERS)]
@@ -138,6 +170,11 @@ class TestFallbackOrder(unittest.TestCase):
         names = [e["name"] for e in fallback_order(
             STREAMERS, only=["auronplay"])]
         self.assertEqual(names, ["auronplay"])
+
+    def test_only_restringe_en(self):
+        names = [e["name"] for e in fallback_order(
+            STREAMERS, only=["kaicenat"])]
+        self.assertEqual(names, ["kaicenat"])
 
 
 class TestClipPassesGates(unittest.TestCase):
@@ -250,11 +287,36 @@ class TestBurnAndEnqueue(unittest.TestCase):
         self.assertEqual(payload["subtitles_complete"], 1)
         self.assertEqual(payload["needs_human_transcription"], 0)
         self.assertEqual(payload["game"], "GTA VI")
+        self.assertEqual(payload["language"], "es")
         self.assertEqual(payload["start_sec"], 3200)
         self.assertEqual(payload["end_sec"], 3248)
         self.assertEqual(payload["source_id"], 2932415021)
         self.assertEqual(len(bridge.uploaded), 1)
         # NUNCA publica: ni publish_clip ni publish loop.
+        self.assertEqual(bridge.published, [])
+
+    def test_encola_en_con_lang_en(self):
+        # Fallo 3 (2026-11-19): el clip EN lleva language="en"
+        # (sin él el panel asume "es"), el título EN y los
+        # subtítulos transcritos en inglés.
+        sub_mock = self._patch_subtitles()
+        bridge = FakeBridge()
+        clip = _clip(viral={"best_title": "", "game": "GTA VI",
+                            "description": "Kai Cenat loses it.",
+                            "tags": ["#GTA6"]},
+                     title_en="Kai Cenat LOSES IT in GTA 6",
+                     title_es="Kai Cenat pierde la cabeza en GTA 6")
+        panel_id, why = burn_and_enqueue(
+            bridge, "kaicenat", "2932415022", self.tmp.name, clip,
+            lang="en")
+        self.assertEqual(panel_id, 101, why)
+        self.assertEqual(len(bridge.created), 1)
+        payload = bridge.created[0]
+        self.assertEqual(payload["language"], "en")
+        self.assertEqual(payload["title"],
+                         "Kai Cenat LOSES IT in GTA 6")
+        self.assertIn(", en)", payload["reason"])
+        self.assertEqual(sub_mock.call_args.kwargs.get("lang"), "en")
         self.assertEqual(bridge.published, [])
 
     def test_sin_voz_no_se_encola(self):
@@ -292,6 +354,60 @@ class TestRun(unittest.TestCase):
             latest_vod_fn=_latest)
         self.assertEqual(n, 0)
         self.assertEqual(bridge.created, [])
+
+    def test_con_en_en_vivo_no_hace_nada(self):
+        # Fallo 3 (2026-11-19): con EN en vivo en GTA VI tampoco
+        # hay fallback (el cortador en vivo se encarga).
+        def _latest(entry):
+            raise AssertionError("no debe listar VODs con EN en vivo")
+        bridge = FakeBridge()
+        n, summary = run(
+            state_path=self.state, out_root=self.out, bridge=bridge,
+            scan_fn=self._scan([{"name": "kaicenat",
+                                 "platform": "twitch"}]),
+            latest_vod_fn=_latest)
+        self.assertEqual(n, 0)
+        self.assertEqual(bridge.created, [])
+
+    def test_encola_en_con_lang_en(self):
+        # Fallo 3 (2026-11-19): sin directos en ningún idioma, el
+        # VOD EN se procesa con --lang en y se encola con lang en.
+        vod = {"vod_id": "2932415022",
+               "url": "https://www.twitch.tv/videos/2932415022",
+               "title": "GTA 6", "category": "Grand Theft Auto VI",
+               "live": False}
+        manifest = {"vod_id": "2932415022", "clips": [_clip()]}
+        seen = {}
+
+        def _auto(url, out_dir, top_n=2, lang="es"):
+            seen["lang"] = lang
+            return manifest
+
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
+            seen["enqueue_lang"] = lang
+            seen["streamer"] = streamer
+            return 101, ""
+
+        streamers = [
+            {"name": "kaicenat", "platform": "twitch",
+             "language": "en", "enabled": True,
+             "estado": "concedido"},
+        ]
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=streamers):
+            n, _ = run(
+                max_vods=1, max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=FakeBridge(),
+                scan_fn=self._scan([]),
+                latest_vod_fn=lambda entry: vod,
+                auto_clips_fn=_auto,
+                enqueue_fn=_enqueue)
+        self.assertEqual(n, 1)
+        self.assertEqual(seen["lang"], "en")
+        self.assertEqual(seen["enqueue_lang"], "en")
+        self.assertEqual(seen["streamer"], "kaicenat")
 
     def test_dry_run_no_corta_ni_encola(self):
         vod = {"vod_id": "2932415021",
@@ -351,7 +467,8 @@ class TestRun(unittest.TestCase):
         manifest = {"vod_id": "2932415021", "clips": [good, bad]}
         enqueued = []
 
-        def _enqueue(bridge, streamer, vod_id, out_dir, clip):
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
             enqueued.append((streamer, vod_id, clip["peak"]))
             return 101, ""
 
@@ -361,7 +478,7 @@ class TestRun(unittest.TestCase):
             state_path=self.state, out_root=self.out, bridge=bridge,
             scan_fn=self._scan([]),
             latest_vod_fn=lambda entry: vod,
-            auto_clips_fn=lambda url, out_dir, top_n=2: manifest,
+            auto_clips_fn=lambda url, out_dir, top_n=2, lang="es": manifest,
             enqueue_fn=_enqueue)
         self.assertEqual(n, 1)
         self.assertEqual(enqueued, [("rubius", "2932415021", 3220.0)])
@@ -385,7 +502,7 @@ class TestRun(unittest.TestCase):
             state_path=self.state, out_root=self.out, bridge=bridge,
             scan_fn=self._scan([]),
             latest_vod_fn=lambda entry: vod,
-            auto_clips_fn=lambda url, out_dir, top_n=2: manifest,
+            auto_clips_fn=lambda url, out_dir, top_n=2, lang="es": manifest,
             enqueue_fn=_enqueue)
         self.assertEqual(n, 0)
         self.assertEqual(called, [])
@@ -402,7 +519,8 @@ class TestRun(unittest.TestCase):
         manifest = {"vod_id": "2932415021", "clips": [_clip()]}
         enqueued = []
 
-        def _enqueue(bridge, streamer, vod_id, out_dir, clip):
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
             enqueued.append((streamer, vod_id, clip["peak"]))
             return 101, ""
 
@@ -412,7 +530,7 @@ class TestRun(unittest.TestCase):
             bridge=FakeBridge(),
             scan_fn=self._scan([]),
             latest_vod_fn=lambda entry: vod,
-            auto_clips_fn=lambda url, out_dir, top_n=2: manifest,
+            auto_clips_fn=lambda url, out_dir, top_n=2, lang="es": manifest,
             enqueue_fn=_enqueue)
         self.assertEqual(n, 1)
         self.assertEqual(enqueued, [("rubius", "2932415021", 3220.0)])

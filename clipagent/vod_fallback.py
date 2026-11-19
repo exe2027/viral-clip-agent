@@ -1,12 +1,21 @@
-"""Fallback VOD del cerebro (2026-11-19, corrección del usuario).
+"""Fallback VOD del cerebro (2026-11-19, corrección del usuario;
+2026-11-19: también EN, fallo 3 del test de día completo).
 
-Cuando NO hay ningún streamer en español en directo en GTA VI, el
-cerebro cambia solo a modo VOD y corta de los VOD más recientes
-(Rubius primero, después IlloJuan), con los mismos filtros de
-siempre. Lo hace el workflow Cerebro — Live Cutter (GitHub Actions,
-100% automático): nada manual, nada local, y sigue trabajando aunque
-el usuario se desloguee (el cron */15 y el dispatch del panel lo
-disparan sin sesión del usuario).
+Cuando NO hay ningún streamer en directo en GTA VI (ni ES ni EN),
+el cerebro cambia solo a modo VOD y corta de los VOD más recientes
+(ES primero: Rubius, IlloJuan, resto ES; después EN en el orden de
+streamers.yaml), con los mismos filtros de siempre. Lo hace el
+workflow Cerebro — Live Cutter (GitHub Actions, 100% automático):
+nada manual, nada local, y sigue trabajando aunque el usuario se
+desloguee (el cron */15 y el dispatch del panel lo disparan sin
+sesión del usuario).
+
+Los VODs EN se procesan con --lang en: títulos, descripción, tags,
+transcripción de subtítulos, revisión y SEO en inglés (auto_clips
+ya es bilingüe: el manifiesto trae title_en/desc_en y el SEO se
+puntúa con lang=en). Se encolan con language="en" (columna
+clips.language del panel, migración 0019: sin ella el panel asume
+"es" y el clip EN caería en las cuentas ES al publicar).
 
 Reglas duras (las del usuario, no se tocan):
   * El corte de VOD es trabajo del CEREBRO, nunca de un agente
@@ -98,22 +107,45 @@ def es_live_gta6(live_entries, streamers=None):
             if lang.get(x.get("name"), "") == "es"]
 
 
+def live_gta6(live_entries, streamers=None):
+    """¿Hay algún streamer conocido en directo en GTA VI, en
+    cualquier idioma (ES o EN)?
+
+    Es la puerta del fallback (2026-11-19, fallo 3): si hay
+    alguien en vivo en GTA VI, el cortador en vivo se encarga y no
+    hay modo VOD, sea ES o EN. Un nombre sin entrada conocida no
+    cuenta (no se inventa el idioma).
+    """
+    from .streamers import load_streamers
+    entries = streamers if streamers is not None else load_streamers()
+    known = {e["name"] for e in entries}
+    return [x for x in (live_entries or [])
+            if x.get("name") in known]
+
+
 def fallback_order(streamers, only=None):
     """Orden de streamers para el fallback VOD.
 
-    Rubius primero, IlloJuan después, luego el resto de ES enabled
-    en el orden de streamers.yaml. `only` (nombres, minúsculas)
-    restringe la lista (dispatch manual del workflow).
+    ES primero (Rubius, IlloJuan, resto ES en el orden de
+    streamers.yaml) y después EN en el orden de streamers.yaml
+    (2026-11-19, fallo 3: sin ES en vivo tampoco hay EN en vivo,
+    así que los VODs EN también se procesan). Solo enabled +
+    estado concedido. `only` (nombres, minúsculas) restringe la
+    lista (dispatch manual del workflow).
     """
     only_set = {s.strip().lower() for s in (only or []) if s.strip()}
-    es = [e for e in streamers
-          if (e.get("language") or "") == "es"
-          and e.get("enabled", True)
-          and (e.get("estado") or "") == "concedido"
-          and (not only_set or e["name"] in only_set)]
+
+    def _eligible(lang):
+        return [e for e in streamers
+                if (e.get("language") or "") == lang
+                and e.get("enabled", True)
+                and (e.get("estado") or "") == "concedido"
+                and (not only_set or e["name"] in only_set)]
+
+    es = _eligible("es")
     head = [e for n in FALLBACK_PRIORITY for e in es if e["name"] == n]
     tail = [e for e in es if e["name"] not in FALLBACK_PRIORITY]
-    return head + tail
+    return head + tail + _eligible("en")
 
 
 def clip_passes_gates(clip, vod_id):
@@ -257,19 +289,21 @@ def latest_vod_for(streamer_entry):
 
 
 def run_auto_clips(vod_url, out_dir, top_n=TOP_N_PER_VOD,
-                   timeout_s=AUTO_CLIPS_TIMEOUT_S):
+                   timeout_s=AUTO_CLIPS_TIMEOUT_S, lang="es"):
     """auto_clips.py sobre el VOD (mismo comando que el worker).
 
     Baja solo el segmento de cada pico y el chat para detectar picos
     (el pipeline aprobado); nunca el VOD entero. Devuelve el
     manifiesto (dict) o None si auto_clips falló / no dejó
-    manifiesto.
+    manifiesto. `lang` es el idioma del streamer ("es" o "en"):
+    títulos, revisión y SEO van en ese idioma.
     """
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     auto_clips = os.path.join(here, "auto_clips.py")
     os.makedirs(out_dir, exist_ok=True)
+    lang = lang if lang in ("es", "en") else "es"
     cmd = [sys.executable, "-u", auto_clips, vod_url,
-           "--lang", "es", "--out", out_dir,
+           "--lang", lang, "--out", out_dir,
            "--top-n", str(top_n), "--llm-select"]
     _log(f"$ {' '.join(cmd)}")
     try:
@@ -298,23 +332,28 @@ def run_auto_clips(vod_url, out_dir, top_n=TOP_N_PER_VOD,
 # Quemado de subtítulos + encolado en el panel (SIN publicar)
 # ---------------------------------------------------------------------------
 
-def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None):
+def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
+                     lang="es"):
     """Quema subtítulos + título y encola el clip en el panel.
 
     Devuelve (panel_id o None, motivo). Si no hay voz verificable
     el clip queda fuera (publish_blocked): nunca se encola sin
-    subtítulos completos y nunca se inventa texto.
+    subtítulos completos y nunca se inventa texto. `lang` ("es" o
+    "en") es el idioma del streamer: subtítulos, título y
+    `language` del payload van en ese idioma.
     """
     from .workers import subtitle_clip
+    lang = lang if lang in ("es", "en") else "es"
     viral = clip.get("viral") or {}
-    title = viral.get("best_title") or clip.get("title_es") or ""
+    title_key = "title_en" if lang == "en" else "title_es"
+    title = viral.get("best_title") or clip.get(title_key) or ""
     video = os.path.join(out_dir, clip.get("file", ""))
     if not os.path.isfile(video):
         return None, f"falta el MP4 {video}"
     burned = os.path.splitext(video)[0] + "_subs.mp4"
     try:
         sub = subtitle_clip(video, burn=burned, cfg=cfg or {},
-                            lang="es", title=title)
+                            lang=lang, title=title)
     except Exception as e:  # noqa: BLE001 - un clip no tumba la corrida
         return None, f"subtítulos fallaron ({e})"
     if sub.get("publish_blocked") or sub.get("no_speech"):
@@ -351,8 +390,13 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None):
         "needs_human_transcription": 0,
         "origin": "vod",
         "game": "GTA VI",
-        "reason": (f"VOD GTA VI ({streamer}, VOD {vod_id}) — viralidad "
-                   f"{total} — SEO {seo_txt} — subtítulos completos"),
+        # Idioma del clip (columna clips.language del panel,
+        # migración 0019): sin él el panel asume "es" y un clip EN
+        # caería en las cuentas ES al publicar.
+        "language": lang,
+        "reason": (f"VOD GTA VI ({streamer}, VOD {vod_id}, {lang}) — "
+                   f"viralidad {total} — SEO {seo_txt} — subtítulos "
+                   "completos"),
     }
     try:
         created = bridge.create_clip(payload)
@@ -380,7 +424,8 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
     """
     from .live_scan import scan_live
     from .streamers import load_streamers
-    # 1. ¿Hay ES en directo en GTA VI? Si sí, no hay fallback.
+    # 1. ¿Hay alguien en directo en GTA VI (ES o EN)? Si sí, no hay
+    # fallback: el cortador en vivo se encarga.
     try:
         scan = (scan_fn or scan_live)(only=only or None)
     except Exception as e:  # noqa: BLE001 - sin lectura fiable no se
@@ -388,17 +433,17 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         _log(f"Sin lectura fiable de directos ({e}): no se entra en "
              "modo VOD a ciegas.")
         return 0, "sin lectura de directos"
-    live_es = es_live_gta6(scan.get("live") or [])
-    if live_es:
-        names = ", ".join(x["name"] for x in live_es)
-        _log(f"Hay ES en directo en GTA VI ({names}): sin fallback VOD.")
-        return 0, f"directos ES en GTA VI: {names}"
-    _log("Sin directos ES en GTA VI: modo VOD.")
+    live_any = live_gta6(scan.get("live") or [])
+    if live_any:
+        names = ", ".join(x["name"] for x in live_any)
+        _log(f"Hay directos en GTA VI ({names}): sin fallback VOD.")
+        return 0, f"directos en GTA VI: {names}"
+    _log("Sin directos en GTA VI: modo VOD.")
     streamers = load_streamers()
     order = fallback_order(streamers, only=only)
     if not order:
-        _log("Sin streamers ES para el fallback.")
-        return 0, "sin streamers ES"
+        _log("Sin streamers para el fallback.")
+        return 0, "sin streamers"
     state = load_state(state_path)
     if bridge is None and not dry_run:
         from .panel_bridge import PanelBridge
@@ -415,7 +460,7 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             _log(f"No se pudo listar la Cola del panel ({e}); se "
                  "sigue sin dedup contra el panel.")
             panel_clips = []
-    # Fase en vivo: entrando en modo VOD (Rubius, IlloJuan).
+    # Fase en vivo: entrando en modo VOD (ES primero, luego EN).
     _report_phase("modo_vod", ", ".join(e["name"] for e in order),
                   bridge=bridge, dry_run=dry_run)
     enqueued = 0
@@ -450,15 +495,17 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         # tarda ~8 min; sin esto la fase envejece y el panel la
         # marca "sin señal reciente" a mitad de corrida).
         _report_phase("modo_vod", name, bridge=bridge, dry_run=dry_run)
+        lang = (entry.get("language") or "es").lower()
+        lang = lang if lang in ("es", "en") else "es"
         _log(f"{name}: VOD {vod_id} ({vod.get('title', '')[:60]!r}, "
-             f"categoría Helix {vod.get('category')!r})")
+             f"categoría Helix {vod.get('category')!r}, idioma {lang})")
         if dry_run:
             _log(f"{name}: dry-run, no se corta ni se encola.")
             mark_vod_attempted(state, vod_id)
             continue
         out_dir = os.path.join(out_root, str(vod_id))
         manifest = (auto_clips_fn or run_auto_clips)(
-            vod.get("url") or "", out_dir, top_n=top_n)
+            vod.get("url") or "", out_dir, top_n=top_n, lang=lang)
         if not manifest:
             mark_vod_attempted(state, vod_id)
             continue
@@ -477,7 +524,7 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
                      "panel; se salta.")
                 continue
             panel_id, why = (enqueue_fn or burn_and_enqueue)(
-                bridge, name, vod_id, out_dir, clip)
+                bridge, name, vod_id, out_dir, clip, lang=lang)
             if panel_id:
                 _log(f"  pico {clip.get('peak')}: en Cola del panel "
                      f"como clip #{panel_id} (VOD, sin publicar).")
@@ -500,15 +547,16 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
 
 def main(argv=None):
     p = argparse.ArgumentParser(
-        description="Fallback VOD: sin ES en vivo en GTA VI, corta de "
-                    "los VOD más recientes (Rubius, IlloJuan) y encola "
-                    "en el panel sin publicar.")
+        description="Fallback VOD: sin directos en GTA VI (ni ES ni "
+                    "EN), corta de los VOD más recientes (ES primero: "
+                    "Rubius, IlloJuan; después EN) y encola en el "
+                    "panel sin publicar.")
     p.add_argument("--max-vods", type=int, default=MAX_VODS_PER_RUN)
     p.add_argument("--max-clips", type=int, default=MAX_CLIPS_PER_RUN)
     p.add_argument("--top-n", type=int, default=TOP_N_PER_VOD)
     p.add_argument("--streamers", default="",
                    help="Canales a considerar, separados por comas "
-                        "(vacío = todos los ES)")
+                        "(vacío = todos: ES primero, luego EN)")
     p.add_argument("--state", default=DEFAULT_STATE_PATH)
     p.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     p.add_argument("--dry-run", action="store_true",

@@ -92,9 +92,10 @@ def main(argv=None) -> int:
     only = [s for s in os.environ.get("STREAMERS", "").split(",")
             if s.strip()]
     result = scan_live(only=only or None)
-    # Conteo ES (fallback VOD, 2026-11-19): el workflow dispara el
-    # modo VOD solo si es_count == 0. Se calcula aquí, con el mismo
-    # barrido, para no hacer una segunda lectura a Twitch/Kick.
+    # Conteo ES (fallback VOD, 2026-11-19): se sigue emitiendo
+    # es_count por compatibilidad, pero el workflow dispara el modo
+    # VOD solo si count == 0 (nadie en GTA VI, ni ES ni EN —
+    # fallo 3 del test de día completo 2026-11-19).
     from .streamers import load_streamers
     _lang = {e["name"]: (e.get("language") or "")
              for e in load_streamers()}
@@ -106,14 +107,16 @@ def main(argv=None) -> int:
           f"twitch: {result['twitch_mode']})", flush=True)
     # Fase en vivo (2026-11-19): el panel muestra qué hace el
     # cerebro AHORA. Sin credenciales del panel no se reporta (el
-    # barrido sigue igual); nunca tumba el barrido.
+    # barrido sigue igual); nunca tumba el barrido. Con EN en vivo
+    # también es buscando_picos (antes solo contaba ES y el panel
+    # decía "sin directos" mientras se cortaba EN).
     try:
         from .panel_bridge import report_brain_phase
-        if es_live:
-            names = ", ".join(x["name"] for x in es_live)
+        if result["live"]:
+            names = ", ".join(x["name"] for x in result["live"])
             report_brain_phase("buscando_picos", f"en vivo: {names}")
         else:
-            report_brain_phase("sin_directos", "ningún ES en GTA VI")
+            report_brain_phase("sin_directos", "nadie en GTA VI")
     except Exception:  # noqa: BLE001 - la fase es informativa
         pass
     for s in result["skipped"]:
