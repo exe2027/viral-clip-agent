@@ -310,9 +310,19 @@ def main(argv=None):
             if bridge is None:
                 print("Sin PANEL_USERNAME/PANEL_PASSWORD: el cutter "
                       "sigue solo con la cola del cerebro.")
+            # Ajustes del panel (2026-11-18): la marca de agua y
+            # demás Ajustes mandan sobre config.yaml. Sin entorno
+            # del panel, load_config_with_panel() devuelve
+            # load_config() (comportamiento de siempre); si falla,
+            # run_live_cut cae a load_config() con cfg=None.
+            try:
+                from .panel_settings import load_config_with_panel
+                live_cfg = load_config_with_panel()
+            except Exception:
+                live_cfg = None
             result = run_live_cut(
                 args.streamer, platform=args.platform,
-                minutes=args.minutes, bridge=bridge,
+                minutes=args.minutes, bridge=bridge, cfg=live_cfg,
                 auto_publish=bool(getattr(args, "auto_publish",
                                           False)))
             print(f"Picos detectados: {len(result['peaks'])}")
@@ -358,11 +368,16 @@ def main(argv=None):
     if args.command == "live-replay":
         from .jobs import StepJobs
         from .live_cutter import CategoryGate, LiveCutterSession
+        try:
+            from .panel_settings import load_config_with_panel
+            replay_cfg = load_config_with_panel()
+        except Exception:
+            replay_cfg = None
         gate = CategoryGate(mode="vod", chat_path=args.chat)
         session = LiveCutterSession(
             args.streamer, platform="twitch",
             stream_id="replay", gate=gate, store=StepJobs(":memory:"),
-            dry_run=True)
+            cfg=replay_cfg, dry_run=True)
         peaks, clips, skipped = session.replay(
             args.chat, args.video, video_offset=args.video_offset)
         print(f"Picos detectados: {len(peaks)}")

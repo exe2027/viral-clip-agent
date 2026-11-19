@@ -29,10 +29,22 @@ Campos (mismos nombres en D1, en el Worker y aquí):
   hype_burst: true | false (hype por ráfaga on/off)
   loop_running: true | false (el loop Iniciar/Parar; lo lee el
     Worker, el cerebro solo lo muestra)
+  Marca de agua (2026-11-18, elección del usuario: logo de
+  COLORES, arriba a la derecha, 320 px, 20%):
+  watermark_enabled: true | false
+  watermark_url: URL firmada HMAC (TTL 60 min) que el puente
+    añade SOLO cuando la marca está activada y el logo existe
+    en R2; sin logo resoluble el puente apaga la marca en esa
+    respuesta sin tocar D1.
+  watermark_opacity: 0-100 (%), watermark_size_px: px de
+    diámetro, watermark_position: center | top-left | top-right
+    | bottom-left | bottom-right
 """
 import json
 import os
 import urllib.request
+
+from .watermark import WATERMARK_POSITIONS
 
 PANEL_SETTINGS_FIELDS = {
     "layout": str,
@@ -53,6 +65,11 @@ PANEL_SETTINGS_FIELDS = {
     "thumbnail_style": str,
     "hype_burst": bool,
     "loop_running": bool,
+    "watermark_enabled": bool,
+    "watermark_url": str,
+    "watermark_opacity": int,
+    "watermark_size_px": int,
+    "watermark_position": str,
 }
 
 # Rangos válidos: fuera de rango, el valor del panel se ignora y
@@ -70,6 +87,8 @@ PANEL_SETTINGS_RANGES = {
     "tiktok_zernio_per_day": (0, 15),
     "tiktok_zernio_pending_drafts_max": (0, 5),
     "min_spacing_hours": (0, 24),
+    "watermark_opacity": (0, 100),
+    "watermark_size_px": (32, 1080),
 }
 
 
@@ -107,6 +126,9 @@ def sanitize_panel_settings(settings):
             and clean["min_duration_s"] > clean["max_duration_s"]):
         clean.pop("min_duration_s")
         clean.pop("max_duration_s")
+    if (clean.get("watermark_position") is not None
+            and clean["watermark_position"] not in WATERMARK_POSITIONS):
+        clean.pop("watermark_position")
     return clean
 
 
@@ -154,6 +176,24 @@ def apply_panel_settings(cfg, settings):
         rules["hype_burst_enabled"] = clean["hype_burst"]
     if clean.get("loop_running") is not None:
         rules["loop_running"] = clean["loop_running"]
+    # Marca de agua -> cfg["watermark"] (la lee watermark.py):
+    # se mezcla sobre lo que ya traiga config.yaml; si el panel
+    # no manda nada de la marca (Worker viejo), lo de config.yaml
+    # queda intacto. watermark_url solo llega cuando la marca está
+    # activada y el logo existe en R2 (el puente la añade).
+    wm = dict((cfg.get("watermark") or {}))
+    if clean.get("watermark_enabled") is not None:
+        wm["enabled"] = clean["watermark_enabled"]
+    if clean.get("watermark_url"):
+        wm["url"] = clean["watermark_url"]
+    if clean.get("watermark_opacity") is not None:
+        wm["opacity"] = clean["watermark_opacity"]
+    if clean.get("watermark_size_px") is not None:
+        wm["size_px"] = clean["watermark_size_px"]
+    if clean.get("watermark_position"):
+        wm["position"] = clean["watermark_position"]
+    if wm:
+        cfg["watermark"] = wm
     limits = {}
     if clean.get("youtube_plan_per_day") is not None:
         limits.setdefault("youtube_shorts", {})["plan_per_day"] = clean["youtube_plan_per_day"]

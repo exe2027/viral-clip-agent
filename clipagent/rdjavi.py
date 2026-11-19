@@ -74,6 +74,17 @@ Uso:
         --out clips/clip_rdjavi_subs.mp4 [--bg-frame 20] [--fps 60]
         [--preset veryfast] [--punch-in 16 26] [--no-punch-in]
         [--game-zoom 18 24] [--no-game-zoom]
+        [--watermark [ruta|URL]] [--watermark-opacity 20]
+        [--watermark-size 320] [--watermark-position top-right]
+
+Marca de agua (2026-11-18, elección del usuario: logo BITSONER
+de colores, arriba a la derecha, 320 px, 20%): --watermark sin
+valor usa el logo de colores del repo
+(clipagent/assets/watermark_bitsoner_color.png); con ruta o URL
+usa ese PNG. Se compone en un pase final sobre el render (el
+pase único de la plantilla no se toca). Sin --watermark no se
+aplica nada. Si la descarga o el overlay fallan, el render sigue
+sin marca (aviso por stderr).
 """
 import argparse
 import os
@@ -630,14 +641,27 @@ def make_plain_ass(blocks, title=None, duration=None, max_end=None,
 def render(segment, start, duration, ass_path, out_path, bg_png,
            cam_box=DEFAULT_CAM_BOX, cam_square=DEFAULT_CAM_SQUARE,
            punch_in=(16, 26), fps=30, preset="veryfast", crf=23,
-           game_crop=GAME_CROP, game_zoom=GAME_ZOOM):
-    """Render RDJavi en un solo pase. Devuelve los segundos que tardo."""
+           game_crop=GAME_CROP, game_zoom=GAME_ZOOM, watermark=None):
+    """Render RDJavi en un solo pase. Devuelve los segundos que tardo.
+
+    ``watermark``: dict {source|url, opacity, size_px, position}
+    o ruta/URL suelta (ver clipagent/watermark.py). Se compone en
+    un pase final sobre el render, sin tocar el grafo de un solo
+    pase; si falla, el render sigue sin marca. Sin watermark, el
+    render es exactamente el de siempre.
+    """
     cmd = build_render_cmd(segment, start, duration, ass_path, out_path,
                            bg_png, cam_box=cam_box, cam_square=cam_square,
                            punch_in=punch_in, fps=fps, preset=preset,
                            crf=crf, game_crop=game_crop,
                            game_zoom=game_zoom)
-    return _run(cmd, "render RDJavi")
+    dt = _run(cmd, "render RDJavi")
+    if watermark:
+        from .watermark import maybe_apply_watermark
+        wm = watermark if isinstance(watermark, dict) else {
+            "enabled": True, "source": watermark}
+        maybe_apply_watermark(out_path, {"watermark": wm})
+    return dt
 
 
 def main(argv=None):
@@ -679,6 +703,19 @@ def main(argv=None):
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--preset", default="veryfast")
     p.add_argument("--crf", type=int, default=23)
+    p.add_argument("--watermark", nargs="?", const="default", default=None,
+                   help="Marca de agua: ruta local o URL de un PNG. Sin "
+                        "valor usa el logo BITSONER de colores del repo "
+                        "(arriba a la derecha, 320 px, 20%%). Sin este "
+                        "flag no se aplica marca.")
+    p.add_argument("--watermark-opacity", type=float, default=20,
+                   help="Opacidad de la marca 0-100 (default 20)")
+    p.add_argument("--watermark-size", type=int, default=320,
+                   help="Diámetro de la marca en px (default 320)")
+    p.add_argument("--watermark-position", default="top-right",
+                   choices=["center", "top-left", "top-right",
+                            "bottom-left", "bottom-right"],
+                   help="Posición de la marca (default top-right)")
     args = p.parse_args(argv)
 
     # Los defaults son la caja de p3220 (webcam arriba a la
@@ -723,12 +760,21 @@ def main(argv=None):
         print(f"titulo quemado: {wrap_title(args.title)!r}")
     punch = None if args.no_punch_in else tuple(args.punch_in)
     game_zoom = None if args.no_game_zoom else tuple(args.game_zoom)
+    watermark = None
+    if args.watermark:
+        from .watermark import DEFAULT_WATERMARK_PNG
+        src = (DEFAULT_WATERMARK_PNG if args.watermark == "default"
+               else args.watermark)
+        watermark = {"enabled": True, "source": src,
+                     "opacity": args.watermark_opacity,
+                     "size_px": args.watermark_size,
+                     "position": args.watermark_position}
     t0 = time.time()
     dt = render(args.segment, args.start, args.duration, ass_path,
                 args.out, bg, cam_box=cam_box, cam_square=cam_square,
                 punch_in=punch, fps=args.fps, preset=args.preset,
                 crf=args.crf, game_crop=args.game_crop,
-                game_zoom=game_zoom)
+                game_zoom=game_zoom, watermark=watermark)
     print(f"render RDJavi: {dt:.1f} s ({args.duration:.1f} s de clip, "
           f"{args.duration/dt:.2f}x) -> {args.out}")
     return 0

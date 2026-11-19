@@ -1216,6 +1216,7 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
                 print(f"Error de FFmpeg: {result.stderr.decode()[-2000:]}",
                       file=sys.stderr)
                 raise RuntimeError("FFmpeg falló al quemar subtítulos")
+            _apply_watermark_if_enabled(output_path, config)
             return True
         finally:
             try:
@@ -1255,7 +1256,22 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
     if result.returncode != 0:
         print(f"Error de FFmpeg: {result.stderr.decode()[-2000:]}", file=sys.stderr)
         raise RuntimeError("FFmpeg falló al quemar subtítulos")
+    _apply_watermark_if_enabled(output_path, config)
     return True
+
+
+def _apply_watermark_if_enabled(output_path, config):
+    """Marca de agua del panel (2026-11-18): paso final tras quemar
+    los subtítulos, que es el último paso de vídeo del pipeline
+    automático (en vivo y VOD: workers.subtitle_clip pasa el cfg
+    completo; el corte previo solo recibe cfg["layout"], así que
+    ahí NO se puede ver). Si está apagada o falla, el clip sigue
+    igual: nunca se rompe un clip por la marca."""
+    try:
+        from .watermark import maybe_apply_watermark
+        maybe_apply_watermark(output_path, config)
+    except Exception as e:  # nunca romper el quemado por la marca
+        print(f"AVISO: marca de agua no aplicada: {e}", file=sys.stderr)
 
 
 def get_duration(video_path):

@@ -79,6 +79,54 @@ class TestApplyPanelSettings(unittest.TestCase):
         self.assertEqual(out2, cfg)
 
 
+class TestWatermarkPanelSettings(unittest.TestCase):
+    """Marca de agua (2026-11-18): logo de colores, arriba a la
+    derecha, 320 px, 20% (elección del usuario)."""
+
+    def test_sanitize_guarda_los_campos(self):
+        clean = sanitize_panel_settings({
+            "watermark_enabled": True,
+            "watermark_url": "https://x/logo.png?sig=1",
+            "watermark_opacity": 20, "watermark_size_px": 320,
+            "watermark_position": "top-right",
+        })
+        self.assertTrue(clean["watermark_enabled"])
+        self.assertEqual(clean["watermark_url"],
+                         "https://x/logo.png?sig=1")
+        self.assertEqual(clean["watermark_opacity"], 20)
+        self.assertEqual(clean["watermark_size_px"], 320)
+        self.assertEqual(clean["watermark_position"], "top-right")
+
+    def test_sanitize_descarta_posicion_y_rangos_invalidos(self):
+        clean = sanitize_panel_settings({
+            "watermark_position": "arriba",
+            "watermark_opacity": 150, "watermark_size_px": 10,
+        })
+        self.assertNotIn("watermark_position", clean)
+        self.assertNotIn("watermark_opacity", clean)
+        self.assertNotIn("watermark_size_px", clean)
+
+    def test_apply_mapea_a_cfg_watermark(self):
+        cfg = apply_panel_settings(load_config(), {
+            "watermark_enabled": True,
+            "watermark_url": "https://x/logo.png?sig=1",
+            "watermark_opacity": 20, "watermark_size_px": 320,
+            "watermark_position": "top-right",
+        })
+        self.assertEqual(cfg["watermark"], {
+            "enabled": True, "url": "https://x/logo.png?sig=1",
+            "opacity": 20, "size_px": 320, "position": "top-right"})
+
+    def test_apply_apagada_desactiva(self):
+        cfg = apply_panel_settings(load_config(), {
+            "watermark_enabled": False})
+        self.assertEqual(cfg["watermark"], {"enabled": False})
+
+    def test_sin_campos_de_marca_no_toca_cfg(self):
+        cfg = apply_panel_settings(load_config(), {"layout": "plain"})
+        self.assertNotIn("watermark", cfg)
+
+
 class TestFetchPanelSettings(unittest.TestCase):
     def test_sin_entorno_devuelve_none_sin_romper(self):
         self.assertIsNone(fetch_panel_settings())
