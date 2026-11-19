@@ -192,6 +192,7 @@ jobs:
         run: |
           python -m clipagent live "${{ matrix.target.name }}" \
             --platform "${{ matrix.target.platform }}" \
+            --lang "${{ matrix.target.language }}" \
             --cut --minutes "${{ inputs.minutes || '10' }}"
       - name: Guardar estado (picos y clips de la sesión)
         if: always()

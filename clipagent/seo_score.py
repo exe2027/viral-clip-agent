@@ -77,7 +77,31 @@ BROAD_HASHTAGS = {"#gta6", "#gta", "#rockstargames", "#gaming",
                   "#videojuegos", "#games", "#clips"}
 CTA_WORDS = ("suscríbete", "suscribete", "comenta", "sígueme", "sigueme",
              "seguime", "comparte", "no te lo pierdas", "qué te pareció",
-             "que te pareció", "¿qué", "mira el final", "mira hasta el final")
+             "que te pareció", "¿qué", "mira el final", "mira hasta el final",
+             # EN (2026-11-19, calibración: una descripción en inglés
+             # que termina en "Subscribe for more clips" ES una CTA;
+             # sin estas palabras todo EN sin "?" perdía 20 puntos).
+             "subscribe", "comment", "follow", "share",
+             "what do you think", "did you see", "watch till the end",
+             "watch until the end", "check it out", "let me know",
+             "don't miss", "dont miss")
+
+# Palabras vacías (stopwords) ES/EN: no cuentan como repetición
+# entre miniatura y título (2026-11-19, calibración: "NO LO CREÍA"
+# compartía solo "no"/"lo" con el título y perdía los 30 puntos
+# de "no repite el título" sin repetir nada con sustancia).
+STOPWORDS = {
+    "el", "la", "los", "las", "de", "en", "que", "no", "lo", "le",
+    "se", "su", "sus", "un", "una", "unos", "unas", "y", "a", "con",
+    "por", "para", "es", "son", "me", "te", "mi", "tu", "al", "del",
+    "the", "a", "an", "it", "is", "to", "of", "in", "on", "and",
+    "you", "i", "this", "that", "for", "with", "my", "your",
+}
+
+
+def _content_words(text):
+    """Palabras con sustancia (sin stopwords) de un texto."""
+    return {w for w in _words(text) if w not in STOPWORDS}
 
 MAX_RETRIES = 3
 
@@ -320,8 +344,14 @@ def thumbnail_component(thumbnail_text, title):
     else:
         value += 5
         notes.append(f"miniatura de {len(words)} palabras (>4) (+5)")
-    title_words = set(_words(title))
-    if title_words and not (set(words) & title_words):
+    thumb_content = _content_words(thumb)
+    title_content = _content_words(title)
+    if not thumb_content or not title_content:
+        # Sin palabras con sustancia en uno de los dos lados no
+        # hay repetición que penalizar.
+        value += 30
+        notes.append("sin palabras con sustancia en común (+30)")
+    elif not (thumb_content & title_content):
         value += 30
         notes.append("no repite el título (+30)")
     else:

@@ -82,6 +82,26 @@ Responde SOLO con este JSON (sin texto fuera):
   "razones": {{"hook": "...", "claridad": "...", "novedad": "...", "loop": "...", "packaging": "..."}}}}
 """
 
+REVIEW_PROMPT_EN = """You are the virality judge for a GTA 6 clips channel in English.
+You get 3 frames from a 40-second moment of a GTA VI livestream
+and the transcript of what the streamer says in that moment. The
+provisional title of the clip is: {title}
+
+Score each component 0 to 10 (one decimal, be demanding: a 5 is mediocre,
+an 8 is very good, a 10 is exceptional):
+- hook: the first 3 seconds grab attention and make you stay.
+- claridad: you understand what is happening without knowing the stream context.
+- novedad: the moment is unexpected, surprising or funny, not routine.
+- loop: it makes you want to watch it again or share it.
+- packaging: the moment sells itself as a short clip (title + thumbnail).
+
+Reply ONLY with this JSON (no text outside):
+{{"hook": 0.0, "claridad": 0.0, "novedad": 0.0, "loop": 0.0, "packaging": 0.0,
+  "razones": {{"hook": "...", "claridad": "...", "novedad": "...", "loop": "...", "packaging": "..."}}}}
+"""
+
+REVIEW_PROMPTS = {"es": REVIEW_PROMPT, "en": REVIEW_PROMPT_EN}
+
 
 def decide_render(viral_auto, reviewed_count):
     """Decisión pre-render de UN pico en el loop en vivo.
@@ -146,10 +166,15 @@ def _parse_human_scores(text):
     return human, reasons
 
 
-def review_human_scores(frames, transcript_text, title, game="GTA 6"):
+def review_human_scores(frames, transcript_text, title, game="GTA 6",
+                        lang="es"):
     """Gemini puntúa los 5 componentes humanos del clip.
 
     ``frames``: lista de ``extract_thumbnail_frames`` ({path}).
+    ``lang``: idioma del canal del clip ("es" o "en"): el juez
+    usa el prompt en ese idioma (2026-11-19, calibración: el
+    prompt en español para un clip en inglés juzgaba el momento
+    como si fuera para público hispano).
     Devuelve (human, reasons). Lanza RuntimeError si no hay key,
     no hay fotogramas o Gemini no responde con JSON válido.
     """
@@ -158,7 +183,8 @@ def review_human_scores(frames, transcript_text, title, game="GTA 6"):
         raise RuntimeError("sin fotogramas para la revisión")
     if not get_api_key():
         raise RuntimeError("sin GEMINI_API_KEY")
-    parts = [{"text": REVIEW_PROMPT.format(
+    prompt = REVIEW_PROMPTS.get(lang) or REVIEW_PROMPT
+    parts = [{"text": prompt.format(
         title=title or "(sin título provisional)")}]
     if transcript_text:
         parts.append({"text": "Transcripción del momento:\n"
@@ -203,6 +229,7 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
     result = {"viral_auto": viral_auto, "viral_revisado": None,
               "human": None, "human_reasons": None, "audio": None,
               "seo": {}, "seo_medido": False, "pre_corte_title": None,
+              "package": None, "seo_detail": None,
               "revision": "gemini", "pasa": False, "motivo": "",
               "transcript_words": 0, "frames_n": 0,
               "streamer_hype": {"count": 0, "distinct": 0,
@@ -221,6 +248,20 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
                          for p, r in (seo_full or {}).items()}
         result["seo_medido"] = bool(game) and bool(
             result["pre_corte_title"])
+        # El paquete pre-corte y su desglose SEO quedan guardados
+        # (2026-11-19, calibración): el paso 7 del cutter reutiliza
+        # ESTE paquete para el SEO post-corte, y el embudo queda
+        # auditable sin reconstruir nada (antes solo vivían los
+        # totales y los paquetes descartados se perdían).
+        result["package"] = {
+            "best_title": pkg.get("best_title"),
+            "description": pkg.get("description_first_2_lines"),
+            "tags": pkg.get("tags") or [],
+            "hashtags": pkg.get("hashtags") or [],
+            "thumbnail_text": pkg.get("thumbnail_text"),
+            "pkg_source": pkg.get("pkg_source"),
+        }
+        result["seo_detail"] = seo_full
     except Exception as e:  # noqa: BLE001 - SEO sin medir: la
         result["seo_error"] = str(e)  # puerta decide por viralidad.
     seo_for_gate = result["seo"] if result["seo_medido"] else {}
@@ -260,7 +301,8 @@ def review_peak(window_path, detail, multiple, chat_path, peak_ts,
     # 3. Juez Gemini: los 5 componentes humanos.
     try:
         human, reasons = review_human_scores(
-            frames, text, result["pre_corte_title"], game=game)
+            frames, text, result["pre_corte_title"], game=game,
+            lang=lang if lang in ("es", "en") else "es")
     except Exception as e:  # noqa: BLE001 - sin juez no hay
         return _fallback(result, viral_auto, seo_for_gate,  # revisión:
                          f"revisión sin juez Gemini: {e}", cfg=cfg)

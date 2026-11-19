@@ -426,5 +426,74 @@ class TestEnqueuePanelRescue(unittest.TestCase):
             self.assertNotIn("seo_scores", payload)
 
 
+class TestCalibrationLangVisible(unittest.TestCase):
+    """Calibración 2026-11-19: idioma por streamer, lo visible por
+    layout, y persistencia de las revisiones."""
+
+    def _session(self, tmp, streamer="kaicenat", **kwargs):
+        from clipagent.live_cutter import LiveCutterSession
+        return LiveCutterSession(
+            streamer, platform="twitch", stream_id="2026-11-19",
+            out_dir=os.path.join(tmp, "clips"), base_dir=tmp,
+            dry_run=True, **kwargs)
+
+    def test_lang_por_streamer(self):
+        from clipagent.live_cutter import _lang_for_streamer
+        self.assertEqual(_lang_for_streamer("kaicenat"), "en")
+        self.assertEqual(_lang_for_streamer("theburntpeanut"), "en")
+        self.assertEqual(_lang_for_streamer("rubius"), "es")
+        self.assertEqual(_lang_for_streamer("illojuan"), "es")
+        self.assertEqual(_lang_for_streamer("streamer-que-no-existe"),
+                         "es")
+
+    def test_sesion_resuelve_lang_del_catalogo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._session(tmp, "kaicenat").lang, "en")
+            self.assertEqual(self._session(tmp, "rubius").lang, "es")
+
+    def test_lang_explicito_manda_e_invalido_cae_a_es(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                self._session(tmp, "kaicenat", lang="es").lang, "es")
+            self.assertEqual(
+                self._session(tmp, "rubius", lang="xx").lang, "es")
+
+    def test_visible_desde_layout(self):
+        from clipagent.live_cutter import _visible_from_layout
+        split = {"mode": "split", "segments": [
+            {"start": 0.0, "end": 20.0, "layout": "split"},
+            {"start": 20.0, "end": 40.0, "layout": "game"}]}
+        self.assertEqual(_visible_from_layout(split), "cams+gameplay")
+        game_only = {"mode": "center", "segments": [
+            {"start": 0.0, "end": 40.0, "layout": "center"}]}
+        self.assertEqual(_visible_from_layout(game_only), "gameplay")
+        self.assertIsNone(_visible_from_layout({}))
+        self.assertIsNone(_visible_from_layout(None))
+        self.assertEqual(_visible_from_layout({"mode": "pip"}),
+                         "cams+gameplay")
+
+    def test_persist_review_guarda_pase_y_descarte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp, "rubius")
+            reviewed = {"peak_ts": 3220.0, "viral_auto": 48.5,
+                        "viral_revisado": 36.5, "revision": "gemini",
+                        "pasa": False, "motivo": "viralidad baja",
+                        "package": {"best_title": "GTA 6: test"},
+                        "seo_detail": {"youtube_shorts": {"score": 92}}}
+            session._persist_review(reviewed, 3220.0)
+            path = os.path.join(tmp, "clips", "live_reviews.json")
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(len(saved), 1)
+            self.assertEqual(saved[0]["viral_revisado"], 36.5)
+            self.assertEqual(saved[0]["package"]["best_title"],
+                             "GTA 6: test")
+            # Segunda revisión se añade, no se pisa.
+            session._persist_review({**reviewed, "peak_ts": 3300.0},
+                                    3300.0)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(len(json.load(f)), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

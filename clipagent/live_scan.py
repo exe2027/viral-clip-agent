@@ -29,7 +29,10 @@ import sys
 def scan_live(only=None, twitch_cfg=None):
     """Barrido: (live, skipped, checked, twitch_mode).
 
-    live: [{"name", "platform"}] en vivo y en GTA VI.
+    live: [{"name", "platform", "language"}] en vivo y en GTA VI.
+    El idioma viaja en la matriz (2026-11-19, calibración): sin
+    él el workflow no podía pasar --lang al corte y todo el
+    camino en vivo era español a la fuerza.
     skipped: ["nombre: motivo"] (youtube, sin lectura, error).
     only: lista de nombres (minúsculas) o None (= todos).
     twitch_cfg: {"twitch_client_id", "twitch_client_secret"} o None
@@ -76,7 +79,8 @@ def scan_live(only=None, twitch_cfg=None):
         print(f"{name} ({platform}): live={is_live} game={game!r} "
               f"gta6={is_gta6(game)}", flush=True)
         if is_live and is_gta6(game):
-            live.append({"name": name, "platform": platform})
+            live.append({"name": name, "platform": platform,
+                         "language": (e.get("language") or "es")})
     return {"live": live, "skipped": skipped,
             "checked": len(entries), "twitch_mode": mode}
 

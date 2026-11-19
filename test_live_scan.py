@@ -70,6 +70,18 @@ class TestLiveScan(unittest.TestCase):
         self.assertEqual(r["live"], [])
         self.assertEqual(r["checked"], 18)
 
+    def test_matriz_lleva_el_idioma_del_canal(self):
+        # 2026-11-19, calibración: el workflow pasa --lang al corte
+        # desde matrix.target.language; sin él todo era español.
+        tw, kick = self._patch(
+            {"illojuan": "Grand Theft Auto VI",
+             "kaicenat": "Grand Theft Auto VI"}, {})
+        with tw, kick:
+            r = live_scan.scan_live()
+        by_name = {x["name"]: x for x in r["live"]}
+        self.assertEqual(by_name["illojuan"]["language"], "es")
+        self.assertEqual(by_name["kaicenat"]["language"], "en")
+
     def test_filtro_only(self):
         tw, kick = self._patch(
             {"illojuan": "Grand Theft Auto VI",

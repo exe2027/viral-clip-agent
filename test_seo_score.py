@@ -124,6 +124,16 @@ class TestDescriptionComponent(unittest.TestCase):
             "Clip completo en vertical, sin contexto necesario.")
         self.assertLess(value, 100.0)
 
+    def test_cta_english_subscribe(self):
+        # 2026-11-19, calibración: una descripción EN que termina
+        # en "Subscribe for more clips." ES una CTA (+30); sin las
+        # palabras en inglés todo EN sin "?" perdía 20 puntos.
+        value, _n = description_component(
+            "GTA 6: Kai Cenat loses it over this insane play in "
+            "GTA VI. The chat went wild in seconds. "
+            "Subscribe for more GTA 6 clips every day.")
+        self.assertEqual(value, 100.0)
+
 
 class TestTagsComponent(unittest.TestCase):
     def test_youtube_tags(self):
@@ -156,6 +166,21 @@ class TestThumbnailComponent(unittest.TestCase):
 
     def test_repeats_title(self):
         value, _n = thumbnail_component("MIRA LO QUE PASÓ", BAD_PKG["title"])
+        self.assertLess(value, 70.0)
+
+    def test_thumbnail_stopwords_not_repetition(self):
+        # 2026-11-19, calibración: "NO LO CREÍA" solo comparte
+        # stopwords (no/lo) con el título: no es repetición (+30).
+        # Antes daba +0 y el SEO perdía 3-6 puntos por nada.
+        value, _n = thumbnail_component("NO LO CREÍA",
+                                        "GTA 6: No lo podía creer")
+        self.assertEqual(value, 80.0)
+
+    def test_thumbnail_real_repetition_still_zero(self):
+        # Repetición con sustancia ("cannot believe") sigue en +0.
+        value, _n = thumbnail_component(
+            "CANNOT BELIEVE IT",
+            "GTA 6: Kai Cenat cannot believe this play")
         self.assertLess(value, 70.0)
 
     def test_too_many_words(self):

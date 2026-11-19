@@ -93,6 +93,10 @@ def build_parser():
     p_live.add_argument("--auto-publish", action="store_true",
                         help="con --cut: publicar por API lo publicable "
                         "(por defecto solo Cola + draft, sin público)")
+    p_live.add_argument("--lang", default=None,
+                        help="idioma del canal (es/en; por defecto se "
+                        "resuelve por streamers.yaml; sin él todo el "
+                        "camino en vivo era español a la fuerza)")
     p_vodfb = sub.add_parser(
         "vod-fallback",
         help="Fallback VOD del cerebro: sin ES en vivo en GTA VI, "
@@ -344,7 +348,8 @@ def main(argv=None):
                 args.streamer, platform=args.platform,
                 minutes=args.minutes, bridge=bridge, cfg=live_cfg,
                 auto_publish=bool(getattr(args, "auto_publish",
-                                          False)))
+                                          False)),
+                lang=getattr(args, "lang", None))
             print(f"Picos detectados: {len(result['peaks'])}")
             print(f"Clips cortados: {len(result['clips'])}")
             for clip in result["clips"]:

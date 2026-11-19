@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from clipagent import review
 from clipagent.review import (REVIEW_TOP_N, decide_render,
-                              review_peak)
+                              review_human_scores, review_peak)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 P3220_CHAT = os.path.join(
@@ -173,6 +173,19 @@ class TestReviewPeak(unittest.TestCase):
         self.assertLess(r["viral_revisado"], 50.0)
         self.assertEqual(r["revision"], "gemini")
 
+    def test_revision_guarda_paquete_y_seo_detail(self):
+        # 2026-11-19, calibración: la revisión persiste el paquete
+        # pre-corte y el desglose SEO completo (el paso 7 del
+        # cutter reutiliza el paquete; el embudo queda auditable
+        # sin reconstruir nada).
+        if not os.path.isfile(P3220_CHAT):
+            self.skipTest("sin datos reales de p3220")
+        r = self._run(self._patch_all(GEMINI_ALTO), p3220_detail())
+        self.assertEqual(r["package"]["best_title"],
+                         'GTA 6: El chat: "Cinema"')
+        self.assertEqual(r["seo_detail"]["youtube_shorts"]["score"], 92)
+        self.assertEqual(r["seo"]["youtube_shorts"], 92)
+
     def test_revision_falla_por_seo_bajo(self):
         if not os.path.isfile(P3220_CHAT):
             self.skipTest("sin datos reales de p3220")
@@ -266,6 +279,47 @@ class TestReviewPeak(unittest.TestCase):
         self.assertEqual(r["revision"], "fallback-pre-corte")
 
 
+class TestReviewHumanScoresLang(unittest.TestCase):
+    """El juez usa el prompt del idioma del canal (2026-11-19,
+    calibración: antes el prompt era siempre español, también para
+    clips en inglés)."""
+
+    def _run(self, lang):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        frame = os.path.join(tmp.name, "f0.jpg")
+        open(frame, "wb").close()
+        seen = {}
+        fake = mock.Mock(return_value=json.dumps({
+            "hook": 7.0, "claridad": 7.0, "novedad": 7.0, "loop": 7.0,
+            "packaging": 7.0,
+            "razones": {k: "ok" for k in
+                        ("hook", "claridad", "novedad", "loop",
+                         "packaging")}}))
+        def capture(parts, **kwargs):
+            seen["prompt"] = parts[0]["text"]
+            return fake(parts, **kwargs)
+        with mock.patch("clipagent.vision.get_api_key",
+                        return_value="fake-key"), \
+                mock.patch("clipagent.vision._call_gemini",
+                           side_effect=capture):
+            human, _reasons = review_human_scores(
+                [{"path": frame, "role": "payoff", "ts_clip": 20.0}],
+                "hello chat", "GTA 6: test", lang=lang)
+        self.assertEqual(human["hook"], 7.0)
+        return seen["prompt"]
+
+    def test_prompt_en_para_clips_en_ingles(self):
+        prompt = self._run("en")
+        self.assertIn("virality judge", prompt)
+        self.assertNotIn("Eres el juez", prompt)
+
+    def test_prompt_es_para_clips_en_espanol(self):
+        prompt = self._run("es")
+        self.assertIn("Eres el juez", prompt)
+        self.assertNotIn("virality judge", prompt)
+
+
 class TestProcessPeakReview(unittest.TestCase):
     """El cableado en el loop en vivo: qué picos llegan a revisión
     y cuáles a render. Recorder/corte/subtítulos simulados."""
@@ -346,6 +400,65 @@ class TestProcessPeakReview(unittest.TestCase):
         self.assertEqual(record["review"]["viral_revisado"], 53.8)
         self.assertEqual(len(session._reviewed_peaks), 1)
         cut.assert_called_once()
+
+    def test_paso7_usa_el_paquete_de_la_revision(self):
+        # 2026-11-19, calibración: el SEO post-corte se mide sobre
+        # el paquete Gemini de la revisión (título + descripción +
+        # tags + miniatura), NO sobre el título de reglas quemado en
+        # la franja (antes el SEO colapsaba 92 -> 49).
+        review_ok = {"pasa": True, "motivo": "revisión ok",
+                     "viral_revisado": 53.8, "human": {"hook": 8},
+                     "audio": {"stats": {}, "words": 40},
+                     "revision": "gemini", "seo": {},
+                     "package": {
+                         "best_title": 'GTA 6: El chat: "Cinema"',
+                         "description": "GTA 6: el chat explotó.",
+                         "tags": ["gta 6", "cinema"],
+                         "hashtags": ["#GTA6"],
+                         "thumbnail_text": "CINEMA",
+                         "pkg_source": "gemini"}}
+        self._patch_process(44.5, review_ok)
+        session = self._session(44.5)
+        record = session.process_peak(self._peak())
+        self.assertIsNotNone(record)
+        from clipagent import workers as _workers
+        _args, kwargs = _workers.package_clip_step.call_args
+        # El título viaja como 2º argumento posicional.
+        self.assertEqual(_args[1], 'GTA 6: El chat: "Cinema"')
+        self.assertEqual(kwargs["description"],
+                         "GTA 6: el chat explotó.")
+        self.assertEqual(kwargs["tags"], ["gta 6", "cinema"])
+        self.assertEqual(kwargs["thumbnail_text"], "CINEMA")
+        self.assertEqual(kwargs["lang"], "es")
+        # El registro lleva el título de publicación; el quemado
+        # queda aparte (la validación final sigue viendo el vídeo).
+        self.assertEqual(record["title"], 'GTA 6: El chat: "Cinema"')
+        self.assertEqual(record["burned_title"], "Título test")
+
+    def test_paso7_directo_construye_paquete_con_visible(self):
+        # Sin revisión (viral auto >= 50): el paso 7 construye el
+        # mismo paquete Gemini que el pre-corte, con lo visible
+        # real del layout (split -> cams+gameplay).
+        pkg_full = {"best_title": "GTA 6: directo total",
+                    "description_first_2_lines":
+                        "GTA 6: jugada directa.",
+                    "tags": ["gta 6"], "hashtags": ["#GTA6"],
+                    "thumbnail_text": "DIRECTO", "pkg_source": "gemini"}
+        self._patch_process(51.4, None)
+        session = self._session(51.4)
+        layout = {"mode": "split", "segments": [
+            {"start": 0.0, "end": 40.0, "layout": "split"}]}
+        with mock.patch("clipagent.workers.cut_clip",
+                        return_value={"layout": layout}), \
+                mock.patch("clipagent.workers.pre_corte_package",
+                           return_value=(pkg_full, {})):
+            record = session.process_peak(self._peak())
+        self.assertIsNotNone(record)
+        from clipagent import workers as _workers
+        _args, kwargs = _workers.package_clip_step.call_args
+        self.assertEqual(_args[1], "GTA 6: directo total")
+        self.assertEqual(kwargs["visible"], "cams+gameplay")
+        self.assertEqual(kwargs["lang"], "es")
 
     def test_revision_queda_en_el_log_del_job(self):
         # Antes la revisión solo vivía en live_cuts.json: en la

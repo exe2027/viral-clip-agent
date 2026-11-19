@@ -425,6 +425,45 @@ def finalize_package(package_path, viral_total, chat_multiple):
     return package
 
 
+def _lang_for_streamer(name):
+    """Idioma del canal de un streamer según streamers.yaml.
+
+    Devuelve "es" o "en" ("es" por defecto si el streamer no está
+    en el catálogo o el fichero no se puede leer).
+    """
+    try:
+        from .streamers import load_streamers
+        for entry in load_streamers():
+            if str(entry.get("name") or "").lower() == str(name).lower():
+                lang = str(entry.get("language") or "es").lower()
+                return lang if lang in ("es", "en") else "es"
+    except Exception:  # noqa: BLE001 - sin catálogo: español.
+        pass
+    return "es"
+
+
+def _visible_from_layout(layout):
+    """Lo que se ve de verdad en un layout de render.
+
+    ``layout`` es la decisión de render.decide_layout: {"mode",
+    "segments": [{"layout": ...}]}. Cualquier tramo con franja de
+    webcam (split/stack/pip) -> "cams+gameplay"; si todo es juego
+    a pantalla completa (center/game) -> "gameplay". Sin layout
+    (o vacío) -> None (la coherencia SEO queda en 80, como antes).
+    """
+    if not isinstance(layout, dict):
+        return None
+    segments = layout.get("segments") or []
+    if not segments:
+        mode = layout.get("mode")
+        return ("cams+gameplay" if mode in ("split", "stack", "pip")
+                else "gameplay" if mode in ("center", "game") else None)
+    for seg in segments:
+        if str(seg.get("layout") or "") in ("split", "stack", "pip"):
+            return "cams+gameplay"
+    return "gameplay"
+
+
 class LiveCutterSession(LiveSession):
     """Sesión en vivo que CORTA: LiveSession + recorder + pipeline.
 
@@ -446,10 +485,19 @@ class LiveCutterSession(LiveSession):
                  recorder=None, gate=None, store=None, bridge=None,
                  out_dir=None, cfg=None, dry_run=False,
                  latency_s=DEFAULT_LATENCY_S, vod_id=None,
-                 auto_publish=False, final_review_fn=None):
+                 auto_publish=False, final_review_fn=None, lang=None):
         super().__init__(streamer, platform=platform,
                          stream_id=stream_id, limits=limits,
                          notify_fn=notify_fn, base_dir=base_dir)
+        # Idioma del canal (2026-11-19, calibración): sin él todo
+        # el camino en vivo era español a la fuerza (Whisper,
+        # revisión Gemini, títulos, subtítulos y SEO) aunque el
+        # streamer fuera inglés. Si no se pasa, se resuelve por
+        # streamers.yaml; si el streamer no está, "es".
+        self.lang = (str(lang).lower() if lang else None) or \
+            _lang_for_streamer(streamer)
+        if self.lang not in ("es", "en"):
+            self.lang = "es"
         self.recorder = recorder
         self.gate = gate or CategoryGate(
             platform=platform, streamer=streamer, mode="live", cfg=cfg)
@@ -502,6 +550,29 @@ class LiveCutterSession(LiveSession):
             json.dump(self.cut_clips, f, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
         return path
+
+    def _persist_review(self, reviewed, peak_ts):
+        """Añade una revisión (pase o descarte) a live_reviews.json.
+
+        2026-11-19, calibración: antes la revisión solo vivía en
+        memoria (self._reviewed_peaks) y en el log; los picos
+        descartados perdían sus entradas (transcripción,
+        fotogramas, paquete, SEO por plataforma) y el embudo no se
+        podía auditar después. Nunca tumba el corte.
+        """
+        try:
+            path = os.path.join(self.out_dir, "live_reviews.json")
+            reviews = []
+            if os.path.isfile(path):
+                with open(path, encoding="utf-8") as f:
+                    reviews = json.load(f) or []
+            reviews.append(dict(reviewed))
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(reviews, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except Exception:  # noqa: BLE001 - la persistencia no tumba
+            pass
 
     # -- picos: del detector al hilo de corte --------------------------
     def _on_peak(self, peak, notify):
@@ -614,10 +685,11 @@ class LiveCutterSession(LiveSession):
             chat_path = _chat_json_path(self.detector.messages)
             reviewed = review_peak(
                 window_path, detail, multiple, chat_path, peak_ts,
-                score, game="GTA 6", lang="es",
+                score, game="GTA 6", lang=self.lang,
                 streamer=self.streamer, cfg=self.cfg)
             reviewed["peak_ts"] = peak_ts
             self._reviewed_peaks.append(reviewed)
+            self._persist_review(reviewed, peak_ts)
             # La revisión queda también en el log del job (antes
             # solo vivía en live_cuts.json y no se veía en la
             # salida de la corrida).
@@ -643,16 +715,18 @@ class LiveCutterSession(LiveSession):
         layout = cut.get("layout") or {}
         # 5b. Título ANTES del quemado (port v2, 2026-11-19): la
         # franja 702-800 se quema en el paso de subtítulos, así que
-        # el título tiene que existir ya aquí. El paquete del paso
-        # 7 reutiliza ESTE mismo título (nunca se recalcula).
+        # el título tiene que existir ya aquí. Es el título de
+        # REGLAS que se quema en el vídeo; el paquete de publicación
+        # del paso 7 usa el título Gemini (mejor SEO) sin tocar
+        # este (2026-11-19, calibración).
         title = build_title(detail, layout,
-                            payoff_ts_clip=CLIP_PRE_S, lang="es",
+                            payoff_ts_clip=CLIP_PRE_S, lang=self.lang,
                             game="GTA 6")
         # 6. Subtítulos quemados COMPLETOS. Sin voz verificable el
         # clip queda BLOQUEADO (nunca se publica, nunca se inventa).
         burned = os.path.join(work_dir, f"clip_{n:02d}_subs.mp4")
         sub = subtitle_clip(raw_clip, burn=burned, cfg=self.cfg,
-                            lang="es", title=title)
+                            lang=self.lang, title=title)
         final_clip = burned if os.path.isfile(burned) else raw_clip
         blocked = bool(sub.get("publish_blocked"))
         # 6b. Frases hype del streamer en su propia voz (2026-11-18):
@@ -676,8 +750,16 @@ class LiveCutterSession(LiveSession):
                             transcript_text(json.load(f)))
             except Exception:  # noqa: BLE001 - señal opcional
                 pass
-        # 7. Paquete SEO + prioridad (intocable). El título es el
-        # del paso 5b (el mismo que se quemó en la franja).
+        # 7. Paquete SEO + prioridad (intocable). El SEO post-corte
+        # se mide sobre el paquete de PUBLICACIÓN (título Gemini +
+        # descripción + tags + miniatura), NO sobre el título de
+        # reglas sin tags: antes se puntuaba solo ese título y el
+        # SEO colapsaba 92 -> 49, bloqueando publicar TODOS los
+        # clips en vivo (2026-11-19, calibración). Si hubo revisión
+        # se reutiliza su paquete pre-corte; si no (camino directo),
+        # se construye el mismo paquete Gemini ahora. Lo visible es
+        # el layout real del corte (no None): la coherencia pasa de
+        # 80 a 100 cuando el juego está verificado y se ve.
         # Si hubo revisión, la viralidad post-corte usa sus valores
         # REALES (human Gemini + audio medido), no la estimación.
         if reviewed is not None:
@@ -687,14 +769,46 @@ class LiveCutterSession(LiveSession):
         else:
             viral = _score_clip(detail, multiple)
         viral_total = viral.get("total")
-        _desc = ""
-        try:
-            import auto_clips as _auto
-            _t, _desc = _auto.suggest_titles(detail, "es", game="GTA 6")
-        except Exception:  # noqa: BLE001 - descripción vacía
-            _desc = ""
-        pkg = package_clip_step(final_clip, title,
-                                description=_desc, lang="es")
+        visible = _visible_from_layout(layout)
+        pub_pkg = (reviewed or {}).get("package") or {}
+        if not pub_pkg.get("best_title"):
+            # Sin revisión (camino directo) o con el paquete pre-corte
+            # sin construir: se construye el mismo paquete Gemini
+            # ahora. Si TAMPOCO se puede (mismo fallo que en la
+            # revisión), se cae al comportamiento de antes (título de
+            # reglas, sin tags): el clip no muere por el paquete.
+            try:
+                from .live import _chat_json_path
+                from .workers import pre_corte_package
+                chat_path = _chat_json_path(self.detector.messages)
+                median_score = (float(score) / float(multiple)
+                                if multiple and float(multiple) > 0
+                                else None)
+                pub_pkg_full, _pub_seo = pre_corte_package(
+                    chat_path, peak_ts, score, multiple, detail,
+                    median_score=median_score, all_scores=[],
+                    lang=self.lang, game="GTA 6", streamer=self.streamer,
+                    clip_start=rec_start, duration=CLIP_DURATION_S,
+                    category=category, visible=visible)
+                pub_pkg = {
+                    "best_title": pub_pkg_full.get("best_title"),
+                    "description": pub_pkg_full.get(
+                        "description_first_2_lines"),
+                    "tags": pub_pkg_full.get("tags") or [],
+                    "hashtags": pub_pkg_full.get("hashtags") or [],
+                    "thumbnail_text": pub_pkg_full.get("thumbnail_text"),
+                    "pkg_source": pub_pkg_full.get("pkg_source"),
+                }
+            except Exception:  # noqa: BLE001 - paquete de reglas
+                pub_pkg = {}
+        pub_title = pub_pkg.get("best_title") or title
+        pkg = package_clip_step(
+            final_clip, pub_title,
+            description=pub_pkg.get("description") or "",
+            tags=pub_pkg.get("tags") or [],
+            hashtags=pub_pkg.get("hashtags") or [],
+            thumbnail_text=pub_pkg.get("thumbnail_text"),
+            game_verified=True, visible=visible, lang=self.lang)
         package = finalize_package(pkg["package_path"], viral_total,
                                    multiple)
         package["category"] = category
@@ -745,7 +859,8 @@ class LiveCutterSession(LiveSession):
             "hype_score": detail.get("hype_score"),
             "hype_ratio": detail.get("hype_ratio"),
             "streamer_hype": streamer_hype,
-            "title": title, "clip": final_clip,
+            "title": pub_title, "burned_title": title,
+            "clip": final_clip,
             "package_path": pkg["package_path"],
             "subtitles_complete": not blocked,
             "publish_blocked": blocked,
@@ -819,13 +934,19 @@ class LiveCutterSession(LiveSession):
         try:
             # El score de la Cola es la prioridad de YouTube (la
             # fórmula vive en el cerebro; el panel solo ordena).
+            # También se lee la descripción y los tags del paquete
+            # para el payload (2026-11-19, calibración: antes la
+            # descripción llegaba vacía al panel).
             yt_priority = None
+            pkg_desc, pkg_tags = "", []
             try:
                 with open(record["package_path"],
                           encoding="utf-8") as f:
                     pkg = json.load(f)
                 yt_priority = (pkg.get("priority") or {}).get(
                     "youtube_shorts", {}).get("priority")
+                pkg_desc = pkg.get("description") or ""
+                pkg_tags = pkg.get("tags") or []
             except (OSError, ValueError):
                 yt_priority = None
             _reason = (f"LIVE GTA VI ({record['category']}, "
@@ -863,7 +984,8 @@ class LiveCutterSession(LiveSession):
                 "influencer_id": self.streamer,
                 "source_id": int(self.vod_id or 0),
                 "seo_title": record["title"],
-                "seo_description": "",
+                "seo_description": pkg_desc,
+                "seo_tags": pkg_tags,
                 "subtitles_complete": 1 if record["subtitles_complete"]
                 else 0,
                 "needs_human_transcription": 1 if record["publish_blocked"]
@@ -1039,8 +1161,12 @@ class LiveCutterSession(LiveSession):
 
 def run_live_cut(streamer, platform="twitch", minutes=25,
                  out_dir=None, dry_run=False, bridge=None,
-                 cfg=None, auto_publish=False):
-    """Entrada del CLI / workflow: sesión en vivo con corte."""
+                 cfg=None, auto_publish=False, lang=None):
+    """Entrada del CLI / workflow: sesión en vivo con corte.
+
+    ``lang``: idioma del canal ("es"/"en"); si es None se resuelve
+    por streamers.yaml en la sesión.
+    """
     from .config import load_config
     cfg = cfg or (load_config() or {})
     live_cfg = (cfg.get("live") or {})
@@ -1052,7 +1178,7 @@ def run_live_cut(streamer, platform="twitch", minutes=25,
     session = LiveCutterSession(
         streamer, platform=platform, limits=limits, gate=gate,
         out_dir=out_dir, cfg=cfg, dry_run=dry_run, bridge=bridge,
-        auto_publish=auto_publish)
+        auto_publish=auto_publish, lang=lang)
     # Fase en vivo (2026-11-19): el panel muestra "Cortando clip".
     # Nunca tumba la sesión: sin credenciales o sin panel, solo
     # queda en el log y se corta igual.

@@ -288,7 +288,7 @@ def pre_corte_package(chat_path, peak_ts, score, multiple, detail,
                       median_score, all_scores, lang="es", game=None,
                       streamer=None, vod_id=None, game_source="",
                       clip_start=None, duration=None, category=None,
-                      n=1, reel_patterns=None):
+                      n=1, reel_patterns=None, visible=None):
     """Paquete PROVISIONAL sin vídeo: ficha del momento (sin clip,
     con las citas del chat) + títulos + SEO por plataforma.
 
@@ -299,6 +299,12 @@ def pre_corte_package(chat_path, peak_ts, score, multiple, detail,
     el SEO sale sistemáticamente bajo. Solo sirve para la puerta de
     render; el paquete DEFINITIVO se construye tras el corte con la
     ficha, el layout y lo visible.
+    ``visible`` (2026-11-19, calibración): lo que se ve de verdad
+    ("gameplay" | "cams+gameplay"); sin él la coherencia queda en
+    80 ("lo visible sin confirmar") y el SEO pre-corte pierde
+    2-3 puntos en las 4 plataformas aunque el juego esté
+    verificado. Pre-corte se pasa None (aún no hay layout) y el
+    paso 7 del cutter lo vuelve a medir con el layout real.
     Devuelve (package, seo_scores) con seo_scores {plataforma:
     {"score": n, ...}}.
     """
@@ -325,10 +331,10 @@ def pre_corte_package(chat_path, peak_ts, score, multiple, detail,
         n, peak_ts, score, risas, hype, median_score=median_score,
         all_scores=all_scores, lang=lang, examples=examples,
         moment_card=card, game=game, streamer=streamer, vod_id=vod_id,
-        register=False, visible=None, layout=None,
+        register=False, visible=visible, layout=None,
         reel_patterns=reel_patterns)
     seo = score_package_seo(pkg, game_verified=bool(game),
-                            visible=None,
+                            visible=visible,
                             lang=lang if lang in ("es", "en") else "es")
     return pkg, seo
 
