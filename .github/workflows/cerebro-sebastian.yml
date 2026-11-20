@@ -413,6 +413,10 @@ jobs:
       # mucho, con el valor restaurado del run anterior, sin tocarlo.
       # Nunca se sube un started=false generado por un run que no
       # trabajó.
+      # SEGURIDAD (2026-11-20): state/tiktok_browser.json (sesión de
+      # navegador TikTok en claro) NUNCA se sube a artefactos: el
+      # repo es público y la sesión quedaría descargable por
+      # cualquiera. Tampoco se restaura de artefactos viejos.
       - name: Guardar estado para mañana
         if: always()
         uses: actions/upload-artifact@v4
@@ -422,7 +426,6 @@ jobs:
             queue.db
             seen_vods.json
             publish_queue.json
-            state/tiktok_browser.json
             state/panel-state.json
             state/counter.json
           if-no-files-found: ignore
