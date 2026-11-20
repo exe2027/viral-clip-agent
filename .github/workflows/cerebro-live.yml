@@ -112,12 +112,20 @@ jobs:
       # y la deja en $GITHUB_ENV (PANEL_SESSION_TOKEN) para los
       # pasos de este job. Sin token (p. ej. cron) falla con
       # mensaje claro: dispara desde el panel con Iniciar.
+      # El token NO va en env: (el runner imprime el bloque env:
+      # del paso en el registro y el token quedaba en claro en un
+      # repo público — verificado 2026-11-20 en la run 44688008771).
+      # Se lee del archivo del evento en tiempo de ejecución, se
+      # enmascara antes de usarlo y solo vive en este paso.
       - name: Credenciales desde el panel
         id: bootstrap
         env:
           PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
-          PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
-        run: python -m clipagent.panel_credentials
+        run: |
+          TOKEN="$(python -c "import json, os; print(json.load(open(os.environ['GITHUB_EVENT_PATH'])).get('client_payload', {}).get('brain_token', ''))")"
+          test -n "$TOKEN" || { echo "ERROR: sin token del cerebro en el dispatch" >&2; exit 1; }
+          echo "::add-mask::$TOKEN"
+          PANEL_BRAIN_TOKEN="$TOKEN" python -m clipagent.panel_credentials
       # Sesión para cut/vod-fallback: por ARTEFACTO, no por output
       # (GitHub vacía un output enmascarado con ::add-mask::).
       # El archivo lleva la sesión en claro: el artefacto vive
