@@ -58,12 +58,22 @@ class TestNewAccount(unittest.TestCase):
                 "youtube_shorts", tmp, today=date(2026, 11, 17)))
 
     def test_cuentas_reales_son_nuevas_esta_semana(self):
-        # Las 4 cuentas ES se crearon el 2026-11-16: hoy (17 nov)
-        # están en su primera semana -> ritmo reducido.
-        self.assertTrue(accounts.is_new_account(
-            "youtube_shorts", today=date(2026, 11, 17)))
-        self.assertTrue(accounts.is_new_account(
-            "tiktok", today=date(2026, 11, 17)))
+        # Las cuentas ES se crearon el 2026-11-16: hoy (17 nov)
+        # están en su primera semana -> ritmo reducido. La fecha
+        # vive en un fixture, no en el accounts.yaml del repo
+        # (borrado 2026-11-19: el repo no guarda datos de ningún
+        # tenant; la madurez real sale del panel).
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "accounts.yaml"), "w",
+                      encoding="utf-8") as f:
+                f.write("youtube_shorts:\n"
+                        '  created_at: "2026-11-16"\n'
+                        "tiktok:\n"
+                        '  created_at: "2026-11-16"\n')
+            self.assertTrue(accounts.is_new_account(
+                "youtube_shorts", tmp, today=date(2026, 11, 17)))
+            self.assertTrue(accounts.is_new_account(
+                "tiktok", tmp, today=date(2026, 11, 17)))
 
 
 class TestPublishOneLimits(unittest.TestCase):
