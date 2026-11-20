@@ -1,0 +1,62 @@
+version: 2.1
+
+# Starter config (CircleCI) para viral-clip-agent.
+# Un solo proyecto: Python en la raiz (pyproject.toml, requires-python >=3.10;
+# CI existente usa Python 3.12). Sin lockfile, sin segundo proyecto: el
+# panel-backend no vive en este repo y tests/ solo tiene fixtures.
+# Funcion usada: setup-python v0.5.0 (la unica que cubre el lenguaje).
+# Sin orbs. Sin secretos: los tests mockean credenciales, no necesitan
+# env vars ni servicios (sin DB externa; SQLite local de cada test).
+functions:
+  setup-python: github.com/circleci-functions/setup-python@v0.5.0
+
+jobs:
+  tests:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - setup-python:
+          with:
+            python-version: "3.12"
+      # ffmpeg no lo cubre ninguna funcion y cimg/base no lo trae;
+      # los tests generan video sintetico con ffmpeg (lavfi). El CI
+      # existente en GitHub hace exactamente este mismo apt-get.
+      - run:
+          name: Instalar ffmpeg
+          command: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+      - run:
+          name: Instalar dependencias de desarrollo
+          command: |
+            python -m pip install --upgrade pip
+            pip install -e .[dev,vision]
+      # Arial Black (plantilla v2): igual que en .github/workflows/ci.yml.
+      # Sin ella, test_rdjavi_auto.py falla en CI. fontTools viene de
+      # pyproject (dependencies), instalada en el paso anterior.
+      - run:
+          name: Instalar Arial Black
+          command: |
+            if ! fc-list | grep -qi "Arial Black"; then
+              mkdir -p ~/.fonts
+              curl -fsSL -o ~/.fonts/ariblk.woff \
+                "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+              test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+              python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+              test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
+              fc-cache -f >/dev/null 2>&1 || true
+            fi
+            fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
+      - run:
+          name: Ruff
+          command: ruff check .
+      - run:
+          name: Run tests
+          command: circleci testsuite run "ci tests"
+      - store_test_results:
+          # Debe coincidir con outputs.junit de .circleci/test-suites.yml
+          path: test-reports
+
+workflows:
+  main:
+    jobs:
+      - tests
