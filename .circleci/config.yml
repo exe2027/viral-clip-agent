@@ -13,31 +13,25 @@ functions:
 jobs:
   tests:
     docker:
-      - image: cimg/base:stable
+      - image: cimg/base:current-24.04
     steps:
       - checkout
       - setup-python:
           with:
             python-version: "3.12"
-      # ffmpeg moderno (static build, johnvansickle): el apt de
-      # cimg/base (Ubuntu 20.04) trae ffmpeg 4.2.7 y su parser no
-      # acepta el if() anidado del zoom del gameplay en
-      # test_rdjavi_y_plain_renderizan_1080x1920:
-      # "Undefined constant or missing '(' in 't)/2,0))))'".
-      # Verificado: 4.2.2 falla, 7.0.2 pasa (1080x1920); GitHub
-      # Actions (6.1.1) y local (8.1.2) pasan. El static trae
-      # ffmpeg + ffprobe; queda primero en PATH para todos los
-      # pasos siguientes via $BASH_ENV. Sin apt.
+      # ffmpeg por apt, como GitHub Actions (Ubuntu 24.04, ffmpeg
+      # 6.1.1): cimg/base:stable es Ubuntu 20.04 y su apt trae
+      # ffmpeg 4.2.7, cuyo parser rechaza el if() anidado del zoom
+      # (test rdjavi 1080x1920). El static 7.0.2 tampoco sirve: su
+      # fontconfig no ve ~/.fonts en este contenedor (no hay fc-list
+      # ni cache) y libass no quema ni el titulo ni los subtitulos
+      # (4 tests en test_rdjavi_auto.py). Con la imagen 24.04 + apt
+      # 6.1.1 el job queda igual que GHA, que pasa todo. fontconfig
+      # se instala para que el paso Arial Black pueda verificar la
+      # fuente con fc-list y generar su cache.
       - run:
           name: Instalar ffmpeg
-          command: |
-            mkdir -p "$HOME/ffmpeg-static"
-            curl -fsSL -o /tmp/ffmpeg-release.tar.xz \
-              https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-            tar -xJf /tmp/ffmpeg-release.tar.xz -C "$HOME/ffmpeg-static" --strip-components=1
-            echo 'export PATH="$HOME/ffmpeg-static:$PATH"' >> "$BASH_ENV"
-            "$HOME/ffmpeg-static/ffmpeg" -version | head -1
-            "$HOME/ffmpeg-static/ffprobe" -version | head -1
+          command: sudo apt-get update -qq && sudo apt-get install -y ffmpeg fontconfig
       - run:
           name: Instalar dependencias de desarrollo
           command: |
