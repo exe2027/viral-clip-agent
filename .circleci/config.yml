@@ -19,12 +19,25 @@ jobs:
       - setup-python:
           with:
             python-version: "3.12"
-      # ffmpeg no lo cubre ninguna funcion y cimg/base no lo trae;
-      # los tests generan video sintetico con ffmpeg (lavfi). El CI
-      # existente en GitHub hace exactamente este mismo apt-get.
+      # ffmpeg moderno (static build, johnvansickle): el apt de
+      # cimg/base (Ubuntu 20.04) trae ffmpeg 4.2.7 y su parser no
+      # acepta el if() anidado del zoom del gameplay en
+      # test_rdjavi_y_plain_renderizan_1080x1920:
+      # "Undefined constant or missing '(' in 't)/2,0))))'".
+      # Verificado: 4.2.2 falla, 7.0.2 pasa (1080x1920); GitHub
+      # Actions (6.1.1) y local (8.1.2) pasan. El static trae
+      # ffmpeg + ffprobe; queda primero en PATH para todos los
+      # pasos siguientes via $BASH_ENV. Sin apt.
       - run:
           name: Instalar ffmpeg
-          command: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+          command: |
+            mkdir -p "$HOME/ffmpeg-static"
+            curl -fsSL -o /tmp/ffmpeg-release.tar.xz \
+              https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+            tar -xJf /tmp/ffmpeg-release.tar.xz -C "$HOME/ffmpeg-static" --strip-components=1
+            echo 'export PATH="$HOME/ffmpeg-static:$PATH"' >> "$BASH_ENV"
+            "$HOME/ffmpeg-static/ffmpeg" -version | head -1
+            "$HOME/ffmpeg-static/ffprobe" -version | head -1
       - run:
           name: Instalar dependencias de desarrollo
           command: |
