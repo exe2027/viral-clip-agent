@@ -1,5 +1,7 @@
 # TEMPORAL (diagnóstico 2026-11-19): ¿::add-mask:: vacía un output entre jobs?
-# Se borra tras el diagnóstico. Valor FALSO, no es ningún secreto real.
+# Se borra tras el diagnóstico. Valores FALSOS, ningún secreto real.
+# Variante 2: valores DISTINTOS para masked y plain (la primera prueba
+# usaba el mismo valor en ambos y el add-mask lo contaminaba todo).
 name: Test output con mascara
 on:
   workflow_dispatch:
@@ -12,12 +14,12 @@ jobs:
     steps:
       - id: a
         run: |
-          VAL="eyJmYWtlIjoidG9rZW4ifQ.fake-sig-xyz"
+          VAL="AAA-masked-value-111"
           echo "::add-mask::$VAL"
           echo "masked=$VAL" >> "$GITHUB_OUTPUT"
       - id: b
         run: |
-          VAL="eyJmYWtlIjoidG9rZW4ifQ.fake-sig-xyz"
+          VAL="BBB-plain-value-222"
           echo "plain=$VAL" >> "$GITHUB_OUTPUT"
   consumer:
     needs: producer
