@@ -6,12 +6,20 @@ Cola del panel: POST /api/clips (origin='live'), PUT del MP4 a
 R2 y pasos de tracking. Auth por sesión del panel (login por
 usuario + Bearer), nunca por token en el repo.
 
-Credenciales SOLO por entorno (secretos de GitHub Actions, nunca
-en el repo ni en archivos):
+Credenciales SOLO por entorno (nunca en el repo ni en archivos):
   PANEL_BASE_URL  (default https://avc.vikingosfoodspa.workers.dev)
-  PANEL_USERNAME  (p. ej. el login de servicio del tenant)
-  PANEL_PASSWORD
-  PANEL_TENANT    (default sebastian)
+  PANEL_BRAIN_TOKEN (token de un solo uso que el Worker mete en el
+    client_payload del dispatch a GitHub; se canjea UNA vez en
+    POST /api/brain/session por una sesión de 12 h. ES la vía
+    del cerebro en GitHub Actions: sin secretos por tenant en
+    GitHub y sin environments por tenant.)
+  PANEL_USERNAME / PANEL_PASSWORD (fallback local/operador: login
+    de servicio del tenant; en Actions NO se usa)
+  PANEL_TENANT    (OBLIGATORIO cuando hay credenciales: sin valor
+    por defecto, regla 2026-11-18. Debe estar en tenants.yaml.
+    Con PANEL_BRAIN_TOKEN el tenant también puede venir de la
+    sesión canjeada, que es la fuente de verdad.)
+  PANEL_SESSION_TOKEN (sesión ya canjeada, p. ej. en tests)
 
 Sin credenciales, from_env() devuelve None y el cutter sigue
 solo con la cola del cerebro (el motivo queda registrado).
@@ -42,24 +50,53 @@ class PanelBridge:
     """Cliente mínimo del panel web (urllib, sin dependencias)."""
 
     def __init__(self, base_url=None, username=None, password=None,
-                 tenant=None, token=None):
+                 tenant=None, token=None, brain_token=None):
         self.base_url = (base_url or os.environ.get("PANEL_BASE_URL")
                          or DEFAULT_BASE_URL).rstrip("/")
         self.username = username or os.environ.get("PANEL_USERNAME")
         self.password = password or os.environ.get("PANEL_PASSWORD")
-        self.tenant = tenant or os.environ.get("PANEL_TENANT") \
-            or "sebastian"
+        # Token de un solo uso del dispatch (2026-11-19, cerebro
+        # genérico): se canjea una vez por una sesión y se borra
+        # de la memoria. Sin él, el cerebro en Actions no puede
+        # autenticarse: no hay secretos por tenant en GitHub.
+        self._brain_token = (brain_token
+                             or os.environ.get("PANEL_BRAIN_TOKEN") or "")
+        # Sin tenant por defecto: None hasta que se valide. Un tenant
+        # explícito inválido falla ya aquí; uno ausente falla en
+        # from_env()/_ensure_login(), antes de tocar la red.
+        raw_tenant = (tenant or os.environ.get("PANEL_TENANT") or "").strip()
+        if raw_tenant:
+            from .tenant import require_tenant
+            self.tenant = require_tenant(raw_tenant)
+        else:
+            self.tenant = None
         self._token = token or os.environ.get("PANEL_SESSION_TOKEN")
 
     @classmethod
     def from_env(cls):
-        """Bridge si hay credenciales en el entorno, si no None."""
+        """Bridge si hay credenciales en el entorno, si no None.
+
+        Con credenciales pero sin PANEL_TENANT válido, levanta
+        TenantError (no se cae a otro tenant por defecto). Con
+        PANEL_BRAIN_TOKEN el tenant puede venir de la sesión
+        canjeada (ver _ensure_login).
+        """
         bridge = cls()
         if bridge._token:
+            return bridge.require_tenant_or_raise()
+        if bridge._brain_token:
             return bridge
         if bridge.username and bridge.password:
-            return bridge
+            return bridge.require_tenant_or_raise()
         return None
+
+    def require_tenant_or_raise(self):
+        """Valida el tenant del bridge o levanta TenantError."""
+        if self.tenant:
+            return self
+        from .tenant import require_tenant
+        self.tenant = require_tenant()
+        return self
 
     # -- HTTP ----------------------------------------------------------
     def _request(self, method, path, body=None, raw=None,
@@ -102,7 +139,41 @@ class PanelBridge:
         self._token = token
         return res
 
+    def _exchange_brain_token(self):
+        """POST /api/brain/session: canjea el token de un solo uso
+        por una sesión de 12 h (sub "cerebro"). El token se borra
+        de la memoria tras el canje (vale una sola vez). El tenant
+        de la sesión es la fuente de verdad: si el bridge no tiene
+        tenant, se toma de aquí (validado contra tenants.yaml); si
+        lo tiene y no coincide, se levanta (el dispatch era de
+        otro tenant)."""
+        if not self._brain_token:
+            raise PanelError("sin PANEL_BRAIN_TOKEN")
+        res = self._request("POST", "/api/brain/session", body={
+            "token": self._brain_token})
+        self._brain_token = ""
+        token = res.get("token")
+        if not token:
+            raise PanelError(f"canje del token sin sesión: {str(res)[:200]}")
+        self._token = token
+        session_tenant = res.get("tenant") or ""
+        if session_tenant:
+            from .tenant import require_tenant
+            session_tenant = require_tenant(session_tenant)
+            if self.tenant and self.tenant != session_tenant:
+                raise PanelError(
+                    f"el token del cerebro es del tenant "
+                    f"{session_tenant!r}, no de {self.tenant!r}")
+            self.tenant = session_tenant
+        return res
+
     def _ensure_login(self):
+        # Con token de un solo uso, canjearlo ANTES de exigir el
+        # tenant: la sesión trae el tenant (el workflow pone
+        # PANEL_TENANT igual, pero la sesión es la fuente de verdad).
+        if not self._token and self._brain_token:
+            self._exchange_brain_token()
+        self.require_tenant_or_raise()
         if not self._token:
             self.login()
 
@@ -173,6 +244,26 @@ class PanelBridge:
             print(f"[panel] evento {kind} no reportado ({e})", flush=True)
             return None
 
+    def brain_credentials(self):
+        """GET /api/bridge/credentials: credenciales descifradas
+        DEL TENANT DE LA SESIÓN (2026-11-19, cerebro genérico).
+        Devuelve {twitch, gemini, youtube:{es,en}, zernio:{es,en},
+        tiktok_direct:{es,en}, meta, clip_public_base_url} (null
+        lo que falte en el panel). Nunca se registra el contenido:
+        el llamador (panel_credentials) enmascara cada valor."""
+        self._ensure_login()
+        return self._request("GET", "/api/bridge/credentials")
+
+    def list_influencers(self):
+        """GET /api/influencers (los del tenant de la sesión)."""
+        self._ensure_login()
+        return self._request("GET", "/api/influencers").get("influencers") or []
+
+    def list_api_accounts(self):
+        """GET /api/accounts (cuentas API del tenant, con madurez)."""
+        self._ensure_login()
+        return self._request("GET", "/api/accounts").get("accounts") or []
+
     def list_clips(self):
         """GET /api/clips (Cola del tenant)."""
         self._ensure_login()
@@ -202,6 +293,12 @@ class PanelBridge:
         self._ensure_login()
         q = f"?limit={limit}" + (f"&state={state}" if state else "")
         return self._request("GET", f"/api/jobs{q}").get("jobs") or []
+
+    def worker_state(self):
+        """GET /api/worker/state (flag running del tenant de la
+        sesión; lo usa la puerta Iniciar del workflow diario)."""
+        self._ensure_login()
+        return self._request("GET", "/api/worker/state")
 
     def health(self):
         """GET /api/health (sin auth)."""

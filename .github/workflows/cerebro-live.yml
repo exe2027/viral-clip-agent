@@ -1,82 +1,71 @@
-# Cerebro — Live Cutter (monitoreo en vivo simultáneo)
+# Cerebro — Live Cutter (monitoreo en vivo simultáneo, GENÉRICO)
 #
-# FALLO REAL 2026-11-18: el monitoreo en vivo simultáneo NO se
-# estaba haciendo. Causas (las 3 confirmadas):
-# 1. cerebro-sebastian corre 1 vez al día (09:00) + un dispatch
-#    al pulsar Iniciar (una corrida de ~13 min y termina).
-# 2. cerebro-live corría cada 30 min pero solo para rubius por
-#    defecto, 25 min por corrida, y solo Twitch (sin Kick).
-# 3. cerebro-live NO declaraba `environment: sebastian`, así que
-#    TWITCH_CLIENT_ID/SECRET y PANEL_USERNAME/PASSWORD se
-#    resolvían vacíos (los secretos viven en el entorno
-#    sebastian, no a nivel de repo): sin PANEL_* el cutter
-#    encola solo en el cerebro y NADA llega al panel.
-#    Además PANEL_USERNAME/PANEL_PASSWORD ni existían como
-#    secretos: se crearon con el login de servicio del panel.
+# 2026-11-19, cerebro genérico: UN solo workflow para TODOS los
+# tenants. Nada de `environment: <tenant>` ni secretos por tenant
+# en GitHub: las credenciales salen DEL PANEL (donde cada usuario
+# ya conecta sus cuentas). El Worker dispara `panel-live` (tipo
+# FIJO; el tenant va en el client_payload, junto a un token de un
+# solo uso) y cada job arranca con el paso bootstrap
+# (`python -m clipagent.panel_credentials`), que canjea el token
+# por una sesión de 12 h y materializa las credenciales en el
+# runner. El token es de UN SOLO USO: lo canjea el job `detect` y
+# la sesión pasa a `cut`/`vod-fallback` vía outputs (enmascarada
+# con ::add-mask::). Sin token no hay corrida: el bootstrap sale
+# con error claro ("dispara desde el panel con Iniciar").
 #
-# MEDIDO 2026-11-18 19:31-19:40Z: la corrida 44381513042 (detect
-# OK, 6 streamers en vivo en GTA VI) fue CANCELADA a los ~9 min
-# por el siguiente trigger, porque `cancel-in-progress: true` y
-# una corrida dura ~11-13 min (setup + sesión 8 min) con
-# triggers cada 10 min: con cancelación, NINGUNA corrida termina
-# nunca. Por eso el ciclo es */15 con sesiones de 10 min
-# (~13,5 min por corrida < 15 min) y `cancel-in-progress: false`
-# (las corridas encolan, nunca se cancelan entre sí: hay DOS
-# fuentes de triggers — cron + dispatch panel-live del Worker —
-# y la cancelación mataría cualquier corrida en curso). El Worker
-# además NO dispara si ya hay una corrida en curso/en cola
-# (throttle 15 min por tenant).
+# Disparadores (el Worker es la ÚNICA fuente: sin cron aquí, un
+# run por cron no tendría token para autenticarse):
+# - repository_dispatch panel-live (cada 15 min por tenant en
+#   marcha, con throttle por tenant en D1: una corrida de un
+#   tenant no frena a otro).
+# - workflow_dispatch manual (tenant obligatorio, sin default).
 #
-# Diseño actual (2026-11-18):
-# - cron */15: barrido de TODOS los enabled de streamers.yaml
-#   (ES + EN, Twitch y Kick) en cada ciclo. El Worker cron */5
-#   dispara además `panel-live-<tenant>` mientras running=1
-#   (throttle 15 min por tenant en D1), así el monitoreo sigue
-#   aunque el usuario cierre sesión.
+# Concurrencia por tenant: dos corridas del MISMO tenant nunca
+# van en paralelo (cancel-in-progress: false, encolan); las de
+# tenants distintos sí pueden correr a la vez.
+#
+# MEDIDO 2026-11-18: una corrida dura ~11-13 min (setup + sesión
+# 10 min); con triggers cada 15 min y cancel-in-progress: false
+# ninguna se cancela a mitad (el fallo real del 18: triggers cada
+# 10 min + cancel-in-progress: true cancelaban todas).
+#
 # - job `detect` (~1 min): clipagent.live_scan lee en vivo +
 #   categoría GTA VI por API oficial (Helix / Kick API v2).
 #   YouTube no tiene watcher en vivo todavía: se salta con nota.
+#   La lista de streamers sale DEL PANEL del tenant (no de
+#   streamers.yaml: esa es la lista del repo, de otro tenant).
 # - job `cut` (matrix, un job por streamer en vivo, max 4 en
 #   paralelo): `python -m clipagent live <name> --cut --minutes 10`.
 #   Cada sesión re-verifica vivo + GTA VI (CategoryGate), aplica
 #   la puerta pre-render + revisión de los mejores picos
 #   (clipagent.review) y encola en la Cola LIVE del panel vía
-#   PanelBridge. Sin publicar en público todavía (orden
-#   2026-11-18 14:37): quedan en draft.
-# - job `vod-fallback` (2026-11-19, corrección del usuario: el
-#   corte de VOD lo hace el CEREBRO, nunca un agente manual): si
-#   nadie está en vivo en GTA VI en ningún idioma (count == 0),
-#   cambia solo a modo VOD y corta de los VOD más recientes (ES
-#   primero: Rubius, IlloJuan; después EN en el orden de
-#   streamers.yaml) con los mismos filtros (viralidad >= 50,
-#   SEO >= 90, 40-60 s, subtítulos completos). Máx. 2 VODs y 2
-#   clips por corrida, 6 h de enfriamiento por VOD (estado en el
-#   artefacto cerebro-live-vod-state, bajado con gh desde la
-#   última corrida completada: download-artifact sin run-id solo
-#   busca en la corrida actual y el restore venía vacío). Los
-#   clips van a la Cola del panel con el MP4 (origin='vod'), SIN
-#   publicar. Nunca baja el VOD entero (solo el segmento del
-#   pico, vía auto_clips.py).
-# - Fase en vivo (2026-11-19, corrección del usuario: el panel
-#   tiene que mostrar qué hace el cerebro AHORA, no solo un piloto
-#   verde/rojo): detect reporta buscando_picos / sin_directos, cut
-#   reporta cortando_clip y el fallback modo_vod (y sin_directos
-#   al terminar), todo a POST /api/worker/phase. La fase nunca
-#   tumba una corrida: si el panel no responde, solo queda en el
-#   log. ATASCADO lo decide solo el validador del Worker.
-# - cerebro-sebastian (VOD, 09:00) NO se toca: es el barrido
-#   diario de VODs, no el monitoreo en vivo.
+#   PanelBridge.
+# - job `vod-fallback`: si nadie está en vivo en GTA VI en ningún
+#   idioma (count == 0), cambia solo a modo VOD y corta de los
+#   VOD más recientes con los mismos filtros (viralidad >= 45,
+#   SEO >= 80, 40-60 s). Máx. 2 VODs y 2 clips por corrida, 6 h
+#   de enfriamiento por VOD (estado en el artefacto
+#   cerebro-live-vod-state-<tenant>, bajado con gh desde la
+#   última corrida completada). Los clips van a la Cola del panel
+#   con el MP4 (origin='vod'), SIN publicar. Nunca baja el VOD
+#   entero (solo el segmento del pico).
+# - Fase en vivo: detect reporta buscando_picos / sin_directos,
+#   cut reporta cortando_clip y el fallback modo_vod (y
+#   sin_directos al terminar), todo a POST /api/worker/phase.
+#   La fase nunca tumba una corrida. ATASCADO lo decide solo el
+#   validador del Worker.
 name: Cerebro — Live Cutter
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   repository_dispatch:
-    types: [panel-live-sebastian, panel-live-colega]
+    types: [panel-live]
   workflow_dispatch:
     inputs:
+      tenant:
+        description: "Tenant del panel (p. ej. sebastian, kaez)"
+        required: true
       streamers:
-        description: "Canales a vigilar, separados por comas (vacío = todos los enabled de streamers.yaml)"
+        description: "Canales a vigilar, separados por comas (vacío = todos los enabled del panel)"
         required: false
         default: ""
       minutes:
@@ -89,7 +78,7 @@ on:
         default: "false"
 
 concurrency:
-  group: cerebro-live
+  group: cerebro-live-${{ github.event.client_payload.tenant || inputs.tenant }}
   cancel-in-progress: false
 
 permissions:
@@ -100,11 +89,11 @@ jobs:
     name: Detectar en vivo en GTA VI
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: sebastian
     outputs:
       live: ${{ steps.scan.outputs.live }}
       count: ${{ steps.scan.outputs.count }}
       es_count: ${{ steps.scan.outputs.es_count }}
+      session_token: ${{ steps.bootstrap.outputs.session_token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -112,21 +101,27 @@ jobs:
           python-version: "3.12"
       - name: Instalar dependencias
         run: python -m pip install -q -e .
+      # Bootstrap: credenciales del tenant desde el panel. Canjea
+      # el token de un solo uso del dispatch por una sesión de 12 h
+      # y la pasa a cut/vod-fallback vía el output session_token
+      # (enmascarada). Sin token (p. ej. cron) falla con mensaje
+      # claro: dispara desde el panel con Iniciar.
+      - name: Credenciales desde el panel
+        id: bootstrap
+        env:
+          PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+          PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
+        run: python -m clipagent.panel_credentials
       - name: Barrido simultáneo (todos los enabled, ES + EN)
         id: scan
         env:
-          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
-          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
           STREAMERS: ${{ inputs.streamers || '' }}
           # Fase en vivo (2026-11-19): el barrido reporta al panel
           # buscando_picos (hay directos en GTA VI, ES o EN) o
           # sin_directos (nadie en GTA VI); el job cut reporta
-          # cortando_clip y el fallback modo_vod. Sin estas
-          # credenciales el barrido sigue igual, solo no reporta
-          # la fase.
-          PANEL_TENANT: sebastian
-          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
-          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          # cortando_clip y el fallback modo_vod. Las credenciales
+          # (Twitch, Gemini) y la sesión del panel las deja el
+          # bootstrap en el entorno del runner.
           PANEL_URL: https://avc.vikingosfoodspa.workers.dev
         run: python -m clipagent.live_scan
 
@@ -136,7 +131,6 @@ jobs:
     if: needs.detect.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: sebastian
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -186,17 +180,17 @@ jobs:
             fc-cache -f >/dev/null 2>&1 || true
           fi
           fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
+      # Bootstrap: la sesión del panel viene del job detect (el
+      # token de un solo uso ya está canjeado; este job no puede
+      # canjearlo de nuevo). Materializa las credenciales del
+      # tenant (Twitch, Gemini) en el entorno del runner.
+      - name: Credenciales desde el panel
+        env:
+          PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+          PANEL_SESSION_TOKEN: ${{ needs.detect.outputs.session_token }}
+        run: python -m clipagent.panel_credentials
       - name: Seguir directo y cortar picos (Cola LIVE del panel)
         env:
-          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
-          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
-          PANEL_TENANT: sebastian
-          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
-          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
-          # Sin esta key la revisión de picos no tiene juez Gemini y
-          # cae siempre al fallback pre-corte (medido 2026-11-18 en
-          # el clip de djmariio: "sin GEMINI_API_KEY").
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # URL DIRECTA del Worker, NO el front de Pages: Pages
           # corta las llamadas API desde Actions (RemoteDisconnected
           # / 405 vacíos; medido 2026-11-18: login 200 por el Worker
@@ -224,7 +218,6 @@ jobs:
     if: needs.detect.outputs.count == '0'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: sebastian
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -268,8 +261,8 @@ jobs:
           fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
       # Estado persistente entre corridas (enfriamiento por VOD):
       # el runner es efímero; se restaura del artefacto de la
-      # corrida anterior y se vuelve a subir al final. Separado
-      # del estado diario (cerebro-state-sebastian) para no pisarlo.
+      # corrida anterior y se vuelve a subir al final. El nombre
+      # lleva el tenant: el estado de un tenant no es el de otro.
       # OJO: actions/download-artifact sin run-id solo busca en la
       # corrida ACTUAL (donde el artefacto aún no existe), así que
       # el restore siempre venía vacío y cada corrida reprocesaba
@@ -279,23 +272,24 @@ jobs:
       - name: Restaurar estado del fallback
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
         run: |
           mkdir -p runs/vod-fallback
           for id in $(gh run list --workflow cerebro-live.yml --status completed --limit 5 --json databaseId --jq '.[].databaseId'); do
-            if gh run download "$id" -n cerebro-live-vod-state -D runs/vod-fallback 2>/dev/null; then
+            if gh run download "$id" -n "cerebro-live-vod-state-$TENANT" -D runs/vod-fallback 2>/dev/null; then
               echo "estado restaurado de la corrida $id"
               break
             fi
           done
           ls runs/vod-fallback/state.json 2>/dev/null || echo "sin estado previo: se empieza vacío"
+      # Bootstrap: igual que en cut, la sesión viene de detect.
+      - name: Credenciales desde el panel
+        env:
+          PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+          PANEL_SESSION_TOKEN: ${{ needs.detect.outputs.session_token }}
+        run: python -m clipagent.panel_credentials
       - name: Modo VOD (Rubius, IlloJuan) -> Cola del panel, sin publicar
         env:
-          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
-          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PANEL_TENANT: sebastian
-          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
-          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
           PANEL_URL: https://avc.vikingosfoodspa.workers.dev
         run: |
           python -m clipagent vod-fallback \
@@ -306,7 +300,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cerebro-live-vod-state
+          name: cerebro-live-vod-state-${{ github.event.client_payload.tenant || inputs.tenant }}
           path: runs/vod-fallback/state.json
           if-no-files-found: ignore
           retention-days: 30
