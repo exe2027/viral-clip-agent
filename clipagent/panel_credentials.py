@@ -210,9 +210,12 @@ def main(argv=None):
     bridge = PanelBridge.from_env()
     if bridge is None:
         print("[panel-credentials] ERROR: sin PANEL_BRAIN_TOKEN ni "
-              "login del panel. Dispara el workflow desde el panel "
-              "(botón Iniciar) en vez de a mano: el dispatch lleva "
-              "el token de un solo uso.", file=sys.stderr, flush=True)
+              "PANEL_SESSION_TOKEN (sesión del panel). En detect, "
+              "dispara el workflow desde el panel (botón Iniciar): "
+              "el dispatch lleva el token de un solo uso. En cut/vod, "
+              "la sesión llega por el artefacto panel-session de "
+              "esta corrida: si falta, falló su descarga.",
+              file=sys.stderr, flush=True)
         return 1
     try:
         creds = fetch_brain_credentials(bridge)
@@ -221,18 +224,18 @@ def main(argv=None):
               f"credenciales al panel: {e}", file=sys.stderr, flush=True)
         return 1
     # La sesión canjeada (12 h) se exporta para los pasos siguientes
-    # del MISMO job ($GITHUB_ENV) y, si el workflow la necesita en
-    # otros jobs, como output "session_token" ($GITHUB_OUTPUT): el
-    # token de un solo uso ya está gastado y cada job no puede
-    # canjearlo de nuevo. El valor se enmascara antes de salir por
-    # ningún canal (nunca se imprime en claro).
+    # del MISMO job ($GITHUB_ENV). NO se pasa a otros jobs por
+    # output ($GITHUB_OUTPUT): GitHub VACÍA un output cuyo valor
+    # fue registrado con ::add-mask:: (verificado 2026-11-19 con
+    # un workflow de prueba: MASKED EMPTY / PLAIN OK, y el orden
+    # no importa — el vaciado pasa al consumirlo, no al escribirlo).
+    # La sesión viaja entre jobs por ARTEFACTO (panel-session):
+    # detect la sube y cut/vod la descargan (ver cerebro-live.yml).
+    # El valor se enmascara antes de salir por ningún canal (nunca
+    # se imprime en claro).
     session_token = getattr(bridge, "_token", None)
     if session_token:
         _set_env("PANEL_SESSION_TOKEN", session_token)
-        output_path = os.environ.get("GITHUB_OUTPUT")
-        if output_path:
-            with open(output_path, "a", encoding="utf-8") as f:
-                f.write(f"session_token={session_token}\n")
     summary = materialize_credentials(creds)
     print_summary(summary, creds.get("tenant") or bridge.tenant or "?")
     missing = [k for k, v in summary.items() if not v]

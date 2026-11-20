@@ -9,9 +9,16 @@
 # (`python -m clipagent.panel_credentials`), que canjea el token
 # por una sesión de 12 h y materializa las credenciales en el
 # runner. El token es de UN SOLO USO: lo canjea el job `detect` y
-# la sesión pasa a `cut`/`vod-fallback` vía outputs (enmascarada
-# con ::add-mask::). Sin token no hay corrida: el bootstrap sale
-# con error claro ("dispara desde el panel con Iniciar").
+# la sesión pasa a `cut`/`vod-fallback` por ARTEFACTO
+# (`panel-session-<tenant>-<run_id>`, retención 1 día, borrado
+# por el job `cleanup-session` al terminar la corrida). NO por
+# outputs: GitHub VACÍA un output cuyo valor fue registrado con
+# ::add-mask:: (verificado 2026-11-19: MASKED EMPTY / PLAIN OK;
+# el orden no importa) y ese fue el fallo de las corridas
+# 44655780311 y 44656729371 (detect OK, todos los cortes caídos
+# en el bootstrap con PANEL_SESSION_TOKEN vacío). Sin token no
+# hay corrida: el bootstrap sale con error claro ("dispara
+# desde el panel con Iniciar").
 #
 # Disparadores (el Worker es la ÚNICA fuente: sin cron aquí, un
 # run por cron no tendría token para autenticarse):
@@ -93,7 +100,6 @@ jobs:
       live: ${{ steps.scan.outputs.live }}
       count: ${{ steps.scan.outputs.count }}
       es_count: ${{ steps.scan.outputs.es_count }}
-      session_token: ${{ steps.bootstrap.outputs.session_token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -103,15 +109,32 @@ jobs:
         run: python -m pip install -q -e .
       # Bootstrap: credenciales del tenant desde el panel. Canjea
       # el token de un solo uso del dispatch por una sesión de 12 h
-      # y la pasa a cut/vod-fallback vía el output session_token
-      # (enmascarada). Sin token (p. ej. cron) falla con mensaje
-      # claro: dispara desde el panel con Iniciar.
+      # y la deja en $GITHUB_ENV (PANEL_SESSION_TOKEN) para los
+      # pasos de este job. Sin token (p. ej. cron) falla con
+      # mensaje claro: dispara desde el panel con Iniciar.
       - name: Credenciales desde el panel
         id: bootstrap
         env:
           PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
           PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
         run: python -m clipagent.panel_credentials
+      # Sesión para cut/vod-fallback: por ARTEFACTO, no por output
+      # (GitHub vacía un output enmascarado con ::add-mask::).
+      # El archivo lleva la sesión en claro: el artefacto vive
+      # solo esta corrida (retención 1 día) y el job
+      # cleanup-session lo borra al terminar. El repo debe ser
+      # privado (pendiente) para que el artefacto no sea público.
+      - name: Guardar sesión del panel (artefacto)
+        run: |
+          test -n "$PANEL_SESSION_TOKEN" || { echo "ERROR: sin sesión del panel tras el bootstrap" >&2; exit 1; }
+          printf '%s' "$PANEL_SESSION_TOKEN" > panel-session.txt
+          test -s panel-session.txt || { echo "ERROR: panel-session.txt vacío" >&2; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panel-session-${{ github.event.client_payload.tenant || inputs.tenant }}-${{ github.run_id }}
+          path: panel-session.txt
+          if-no-files-found: error
+          retention-days: 1
       - name: Barrido simultáneo (todos los enabled, ES + EN)
         id: scan
         env:
@@ -180,14 +203,32 @@ jobs:
             fc-cache -f >/dev/null 2>&1 || true
           fi
           fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
-      # Bootstrap: la sesión del panel viene del job detect (el
-      # token de un solo uso ya está canjeado; este job no puede
-      # canjearlo de nuevo). Materializa las credenciales del
-      # tenant (Twitch, Gemini) en el entorno del runner.
+      # Sesión del panel: viene del artefacto panel-session que
+      # subió detect (el token de un solo uso ya está canjeado;
+      # este job no puede canjearlo de nuevo y un output no sirve:
+      # GitHub vacía un output enmascarado). Se lee del archivo,
+      # se enmascara ANTES de exportarla (así ningún env dump
+      # posterior la muestra en claro) y queda en $GITHUB_ENV
+      # para el bootstrap y el resto de pasos de este job.
+      - name: Descargar sesión del panel (artefacto)
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-session-${{ github.event.client_payload.tenant || inputs.tenant }}-${{ github.run_id }}
+          path: .panel-session
+      - name: Exportar sesión del panel
+        run: |
+          test -s .panel-session/panel-session.txt || { echo "ERROR: artefacto panel-session vacío o ausente" >&2; exit 1; }
+          SESSION_TOKEN="$(cat .panel-session/panel-session.txt)"
+          test -n "$SESSION_TOKEN" || { echo "ERROR: sesión vacía en el artefacto" >&2; exit 1; }
+          echo "::add-mask::$SESSION_TOKEN"
+          echo "PANEL_SESSION_TOKEN=$SESSION_TOKEN" >> "$GITHUB_ENV"
+          rm -f .panel-session/panel-session.txt
+      # Bootstrap: materializa las credenciales del tenant
+      # (Twitch, Gemini) en el entorno del runner con la sesión
+      # que dejó el paso anterior.
       - name: Credenciales desde el panel
         env:
           PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
-          PANEL_SESSION_TOKEN: ${{ needs.detect.outputs.session_token }}
         run: python -m clipagent.panel_credentials
       - name: Seguir directo y cortar picos (Cola LIVE del panel)
         env:
@@ -282,11 +323,28 @@ jobs:
             fi
           done
           ls runs/vod-fallback/state.json 2>/dev/null || echo "sin estado previo: se empieza vacío"
-      # Bootstrap: igual que en cut, la sesión viene de detect.
+      # Sesión del panel: igual que en cut, del artefacto
+      # panel-session que subió detect (ver el paso "Descargar
+      # sesión del panel" de cut: descarga, enmascara y exporta
+      # a $GITHUB_ENV para este job).
+      - name: Descargar sesión del panel (artefacto)
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-session-${{ github.event.client_payload.tenant || inputs.tenant }}-${{ github.run_id }}
+          path: .panel-session
+      - name: Exportar sesión del panel
+        run: |
+          test -s .panel-session/panel-session.txt || { echo "ERROR: artefacto panel-session vacío o ausente" >&2; exit 1; }
+          SESSION_TOKEN="$(cat .panel-session/panel-session.txt)"
+          test -n "$SESSION_TOKEN" || { echo "ERROR: sesión vacía en el artefacto" >&2; exit 1; }
+          echo "::add-mask::$SESSION_TOKEN"
+          echo "PANEL_SESSION_TOKEN=$SESSION_TOKEN" >> "$GITHUB_ENV"
+          rm -f .panel-session/panel-session.txt
+      # Bootstrap: materializa las credenciales del tenant
+      # con la sesión que dejó el paso anterior.
       - name: Credenciales desde el panel
         env:
           PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
-          PANEL_SESSION_TOKEN: ${{ needs.detect.outputs.session_token }}
         run: python -m clipagent.panel_credentials
       - name: Modo VOD (Rubius, IlloJuan) -> Cola del panel, sin publicar
         env:
@@ -313,3 +371,31 @@ jobs:
             runs/vod-fallback/*/manifest.json
           if-no-files-found: ignore
           retention-days: 7
+
+  cleanup-session:
+    name: Borrar sesión del panel (artefacto)
+    needs: [cut, vod-fallback]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # La sesión (12 h) vivió en el artefacto panel-session solo
+      # durante esta corrida: se borra al terminar para que no
+      # quede una credencial en el almacenamiento de Actions
+      # (retención 1 día como red de seguridad). Si cut y
+      # vod-fallback se saltaron (p. ej. detect falló), no hay
+      # artefacto y el paso es un no-op.
+      - name: Borrar artefacto panel-session
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: panel-session-${{ github.event.client_payload.tenant || inputs.tenant }}-${{ github.run_id }}
+        run: |
+          id="$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\") | .id" | head -1)"
+          if [ -n "$id" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" && echo "artefacto panel-session borrado ($id)"
+          else
+            echo "sin artefacto panel-session que borrar"
+          fi
