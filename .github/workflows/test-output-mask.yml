@@ -1,0 +1,28 @@
+# TEMPORAL (diagnóstico 2026-11-19): ¿::add-mask:: vacía un output entre jobs?
+# Se borra tras el diagnóstico. Valor FALSO, no es ningún secreto real.
+name: Test output con mascara
+on:
+  workflow_dispatch:
+jobs:
+  producer:
+    runs-on: ubuntu-latest
+    outputs:
+      masked: ${{ steps.a.outputs.masked }}
+      plain: ${{ steps.b.outputs.plain }}
+    steps:
+      - id: a
+        run: |
+          VAL="eyJmYWtlIjoidG9rZW4ifQ.fake-sig-xyz"
+          echo "::add-mask::$VAL"
+          echo "masked=$VAL" >> "$GITHUB_OUTPUT"
+      - id: b
+        run: |
+          VAL="eyJmYWtlIjoidG9rZW4ifQ.fake-sig-xyz"
+          echo "plain=$VAL" >> "$GITHUB_OUTPUT"
+  consumer:
+    needs: producer
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ -n "${{ needs.producer.outputs.masked }}" ]; then echo "MASKED OK"; else echo "MASKED EMPTY"; fi
+          if [ -n "${{ needs.producer.outputs.plain }}" ]; then echo "PLAIN OK"; else echo "PLAIN EMPTY"; fi
