@@ -222,6 +222,10 @@ jobs:
           test -n "$SESSION_TOKEN" || { echo "ERROR: sesión vacía en el artefacto" >&2; exit 1; }
           echo "::add-mask::$SESSION_TOKEN"
           echo "PANEL_SESSION_TOKEN=$SESSION_TOKEN" >> "$GITHUB_ENV"
+          # El tenant tambien va a $GITHUB_ENV: el env del paso de
+          # bootstrap es solo de ese paso y el corte lo exige
+          # (require_tenant falla sin PANEL_TENANT).
+          echo "PANEL_TENANT=${{ github.event.client_payload.tenant || inputs.tenant }}" >> "$GITHUB_ENV"
           rm -f .panel-session/panel-session.txt
       # Bootstrap: materializa las credenciales del tenant
       # (Twitch, Gemini) en el entorno del runner con la sesión
@@ -339,6 +343,10 @@ jobs:
           test -n "$SESSION_TOKEN" || { echo "ERROR: sesión vacía en el artefacto" >&2; exit 1; }
           echo "::add-mask::$SESSION_TOKEN"
           echo "PANEL_SESSION_TOKEN=$SESSION_TOKEN" >> "$GITHUB_ENV"
+          # El tenant tambien va a $GITHUB_ENV: el env del paso de
+          # bootstrap es solo de ese paso y el corte lo exige
+          # (require_tenant falla sin PANEL_TENANT).
+          echo "PANEL_TENANT=${{ github.event.client_payload.tenant || inputs.tenant }}" >> "$GITHUB_ENV"
           rm -f .panel-session/panel-session.txt
       # Bootstrap: materializa las credenciales del tenant
       # con la sesión que dejó el paso anterior.
