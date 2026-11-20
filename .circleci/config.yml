@@ -29,7 +29,7 @@ jobs:
           name: Instalar dependencias de desarrollo
           command: |
             python -m pip install --upgrade pip
-            pip install -e .[dev,vision]
+            python -m pip install -e .[dev,vision]
       # Arial Black (plantilla v2): igual que en .github/workflows/ci.yml.
       # Sin ella, test_rdjavi_auto.py falla en CI. fontTools viene de
       # pyproject (dependencies), instalada en el paso anterior.
@@ -48,7 +48,7 @@ jobs:
             fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
       - run:
           name: Ruff
-          command: ruff check .
+          command: python -m ruff check .
       - run:
           name: Run tests
           command: circleci testsuite run "ci tests"
