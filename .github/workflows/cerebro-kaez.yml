@@ -1,0 +1,328 @@
+name: Cerebro — Kaez
+
+# Cerebro diario SOLO de kaez (2026-11-21). INDEPENDIENTE de
+# sebastian: su propio workflow, su propio entorno `kaez` y su
+# propio Worker/D1/R2. No toca cerebro.yml, cerebro-live.yml ni
+# cerebro-sebastian.yml, y nunca escribe en la D1 de sebastian
+# (bloqueada hasta las 21:00 por cuota; la de kaez está fresca,
+# así que este workflow se ENCIENDE AHORA, no a las 21:00).
+#
+# Por qué no sirve el cerebro genérico para kaez (causa raíz del
+# ATASCADO "Sin señal del cerebro"): cerebro.yml y
+# cerebro-live.yml fijan PANEL_URL del Worker de sebastian y
+# PanelBridge solo lee PANEL_BASE_URL, así que el canje del
+# brain_token de kaez daba 401 "Token del cerebro inválido"
+# (corridas 44917889824, 44922296080, 44922316075). Este workflow
+# fija PANEL_BASE_URL al Worker de kaez y usa auth por sesión
+# (PANEL_USERNAME/PANEL_PASSWORD del entorno `kaez`), así que no
+# necesita brain_token.
+#
+# Disparadores:
+# - repository_dispatch `panel-start-kaez`: lo dispara el
+#   vigilante de tenant (cerebro-tenant-watchdog.yml) cuando
+#   detecta a kaez atascado, y el panel al pulsar Iniciar si se
+#   cablea a este evento. Sin brain_token: la sesión sale del
+#   entorno `kaez`.
+# - workflow_dispatch manual (force / streamer opcionales).
+# Sin cron aquí: el vigilante es quien dispara (cada 30 min si
+# hace falta); un run por cron no tendría sesión.
+#
+# Concurrencia: una corrida de kaez a la vez
+# (cancel-in-progress: false, encolan).
+#
+# $0: GitHub Actions (minutos gratis) + Cloudflare (cuota de
+# kaez, fresca). La cadena respeta las reglas del panel (franjas,
+# topes, calentamiento) vía PanelBridge y el gate del Worker.
+
+on:
+  repository_dispatch:
+    types: [panel-start-kaez]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Trabajar aunque el panel esté detenido (true: orden de trabajar; false: respetar el estado del panel)"
+        required: false
+        default: "true"
+        type: boolean
+      streamer:
+        description: "Solo este streamer (p. ej. rubius, para rescates); vacío = todos los vigilados"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: cerebro-kaez
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  vod-check-and-publish:
+    runs-on: ubuntu-latest
+    environment: kaez
+    env:
+      TENANT: kaez
+      PANEL_TENANT: kaez
+      # URL DIRECTA del Worker de KAEZ, no el de sebastian:
+      # PanelBridge solo lee PANEL_BASE_URL (PANEL_URL lo ignora)
+      # y con el default el login caería en el Worker de
+      # sebastian. El front para humanos sigue en Pages.
+      PANEL_BASE_URL: https://avc-kaez.clipsultravirales768.workers.dev
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+
+      - name: Instalar TwitchDownloaderCLI
+        run: |
+          TDL_VERSION="1.56.5"
+          curl -sSL -o /tmp/twitchdownloader.zip \
+            "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
+          sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
+          TwitchDownloaderCLI --help || true
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,youtube,whisper]
+
+      # Bootstrap: credenciales de kaez desde SU panel. Con sesión
+      # (PANEL_USERNAME/PANEL_PASSWORD del entorno `kaez`), no con
+      # brain_token: materializa Twitch/Gemini/Zernio/Meta/YouTube
+      # en el runner (con ::add-mask:: por valor; el resumen solo
+      # nombra, nunca muestra valores). Sin sesión falla con
+      # mensaje claro (falta PANEL_PASSWORD en el entorno `kaez`).
+      - name: Credenciales desde el panel
+        run: python -m clipagent.panel_credentials
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Tests de humo
+        run: pytest -q test_smoke.py test_tiktok_browser.py test_policy.py
+
+      # Estado persistente entre días: el runner es efímero y
+      # queue.db / seen_vods.json están gitignored. Se restauran
+      # del artefacto del día anterior y se vuelven a subir al
+      # final. El nombre del artefacto lleva el tenant (kaez): el
+      # estado de un tenant no es el de otro.
+      - name: Resolver run previo exitoso
+        id: prev-run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cerebro-kaez.yml/runs?status=success&per_page=1" --jq '.workflow_runs[0].id // empty' || true)"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          if [ -n "$RUN_ID" ]; then
+            echo "Último run exitoso: ${RUN_ID}"
+          else
+            echo "Sin run previo exitoso: se arranca sin estado restaurado."
+          fi
+
+      - name: Restaurar estado del día anterior
+        if: steps.prev-run.outputs.run_id != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ steps.prev-run.outputs.run_id }}" \
+            -n cerebro-state-kaez -D . \
+            --repo "${GITHUB_REPOSITORY}" || exit 0
+          echo "Estado restaurado:"
+          ls -la queue.db seen_vods.json 2>/dev/null || true
+
+      # Puerta Iniciar: el flag started vive en D1 (worker_state
+      # de kaez). panel-start-kaez es orden de trabajar.
+      # workflow_dispatch con force=false respeta el estado del
+      # panel (GET /api/worker/state vía PanelBridge, con la
+      # sesión del bootstrap). Nunca un paro silencioso.
+      - name: Puerta Iniciar (botón del panel)
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_TYPE: ${{ github.event.action }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          python - <<'EOF'
+          import os
+          from clipagent.panel_bridge import PanelBridge
+
+          event = os.environ.get("EVENT")
+          action = os.environ.get("DISPATCH_TYPE")
+          force_raw = os.environ.get("FORCE", "")
+
+
+          def _force():
+              return force_raw.strip().lower() not in ("false", "0", "no")
+
+
+          def _panel_running():
+              try:
+                  bridge = PanelBridge.from_env()
+                  if bridge is None:
+                      print("Sin sesión del panel: no se puede leer "
+                            "el estado.")
+                      return False
+                  state = bridge.worker_state() or {}
+                  return bool(state.get("running"))
+              except Exception as exc:  # noqa: BLE001
+                  print(f"::warning::no se pudo leer el estado del "
+                        f"panel: {exc}")
+                  return False
+
+
+          started = False
+          if event == "repository_dispatch" \
+                  and action == "panel-start-kaez":
+              started = True
+          elif event == "workflow_dispatch":
+              started = True if _force() else _panel_running()
+
+          print(f"Panel iniciado: {started} "
+                f"(evento={event} acción={action} "
+                f"force={force_raw!r})")
+          if not started:
+              print("Panel no iniciado: esperando el botón Iniciar; "
+                    "sin procesar nada.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"started={'true' if started else 'false'}\n")
+          EOF
+
+      - name: Revisión de VODs
+        id: watch
+        if: steps.gate.outputs.started == 'true'
+        run: |
+          set +e
+          WATCH_ARGS="--once --live"
+          if [ -n "${{ inputs.streamer }}" ]; then
+            WATCH_ARGS="$WATCH_ARGS --streamer ${{ inputs.streamer }}"
+          fi
+          # shellcheck disable=SC2086
+          python -m clipagent watch $WATCH_ARGS 2>&1 | tee watch.log
+          WATCH_EXIT="${PIPESTATUS[0]}"
+          set -e
+          WATCH_EXIT="$WATCH_EXIT" python - <<'PYEOF'
+          import os
+          import re
+          import sys
+
+          SUMMARY_RE = re.compile(
+              r"Resumen: en vivo=(?P<live>\d+)"
+              r" \| VODs revisados=(?P<new_vods>\d+)"
+              r" \| encolados=(?P<enqueued>\d+)"
+              r" \| encolar[ií]an? \(dry-run\)=(?P<would_enqueue>\d+)"
+              r" \| descartados=(?P<skipped>\d+)"
+              r" \| ya vistos=(?P<seen>\d+)"
+              r" \| errores=(?P<errors>\d+)"
+          )
+          KEYS = ("live", "new_vods", "enqueued", "would_enqueue",
+                  "skipped", "seen", "errors")
+
+          watch_exit = int(os.environ.get("WATCH_EXIT", "0"))
+          summary = None
+          try:
+              with open("watch.log", encoding="utf-8",
+                        errors="replace") as f:
+                  for line in f:
+                      match = SUMMARY_RE.search(line)
+                      if match:
+                          summary = {k: int(v) for k, v in
+                                     match.groupdict().items()}
+          except OSError as exc:
+              print(f"No se pudo leer watch.log: {exc}")
+
+
+          def _emit(name, value):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write(f"{name}={value}\n")
+
+
+          if summary is None:
+              _emit("enqueued", 0)
+              _emit("errors", 1 if watch_exit else 0)
+              _emit("watch_exit", watch_exit)
+              if watch_exit != 0:
+                  print(f"::error::watch terminó con exit {watch_exit} "
+                        "y no emitió la línea 'Resumen:' (watcher.py).")
+                  sys.exit(1)
+              print("::warning::watch no emitió la línea 'Resumen:'; "
+                    "se sigue sin contadores.")
+              sys.exit(0)
+
+          for key in KEYS:
+              _emit(key, summary[key])
+          _emit("watch_exit", watch_exit)
+          print(f"Watch: encolados={summary['enqueued']} "
+                f"descartados={summary['skipped']} "
+                f"errores={summary['errors']} (exit {watch_exit})")
+          if summary["enqueued"] == 0 and summary["errors"] > 0:
+              print("::error::watch no encoló ningún VOD y tuvo "
+                    f"{summary['errors']} error(es); revisa watch.log.")
+              sys.exit(1)
+          if summary["errors"] > 0:
+              print(f"::warning::watch tuvo {summary['errors']} "
+                    "error(es) pero encoló "
+                    f"{summary['enqueued']} VOD(s); se sigue.")
+          PYEOF
+
+      - name: Cadena completa (detectar, cortar, subtitular, publicar)
+        if: steps.gate.outputs.started == 'true'
+        run: |
+          python -m clipagent worker --once --top-n 5
+          python -m clipagent publish loop --once --live
+          python -m clipagent publish audit
+          python -m clipagent status
+
+      - name: Registrar atasco (motivo + hora, visible)
+        if: failure()
+        run: |
+          python - <<'EOF'
+          import json, os
+          from datetime import datetime, timezone
+          os.makedirs("state", exist_ok=True)
+          entry = {
+              "at": datetime.now(timezone.utc).isoformat(),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "job": "vod-check-and-publish",
+              "tenant": "kaez",
+              "conclusion": "failure",
+          }
+          with open("state/run-log.jsonl", "a") as f:
+              f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+          print(json.dumps(entry, ensure_ascii=False))
+          EOF
+
+      - name: Subir registro de atascos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-logs-kaez
+          path: state/run-log.jsonl
+          if-no-files-found: ignore
+          retention-days: 90
+
+      # El flag started vive en D1: aquí solo se guarda el estado
+      # operativo (queue.db, seen_vods, counter). NUNCA se sube
+      # state/tiktok_browser.json (sesión de navegador TikTok en
+      # claro; el repo es público) ni un panel-state.json.
+      - name: Guardar estado para mañana
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-state-kaez
+          path: |
+            queue.db
+            seen_vods.json
+            state/counter.json
+          if-no-files-found: ignore
+          retention-days: 30

@@ -695,6 +695,19 @@ publish_watchdog:
   verify_timeout_s: 20     # timeout por verificación de URL en vivo
   telegram_enabled: true   # avisar por Telegram solo si algo no se pudo arreglar
 
+# Vigilante de tenant atascado (2026-11-21, auto-reparación del
+# cerebro): detecta el tenant que nunca arrancó (Worker en marcha,
+# last_live_dispatch_at NULL/obsoleto, Cola vacía) y dispara
+# panel-start solo. clipagent/tenant_watchdog.py
+# (load_tenant_watchdog_config) falla fuerte si falta uno. El
+# workflow es .github/workflows/cerebro-tenant-watchdog.yml
+# (cada 30 min, entorno `kaez`, ENCENDIDO AHORA para kaez:
+# TENANT_WATCHDOG_ENABLED=true; la restricción de las 21:00 es
+# SOLO de sebastian, cuya D1 agotó la cuota).
+tenant_watchdog:
+  cooldown_min: 60            # entre dos auto-reparaciones del mismo tenant
+  stale_live_dispatch_min: 60 # last_live_dispatch_at más viejo que esto = obsoleto (NULL = nunca)
+
 # Fuente viral (2026-11-21, orden del usuario: los vídeos que YA
 # fueron virales son una fuente permanente, no una tanda manual).
 # El workflow .github/workflows/viral-source.yml la corre a diario

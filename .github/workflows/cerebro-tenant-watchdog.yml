@@ -1,0 +1,109 @@
+# Cerebro — Vigilante de tenant (auto-reparación del cerebro)
+#
+# 2026-11-21, orden del usuario: cualquier error lo arregla el
+# cerebro automáticamente. Este workflow vigila SOLO a kaez y
+# dispara SOLO su cerebro propio (`cerebro-kaez.yml`, evento
+# `panel-start-kaez`) cuando lo detecta atascado-desde-el-
+# nacimiento (Worker en marcha, last_live_dispatch_at NULL u
+# obsoleto, Cola vacía). Nunca toca sebastian: ni su workflow,
+# ni su entorno, ni su D1 (bloqueada hasta las 21:00 por cuota).
+#
+# ENCENDIDO AHORA (no a las 21:00): la restricción de las 21:00
+# es SOLO por la cuota agotada de la D1 de sebastian; la D1 de
+# kaez está fresca y su cuenta de Cloudflare es propia. En cuanto
+# el secreto PANEL_PASSWORD del entorno `kaez` esté puesto, este
+# vigilante ya vigila (cada 30 min) y el cerebro de kaez ya
+# arranca. Sin ese secreto el workflow falla con mensaje claro
+# (ver docs/tenant-watchdog.md); es el único paso pendiente.
+#
+# Disparadores:
+# - schedule (PRINCIPAL): cada 30 min. Solo dispara si
+#   TENANT_WATCHDOG_ENABLED es "true" (lo es: kaez no espera).
+#   En dry-run (si se apaga el flag) solo informa.
+# - workflow_dispatch manual (tenant fijo kaez; live=false por
+#   defecto: dry-run salvo que se pida live=true).
+#
+# Concurrencia: una corrida a la vez (cancel-in-progress: false,
+# encolan). Timeout 10 min (solo lee el panel y, como mucho, un
+# POST a la API de GitHub; sin ffmpeg ni Whisper).
+name: Cerebro — Vigilante de tenant
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant a vigilar (solo kaez)"
+        required: false
+        default: "kaez"
+      live:
+        description: "Actuar de verdad (si no, dry-run)"
+        required: false
+        default: "false"
+        type: boolean
+  schedule:
+    - cron: "*/30 * * * *"
+
+env:
+  # ENCENDIDO (kaez no espera a las 21:00: su D1 está fresca).
+  # Para apagarlo, poner "false": las corridas pasan a dry-run
+  # (leen e informan, no disparan).
+  TENANT_WATCHDOG_ENABLED: "true"
+
+concurrency:
+  group: cerebro-tenant-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Vigilar tenant atascado
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: kaez
+    env:
+      TENANT: kaez
+      PANEL_TENANT: kaez
+      # URL DIRECTA del Worker de KAEZ (PanelBridge solo lee
+      # PANEL_BASE_URL; con el default caería en el Worker de
+      # sebastian y leería/dispararía el tenant equivocado).
+      PANEL_BASE_URL: https://avc-kaez.clipsultravirales768.workers.dev
+      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: python -m pip install -q -e .
+      - name: Vigilar tenant (dry-run salvo flag + live)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TENANT="${{ inputs.tenant || 'kaez' }}"
+          if [ "$TENANT" != "kaez" ]; then
+            echo "ERROR: este workflow solo vigila kaez (tenant=$TENANT)" >&2
+            exit 1
+          fi
+          LIVE=""
+          if [ "$TENANT_WATCHDOG_ENABLED" = "true" ]; then
+            if [ "${{ github.event_name }}" = "schedule" ] \
+              || [ "${{ inputs.live }}" = "true" ]; then
+              LIVE="--live"
+            fi
+          fi
+          echo "tenant=$TENANT live=${LIVE:-dry-run}"
+          mkdir -p runs/tenant-watchdog
+          python -m clipagent.tenant_watchdog --tenant "$TENANT" $LIVE \
+            --out-dir runs/tenant-watchdog | tee runs/tenant-watchdog/report.json
+      - name: Subir informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tenant-watchdog-kaez-${{ github.run_id }}
+          path: runs/tenant-watchdog/report.json
+          if-no-files-found: ignore
+          retention-days: 7
