@@ -494,6 +494,21 @@ class PanelBridge:
         self._ensure_login()
         return self._request_retry("POST", "/api/worker/start")
 
+    def run_once(self):
+        """POST /api/worker/run-once: un ciclo del Worker (force).
+
+        Corre el ciclo para el tenant de la sesión Y para kaez
+        (el Worker viejo es el único que descifra sus
+        credenciales) y devuelve {ok, ran, processed, stalled,
+        autoEnqueued, gate, kaez: {...}}. Lo usa el vigilante de
+        publicación para reintentar lo atascado tras cada franja.
+        SIN reintento: el ciclo avanza jobs (no es idempotente
+        re-dispararlo a ciegas tras un fallo ambiguo); si falla,
+        el llamador lo registra y la próxima franja lo reintenta.
+        """
+        self._ensure_login()
+        return self._request("POST", "/api/worker/run-once")
+
     def notify_telegram(self, message):
         """POST /api/bridge/notify {message}: aviso del vigilante.
 

@@ -37,6 +37,9 @@ KNOWN_TOP_KEYS = {
     "final_review", "validator", "templates",
     # Vigilante con auto-reparación (2026-11-19); se valida abajo.
     "watchdog",
+    # Vigilante de publicación (2026-11-21); se valida en
+    # clipagent/publish_watchdog.py (load_publish_watchdog_config).
+    "publish_watchdog",
     # Señales de Uri (2026-11-17): solo diagnóstico, no puntaje.
     "signals",
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):

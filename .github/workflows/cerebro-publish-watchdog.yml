@@ -1,0 +1,115 @@
+# Cerebro — Vigilante de publicación (tras cada franja)
+#
+# 2026-11-21, orden del usuario: hace automáticamente lo que hoy
+# hace Muse por el chat cuando el Worker o las subidas fallan —
+# revisa los jobs de hoy en D1 (base vieja clips-avc, ambos
+# tenants), reintenta lo atascado, verifica en vivo cada URL
+# publicada y crea republicaciones |repubN si una URL está caída.
+# Es el respaldo del plan "revísalo tras cada franja": la web
+# intenta primero; el vigilante revisa tras cada franja.
+#
+# Disparadores:
+# - schedule (PRINCIPAL): 14:30 / 20:30 / 23:30 hora Chile
+#   (17:30 / 23:30 / 02:30 UTC), tras las franjas 12:00-14:00 /
+#   18:00-20:00 / 21:00-23:00. Solo repara DENTRO de la ventana de
+#   60 min tras la franja (lo de ESA franja); fuera de ella solo
+#   verifica e informa.
+# - workflow_dispatch manual (input live: false por defecto).
+#
+# APAGADO HASTA 2026-11-21 21:00 (reseteo de la cuota D1): el
+# env WATCHDOG_ENABLED está en 'false' y las corridas programadas
+# corren en dry-run (leen, clasifican y verifican; no escriben en
+# D1, no disparan ciclos, no avisan). Para encenderlo:
+#   1. Añadir el secreto CLOUDFLARE_API_TOKEN al repo
+#      (gh secret set CLOUDFLARE_API_TOKEN --body "$TOKEN", con el
+#      token de la cuenta de Cloudflare; sin él el vigilante
+#      degrada a modo solo-panel: solo sebastian, sin
+#      republicaciones).
+#   2. Poner WATCHDOG_ENABLED en 'true' aquí y pushear.
+# Sin WATCHDOG_ENABLED en 'true', --live solo sale del dispatch
+# manual con live=true (para probar una vez).
+#
+# Sin secretos por tenant en GitHub (diseño genérico, igual que
+# cerebro-live): la sesión del panel sale de PANEL_USERNAME /
+# PANEL_PASSWORD (secretos que ya existen, login de servicio de
+# sebastian); el ciclo run-once corre para sebastian Y kaez.
+# El informe queda como artefacto (retención 7 días) y en el log.
+#
+# Concurrencia: una corrida a la vez (cancel-in-progress: false,
+# encolan). Timeout 15 min.
+name: Cerebro — Vigilante de publicación
+
+on:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Actuar de verdad (si no, dry-run)"
+        required: false
+        default: "false"
+        type: boolean
+  schedule:
+    - cron: "30 17 * * *" # 14:30 Chile, tras franja 12:00-14:00
+    - cron: "30 23 * * *" # 20:30 Chile, tras franja 18:00-20:00
+    - cron: "30 2 * * *" # 23:30 Chile, tras franja 21:00-23:00
+
+env:
+  # APAGADO hasta 2026-11-21 21:00: 'false' = dry-run siempre en
+  # las corridas programadas. Para encenderlo, poner 'true'.
+  WATCHDOG_ENABLED: "false"
+
+concurrency:
+  group: cerebro-publish-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-watchdog:
+    name: Revisar publicación tras la franja
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # El login del panel vive en los secretos del entorno
+    # "sebastian" (no a nivel de repo): sin esta línea,
+    # PANEL_USERNAME/PANEL_PASSWORD llegan vacíos y el ciclo
+    # run-once no puede correr. CLOUDFLARE_API_TOKEN sigue
+    # resolviendo a nivel de repo (el entorno no lo define).
+    environment: sebastian
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: python -m pip install -q -e .
+      # D1 directo (lectura + republicaciones) necesita el token
+      # de Cloudflare; sin él el módulo degrada a modo solo-panel
+      # (lo dice en el informe). La sesión del panel es el login
+      # de servicio de sebastian (secretos que ya existen); el
+      # ciclo run-once corre para sebastian Y kaez.
+      # La URL es la DIRECTA del Worker, NO el front de Pages:
+      # Pages corta las llamadas API desde Actions (medido
+      # 2026-11-18).
+      - name: Revisar publicación
+        env:
+          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          PANEL_TENANT: sebastian
+          PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          LIVE_FLAG="--dry-run"
+          if [ "$WATCHDOG_ENABLED" = "true" ] || [ "${{ inputs.live }}" = "true" ]; then
+            LIVE_FLAG="--live"
+          fi
+          echo "[publish-watchdog] modo: $LIVE_FLAG (WATCHDOG_ENABLED=$WATCHDOG_ENABLED)"
+          python -m clipagent.publish_watchdog $LIVE_FLAG \
+            --out-dir runs/publish-watchdog
+      - name: Guardar informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-watchdog-${{ github.run_id }}
+          path: runs/publish-watchdog/
+          if-no-files-found: ignore
+          retention-days: 7

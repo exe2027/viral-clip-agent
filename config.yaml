@@ -671,3 +671,16 @@ watchdog:
   telegram_enabled: true  # avisar por Telegram solo si sigue atascado
   dispatch_workflow: cerebro-live.yml
   watchdog_workflow: cerebro-watchdog.yml
+
+# Vigilante de publicación (2026-11-21, orden del usuario: hace lo
+# que hoy hace Muse por el chat cuando el Worker o las subidas
+# fallan). Única fuente de estos valores:
+# clipagent/publish_watchdog.py (load_publish_watchdog_config)
+# falla fuerte si falta uno. El workflow es
+# .github/workflows/cerebro-publish-watchdog.yml (tras cada franja).
+publish_watchdog:
+  repair_window_min: 60    # tras cada franja, 60 min para reparar lo de ESA franja
+  max_cycles_per_run: 1    # como mucho 1 ciclo run-once por corrida
+  stuck_processing_min: 30 # processing más de 30 min = atascado (lo mismo que el Worker)
+  verify_timeout_s: 20     # timeout por verificación de URL en vivo
+  telegram_enabled: true   # avisar por Telegram solo si algo no se pudo arreglar
