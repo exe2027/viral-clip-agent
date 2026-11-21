@@ -295,26 +295,25 @@ class TestVodHook(unittest.TestCase):
                 "subtitles": {"default_style": "rdjavi"}}
             return advance_pipeline(store, job, {}, cfg=cfg)
 
-    def test_aprobado_encola_api(self):
-        created = self._advance("aprobado")
-        self.assertEqual(len(created), 1)
-        self.assertEqual(created[0]["paso"], "publicar")
-        self.assertEqual(created[0]["payload"]["mode"], "api")
+    def test_aprobado_no_encola_publicar(self):
+        # P0 #8: aprobado -> la cadena local termina en empaquetar;
+        # ya no se auto-encola el job local "publicar" (lo ejecutaba
+        # el publish loop --live y duplicaba con el Worker).
+        self.assertEqual(self._advance("aprobado"), [])
 
     def test_rechazado_no_encola_nada(self):
         self.assertEqual(self._advance("rechazado"), [])
 
-    def test_pendiente_encola_draft_para_humano(self):
-        created = self._advance("pendiente_revision")
-        self.assertEqual(len(created), 1)
-        self.assertEqual(created[0]["payload"]["mode"], "draft")
-        self.assertEqual(created[0]["payload"]["final_review"],
-                         "pendiente_revision")
+    def test_pendiente_no_encola_publicar(self):
+        # P0 #8: pendiente -> tampoco se encola nada; el clip queda
+        # en local para revisión humana (no en un job draft local).
+        self.assertEqual(self._advance("pendiente_revision"), [])
 
-    def test_desactivada_comportamiento_de_antes(self):
-        created = self._advance("desactivada")
-        self.assertEqual(len(created), 1)
-        self.assertEqual(created[0]["payload"]["mode"], "api")
+    def test_desactivada_no_encola_publicar(self):
+        # P0 #8: con la validación desactivada tampoco se encola
+        # nada (antes salía en mode api); la cadena local termina
+        # en empaquetar.
+        self.assertEqual(self._advance("desactivada"), [])
 
 
 class TestObserveOnly(unittest.TestCase):

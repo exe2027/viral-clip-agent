@@ -62,7 +62,7 @@ Uso:
     python publisher.py audit
     python publisher.py dry-run --clip runs/kick-coker-01a1dffd/clips/clip_01_t03h14m50s_s56.5_r14h1_v2.mp4 --platform youtube_shorts
     python publisher.py draft --clip <clip.mp4> --platform tiktok
-    python publisher.py publish --clip <clip.mp4> --platform youtube_shorts --live
+    python publisher.py loop --once --live  # encola en el Worker vía el panel (P0 #8)
     python publisher.py status --platform youtube_shorts
     python publisher.py quarantine --clip <clip.mp4> --platform tiktok --reason "copyright"
 """
@@ -471,10 +471,14 @@ class PublishQueue:
         return None
 
     def enqueue(self, clip, platform, streamer=None, moment_key=None,
-                red_flags=None, game=None, vod_id=None):
+                red_flags=None, game=None, vod_id=None,
+                panel_clip_id=None):
         """Encola un clip. La política (6.3) necesita estos metadatos
         guardados en el ítem: moment_key (duplicados), red_flags
-        (semáforo), game y vod_id."""
+        (semáforo), game y vod_id. ``panel_clip_id`` es el id del
+        clip en la Cola del panel (P0 #8): el publicador único es
+        el Worker y publish_direct publica vía
+        PanelBridge.publish_clip(panel_clip_id)."""
         if self._find(clip, platform):
             return self._find(clip, platform)
         item = {"clip": clip, "platform": platform, "streamer": streamer,
@@ -483,7 +487,8 @@ class PublishQueue:
                 "scheduled_for": None, "published_at": None,
                 "platform_id": None, "quarantine_reason": None,
                 "moment_key": moment_key, "red_flags": red_flags or [],
-                "game": game, "vod_id": vod_id}
+                "game": game, "vod_id": vod_id,
+                "panel_clip_id": panel_clip_id}
         self.data["items"].append(item)
         self.save()
         return item
@@ -1813,15 +1818,57 @@ def _transient_attempts(item):
 
 
 def publish_direct(platform, clip_path, queue=None, live=False,
-                   item=None, cfg=None, request_fn=None, sleep_fn=None):
+                   item=None, cfg=None, request_fn=None, sleep_fn=None,
+                   bridge=None):
     """Publica un clip por API en esa plataforma (fan-out).
 
-    YouTube: subida real por YouTubePublisher (exige OAuth y live).
-    TikTok / Instagram / Facebook: DirectPublisher con los
-    adaptadores de clipagent.platforms. Sin token, sin IDs o sin
-    URL pública se devuelve mode "draft" con el motivo explícito.
-    Nunca se finge una publicación.
+    PUBLICADOR ÚNICO (P0 #8, #64, 2026-11-21): la subida directa
+    por adapters (YouTubePublisher / DirectPublisher) está
+    RETIRADA: duplicaba con el Worker. Con live=True se publica
+    solo vía el Worker: PanelBridge.publish_clip(panel_clip_id)
+    (POST /api/clips/:id/publish → jobs D1 → el ciclo publica).
+    Sin panel_clip_id o sin puente no se publica nada: se
+    devuelve mode "draft" con el motivo explícito. Sin live, el
+    dry-run valida el paquete con DirectPublisher como antes
+    (no sube nada). Nunca se finge una publicación.
     """
+    if live:
+        panel_clip_id = (item or {}).get("panel_clip_id")
+        if panel_clip_id is None:
+            return {"ok": False, "mode": "draft",
+                    "reason": "publicación directa retirada (P0 #8): "
+                              "el ítem no tiene clip en el panel "
+                              "(panel_clip_id); crea el clip en la "
+                              "Cola del panel y publica desde ahí"}
+        if bridge is None:
+            try:
+                from .panel_bridge import PanelBridge
+                bridge = PanelBridge.from_env()
+            except Exception:  # noqa: BLE001 - sin puente, a draft
+                bridge = None
+        if bridge is None:
+            return {"ok": False, "mode": "draft",
+                    "reason": "publicación directa retirada (P0 #8): "
+                              "sin puente al panel "
+                              "(PANEL_USERNAME/PANEL_PASSWORD); el "
+                              "clip queda en la Cola del panel"}
+        try:
+            result = bridge.publish_clip(panel_clip_id)
+        except Exception as e:  # noqa: BLE001 - fallo del puente
+            return {"ok": False, "mode": "error",
+                    "reason": f"puente al panel: {str(e)[:200]}",
+                    "retryable": True}
+        jobs = (result or {}).get("jobs") or []
+        job = next((j for j in jobs
+                    if j.get("platform") == platform), None)
+        if job is None:
+            blocked = (result or {}).get("blocked") or []
+            reason = ("; ".join(str(b) for b in blocked)
+                      or "el Worker no encoló el job")
+            return {"ok": False, "mode": "draft", "reason": reason}
+        return {"ok": True, "mode": "api",
+                "post_id": f"worker-job-{job.get('id')}",
+                "jobs": jobs}
     pub = get_publisher(platform, queue)
     if platform == "youtube_shorts":
         return pub.publish(clip_path, live=live)
@@ -1830,10 +1877,13 @@ def publish_direct(platform, clip_path, queue=None, live=False,
 
 
 def publish_one(queue, item, cfg=None, live=False, mode="full",
-                counter_state=None):
+                counter_state=None, bridge=None):
     """Un ítem de la cola por la política (6.3). Devuelve
     {"action": published|retained|discarded|draft|failed|
-    quarantined|limited|paused|processing, "reason": ...}."""
+    quarantined|limited|paused|processing, "reason": ...}.
+    Con live=True publica solo vía ``bridge`` (PanelBridge al
+    Worker, P0 #8); sin bridge se resuelve del entorno y sin
+    puente no se publica nada."""
     from .policy import evaluate
     from .status import is_paused
     platform = item["platform"]
@@ -1906,7 +1956,7 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     if not ok:
         return {"action": "limited", "reason": why}
     result = publish_direct(platform, clip_path, queue, live=live,
-                            item=item, cfg=cfg)
+                            item=item, cfg=cfg, bridge=bridge)
     if result.get("mode") == "draft":
         # El paquete manual se genera igual (para subir a mano), y
         # el motivo queda visible en la cola y en el panel.
@@ -1997,7 +2047,8 @@ def fan_out(queue, item, cfg=None):
             item["clip"], platform, streamer=item.get("streamer"),
             moment_key=item.get("moment_key"),
             red_flags=item.get("red_flags"), game=item.get("game"),
-            vod_id=item.get("vod_id"))
+            vod_id=item.get("vod_id"),
+            panel_clip_id=item.get("panel_clip_id"))
         queue.add_note(
             new_item,
             f"fan-out desde youtube_shorts "
@@ -2016,13 +2067,17 @@ def _record_counter(counter_state, event, clip, platform, path=None):
 
 def publish_loop(queue=None, interval_s=300, live=False, once=False,
                  cfg=None, stop_event=None, notify_fn=None,
-                 counter_path=None, metrics_path=None):
+                 counter_path=None, metrics_path=None, bridge=None):
     """Bucle del publicador: evalúa la cola por política y publica.
 
     Una pasada por plataforma (pausadas se saltan), y espera
     interval_s entre pasadas salvo --once. Devuelve el conteo de
     acciones. `notify_fn(evento, detalle)` se llama al publicar,
     fallar o mandar a cuarentena (6.6).
+
+    PUBLICADOR ÚNICO (P0 #8): con live=True publica solo vía
+    ``bridge`` (PanelBridge al Worker); sin bridge se resuelve
+    del entorno y sin puente ningún ítem se publica.
     """
     import threading
     from . import breaker as _breaker
@@ -2057,7 +2112,8 @@ def publish_loop(queue=None, interval_s=300, live=False, once=False,
                     platform, states=("approved", "queued")):
                 result = publish_one(queue, item, cfg=cfg, live=live,
                                      mode=mode,
-                                     counter_state=counter_state)
+                                     counter_state=counter_state,
+                                     bridge=bridge)
                 action = result["action"]
                 if action in stats:
                     stats[action] += 1
@@ -2139,7 +2195,10 @@ def main(argv=None):
     p = sub.add_parser("publish", help="publicar (dry-run salvo --live)")
     p.add_argument("--clip", required=True)
     p.add_argument("--platform", default="youtube_shorts", choices=list(PLATFORMS))
-    p.add_argument("--live", action="store_true", help="subida real (YT con OAuth)")
+    p.add_argument("--live", action="store_true",
+                   help="RETIRADO (P0 #8): la subida directa ya no "
+                        "existe; usa el panel (Crear clip a mano) o "
+                        "publish loop --live con el clip en la Cola")
     p.add_argument("--privacy", default="public", choices=["public", "unlisted", "private"])
     p = sub.add_parser("status", help="estado de una plataforma")
     p.add_argument("--platform", default="youtube_shorts", choices=list(PLATFORMS))
@@ -2165,7 +2224,8 @@ def main(argv=None):
     p = sub.add_parser("loop", help="bucle automático: evalúa la cola "
                        "por política y publica (6.3)")
     p.add_argument("--live", action="store_true",
-                   help="subidas reales (sin --live, YouTube no sube)")
+                   help="encola en el Worker vía el panel (P0 #8: "
+                        "único publicador; sin --live, dry-run)")
     p.add_argument("--once", action="store_true",
                    help="una sola pasada y salir")
     p.add_argument("--interval-minutes", type=int, default=5,
@@ -2197,6 +2257,20 @@ def main(argv=None):
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0 if result.get("ok") else 1
     if args.cmd == "publish":
+        if args.live:
+            # P0 #8 (#64): la subida directa de un archivo local
+            # está retirada. El camino es crear el clip en la Cola
+            # del panel (Crear clip a mano: create_clip +
+            # upload_video) y publicar desde ahí (o con
+            # publish loop --live, que encola vía el Worker).
+            print(json.dumps({
+                "ok": False, "mode": "error",
+                "reason": "publicación directa retirada (P0 #8): "
+                          "crea el clip en la Cola del panel "
+                          "(Crear clip a mano) y publica desde ahí; "
+                          "el único publicador es el Worker"},
+                indent=2, ensure_ascii=False))
+            return 2
         pub = get_publisher(args.platform, queue)
         if args.platform == "youtube_shorts":
             result = pub.publish(args.clip, privacy=args.privacy, live=args.live)
@@ -2227,9 +2301,25 @@ def main(argv=None):
         return 0
     if args.cmd == "loop":
         from .notify import notify
+        bridge = None
+        if args.live:
+            # P0 #8: el loop publica solo vía el Worker. Sin
+            # credenciales del panel no se publica nada (nunca por
+            # adapters directos).
+            from .panel_bridge import PanelBridge
+            bridge = PanelBridge.from_env()
+            if bridge is None:
+                print(json.dumps({
+                    "ok": False, "mode": "error",
+                    "reason": "publish loop --live sin puente al "
+                              "panel (PANEL_USERNAME/PANEL_PASSWORD): "
+                              "nada se publica; el único publicador "
+                              "es el Worker"},
+                    indent=2, ensure_ascii=False))
+                return 2
         stats = publish_loop(queue, live=args.live, once=args.once,
                              interval_s=args.interval_minutes * 60,
-                             notify_fn=notify)
+                             notify_fn=notify, bridge=bridge)
         print(json.dumps(stats, indent=2, ensure_ascii=False))
         return 0
     return 0

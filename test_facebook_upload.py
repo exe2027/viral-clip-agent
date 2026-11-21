@@ -24,11 +24,20 @@ def _video(tmp, size=1024):
 
 class _FakeTransport:
     """Responde según el trozo de URL; la transferencia avanza el
-    offset según el header offset + el tamaño del chunk."""
+    offset según el header offset + el tamaño del chunk.
 
-    def __init__(self, fail_upload_at=None):
+    P0 #7: rupload acepta 206 por chunk (y 200 al completar); un
+    200/206 con cuerpo de error es error; sin end_offset se
+    pregunta al servidor (GET /{video_id}?fields=status).
+    """
+
+    def __init__(self, fail_upload_at=None, upload_status=200,
+                 upload_body=None, server_offset=None):
         self.calls = []
         self.fail_upload_at = fail_upload_at
+        self.upload_status = upload_status
+        self.upload_body = upload_body
+        self.server_offset = server_offset
 
     def __call__(self, method, url, headers, body):
         self.calls.append((method, url, headers, body))
@@ -36,14 +45,22 @@ class _FakeTransport:
             return 200, {"video_id": "vid1"}
         if "upload_phase=finish" in url:
             return 200, {"id": "post1"}
+        if "fields=status" in url:
+            if self.server_offset is None:
+                return 200, {"status": {"uploading_phase": {}}}
+            return 200, {"status": {"uploading_phase": {
+                "bytes_transfered": self.server_offset}}}
         if "rupload.facebook.com" in url:
             if self.fail_upload_at is not None:
                 return self.fail_upload_at
+            if self.upload_body is not None:
+                return self.upload_status, self.upload_body
             offset = int(headers.get("offset", 0))
             size = int(headers.get("file_size", 0))
             end = min(offset + len(body), size)
-            return 200, {"video_id": "vid1", "start_offset": offset,
-                         "end_offset": end}
+            return self.upload_status, {
+                "video_id": "vid1", "start_offset": offset,
+                "end_offset": end}
         return 404, {"error": {"code": "not_found", "message": "?"}}
 
 def _adapter(tmp, transport=None):
@@ -91,17 +108,66 @@ class TestFacebookUpload(unittest.TestCase):
         self.assertTrue(any("upload_phase=finish" in c[1]
                             for c in fn.calls))
 
-    def test_multiples_chunks_con_offset(self):
+    def test_archivo_grande_en_un_solo_post(self):
+        # P0 #7: Meta rechaza los trozos fijos de 8 MB ("Partial
+        # request"); el archivo entero (offset → EOF) va en un solo
+        # POST, aunque tenga 20 MB.
         clip = _video(self.base, size=20 * 1024 * 1024)
         fn = _FakeTransport()
         ad = _adapter(self.base, fn)
         r = ad.publish_reel("123", clip, "desc")
         self.assertTrue(r["ok"], r)
         ups = [c for c in fn.calls if "rupload" in c[1]]
-        self.assertEqual(len(ups), 3)
-        self.assertEqual(
-            [u[2]["offset"] for u in ups],
-            ["0", str(8 * 1024 * 1024), str(16 * 1024 * 1024)])
+        self.assertEqual(len(ups), 1)
+        self.assertEqual(ups[0][2]["offset"], "0")
+        self.assertEqual(ups[0][2]["file_size"], str(20 * 1024 * 1024))
+        self.assertEqual(len(ups[0][3]), 20 * 1024 * 1024)
+
+    def test_206_por_chunk_es_exito(self):
+        # P0 #7: rupload responde 206 por chunk aceptado (200 solo
+        # al completar); el 206 no es error.
+        clip = _video(self.base)
+        fn = _FakeTransport(upload_status=206)
+        ad = _adapter(self.base, fn)
+        r = ad.publish_reel("123", clip, "desc")
+        self.assertTrue(r["ok"], r)
+
+    def test_200_con_cuerpo_de_error_es_error(self):
+        # P0 #7: un 200/206 con cuerpo de error (p. ej.
+        # PartialRequestError) no es un chunk aceptado.
+        clip = _video(self.base)
+        fn = _FakeTransport(upload_body={
+            "error": {"code": 1, "message": "Partial request"},
+            "debug_info": {"type": "PartialRequestError"}})
+        ad = _adapter(self.base, fn)
+        r = ad.publish_reel("123", clip, "desc")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["mode"], "error")
+
+    def test_sin_end_offset_pregunta_al_servidor(self):
+        # P0 #7: sin end_offset no se avanza a ciegas; se pregunta
+        # al servidor cuánto guardó y se retoma desde ahí.
+        clip = _video(self.base)
+        fn = _FakeTransport(
+            upload_body={"video_id": "vid1"},
+            server_offset=1024)
+        ad = _adapter(self.base, fn)
+        r = ad.publish_reel("123", clip, "desc")
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(any("fields=status" in c[1]
+                            for c in fn.calls))
+
+    def test_sin_end_offset_y_sin_servidor_es_reintentable(self):
+        # P0 #7: sin end_offset y sin respuesta del servidor, error
+        # reintentable (el ciclo reintenta el mismo chunk).
+        clip = _video(self.base)
+        fn = _FakeTransport(upload_body={"video_id": "vid1"})
+        ad = _adapter(self.base, fn)
+        r = ad.publish_reel("123", clip, "desc")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["mode"], "error")
+        self.assertTrue(r["retryable"])
+        self.assertIn("sin end_offset", r["reason"])
 
     def test_error_5xx_en_subida_es_reintentable(self):
         clip = _video(self.base)

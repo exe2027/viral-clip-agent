@@ -13,6 +13,15 @@ otra estrategia de caja de cámara (detectada <-> default) hasta
 ``--max-intentos``; si sigue fallando, el clip queda para revisión
 humana. Un clip que falla nunca tumba el batch.
 
+P0 #4 (2026-11-21, auditoría #25): cada re-make que pasa
+recalcula el veredicto de calidad (``build_quality_gate`` sobre
+el review del intento que pasó) y lo guarda en el PATCH
+(``viral.quality_gate``): el veredicto viejo (rechazado) no
+puede quedar, porque el gate del Worker lo seguiría leyendo y
+el clip re-hecho nunca publicaría. El Worker reemplaza el
+veredicto entero (mergeViralJson), nunca lo fusiona por
+criterio.
+
 Origen del VOD: el registro del panel trae ``source_id`` (id del
 VOD de Twitch) y ``start_sec``/``end_sec``. Sin ``source_id`` el
 momento no se puede localizar automáticamente (los clips en vivo
@@ -183,6 +192,30 @@ def resolve_source(clip, source_map=None):
             f"end_sec={end} (VOD {vod_id})"
         )
     return (vod_id, start, end), ""
+
+
+def _quality_gate_for_review(review, title, no_speech):
+    """Veredicto B4 nuevo a partir del review del intento que pasó.
+
+    P0 #4 (2026-11-21, auditoría #25): al desbloquear, el
+    veredicto viejo de quality_gate quedaba en el clip y el gate
+    del Worker lo seguía leyendo (rechazado) aunque el re-make
+    pasara. Cada re-make que pasa recalcula el veredicto con
+    ``build_quality_gate`` (los 6 criterios B4 sobre el review
+    de ``validate_final_clip``) y lo guarda en el PATCH
+    (viral.quality_gate): el Worker lo reemplaza entero
+    (mergeViralJson), nunca lo fusiona por criterio. Nunca
+    levanta: sin veredicto usable devuelve pendiente_revision.
+    """
+    from .quality_gate import build_quality_gate
+    try:
+        return build_quality_gate(
+            review or {}, thumbnail_text=title,
+            no_speech=bool(no_speech))
+    except Exception:  # noqa: BLE001 - sin veredicto, a revisión
+        return {"decision": "pendiente_revision", "pasa": False,
+                "criterios": {}, "fallos": [], "fallos_duros": [],
+                "motivo": "puerta de calidad sin ejecutar"}
 
 
 def _box_str(cam_box_list):
@@ -508,6 +541,11 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
     no_speech = bool(passed.get("no_speech", False))
     # El intento que pasó es el último registrado con pasa=True;
     # su no_speech vive en el render de ese intento.
+    # P0 #4 (2026-11-21, auditoría #25): el intento que pasó es
+    # el último (el bucle rompe al pasar), así que last_review es
+    # su veredicto. Se recalcula el quality_gate con él: el viejo
+    # (rechazado) no puede quedar en el clip.
+    new_gate = _quality_gate_for_review(last_review, title, no_speech)
     try:
         bridge.upload_video(clip_id, final)
     except Exception as exc:  # noqa: BLE001 - sin subida no
@@ -524,7 +562,8 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
     if _is_published(clip):
         try:
             bridge.update_clip(
-                clip_id, {"subtitles_complete": subtitles_complete})
+                clip_id, {"subtitles_complete": subtitles_complete,
+                          "viral": {"quality_gate": new_gate}})
         except Exception as exc:  # noqa: BLE001 - el vídeo ya
             # está reemplazado; el flag es secundario.
             print(
@@ -538,12 +577,13 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
             "se borran y se republican a mano (TikTok no tiene "
             "API de borrado)",
             {"intentos": intentos, "final": final,
-             "no_speech": no_speech},
+             "no_speech": no_speech, "quality_gate": new_gate},
         )
     try:
         bridge.update_clip(clip_id, {
             "publish_blocked": 0,
             "subtitles_complete": subtitles_complete,
+            "viral": {"quality_gate": new_gate},
         })
     except Exception as exc:  # noqa: BLE001 - sin desbloqueo
         # el re-hecho no está completo: humano.
@@ -558,7 +598,7 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
         "sin voz verificable: se publica igual sin subtítulos "
         "(pasa las puertas)",
         {"intentos": intentos, "final": final,
-         "no_speech": no_speech},
+         "no_speech": no_speech, "quality_gate": new_gate},
     )
 
 

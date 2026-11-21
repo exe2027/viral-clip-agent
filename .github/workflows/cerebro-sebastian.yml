@@ -359,21 +359,26 @@ jobs:
       # Cadena completa en una pasada (tras pulsar Iniciar no hay
       # pasos manuales): el worker monolítico corre auto_clips
       # (detección de picos por chat → corte 9:16 con ffmpeg →
-      # subtítulos faster-whisper → empaquetado SEO) y encola los
-      # clips; el publish loop publica por API con --live (YouTube
-      # real; TikTok Direct Post, IG contenedor y FB 3 fases cuando
-      # sus credenciales/IDs están configurados; si falta algo, el
-      # ítem cae a draft con el motivo visible, nunca se finge una
-      # publicación). La auditoría después del bucle refleja el
-      # estado ya publicado. El agente navegador TikTok NO corre
-      # aquí (sesión persistente, misma IP y captcha humano:
-      # runner autoalojado en su PC): sus clips quedan en draft
-      # hasta que los publica el agente o se suben a mano.
+      # subtítulos faster-whisper → empaquetado SEO) y sube los
+      # clips a la Cola del panel (C8: create_clip + upload_video,
+      # solo para aprobación, NUNCA publica).
+      # PUBLICADOR ÚNICO (P0 #8, #64, 2026-11-21): el cerebro NO
+      # publica. El publish loop --live está RETIRADO de este
+      # workflow: publicaba los mismos clips por adapters directos
+      # de Python y duplicaba con el Worker. El único publicador
+      # es el Worker: su ciclo auto-encola los clips aprobados de
+      # la Cola (autoEnqueueTopClips) y publica por sus adapters
+      # (YouTube/TikTok/IG/FB) con todos los gates (franja,
+      # espaciamiento, tope diario, calentamiento, 1 por slot).
+      # La auditoría después refleja el estado de las cuentas.
+      # El agente navegador TikTok NO corre aquí (sesión
+      # persistente, misma IP y captcha humano: runner autoalojado
+      # en su PC): sus clips quedan en draft hasta que los publica
+      # el agente o se suben a mano.
       - name: Cadena completa (detectar, cortar, subtitular, publicar)
         if: steps.gate.outputs.started == 'true'
         run: |
           python -m clipagent worker --once --top-n 5
-          python -m clipagent publish loop --once --live
           python -m clipagent publish audit
           python -m clipagent status
 

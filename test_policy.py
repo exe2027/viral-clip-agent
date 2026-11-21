@@ -23,6 +23,21 @@ def base_cfg(**over):
     return cfg
 
 
+class _FakeBridge:
+    """Puente falso al panel (P0 #8): publish_clip encola en el
+    Worker."""
+
+    def __init__(self):
+        self.published = []
+
+    def publish_clip(self, clip_id):
+        self.published.append(clip_id)
+        return {"jobs": [{"id": 7, "platform": p}
+                         for p in ("youtube_shorts", "tiktok",
+                                   "instagram_reels", "facebook_reels")],
+                "blocked": []}
+
+
 def clip(virality=80, seo=95, audio_decision=None, multiple=8.0):
     c = {"peak": 100, "start": 80, "file": "clips/clip_01.mp4",
          # Categoría verificada (capítulo GTA VI del VOD) — regla
@@ -49,16 +64,16 @@ class TestEvaluate(unittest.TestCase):
         self.assertIsNotNone(r["priority"])
 
     def test_viralidad_baja_descarta(self):
-        r = policy.evaluate(clip(virality=49), "youtube_shorts",
+        r = policy.evaluate(clip(virality=44), "youtube_shorts",
                             cfg=base_cfg())
         self.assertEqual(r["decision"], "descartado")
-        self.assertIn("49", r["reason"])
+        self.assertIn("44", r["reason"])
 
-    def test_seo_89_sin_llm_retiene(self):
-        r = policy.evaluate(clip(seo=89), "youtube_shorts",
+    def test_seo_79_sin_llm_retiene(self):
+        r = policy.evaluate(clip(seo=79), "youtube_shorts",
                             cfg=base_cfg())
         self.assertEqual(r["decision"], "retenido")
-        self.assertIn("89", r["reason"])
+        self.assertIn("79", r["reason"])
 
     def test_seo_69_bloqueo_duro(self):
         r = policy.evaluate(clip(seo=69), "youtube_shorts",
@@ -66,8 +81,8 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual(r["decision"], "descartado")
         self.assertIn("70", r["reason"])
 
-    def test_override_permite_seo_89(self):
-        r = policy.evaluate(clip(seo=89), "youtube_shorts",
+    def test_override_permite_seo_79(self):
+        r = policy.evaluate(clip(seo=79), "youtube_shorts",
                             cfg=base_cfg(), seo_override=True)
         self.assertEqual(r["decision"], "publicar")
 
@@ -192,12 +207,12 @@ class TestPublishOne(unittest.TestCase):
             json.dump(manifest, f)
         q = PublishQueue(os.path.join(tmp, "pq.json"))
         item = q.enqueue(clip_path, platform, vod_id="v1",
-                         moment_key=["v1", 8])
+                         moment_key=["v1", 8], panel_clip_id=123)
         return q, item, clip_path
 
     def test_retenido_por_seo(self):
         with tempfile.TemporaryDirectory() as tmp:
-            q, item, _ = self._setup(tmp, seo=85)
+            q, item, _ = self._setup(tmp, seo=79)
             with mock.patch("clipagent.publish._now_chile") as now:
                 import datetime
                 now.return_value = datetime.datetime(
@@ -215,16 +230,13 @@ class TestPublishOne(unittest.TestCase):
             r = publish_one(q, item, cfg=base_cfg(), live=False)
             self.assertEqual(r["action"], "discarded")
 
-    def test_publica_youtube_con_mock(self):
+    def test_publica_youtube_por_el_puente(self):
+        # P0 #8: la subida ya no va por el adapter de YouTube
+        # (get_publisher) sino por el puente al Worker.
         with tempfile.TemporaryDirectory() as tmp:
             q, item, clip_path = self._setup(tmp)
-            fake_pub = mock.Mock()
-            fake_pub.publish.return_value = {
-                "ok": True, "video_id": "xyz",
-                "url": "https://www.youtube.com/shorts/xyz"}
+            bridge = _FakeBridge()
             with mock.patch("clipagent.publish._now_chile") as now, \
-                    mock.patch("clipagent.publish.get_publisher",
-                               return_value=fake_pub), \
                     mock.patch("clipagent.publish.check_limits",
                                return_value=(True, "ok")):
                 import datetime
@@ -232,39 +244,26 @@ class TestPublishOne(unittest.TestCase):
                     2026, 11, 17, 20, 0,
                     tzinfo=datetime.timezone(
                         datetime.timedelta(hours=-3)))
-                r = publish_one(q, item, cfg=base_cfg(), live=True)
+                r = publish_one(q, item, cfg=base_cfg(), live=True,
+                                bridge=bridge)
             self.assertEqual(r["action"], "published")
+            self.assertEqual(bridge.published, [123])
             self.assertEqual(q._find(clip_path,
                                      "youtube_shorts")["state"], "published")
 
-    def test_tiktok_sin_directo_cae_a_draft(self):
+    def test_tiktok_sin_puente_cae_a_draft(self):
+        # P0 #8: sin puente al panel no se publica por adapters
+        # directos (el directo de TikTok está retirado): a draft.
         with tempfile.TemporaryDirectory() as tmp:
             q, item, clip_path = self._setup(tmp, platform="tiktok")
             with mock.patch("clipagent.publish.check_limits",
-                           return_value=(True, "ok")):
+                           return_value=(True, "ok")), \
+                    mock.patch("clipagent.panel_bridge.PanelBridge"
+                               ".from_env", return_value=None):
                 r = publish_one(q, item, cfg=base_cfg(), live=True)
             self.assertEqual(r["action"], "draft")
             self.assertEqual(q._find(clip_path, "tiktok")["state"],
                              "draft")
-
-
-class TestWorkerEnqueue(unittest.TestCase):
-    def test_encola_por_plataforma_del_streamer(self):
-        from worker import _enqueue_clips_for_publish
-        with tempfile.TemporaryDirectory() as tmp:
-            run_dir = os.path.join(tmp, "runs", "v1")
-            os.makedirs(os.path.join(run_dir, "clips"), exist_ok=True)
-            clip_path = os.path.join(run_dir, "clips", "c1.mp4")
-            with open(clip_path, "wb") as f:
-                f.write(b"x")
-            manifest = {"vod_id": "v1",
-                        "clips": [{"file": "clips/c1.mp4", "start": 80,
-                                   "moment_card": {"game": "GTA 6"}}]}
-            job = {"out_dir": run_dir, "streamer": "illojuan"}
-            with mock.patch("clipagent.publish.QUEUE_STATE_FILE",
-                           os.path.join(tmp, "pq.json")):
-                n = _enqueue_clips_for_publish(job, manifest, [])
-            self.assertEqual(n, 4)  # illojuan publica en las 4
 
 
 class TestNoSpeech(unittest.TestCase):

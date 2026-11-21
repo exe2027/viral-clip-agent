@@ -227,19 +227,20 @@ def test_pipeline_advances_vod_to_picos_to_corte(store, tmp_path,
                for c in cortes)
 
 
-def test_pipeline_empaquetar_autoencola_tiktok(store, tmp_path,
-                                               monkeypatch):
-    # 2026-11-18 (100% automático): validación final del preview
-    # ENCENDIDA por defecto. Sin GEMINI_API_KEY, Gemini no puede
-    # validar y el clip queda pendiente: se auto-encola publicar
-    # en modo draft para revisión humana, nunca en api. El resto
-    # de puertas las aplica publish_one al ejecutar ese job.
+def test_pipeline_empaquetar_pendiente_no_autoencola(
+        store, tmp_path, monkeypatch):
+    # P0 #8: validación final del preview ENCENDIDA por defecto.
+    # Sin GEMINI_API_KEY, Gemini no puede validar y el clip queda
+    # pendiente: ANTES se auto-encolaba publicar en modo draft
+    # para revisión humana; AHORA no se encola nada (el publish
+    # loop --live está retirado y el Worker es el único
+    # publicador). El clip queda en local para revisión humana.
     # El gate se mockea con el veredicto que produce sin Gemini
-    # (pendiente): este test cubre el ENRUTADO del pipeline
-    # (pendiente -> draft), no el gate. El clip es falso (10
-    # bytes, sin fotogramas): el gate real lo rechazaría por "sin
-    # fotogramas" y nunca llegaría a pendiente (el gate sobre
-    # vídeos reales se cubre en test_final_gate.py).
+    # (pendiente): este test cubre el ENRUTADO del pipeline, no
+    # el gate. El clip es falso (10 bytes, sin fotogramas): el
+    # gate real lo rechazaría por "sin fotogramas" y nunca
+    # llegaría a pendiente (el gate sobre vídeos reales se cubre
+    # en test_final_gate.py).
     import clipagent.final_review as _fr
     monkeypatch.setattr(
         _fr, "validate_final_clip",
@@ -260,18 +261,14 @@ def test_pipeline_empaquetar_autoencola_tiktok(store, tmp_path,
         "out_path": str(tmp_path / "clip.package.json")})
     done = run_step(store, job["id"], cfg={})
     assert done["estado"] == "done"
-    pubs = store.list_jobs(paso="publicar")
-    assert len(pubs) == 1
-    assert pubs[0]["plataforma"] == "tiktok"
-    assert pubs[0]["payload"]["mode"] == "draft"
-    assert pubs[0]["payload"]["final_review"] == "pendiente_revision"
-    assert pubs[0]["payload"]["clip"] == str(clip)
+    assert store.list_jobs(paso="publicar") == []
 
 
-def test_pipeline_empaquetar_validacion_apagada_autoencola_api(
+def test_pipeline_empaquetar_validacion_apagada_no_autoencola(
         store, tmp_path):
-    # Con la validación apagada explícitamente, el comportamiento
-    # de antes: publicar en modo api.
+    # P0 #8: con la validación apagada explícitamente TAMPOCO se
+    # auto-encola publicar (antes salía en modo api). La cadena
+    # local termina en empaquetar.
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"v" * 10)
     job = store.enqueue("c1", "empaquetar", payload={
@@ -280,10 +277,7 @@ def test_pipeline_empaquetar_validacion_apagada_autoencola_api(
     done = run_step(store, job["id"],
                     cfg={"final_review": {"enabled": False}})
     assert done["estado"] == "done"
-    pubs = store.list_jobs(paso="publicar")
-    assert len(pubs) == 1
-    assert pubs[0]["payload"]["mode"] == "api"
-    assert pubs[0]["payload"]["clip"] == str(clip)
+    assert store.list_jobs(paso="publicar") == []
 
 
 def test_pipeline_empaquetar_bloqueado_no_autoencola(store, tmp_path):

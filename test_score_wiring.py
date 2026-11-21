@@ -154,6 +154,21 @@ class TestRegressionExamples(unittest.TestCase):
             self.assertLessEqual(abs(new[key] - old), 0.25 * old + 1e-9)
 
 
+class _FakeBridge:
+    """Puente falso al panel (P0 #8): publish_clip encola en el
+    Worker."""
+
+    def __init__(self):
+        self.published = []
+
+    def publish_clip(self, clip_id):
+        self.published.append(clip_id)
+        return {"jobs": [{"id": 7, "platform": p}
+                         for p in ("youtube_shorts", "tiktok",
+                                   "instagram_reels", "facebook_reels")],
+                "blocked": []}
+
+
 class TestHardFilters(unittest.TestCase):
     """6B.8(b)(c)(e): los filtros duros se aplican de verdad."""
 
@@ -168,7 +183,8 @@ class TestHardFilters(unittest.TestCase):
         q = PublishQueue(os.path.join(tmp, "pq.json"))
         item = q.enqueue(os.path.join(clips_dir, "c1.mp4"),
                          "youtube_shorts", vod_id="v1",
-                         moment_key=["v1", start // 10])
+                         moment_key=["v1", start // 10],
+                         panel_clip_id=123)
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["autopublish"]["mode"] = "full"
         self.now = datetime.datetime(2026, 11, 17, 20, 0,
@@ -187,56 +203,52 @@ class TestHardFilters(unittest.TestCase):
             self.addCleanup(p.stop)
         return q, item, cfg
 
-    def test_viralidad_49_no_se_publica(self):
-        # 6B.8(b)
+    def test_viralidad_44_no_se_publica(self):
+        # 6B.8(b). Puerta de viralidad 45 (P0 #3: antes 50).
         from clipagent.publish import publish_one
         with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = self._setup(tmp, 49, 95)
+            q, item, cfg = self._setup(tmp, 44, 95)
             r = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r["action"], "discarded")
-            self.assertIn("viralidad 49", r["reason"])
+            self.assertIn("viralidad 44", r["reason"])
 
-    def test_seo_89_sin_override_no_se_publica(self):
+    def test_seo_79_sin_override_no_se_publica(self):
         # 6B.8(c): sin LLM no hay reintento: queda retenido.
+        # Puerta SEO 80 (P0 #3: antes 90).
         from clipagent.publish import publish_one
         with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = self._setup(tmp, 80, 89)
+            q, item, cfg = self._setup(tmp, 80, 79)
             r = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r["action"], "retained")
-            self.assertIn("SEO 89", r["reason"])
+            self.assertIn("SEO 79", r["reason"])
 
-    def test_seo_89_con_override_de_usuario_si_se_publica(self):
+    def test_seo_79_con_override_de_usuario_si_se_publica(self):
         # 6B.5: el override SOLO lo registra el usuario (desde el
-        # panel); con él registrado, el mismo clip se publica.
-        from unittest import mock
+        # panel); con él registrado, el mismo clip se publica
+        # (P0 #8: por el puente al Worker, no por el adapter).
         from clipagent.publish import publish_one
         from clipagent.seo_score import register_override
         with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = self._setup(tmp, 80, 89)
+            q, item, cfg = self._setup(tmp, 80, 79)
             run_dir = os.path.join(tmp, "runs", "v1")
             with open(os.path.join(run_dir, "manifest.json"),
                       encoding="utf-8") as f:
                 manifest = json.load(f)
-            register_override(manifest, "youtube_shorts", 89,
+            register_override(manifest, "youtube_shorts", 79,
                               "revisado a mano en el panel")
             with open(os.path.join(run_dir, "manifest.json"), "w",
                       encoding="utf-8") as f:
                 json.dump(manifest, f)
-            fake_pub = mock.Mock()
-            fake_pub.publish.return_value = {
-                "ok": True, "video_id": "xyz",
-                "url": "https://www.youtube.com/shorts/xyz"}
-            with mock.patch("clipagent.publish.get_publisher",
-                           return_value=fake_pub):
-                r = publish_one(q, item, cfg=cfg, live=True)
+            r = publish_one(q, item, cfg=cfg, live=True,
+                            bridge=_FakeBridge())
             self.assertEqual(r["action"], "published", r)
 
     def test_sin_override_automatico_en_el_manifiesto(self):
-        # 6B.5: tras retener un SEO 89, el manifiesto NO gana ningún
+        # 6B.5: tras retener un SEO 79, el manifiesto NO gana ningún
         # override solo: ningún automatismo los registra.
         from clipagent.publish import publish_one
         with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = self._setup(tmp, 80, 89)
+            q, item, cfg = self._setup(tmp, 80, 79)
             publish_one(q, item, cfg=cfg, live=True)
             with open(os.path.join(tmp, "runs", "v1", "manifest.json"),
                       encoding="utf-8") as f:
@@ -270,28 +282,26 @@ class TestHardFilters(unittest.TestCase):
             for c in clips:
                 items.append(q.enqueue(
                     os.path.join(clips_dir, c["file"]), "youtube_shorts",
-                    vod_id="v1", moment_key=["v1", 8]))
+                    vod_id="v1", moment_key=["v1", 8],
+                    panel_clip_id=123))
             import copy
             from clipagent.config import DEFAULT_CONFIG
             cfg = copy.deepcopy(DEFAULT_CONFIG)
             cfg["autopublish"]["mode"] = "full"
-            fake_pub = mock.Mock()
-            fake_pub.publish.return_value = {
-                "ok": True, "video_id": "xyz",
-                "url": "https://www.youtube.com/shorts/xyz"}
+            bridge = _FakeBridge()
             now = datetime.datetime(2026, 11, 17, 20, 0,
                                     tzinfo=datetime.timezone(
                                         datetime.timedelta(hours=-3)))
             with mock.patch("clipagent.publish._now_chile",
                            return_value=now), \
-                    mock.patch("clipagent.publish.get_publisher",
-                               return_value=fake_pub), \
                     mock.patch("clipagent.publish.check_limits",
                                return_value=(True, "ok")), \
                     mock.patch("clipagent.accounts.is_new_account",
                                return_value=False):
-                r1 = publish_one(q, items[0], cfg=cfg, live=True)
-                r2 = publish_one(q, items[1], cfg=cfg, live=True)
+                r1 = publish_one(q, items[0], cfg=cfg, live=True,
+                                 bridge=bridge)
+                r2 = publish_one(q, items[1], cfg=cfg, live=True,
+                                 bridge=bridge)
             self.assertEqual(r1["action"], "published")
             self.assertEqual(r2["action"], "retained")
             self.assertIn("mismo momento", r2["reason"])

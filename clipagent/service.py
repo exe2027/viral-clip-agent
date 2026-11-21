@@ -70,14 +70,14 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE_PID_FILE = os.path.join(REPO_ROOT, "service.pid")
 KILL_SWITCH_PATH = os.path.join(REPO_ROOT, "queue.kill")
 
-# Hijos del servicio (6.1/6.3): watcher, worker y el bucle del
-# publicador (con --live: publica de verdad según la política 6.3;
-# en modo gradual, nada se publica hasta la fase 4 de counter.py).
+# Hijos del servicio (6.1/6.3): watcher y worker. El bucle del
+# publicador (publisher.py loop --live) se RETIRÓ en P0 #8 (#64,
+# 2026-11-21): publicaba por adapters directos de Python y
+# duplicaba con el Worker, el único publicador. El supervisor ya
+# no arranca ningún publicador.
 DEFAULT_CHILDREN = [
     ("watcher", [sys.executable, "watcher.py", "--loop", "--live"]),
     ("worker", [sys.executable, "worker.py"]),
-    ("publisher", [sys.executable, "-m", "clipagent", "publish",
-                   "loop", "--live"]),
 ]
 
 # Reinicios: si un hijo muere más de MAX_RESTARTS veces en

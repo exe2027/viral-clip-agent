@@ -194,6 +194,63 @@ class TestClassifyAudit(unittest.TestCase):
         self.assertEqual(rec["accion"], "avisar-humano")
 
 
+class TestTranscribeClipToSrt(unittest.TestCase):
+    def _transcript(self):
+        return {
+            "segments": [
+                {"words": [
+                    {"word": "hola", "start": 0.5, "end": 0.9},
+                    {"word": "mundo", "start": 1.0, "end": 1.4},
+                ]},
+            ],
+            "language": "es",
+        }
+
+    def test_genera_srt_con_palabras(self):
+        import clipagent.transcribe as tr
+
+        def fake_generate_srt(transcript, start, end, out):
+            with open(out, "w", encoding="utf-8") as f:
+                f.write("1\n00:00:00,500 --> 00:00:01,400\n"
+                        "hola mundo\n")
+            return True, 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = os.path.join(tmp, "clip_11.srt")
+            # transcribe_clip_to_srt importa de .transcribe dentro
+            # de la función: se mockea ahí.
+            with mock.patch.object(
+                tr, "transcribe_audio",
+                return_value=(self._transcript(), {}),
+            ), mock.patch.object(
+                tr, "generate_srt", side_effect=fake_generate_srt,
+            ):
+                got = va.transcribe_clip_to_srt(
+                    "/tmp/clip_11.mp4", tmp, 11, "es")
+            self.assertEqual(got, srt)
+            self.assertTrue(os.path.isfile(srt))
+
+    def test_sin_voz_devuelve_none(self):
+        import clipagent.transcribe as tr
+        with mock.patch.object(
+            tr, "transcribe_audio",
+            return_value=({"no_speech": True, "segments": []}, {}),
+        ):
+            got = va.transcribe_clip_to_srt(
+                "/tmp/clip_11.mp4", "/tmp", 11, "es")
+        self.assertIsNone(got)
+
+    def test_transcripcion_que_falla_devuelve_none(self):
+        import clipagent.transcribe as tr
+        with mock.patch.object(
+            tr, "transcribe_audio",
+            side_effect=RuntimeError("sin ffmpeg"),
+        ):
+            got = va.transcribe_clip_to_srt(
+                "/tmp/clip_11.mp4", "/tmp", 11, "es")
+        self.assertIsNone(got)
+
+
 class TestValidateOne(unittest.TestCase):
     def test_sin_video_no_llama_al_validador(self):
         validate = mock.Mock()
@@ -211,7 +268,8 @@ class TestValidateOne(unittest.TestCase):
         download = mock.Mock(return_value="/tmp/clip_10.mp4")
         validate = mock.Mock(side_effect=RuntimeError("boom"))
         rec = va.validate_one(
-            _clip(10), "/tmp", download_fn=download, validate_fn=validate
+            _clip(10), "/tmp", download_fn=download, validate_fn=validate,
+            transcribe_fn=lambda *a: None,
         )
         self.assertEqual(rec["outcome"], "error")
         self.assertEqual(rec["accion"], "avisar-humano")
@@ -220,10 +278,34 @@ class TestValidateOne(unittest.TestCase):
         download = mock.Mock(return_value="/tmp/clip_11.mp4")
         validate = mock.Mock(return_value=_veredicto(True))
         rec = va.validate_one(
-            _clip(11), "/tmp", download_fn=download, validate_fn=validate
+            _clip(11), "/tmp", download_fn=download, validate_fn=validate,
+            transcribe_fn=lambda *a: None,
         )
         self.assertEqual(rec["plantilla"], "rubius")
         self.assertEqual(rec["outcome"], "pasa")
+
+    def test_pasa_el_srt_transcrito_al_validador(self):
+        download = mock.Mock(return_value="/tmp/clip_11.mp4")
+        validate = mock.Mock(return_value=_veredicto(True))
+        rec = va.validate_one(
+            _clip(11), "/tmp", download_fn=download, validate_fn=validate,
+            transcribe_fn=lambda *a: "/tmp/clip_11.srt",
+        )
+        self.assertEqual(rec["outcome"], "pasa")
+        validate.assert_called_once()
+        _args, kwargs = validate.call_args
+        self.assertEqual(kwargs.get("srt_path"), "/tmp/clip_11.srt")
+
+    def test_sin_srt_valida_sin_srt(self):
+        download = mock.Mock(return_value="/tmp/clip_11.mp4")
+        validate = mock.Mock(return_value=_veredicto(True))
+        rec = va.validate_one(
+            _clip(11), "/tmp", download_fn=download, validate_fn=validate,
+            transcribe_fn=lambda *a: None,
+        )
+        self.assertEqual(rec["outcome"], "pasa")
+        _args, kwargs = validate.call_args
+        self.assertIsNone(kwargs.get("srt_path"))
 
 
 class TestRunBatch(unittest.TestCase):
@@ -233,7 +315,7 @@ class TestRunBatch(unittest.TestCase):
                 f.write(b"x")
             return dest
 
-        def validate(path, title, plantilla=None, cfg=None):
+        def validate(path, title, plantilla=None, cfg=None, srt_path=None):
             clip_id = int(os.path.basename(path).split("_")[1].split(".")[0])
             return results[clip_id]
 
@@ -268,6 +350,7 @@ class TestRunBatch(unittest.TestCase):
                 download_fn=download,
                 validate_fn=validate,
                 default_template="rubius",
+                transcribe_fn=lambda *a: None,
             )
             self.assertEqual(payload["resumen"]["total"], 4)
             self.assertEqual(payload["resumen"]["pasa"], 1)
@@ -302,6 +385,7 @@ class TestRunBatch(unittest.TestCase):
                 modo="panel",
                 download_fn=download,
                 validate_fn=validate,
+                transcribe_fn=lambda *a: None,
             )
             self.assertEqual(payload["resumen"]["total"], 3)
             self.assertEqual(payload["resumen"]["pasa"], 2)

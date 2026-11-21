@@ -90,12 +90,14 @@ def step_compute_requirements():
 RETAINED_RETRY_S = 24 * 3600
 #: Duración de un clip cortado a partir de un pico.
 #: REGLAS 2026-11-18 (usuario): 60 s es el TOPE DURO, no la duración;
-#: el objetivo es 40 s (20 s pre-roll + 20 s tras el pico) y el mínimo
-#: es 40 s (nunca menos de 40; el clip de 38 s de Rubius p2010 queda
-#: fuera). El rango 25-35 sigue prohibido (regla de oro).
+#: el objetivo es 40 s (20 s pre-roll + 20 s tras el pico).
+#: La regla 40-60 / 25-35 fue ELIMINADA por el usuario el
+#: 2026-11-21 08:47 ("para siempre, en todo el canal"): no hay
+#: mínimo ni rango prohibido, solo el tope de 60 s (P0 #6).
+#: CLIP_MIN_DURATION_S se eliminó con ella; la duración pedida
+#: solo se recorta al tope (ver _cut_peaks).
 CLIP_PRE_S = 20             # empieza 20 s antes del pico
 CLIP_DURATION_S = 40        # objetivo: 40 s por clip
-CLIP_MIN_DURATION_S = 40    # mínimo: ningún clip por debajo de 40 s
 CLIP_MAX_DURATION_S = 60    # tope duro: ningún clip por encima de 60 s
 
 
@@ -955,12 +957,12 @@ def advance_pipeline(store, job, result, cfg=None):
         clips_dir = os.path.join(out_dir, "clips")
         for i, peak in enumerate(peaks, 1):
             start = max(0.0, float(peak["start"]) - CLIP_PRE_S)
-            # Regla 2026-11-18: la duración pedida se sujeta al rango
-            # [40, 60] s (mínimo 40, tope duro 60); un pedido corto se
-            # alarga hasta 40, nunca se deja un clip de 21 s ni de 38 s.
+            # Regla 2026-11-21 08:47 (P0 #6): la duración 40-60 /
+            # 25-35 fue eliminada; solo queda el tope duro de 60 s.
+            # La duración pedida solo se recorta al tope, nunca se
+            # alarga hasta 40.
             dur = float(payload.get("duration", CLIP_DURATION_S))
-            dur = max(CLIP_MIN_DURATION_S,
-                      min(CLIP_MAX_DURATION_S, dur))
+            dur = min(CLIP_MAX_DURATION_S, dur)
             out = os.path.join(clips_dir, f"clip_{i:02d}.mp4")
             p = dict(payload)
             p.update({"video": video, "start_sec": start,
@@ -1003,30 +1005,26 @@ def advance_pipeline(store, job, result, cfg=None):
 
 
 def _advance_empaquetar_to_publish(store, job, result, cfg=None):
-    """empaquetar -> publicar (TikTok, mode api, automático).
+    """empaquetar -> (fin de la cadena local).
 
-    Puerta dura de subtítulos (regla 2026-11-17 22:10, matizada
-    2026-11-19 18:41): publish_blocked explícito -> no se encola
-    nada y la cadena se detiene con motivo visible. Sin voz
-    verificable (no_speech) -> solo se frena si NO pasa las
-    puertas (policy.no_speech_blocked, viralidad/SEO de
-    config.yaml): sin voz + buen score se publica igual sin
-    subtítulos. Sin clip o sin archivo -> tampoco. En el resto, el
-    job de publicar en modo api pasa por publish_one, que aplica
-    el resto de puertas (viralidad, SEO, duración, topes, lista
-    blanca); si no las pasa, queda retenido/descartado, nunca se
-    publica. Sin scores en el payload no se puede probar que pase
-    las puertas: se frena (falla cerrado).
-    Idempotente: store.enqueue no duplica por clave.
+    PUBLICADOR ÚNICO (P0 #8, #64, 2026-11-21): este paso YA NO
+    auto-encola el job local "publicar" (TikTok, mode api/draft):
+    lo ejecutaba el publish loop --live por adapters directos y
+    duplicaba con el Worker. La cadena local termina en
+    empaquetar: el clip queda en disco + manifiesto. Para
+    publicarlo, súbelo a la Cola del panel (Crear clip a mano) o
+    usa el worker monolítico (worker.py), que sube los clips al
+    panel al terminar y el ciclo del Worker los publica. El
+    cableado de PanelBridge en este pipeline legacy queda
+    pendiente (ver AUDITORIA.md #64).
 
-    Validación final del preview (2026-11-18, final_review.py):
-    DESPUÉS del render y ANTES de auto-encolar. Puerta DURA de
-    cara + plantilla (2026-11-19): rechazado -> no se encola nada.
-    Pendiente (sin Gemini) -> el job se encola en modo draft para
-    revisión humana, nunca en api. ENCENDIDA por defecto
-    (2026-11-18 22:57); desactivada explícitamente
-    (final_review.enabled=False) -> comportamiento de antes
-    (mode api).
+    Lo que SÍ se mantiene: la validación final del preview
+    (final_review.py) DESPUÉS del render y ANTES de dar el paso
+    por bueno. Puerta DURA de cara + plantilla (2026-11-19):
+    rechazado -> la cadena se detiene con motivo visible para
+    revisión humana (nunca en silencio). Pendiente (sin Gemini)
+    -> también se detiene (el clip queda en local para revisión
+    humana). El veredicto queda registrado en el log del job.
     """
     from .policy import no_speech_blocked
     payload = dict(job["payload"] or {})
@@ -1051,18 +1049,10 @@ def _advance_empaquetar_to_publish(store, job, result, cfg=None):
                    "publicar")
         return []
     # Validación final del preview (2026-11-18, final_review.py):
-    # DESPUÉS del render y ANTES de auto-encolar. Puerta DURA de
-    # cara + plantilla (2026-11-19, validate_final_clip): si la
-    # cara o la plantilla fallan, NO se encola nada y la cadena se
-    # detiene con motivo visible para revisión humana (nunca en
-    # silencio); el re-render automático en este camino queda
-    # pendiente de poder pasar una config por job al paso "corte"
-    # (hoy la cfg es global del run_step). Pendiente (sin Gemini)
-    # -> el job se encola en modo draft para revisión humana, nunca
-    # en api. ENCENDIDA por defecto (2026-11-18 22:57);
-    # desactivada explícitamente (final_review.enabled=False) ->
-    # comportamiento de antes (mode api). Sin config del gate,
-    # ConfigError: falla en voz alta, nunca con defaults.
+    # DESPUÉS del render y ANTES de dar el paso por bueno. Puerta
+    # DURA de cara + plantilla (2026-11-19, validate_final_clip):
+    # si la cara o la plantilla fallan, la cadena se detiene con
+    # motivo visible para revisión humana (nunca en silencio).
     from .final_review import (
         transcript_text_for_srt, validate_final_clip)
     transcript = (payload.get("transcript_text") or
@@ -1085,19 +1075,13 @@ def _advance_empaquetar_to_publish(store, job, result, cfg=None):
                       if final_review.get("needs_human_review")
                       else ""))
         return []
-    mode = "draft" if decision == "pendiente_revision" else "api"
-    pub = store.enqueue(
-        job["clip_id"], "publicar", plataforma="tiktok",
-        payload={"clip": clip, "mode": mode,
-                 "streamer": payload.get("streamer"),
-                 "vod_id": payload.get("vod_id"),
-                 "final_review": decision},
-        prioridad=job.get("prioridad", 0),
-        vod_job_id=job.get("vod_job_id"))
+    # Aprobado o pendiente: la cadena local termina aquí. El clip
+    # queda en disco; la publicación es solo por el panel/Worker.
     store._log(job["id"], "pipeline_advance",
-               f"empaquetar -> publicar (tiktok, mode {mode}, "
-               f"validación final: {decision})")
-    return [pub]
+               "empaquetar -> fin (P0 #8): sin job local publicar; "
+               "el clip queda en local para subirlo a la Cola del "
+               "panel")
+    return []
 
 
 def bridge_legacy_queue(store, queue, limit=1):

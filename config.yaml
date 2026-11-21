@@ -408,7 +408,7 @@ autopublish:
   # política 6.3 sin pasar por las fases.
   mode: gradual
 
-# Umbrales duros del sistema de puntaje (6B.2): por defecto 90/50.
+# Umbrales duros del sistema de puntaje (6B.2): 80/45.
 # Si se bajan, queda registrado con fecha en scoring_changes.log.
 # BAJADOS 2026-11-19 por orden del usuario: el SEO 81-86 moría en
 # 90 y los picos con viralidad 48-49 morían en la revisión (Gemini

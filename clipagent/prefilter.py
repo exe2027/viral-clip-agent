@@ -19,7 +19,7 @@ render RDJavi). Solo los picos que pasan el pre-filtro llegan a
   * NO reemplaza ``hype_score`` v2 ni el score de viralidad de
     7 componentes ni la fórmula de prioridad
     (viralidad^0,5 x SEO^0,3 x chat_norm^0,2) ni los filtros duros
-    (viralidad >= 50, SEO >= 90).
+    (viralidad >= 45, SEO >= 80).
   * NO cambia la duración (40-60 s), los subtítulos (siempre y
     completos) ni el layout (RDJavi). El corte simple de Óscar
     (fondo difuminado) NO se agrega: el look final sigue siendo

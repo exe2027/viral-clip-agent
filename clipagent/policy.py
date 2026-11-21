@@ -8,7 +8,7 @@ atrás salvo override del usuario desde el panel).
 La política usa los puntajes de la Fase 6 bis SIN tocar sus
 fórmulas: publish_status de priority.py decide por viralidad/SEO,
 y los umbrales se leen de config.yaml (scoring.seo_gate,
-scoring.viral_min) con los valores por defecto 90/50. Si el
+scoring.viral_min) con los valores por defecto 80/45. Si el
 usuario los baja, queda registrado con fecha en scoring_changes.log.
 
 Ningún "override" automático: los overrides solo los registra el
@@ -35,7 +35,7 @@ SCORING_LOG = os.path.join(
 def load_scoring_config(cfg=None):
     """(seo_gate, viral_min) desde config.yaml `scoring:`.
 
-    Por defecto 90/50 (los de priority.py). Si el usuario los baja,
+    Por defecto 80/45 (los de priority.py). Si el usuario los baja,
     queda registrado con fecha en scoring_changes.log (6B.2): los
     umbrales no se cambian solos ni en silencio.
     """
@@ -158,7 +158,7 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
 
     `clip` es la entrada del manifiesto (viral_score, seo_scores,
     audio, peak, start). `make_variant` es el generador de variantes
-    del LLM (6B.4): sin él, un SEO 70-89 queda retenido.
+    del LLM (6B.4): sin él, un SEO 70-79 queda retenido.
     """
     checks = []
     seo_gate, viral_min = load_scoring_config(cfg)
@@ -327,7 +327,7 @@ def render_gate(viral_total, seo_scores, seo_override=False, cfg=None,
     y SEO >= seo_gate en al menos una plataforma).
 
     Es la misma puerta que la de publicación (``publish_status`` por
-    plataforma, umbrales de ``load_scoring_config``: 50/90 por
+    plataforma, umbrales de ``load_scoring_config``: 45/80 por
     defecto), aplicada ANTES de gastar render: primero se detecta el
     pico y se puntúa, y solo si pasa se corta y se renderiza. Si no
     pasa, se descarta sin render.
@@ -335,7 +335,7 @@ def render_gate(viral_total, seo_scores, seo_override=False, cfg=None,
     El clip se corta si se puede publicar en AL MENOS UNA plataforma
     (max SEO >= puerta): la puerta por plataforma sigue vigente en
     publicación (``evaluate`` / publishGate del panel), que frena las
-    demás. Si el usuario quería las 4 plataformas >= 90, el cambio
+    demás. Si el usuario quería las 4 plataformas >= 80, el cambio
     es una línea (max -> min); preguntar antes de cambiarlo.
 
     ``seo_scores``: {plataforma: score} o {plataforma: {"score": n}}.

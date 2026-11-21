@@ -291,7 +291,10 @@ class TestProcessPeakReal(unittest.TestCase):
 
 
 class TestEnqueueDraftDefault(unittest.TestCase):
-    def test_publicable_queda_en_draft_no_publico(self):
+    def test_publicable_en_draft_no_crea_job_local(self):
+        # P0 #8: publicable sin auto_publish -> el clip queda en
+        # la Cola del panel como borrador; ya no se crea ningún
+        # job local (el publish loop --live está retirado).
         from clipagent.jobs import StepJobs
         with tempfile.TemporaryDirectory() as tmp:
             store = StepJobs(os.path.join(tmp, "queue.db"))
@@ -311,11 +314,8 @@ class TestEnqueueDraftDefault(unittest.TestCase):
                                   "status": "bloqueado_seo",
                                   "reason": "SEO 80 < 90"}}}
                 created = session._enqueue_publish(record)
-                self.assertEqual(len(created), 1)
-                self.assertEqual(created[0][0], "youtube_shorts")
-                self.assertEqual(created[0][2], "draft")
-                job = store.get(created[0][1])
-                self.assertEqual(job["payload"].get("mode"), "draft")
+                self.assertEqual(created, [])
+                self.assertEqual(store.counts().get("pending", 0), 0)
             finally:
                 store.close()
 
@@ -513,12 +513,12 @@ class TestFinalizePackageUmbrales(unittest.TestCase):
                     pkg["publish_status"][platform]["status"],
                     "publicable", platform)
 
-    def test_viral_49_no_pasa_con_defectos_90_50(self):
+    def test_viral_44_no_pasa_con_defectos_80_45(self):
         from clipagent.live_cutter import finalize_package
         seo = {"youtube_shorts": 85, "tiktok": 88,
                "instagram_reels": 90, "facebook_reels": 82}
         with tempfile.TemporaryDirectory() as tmp:
-            pkg = finalize_package(self._package(tmp, seo), 49.0, 2.0,
+            pkg = finalize_package(self._package(tmp, seo), 44.0, 2.0,
                                    cfg={})
             for platform in seo:
                 self.assertEqual(

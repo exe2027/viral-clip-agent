@@ -9,11 +9,11 @@ no solo en docs:
 2. Los subtítulos NO pueden tapar la cara del influencer / webcam.
 
 Reglas codificadas aquí (config.yaml `rules:`, clipagent/config.py
-RULES_*): entre 40 y 60 s (mínimo 40 s desde la decisión del usuario
-2026-11-18, que reemplaza el mínimo 36 s de 2026-11-17), objetivo
-40 s, tope duro 60 s, prohibido 25-35 s (regla de oro: ningún clip
-de 30 s), pre-roll 20 s antes del pico, subtítulos siempre en la
-zona de juego (MarginV 230 ref, mínimo 200), nunca tapar minimapa ni HUD,
+RULES_*): SIN mínimo ni rango prohibido desde 2026-11-21 08:47
+(el usuario eliminó la regla 40-60 / 25-35 "para siempre, en todo
+el canal"): mínimo 1 s, objetivo 40 s, tope duro 60 s, pre-roll
+20 s antes del pico, subtítulos siempre en la zona de juego
+(MarginV 230 ref, mínimo 200), nunca tapar minimapa ni HUD,
 nunca afirmar un juego no verificado y nunca quemar subtítulos
 alucinados (manda la transcripción corregida por el usuario).
 """
@@ -52,7 +52,6 @@ from clipagent.transcribe import (
 from clipagent.workers import (
     CLIP_DURATION_S,
     CLIP_MAX_DURATION_S,
-    CLIP_MIN_DURATION_S,
     CLIP_PRE_S,
 )
 
@@ -65,58 +64,52 @@ def _words(starts):
 
 
 class TestReglasDuracion20261117(unittest.TestCase):
-    def test_minimo_40_objetivo_40_tope_60(self):
-        # Decisión del usuario 2026-11-18: entre 40 y 60 s (reemplaza
-        # el mínimo 36 s de 2026-11-17).
-        self.assertEqual(RULES_MIN_DURATION_S, 40)
+    def test_sin_minimo_objetivo_40_tope_60(self):
+        # Regla 40-60 / 25-35 ELIMINADA por el usuario 2026-11-21
+        # 08:47 ("para siempre, en todo el canal", P0 #6): sin
+        # mínimo (1 s) ni rango prohibido; solo el tope duro 60 s.
+        self.assertEqual(RULES_MIN_DURATION_S, 1)
         self.assertEqual(RULES_TARGET_DURATION_S, 40)
         self.assertEqual(RULES_HARD_CAP_S, 60)
-        self.assertEqual(RULES_FORBIDDEN_DURATION_RANGE, (25, 35))
+        self.assertEqual(RULES_FORBIDDEN_DURATION_RANGE, ())
         self.assertEqual(RULES_PRE_ROLL_S, 20)
         cfg = load_config()
         clips = cfg["clips"]
-        self.assertEqual(clips["min_duration_s"], 40)
+        self.assertEqual(clips["min_duration_s"], 1)
         self.assertEqual(clips["target_duration_s"], 40)
         self.assertEqual(clips["max_duration_s"], 60)
         self.assertEqual(clips["pre_roll"], 20)
 
-    def test_minimo_fuera_del_rango_prohibido(self):
-        # 40 está por encima del rango prohibido 25-35 y el objetivo
-        # (40) no cae dentro de él.
-        self.assertGreater(RULES_MIN_DURATION_S, 35)
-        self.assertNotIn(RULES_TARGET_DURATION_S, range(25, 36))
+    def test_sin_rango_prohibido_los_cortos_pasan(self):
+        # Sin rango prohibido: 21, 30, 35 y 38 s ya no frenan.
+        self.assertEqual(RULES_FORBIDDEN_DURATION_RANGE, ())
+        for dur in (21.0, 30.0, 35.0, 38.0):
+            ok, _ = clip_duration_ok(dur)
+            self.assertTrue(ok, f"{dur} s debe pasar")
 
-    def test_clip_duration_ok_rechaza_corto_prohibido_y_largo(self):
-        ok, why = clip_duration_ok(21.0)
-        self.assertFalse(ok)
-        self.assertIn("40", why)
-        ok, _ = clip_duration_ok(30.0)
-        self.assertFalse(ok)
-        ok, _ = clip_duration_ok(35.0)
-        self.assertFalse(ok)
-        ok, _ = clip_duration_ok(38.0)
-        self.assertFalse(ok, "38 s (Rubius p2010) queda fuera por la "
-                             "regla 2026-11-18")
-        ok, _ = clip_duration_ok(61.0)
-        self.assertFalse(ok)
-        for good in (40.0, 50.0, 60.0):
+    def test_clip_duration_ok_solo_rechaza_mas_de_60(self):
+        for good in (21.0, 30.0, 35.0, 38.0, 40.0, 50.0, 60.0):
             ok, _ = clip_duration_ok(good)
             self.assertTrue(ok, f"{good} s debe pasar")
+        ok, why = clip_duration_ok(61.0)
+        self.assertFalse(ok)
+        self.assertIn("60", why)
 
-    def test_workers_usan_objetivo_40_y_rango_40_60(self):
+    def test_workers_usan_objetivo_40_y_solo_tope_60(self):
         self.assertEqual(CLIP_PRE_S, 20)
         self.assertEqual(CLIP_DURATION_S, 40)
-        self.assertEqual(CLIP_MIN_DURATION_S, 40)
         self.assertEqual(CLIP_MAX_DURATION_S, 60)
+        # P0 #6: CLIP_MIN_DURATION_S ya no existe (sin mínimo).
+        import clipagent.workers as _w
+        self.assertFalse(hasattr(_w, "CLIP_MIN_DURATION_S"))
 
-    def test_refine_cut_alarga_el_corte_corto_hasta_40(self):
-        # Frase corta que antes dejaba un clip de ~7 s: ahora se
-        # alarga hasta 40 s sin mover el inicio del momento.
+    def test_refine_cut_no_alarga_el_corte_corto(self):
+        # Frase corta que antes se alargaba hasta 40 s: ahora el
+        # corte queda corto (sin mínimo) y solo se respeta el tope.
         transcript = _words([18.5, 19.0, 19.6, 20.1, 20.7, 21.3])
         cut = refine_cut(60.0, 20.0, transcript=transcript)
-        self.assertGreaterEqual(cut["duration"], 40.0)
+        self.assertLess(cut["duration"], 40.0)
         self.assertLessEqual(cut["duration"], 60.0)
-        self.assertIn("40", cut["reason"])
 
     def test_refine_cut_fijo_pico_menos_20_y_minimo_40(self):
         # Sin transcripción fiable: caída pico -20 s / +40 s.
@@ -133,14 +126,14 @@ class TestReglasDuracion20261117(unittest.TestCase):
         self.assertLessEqual(cut["duration"], 60.0)
 
     def test_enforce_min_duration_no_recorta_el_momento(self):
+        # Sin mínimo (P0 #6): un corte de 7 s ya no se alarga
+        # hasta 40 s; se queda como está (sin recortar el momento).
         start, end, _ = enforce_min_duration(16.0, 23.0, 60.0)
         self.assertEqual(start, 16.0)
-        self.assertEqual(end - start, 40.0)
-        # Si el segmento se acaba, retrocede el inicio en vez de
-        # dejar el clip corto.
+        self.assertEqual(end - start, 7.0)
         start, end, _ = enforce_min_duration(50.0, 57.0, 60.0)
-        self.assertEqual(end - start, 40.0)
-        self.assertEqual(end, 60.0)
+        self.assertEqual(end - start, 7.0)
+        self.assertEqual(end, 57.0)
 
     def test_enforce_min_duration_aplica_el_tope(self):
         # Bug real 2026-11-17: la ruta fija (40 s) con --max-duration
@@ -155,16 +148,19 @@ class TestReglasDuracion20261117(unittest.TestCase):
         self.assertEqual(cut["duration"], 40.0)
         self.assertEqual(cut["start"], 0.0)
 
-    def test_validate_rechaza_min_21_y_objetivo_30(self):
+    def test_validate_acepta_min_21_y_objetivo_30(self):
+        # Regla 40-60 / 25-35 ELIMINADA (P0 #6): min 21 y objetivo
+        # 30 ya no se rechazan (21 <= 30 <= 40, tope 60). Solo
+        # sigue frenando un max por encima de 60.
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["clips"]["min_duration_s"] = 21
         cfg["clips"]["target_duration_s"] = 30
         cfg["clips"]["max_duration_s"] = 40
+        self.assertEqual(validate.validate_config(cfg), [])
+        cfg["clips"]["max_duration_s"] = 61
         with self.assertRaises(validate.ConfigError) as ctx:
             validate.validate_config(cfg)
-        msg = str(ctx.exception)
-        self.assertIn("min_duration_s", msg)
-        self.assertIn("target_duration_s", msg)
+        self.assertIn("max_duration_s", str(ctx.exception))
         # La config real del repo pasa.
         self.assertEqual(validate.validate_config(load_config()), [])
 

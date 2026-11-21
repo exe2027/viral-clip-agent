@@ -212,40 +212,6 @@ def _read_tail(path: str, chars: int = 2000) -> str:
         return ""
 
 
-def _enqueue_clips_for_publish(job: dict, manifest: dict, reds):
-    """Encola cada clip terminado en la cola de publicación (6.3).
-
-    Un ítem por clip y plataforma (las del streamer en
-    streamers.yaml; si no se sabe el streamer, las 4). La política
-    decide después si se publica, se retiene o se descarta; los
-    rojos del semáforo viajan en el ítem para que queden retenidos
-    con motivo visible. Devuelve cuántos ítems se encolaron.
-    """
-    from clipagent.priority import moment_key
-    from clipagent.publish import PublishQueue
-    from clipagent import streamers as _streamers
-    entry = _streamers.get_streamer(job.get("streamer") or "")
-    platforms = (entry or {}).get("publish_platforms") or [
-        "youtube_shorts", "tiktok", "instagram_reels", "facebook_reels"]
-    pq = PublishQueue()
-    n = 0
-    for clip in manifest.get("clips", []):
-        clip_path = os.path.join(job["out_dir"], clip.get("file", ""))
-        if not os.path.isfile(clip_path):
-            continue
-        game = ((clip.get("moment_card") or {}).get("game")
-                or (clip.get("viral") or {}).get("game"))
-        for platform in platforms:
-            pq.enqueue(
-                clip_path, platform, streamer=job.get("streamer"),
-                moment_key=list(moment_key(manifest.get("vod_id"),
-                                           clip.get("start"))),
-                red_flags=list(reds), game=game,
-                vod_id=manifest.get("vod_id"))
-            n += 1
-    return n
-
-
 def _panel_score(viral_total, seo_scores, chat_multiple):
     """Score de la Cola: prioridad de YouTube (misma fórmula que el
     cortador en vivo y vod_fallback: viralidad^0,5 x SEO^0,3 x
@@ -560,15 +526,13 @@ def process_job(q: Queue, job: dict, top_n: int = 5,
              f"{elapsed:.0f}s")
         for r in reds:
             _log(f"  rojo: {r}")
-        # 4. A la cola de publicación (6.3): la política decide por
-        # clip y plataforma si se publica, se retiene o se descarta.
-        try:
-            n_enqueued = _enqueue_clips_for_publish(job, manifest, reds)
-            _log(f"Job #{job_id}: {n_enqueued} ítem(s) en la cola "
-                 "de publicación")
-        except Exception as e:
-            _log(f"Job #{job_id}: no se pudo encolar para publicar "
-                 f"({e}); los clips quedan en el manifiesto.")
+        # 4. PUBLICADOR ÚNICO (P0 #8, #64, 2026-11-21): los clips
+        # ya NO se encolan en la cola local de publicación
+        # (_enqueue_clips_for_publish, retirada): esa cola la
+        # ejecutaba el publish loop --live por adapters directos
+        # y duplicaba con el Worker. La única salida es la Cola
+        # del panel (paso 5): el ciclo del Worker auto-encola los
+        # clips aprobados y publica por sus adapters.
         # 5. A la Cola del panel (C8, auditoría 2026-11-19): solo
         # encolar para aprobación, NUNCA publicar. Un fallo aquí
         # no cambia el estado del job: los clips quedan en local

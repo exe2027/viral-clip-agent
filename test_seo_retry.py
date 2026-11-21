@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Pruebas de 6B.4: auto-mejora del SEO (70-89) con el LLM antes
-de descartar; sin LLM, el clip queda retenido.
+"""Pruebas de 6B.4: auto-mejora del SEO (70-79, bajo la puerta
+80) con el LLM antes de descartar; sin LLM, el clip queda
+retenido.
 """
 import copy
 import datetime
@@ -82,7 +83,7 @@ def _setup(tmp):
                 "clips": [{"peak": 100, "start": 80,
                            "file": "clips/c1.mp4",
                            "viral_score": {"total": 80},
-                           "seo_scores": {"youtube_shorts": {"score": 85}},
+                           "seo_scores": {"youtube_shorts": {"score": 75}},
                            "title_es": "t", "desc_es": DESC,
                            "hashtags_es": TAGS, "visible": True,
                            "viral": {"viral_multiple": 8.0,
@@ -95,7 +96,8 @@ def _setup(tmp):
         json.dump(manifest, f)
     q = PublishQueue(os.path.join(tmp, "pq.json"))
     item = q.enqueue(clip_path, "youtube_shorts", vod_id="v1",
-                     moment_key=["v1", 8], game="GTA 6")
+                     moment_key=["v1", 8], game="GTA 6",
+                     panel_clip_id=123)
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg["autopublish"]["mode"] = "full"
     return q, item, cfg, run_dir
@@ -110,26 +112,38 @@ def _patches(now):
                        return_value=False)]
 
 
+class _FakeBridge:
+    """Puente falso al panel (P0 #8): publish_clip encola en el
+    Worker."""
+
+    def __init__(self):
+        self.published = []
+
+    def publish_clip(self, clip_id):
+        self.published.append(clip_id)
+        return {"jobs": [{"id": 7, "platform": p}
+                         for p in ("youtube_shorts", "tiktok",
+                                   "instagram_reels", "facebook_reels")],
+                "blocked": []}
+
+
 class TestSeoRetryPublish(unittest.TestCase):
     def test_con_llm_llega_al_gate_y_se_publica(self):
+        # P0 #8: tras el reintento, la subida va por el puente al
+        # Worker, no por el adapter de YouTube.
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg, run_dir = _setup(tmp)
-            fake_pub = mock.Mock()
-            fake_pub.publish.return_value = {
-                "ok": True, "video_id": "xyz",
-                "url": "https://www.youtube.com/shorts/xyz"}
+            bridge = _FakeBridge()
             now = datetime.datetime(2026, 11, 17, 20, 0,
                                     tzinfo=datetime.timezone(
                                         datetime.timedelta(hours=-3)))
             patches = _patches(now) + [
                 mock.patch("clipagent.llm.get_llm_client",
-                           return_value=FakeLLM()),
-                mock.patch("clipagent.publish.get_publisher",
-                           return_value=fake_pub)]
+                           return_value=FakeLLM())]
             for p in patches:
                 p.start()
                 self.addCleanup(p.stop)
-            r = publish_one(q, item, cfg=cfg, live=True)
+            r = publish_one(q, item, cfg=cfg, live=True, bridge=bridge)
             self.assertEqual(r["action"], "published", r)
             with open(os.path.join(run_dir, "manifest.json"),
                       encoding="utf-8") as f:
@@ -138,7 +152,7 @@ class TestSeoRetryPublish(unittest.TestCase):
             # El manifiesto guarda el paquete mejorado, no el viejo.
             self.assertEqual(clip["title_es"], TITLE_OK)
             self.assertGreaterEqual(
-                clip["seo_scores"]["youtube_shorts"]["score"], 90)
+                clip["seo_scores"]["youtube_shorts"]["score"], 80)
             self.assertEqual(
                 clip["viral"]["platforms"]["youtube_shorts"]["title"],
                 TITLE_OK)
@@ -157,7 +171,7 @@ class TestSeoRetryPublish(unittest.TestCase):
                 self.addCleanup(p.stop)
             r = publish_one(q, item, cfg=cfg, live=True)
             self.assertEqual(r["action"], "retained")
-            self.assertIn("SEO 85", r["reason"])
+            self.assertIn("SEO 75", r["reason"])
 
     def test_sin_llm_queda_retenido(self):
         with tempfile.TemporaryDirectory() as tmp:

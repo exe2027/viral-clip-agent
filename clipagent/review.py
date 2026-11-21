@@ -55,15 +55,15 @@ REVIEW_VIRAL_MIN = 40.0
 # la revisión que los tumbaba) y la revisión solo ve 40-44,9.
 REVIEW_VIRAL_MAX = 45.0
 REVIEW_TOP_N = 3
-REVIEW_SEO_MIN = 90
+REVIEW_SEO_MIN = 80
 REVIEW_PEAK_REL_S = 20.0  # el pico cae a los 20 s de la ventana 40 s
 
 # Rescate por gritos DEL STREAMER (2026-11-18, aprobado por el
-# usuario): punto aparte, no toca la puerta 50/90. Un clip
+# usuario): punto aparte, no toca la puerta 45/80. Un clip
 # borderline (viralidad revisada 45-49,9) con 2+ segundos de grito
 # del streamer (decibeles medidos solo mientras habla, ver
 # audio.streamer_shout_spikes) pasa aunque no llegue a 50, si el
-# SEO también pasa (>= 90). Con 1 solo segundo de grito, o sin
+# SEO también pasa (>= 80). Con 1 solo segundo de grito, o sin
 # voz, no hay rescate: un grito aislado puede ser una risa o un
 # golpe al micrófono.
 SHOUT_RESCUE_VIRAL_MIN = 45.0

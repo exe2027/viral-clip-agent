@@ -41,8 +41,26 @@ def _setup(tmp):
         json.dump(manifest, f)
     q = PublishQueue(os.path.join(tmp, "pq.json"))
     q.enqueue(clip_path, "youtube_shorts", vod_id="v1",
-              moment_key=["v1", 8])
+              moment_key=["v1", 8], panel_clip_id=123)
     return q
+
+
+class _FakeBridge:
+    """Puente falso al panel (P0 #8): publish_clip encola en el
+    Worker (o falla, si fail_with)."""
+
+    def __init__(self, fail_with=None):
+        self.published = []
+        self.fail_with = fail_with
+
+    def publish_clip(self, clip_id):
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.published.append(clip_id)
+        return {"jobs": [{"id": 7, "platform": p}
+                         for p in ("youtube_shorts", "tiktok",
+                                   "instagram_reels", "facebook_reels")],
+                "blocked": []}
 
 
 def _cfg(mode):
@@ -54,15 +72,11 @@ def _cfg(mode):
 class TestCounterLoop(unittest.TestCase):
     def _run_loop(self, tmp, mode, publish_ok=True):
         q = _setup(tmp)
-        fake_pub = mock.Mock()
-        if publish_ok:
-            fake_pub.publish.return_value = {
-                "ok": True, "video_id": "xyz",
-                "url": "https://www.youtube.com/shorts/xyz"}
-        else:
-            fake_pub.publish.return_value = {
-                "ok": False, "reason": "error 500 del servidor",
-                "retryable": True}
+        # P0 #8: el bucle publica vía el puente al Worker, no por
+        # el adapter de YouTube (get_publisher).
+        bridge = _FakeBridge(
+            fail_with=None if publish_ok
+            else RuntimeError("error 500 del servidor"))
         counter_path = os.path.join(tmp, "counter.json")
         now = datetime.datetime(2026, 11, 17, 20, 0,
                                 tzinfo=datetime.timezone(
@@ -73,8 +87,6 @@ class TestCounterLoop(unittest.TestCase):
         # solo se mide que el bucle registra el resultado.
         with mock.patch("clipagent.publish._now_chile",
                         return_value=now), \
-                mock.patch("clipagent.publish.get_publisher",
-                           return_value=fake_pub), \
                 mock.patch("clipagent.publish.check_limits",
                            return_value=(True, "ok")), \
                 mock.patch("clipagent.accounts.is_new_account",
@@ -87,7 +99,8 @@ class TestCounterLoop(unittest.TestCase):
                                  cfg=_cfg(mode),
                                  counter_path=counter_path,
                                  metrics_path=os.path.join(
-                                     tmp, "metrics.db"))
+                                     tmp, "metrics.db"),
+                                 bridge=bridge)
         return stats, counter_path
 
     def test_gradual_publicado_suma_al_contador(self):

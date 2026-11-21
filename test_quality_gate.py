@@ -261,6 +261,12 @@ class FakeBridge:
     def tracking_step(self, *a, **k):
         return {"ok": True}
 
+    def publish_clip(self, clip_id):
+        self.published = getattr(self, "published", [])
+        self.published.append(clip_id)
+        return {"jobs": [{"id": 7, "platform": "youtube_shorts"}],
+                "blocked": []}
+
 
 class TestEnqueuePanelQualityGate(unittest.TestCase):
     def _session(self, tmp, bridge):
@@ -313,11 +319,12 @@ class TestEnqueuePanelQualityGate(unittest.TestCase):
 
 
 class TestEnqueuePublishQualityGate(unittest.TestCase):
-    def _session(self, tmp, store, auto_publish):
+    def _session(self, tmp, store, auto_publish, bridge=None):
         return LiveCutterSession(
             "rubius", platform="twitch", store=store,
             out_dir=os.path.join(tmp, "clips"), base_dir=tmp,
-            dry_run=False, auto_publish=auto_publish)
+            dry_run=False, auto_publish=auto_publish,
+            bridge=bridge)
 
     def _record(self, quality_gate):
         return {
@@ -343,7 +350,10 @@ class TestEnqueuePublishQualityGate(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_pendiente_con_auto_sale_en_borrador(self):
+    def test_pendiente_con_auto_no_crea_job_local(self):
+        # P0 #8: con veredicto pendiente el clip queda en la Cola
+        # del panel como borrador; ya no se crea ningún job local
+        # (el publish loop --live está retirado).
         from clipagent.jobs import StepJobs
         with tempfile.TemporaryDirectory() as tmp:
             store = StepJobs(os.path.join(tmp, "queue.db"))
@@ -352,14 +362,36 @@ class TestEnqueuePublishQualityGate(unittest.TestCase):
                 created = session._enqueue_publish(self._record(
                     {"decision": "pendiente_revision", "pasa": False,
                      "fallos": []}))
-                self.assertEqual(len(created), 1)
-                self.assertEqual(created[0][2], "draft")
-                job = store.get(created[0][1])
-                self.assertEqual(job["payload"].get("mode"), "draft")
+                self.assertEqual(created, [])
+                self.assertEqual(store.counts().get("pending", 0), 0)
             finally:
                 store.close()
 
-    def test_aprobado_con_auto_sale_en_api(self):
+    def test_aprobado_con_auto_publica_por_el_puente(self):
+        # P0 #8: aprobado + auto_publish -> PanelBridge.publish_clip
+        # (único publicador: el Worker); ningún job local.
+        from clipagent.jobs import StepJobs
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StepJobs(os.path.join(tmp, "queue.db"))
+            try:
+                bridge = FakeBridge()
+                session = self._session(tmp, store, True,
+                                        bridge=bridge)
+                created = session._enqueue_publish(self._record(
+                    {"decision": "aprobado", "pasa": True,
+                     "fallos": []}), panel_clip_id=123)
+                self.assertEqual(bridge.published, [123])
+                self.assertEqual(created,
+                                 [("youtube_shorts", 7, "api")])
+                self.assertEqual(store.counts().get("pending", 0), 0)
+            finally:
+                store.close()
+
+    def test_aprobado_sin_puente_no_publica(self):
+        # P0 #8: aprobado + auto_publish pero sin puente al panel
+        # (o sin clip en el panel): no se publica por adapters
+        # directos; el clip queda en la Cola para el auto-enqueue
+        # del ciclo del Worker.
         from clipagent.jobs import StepJobs
         with tempfile.TemporaryDirectory() as tmp:
             store = StepJobs(os.path.join(tmp, "queue.db"))
@@ -367,11 +399,9 @@ class TestEnqueuePublishQualityGate(unittest.TestCase):
                 session = self._session(tmp, store, True)
                 created = session._enqueue_publish(self._record(
                     {"decision": "aprobado", "pasa": True,
-                     "fallos": []}))
-                self.assertEqual(len(created), 1)
-                self.assertEqual(created[0][2], "api")
-                job = store.get(created[0][1])
-                self.assertEqual(job["payload"].get("mode"), "api")
+                     "fallos": []}), panel_clip_id=123)
+                self.assertEqual(created, [])
+                self.assertEqual(store.counts().get("pending", 0), 0)
             finally:
                 store.close()
 

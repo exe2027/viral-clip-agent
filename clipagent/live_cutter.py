@@ -1456,15 +1456,26 @@ class LiveCutterSession(LiveSession):
 
         Orden del usuario 2026-11-18 14:37 (vigente): los clips van
         a la COLA del panel, sin publicar en público todavía. Por
-        eso, por defecto (auto_publish=False), las plataformas
-        publicables se encolan en mode draft: listas para publicar,
-        no publicadas. Con auto_publish=True se encolan en mode api
-        (publicación automática, MÁSTER PROMPT FINAL). El resto
-        (bloqueado_seo / descartado) no se encola nunca."""
+        eso, por defecto (auto_publish=False), el clip queda en la
+        Cola como borrador para revisión humana. Con
+        auto_publish=True y veredicto que pasa, se encola en el
+        Worker con PanelBridge.publish_clip (publicación
+        automática, MÁSTER PROMPT FINAL). El resto (bloqueado_seo /
+        descartado) no se encola nunca.
+
+        PUBLICADOR ÚNICO (P0 #8, #64, 2026-11-21): el cerebro ya
+        NO crea jobs locales de publicar (los ejecutaba el publish
+        loop --live por adapters directos y duplicaban con el
+        Worker). El clip ya está en la Cola del panel
+        (_enqueue_panel): la única salida es el Worker. Sin puente
+        o sin clip en el panel no se publica nada (nunca por
+        adapters directos): el clip queda en la Cola y el ciclo
+        del Worker lo auto-encola cuando toque. Devuelve
+        [(platform, worker_job_id, "api")] por plataforma encolada.
+        """
         if record.get("publish_blocked"):
             return []
         from .quality_gate import publish_mode_for_quality
-        from .workers import enqueue_publish
         # Puerta de calidad B4: un "rechazado" no encola nada (ni
         # en borrador: el clip defectuoso no es publicable y el
         # re-hecho lo trae de vuelta validado). El modo sale de
@@ -1479,14 +1490,31 @@ class LiveCutterSession(LiveSession):
             _qg or None, self.auto_publish)
         if force_draft:
             mode = "draft"
+        if mode != "api":
+            # Draft: el clip ya está en la Cola del panel; no se
+            # crea ningún job local (el publish loop --live está
+            # retirado) y no se llama a publish_clip.
+            return []
+        if self.bridge is None or panel_clip_id is None:
+            # Sin puente o sin clip en el panel: no se publica
+            # (nunca por adapters directos); el clip queda en la
+            # Cola y el ciclo del Worker lo auto-encola.
+            return []
+        try:
+            result = self.bridge.publish_clip(panel_clip_id)
+        except Exception:  # noqa: BLE001 - el panel no tumba el corte
+            # El clip ya está en la Cola: el ciclo del Worker lo
+            # auto-encola en la próxima revisión.
+            return []
+        jobs = (result or {}).get("jobs") or []
         created = []
         for platform, st in (record.get("publish_status") or {}).items():
-            if st.get("status") == "publicable":
-                job = enqueue_publish(
-                    self.store, record["clip_id"], platform,
-                    record["clip"], mode=mode,
-                    prioridad=float(record.get("viral_total") or 0))
-                created.append((platform, job.get("id"), mode))
+            if st.get("status") != "publicable":
+                continue
+            job = next((j for j in jobs
+                        if j.get("platform") == platform), None)
+            if job is not None:
+                created.append((platform, job.get("id"), "api"))
         return created
 
     # -- modo en vivo ----------------------------------------------------

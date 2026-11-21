@@ -196,11 +196,11 @@ DEFAULT_CONFIG = {
         "mode": "gradual",
     },
     # Umbrales duros del sistema de puntaje (6B.2): los valores por
-    # defecto son los de priority.py (90/50). Si se bajan, queda
+    # defecto son los de priority.py (80/45). Si se bajan, queda
     # registrado con fecha en scoring_changes.log.
     "scoring": {
-        "seo_gate": 90,
-        "viral_min": 50,
+        "seo_gate": 80,
+        "viral_min": 45,
         "audio_weight": 1.0,
         "audio_weight_kick": 1.5,
     },

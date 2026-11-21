@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Pruebas del fan-out: publicación directa en TikTok (por Zernio,
-en público desde 2026-11-18), Instagram y Facebook (5a) y
-propagación desde YouTube (5b).
+"""Pruebas del fan-out: publicación por el puente al panel
+(P0 #8, #64) y propagación desde YouTube (5b).
 
 Los adaptadores se prueban con APIs simuladas en sus propios
 archivos (test_zernio, test_facebook_upload,
-test_instagram_publish); aquí se prueba el cableado: DirectPublisher
-+ publish_one + publish_loop, con los adaptadores simulados.
+test_instagram_publish); aquí se prueba el cableado: publish_one +
+publish_loop con un puente falso al Worker (el único publicador).
+La subida directa por adapters está retirada: publish_direct con
+live=True llama a PanelBridge.publish_clip(panel_clip_id).
 """
 import copy
 import datetime
@@ -71,7 +72,7 @@ def _clip(tmp, platform="tiktok", virality=80, seo=95):
     q = PublishQueue(os.path.join(tmp, "pq.json"))
     item = q.enqueue(os.path.join(clips_dir, "c1.mp4"), platform,
                      streamer="rubius", vod_id="v1",
-                     moment_key=["v1", 8])
+                     moment_key=["v1", 8], panel_clip_id=123)
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg["autopublish"]["mode"] = "full"
     return q, item, cfg
@@ -109,122 +110,122 @@ def _fake_adapter(**methods):
     return ad
 
 
-class TestDirectPublisher(unittest.TestCase):
-    def test_tiktok_publica_por_api(self):
+class _FakeBridge:
+    """Puente falso al panel (P0 #8): publish_clip encola jobs
+    en el Worker para las 4 plataformas, salvo las bloqueadas."""
+
+    def __init__(self, blocked=None, fail_with=None):
+        self.published = []
+        self.blocked = blocked or {}
+        self.fail_with = fail_with
+
+    def publish_clip(self, clip_id):
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.published.append(clip_id)
+        jobs = [{"id": 7, "platform": p}
+                for p in ("youtube_shorts", "tiktok",
+                          "instagram_reels", "facebook_reels")
+                if p not in self.blocked]
+        blocked = [f"{p}: {why}"
+                   for p, why in self.blocked.items()]
+        return {"jobs": jobs, "blocked": blocked}
+
+
+class TestPublicaPorElPuente(unittest.TestCase):
+    """P0 #8: publish_one con live=True publica solo vía el puente
+    al Worker (PanelBridge.publish_clip). La subida directa por
+    adapters está retirada; los adapters se prueban en sus propios
+    archivos (test_zernio, test_facebook_upload,
+    test_instagram_publish)."""
+
+    def test_tiktok_publica_por_el_puente(self):
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg = _clip(tmp, "tiktok")
-            fake = _fake_adapter(publish_public={
-                "ok": True, "mode": "api", "post_id": "tt1"})
-            with mock.patch("clipagent.platforms.ZernioAdapter",
-                           return_value=fake):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                r = publish_one(q, item, cfg=cfg, live=True)
-            self.assertEqual(r["action"], "published", r)
-            self.assertEqual(item["platform_id"], "tt1")
-            # TikTok ya no usa el adaptador directo: la llamada fue
-            # a Zernio (draft-first) y sin resume_publish_id.
-            self.assertNotIn("resume_publish_id",
-                             fake.publish_public.call_args[1])
-
-    def test_tiktok_sin_clave_zernio_queda_en_draft_con_motivo(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = _clip(tmp, "tiktok")
-            fake = _fake_adapter(publish_public={
-                "ok": False, "mode": "draft",
-                "reason": "sin ZERNIO_API_KEY en el entorno "
-                          "(secreto ZERNIO_API_KEY)"})
-            with mock.patch("clipagent.platforms.ZernioAdapter",
-                           return_value=fake):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                r = publish_one(q, item, cfg=cfg, live=True)
-            self.assertEqual(r["action"], "draft", r)
-            self.assertEqual(item["state"], "draft")
-            self.assertIn("ZERNIO_API_KEY", r["reason"])
-            # El paquete manual se genera igual (simulado en tests).
-            self.assertIn("paquete manual en", r["reason"])
-
-    def test_instagram_sin_url_publica_queda_en_draft(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = _clip(tmp, "instagram_reels")
-            cfg["platform_accounts"]["instagram_reels"] = {
-                "ig_user_id": "1784"}
-            with mock.patch(
-                    "clipagent.public_url.get_public_url",
-                    return_value=(None, "sin URL pública configurada: "
-                                        "configura public_url.base_url")):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                r = publish_one(q, item, cfg=cfg, live=True)
-            self.assertEqual(r["action"], "draft", r)
-            self.assertIn("sin URL pública configurada", r["reason"])
-
-    def test_instagram_publica_con_media_id(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = _clip(tmp, "instagram_reels")
-            cfg["platform_accounts"]["instagram_reels"] = {
-                "ig_user_id": "1784"}
-            fake = _fake_adapter(publish_reel={
-                "ok": True, "mode": "api", "media_id": "ig9"})
-            with mock.patch("clipagent.platforms.InstagramAdapter",
-                           return_value=fake), \
-                    mock.patch("clipagent.public_url.get_public_url",
-                               return_value=("https://x/c1.mp4", None)):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                r = publish_one(q, item, cfg=cfg, live=True)
-            self.assertEqual(r["action"], "published", r)
-            self.assertEqual(item["platform_id"], "ig9")
-
-    def test_facebook_sin_page_id_queda_en_draft(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg = _clip(tmp, "facebook_reels")
+            bridge = _FakeBridge()
             for p in _patches():
                 p.start()
                 self.addCleanup(p.stop)
-            r = publish_one(q, item, cfg=cfg, live=True)
-            self.assertEqual(r["action"], "draft", r)
-            self.assertIn("page_id", r["reason"])
+            r = publish_one(q, item, cfg=cfg, live=True, bridge=bridge)
+            self.assertEqual(r["action"], "published", r)
+            self.assertEqual(item["platform_id"], "worker-job-7")
+            self.assertEqual(bridge.published, [123])
 
-    def test_facebook_publica_por_api(self):
+    def test_sin_clip_en_panel_queda_en_draft(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, item, cfg = _clip(tmp, "tiktok")
+            item["panel_clip_id"] = None
+            for p in _patches():
+                p.start()
+                self.addCleanup(p.stop)
+            r = publish_one(q, item, cfg=cfg, live=True,
+                            bridge=_FakeBridge())
+            self.assertEqual(r["action"], "draft", r)
+            self.assertEqual(item["state"], "draft")
+            self.assertIn("panel_clip_id", r["reason"])
+
+    def test_sin_puente_queda_en_draft(self):
+        # Sin bridge inyectado ni credenciales en el entorno, no
+        # se publica por adapters directos: a draft con motivo.
+        with tempfile.TemporaryDirectory() as tmp:
+            q, item, cfg = _clip(tmp, "tiktok")
+            for p in _patches():
+                p.start()
+                self.addCleanup(p.stop)
+            with mock.patch.dict(os.environ, {}, clear=True):
+                r = publish_one(q, item, cfg=cfg, live=True)
+            self.assertEqual(r["action"], "draft", r)
+            self.assertIn("sin puente", r["reason"])
+
+    def test_instagram_publica_por_el_puente(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, item, cfg = _clip(tmp, "instagram_reels")
+            bridge = _FakeBridge()
+            for p in _patches():
+                p.start()
+                self.addCleanup(p.stop)
+            r = publish_one(q, item, cfg=cfg, live=True, bridge=bridge)
+            self.assertEqual(r["action"], "published", r)
+            self.assertEqual(item["platform_id"], "worker-job-7")
+            self.assertEqual(bridge.published, [123])
+
+    def test_bloqueado_por_el_worker_queda_en_draft(self):
         with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg = _clip(tmp, "facebook_reels")
-            cfg["platform_accounts"]["facebook_reels"] = {
-                "page_id": "555"}
-            fake = _fake_adapter(publish_reel={
-                "ok": True, "mode": "api", "post_id": "fb1"})
-            with mock.patch("clipagent.platforms.FacebookAdapter",
-                           return_value=fake):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                r = publish_one(q, item, cfg=cfg, live=True)
+            bridge = _FakeBridge(
+                blocked={"facebook_reels": "tope diario"})
+            for p in _patches():
+                p.start()
+                self.addCleanup(p.stop)
+            r = publish_one(q, item, cfg=cfg, live=True, bridge=bridge)
+            self.assertEqual(r["action"], "draft", r)
+            self.assertIn("tope diario", r["reason"])
+
+    def test_facebook_publica_por_el_puente(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            q, item, cfg = _clip(tmp, "facebook_reels")
+            bridge = _FakeBridge()
+            for p in _patches():
+                p.start()
+                self.addCleanup(p.stop)
+            r = publish_one(q, item, cfg=cfg, live=True, bridge=bridge)
             self.assertEqual(r["action"], "published", r)
-            self.assertEqual(item["platform_id"], "fb1")
+            self.assertEqual(item["platform_id"], "worker-job-7")
 
 
 class TestReintentoTransitorio(unittest.TestCase):
-    def _setup_error(self, tmp):
-        q, item, cfg = _clip(tmp, "tiktok")
-        fake = _fake_adapter(publish_public={
-            "ok": False, "mode": "error", "status": 503,
-            "reason": "Zernio caído (503)", "retryable": True})
-        return q, item, cfg, fake
+    """El puente falla (red/login): error reintentable, el ítem
+    sigue en la cola y al 4º intento va a failed."""
 
     def test_5xx_se_reintenta_sin_cambiar_el_estado(self):
         with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg, fake = self._setup_error(tmp)
-            with mock.patch("clipagent.platforms.ZernioAdapter",
-                           return_value=fake):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                r = publish_one(q, item, cfg=cfg, live=True)
+            q, item, cfg = _clip(tmp, "tiktok")
+            bridge = _FakeBridge(
+                fail_with=RuntimeError("Worker caído (503)"))
+            for p in _patches():
+                p.start()
+                self.addCleanup(p.stop)
+            r = publish_one(q, item, cfg=cfg, live=True, bridge=bridge)
             self.assertEqual(r["action"], "failed", r)
             # El ítem sigue en la cola (queued), no en failed.
             self.assertEqual(item["state"], "queued")
@@ -233,58 +234,19 @@ class TestReintentoTransitorio(unittest.TestCase):
 
     def test_tres_transitorios_y_el_cuarto_va_a_failed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            q, item, cfg, fake = self._setup_error(tmp)
-            with mock.patch("clipagent.platforms.ZernioAdapter",
-                           return_value=fake):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                for _ in range(3):
-                    r = publish_one(q, item, cfg=cfg, live=True)
-                    self.assertEqual(r["action"], "failed", r)
-                    self.assertEqual(item["state"], "queued")
-                r = publish_one(q, item, cfg=cfg, live=True)
-            self.assertEqual(item["state"], "failed")
-
-
-class TestProcessing(unittest.TestCase):
-    def test_processing_guarda_publish_id_y_retoma(self):
-        # Zernio no reanuda por publish_id (no hay resume en su
-        # API): el segundo ciclo vuelve a llamar a publish_public
-        # sin resume_publish_id. El publish_id, si viene, se guarda
-        # igual en platform_data por el flujo genérico.
-        with tempfile.TemporaryDirectory() as tmp:
             q, item, cfg = _clip(tmp, "tiktok")
-            calls = {"n": 0}
-
-            def video(*a, **k):
-                calls["n"] += 1
-                if calls["n"] == 1:
-                    return {"ok": False, "mode": "processing",
-                            "publish_id": "pub1", "retryable": True,
-                            "reason": "Zernio sigue procesando"}
-                return {"ok": True, "mode": "api", "post_id": "tt1"}
-            fake = mock.Mock()
-            fake.publish_public.side_effect = video
-            with mock.patch("clipagent.platforms.ZernioAdapter",
-                           return_value=fake):
-                for p in _patches():
-                    p.start()
-                    self.addCleanup(p.stop)
-                r1 = publish_one(q, item, cfg=cfg, live=True)
-                self.assertEqual(r1["action"], "processing", r1)
+            bridge = _FakeBridge(
+                fail_with=RuntimeError("Worker caído (503)"))
+            for p in _patches():
+                p.start()
+                self.addCleanup(p.stop)
+            for _ in range(3):
+                r = publish_one(q, item, cfg=cfg, live=True,
+                                bridge=bridge)
+                self.assertEqual(r["action"], "failed", r)
                 self.assertEqual(item["state"], "queued")
-                self.assertEqual(
-                    item["platform_data"]["publish_id"], "pub1")
-                r2 = publish_one(q, item, cfg=cfg, live=True)
-            self.assertEqual(r2["action"], "published", r2)
-            self.assertEqual(item["platform_id"], "tt1")
-            # ZernioAdapter.publish_public no acepta resume: la
-            # segunda llamada no lleva resume_publish_id.
-            self.assertEqual(fake.publish_public.call_count, 2)
-            self.assertNotIn(
-                "resume_publish_id",
-                fake.publish_public.call_args[1])
+            r = publish_one(q, item, cfg=cfg, live=True, bridge=bridge)
+            self.assertEqual(item["state"], "failed")
 
 
 if __name__ == "__main__":
@@ -292,11 +254,13 @@ if __name__ == "__main__":
 
 
 class TestFanOutLoop(unittest.TestCase):
-    def _setup_loop(self, tmp, tiktok_result=None):
-        """Cola con un ítem de YouTube + parches del bucle.
+    def _setup_loop(self, tmp, blocked=None):
+        """Cola con un ítem de YouTube + puente falso al Worker.
 
-        get_publisher: YouTube simulado; el resto, DirectPublisher
-        real con adaptadores simulados."""
+        P0 #8: todas las plataformas publican vía el puente
+        (publish_clip); el fan-out propaga el panel_clip_id a
+        los ítems nuevos para que también puedan publicar.
+        """
         clips = [{"file": "c1.mp4", "virality": 80, "chat": 8.0,
                   "seo": {"youtube_shorts": 95, "tiktok": 95,
                           "instagram_reels": 95,
@@ -305,53 +269,16 @@ class TestFanOutLoop(unittest.TestCase):
         q = PublishQueue(os.path.join(tmp, "pq.json"))
         yt_item = q.enqueue(os.path.join(clips_dir, "c1.mp4"),
                             "youtube_shorts", streamer="rubius",
-                            vod_id="v1", moment_key=["v1", 8])
+                            vod_id="v1", moment_key=["v1", 8],
+                            panel_clip_id=123)
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["autopublish"]["mode"] = "full"
-        cfg["platform_accounts"]["instagram_reels"] = {
-            "ig_user_id": "1784"}
-        cfg["platform_accounts"]["facebook_reels"] = {
-            "page_id": "555"}
-        fake_yt = mock.Mock()
-
-        def _yt_publish(clip_path, live=False, **kwargs):
-            if not live:
-                return {"ok": False,
-                        "reason": "dry-run por defecto: pasa --live "
-                                  "para subir de verdad"}
-            return {"ok": True, "video_id": "yt1",
-                    "url": "https://www.youtube.com/shorts/yt1"}
-        fake_yt.publish.side_effect = _yt_publish
-
-        from clipagent.publish import DirectPublisher
-        def _get_publisher(platform, queue=None):
-            if platform == "youtube_shorts":
-                return fake_yt
-            return DirectPublisher(platform, queue)
-
-        tk = _fake_adapter(publish_public=tiktok_result or {
-            "ok": True, "mode": "api", "post_id": "tt1"})
-        ig = _fake_adapter(publish_reel={
-            "ok": True, "mode": "api", "media_id": "ig9"})
-        fb = _fake_adapter(publish_reel={
-            "ok": True, "mode": "api", "post_id": "fb1"})
-        patches = _patches() + [
-            mock.patch("clipagent.publish.get_publisher",
-                       side_effect=_get_publisher),
-            mock.patch("clipagent.platforms.ZernioAdapter",
-                       return_value=tk),
-            mock.patch("clipagent.platforms.InstagramAdapter",
-                       return_value=ig),
-            mock.patch("clipagent.platforms.FacebookAdapter",
-                       return_value=fb),
-            mock.patch("clipagent.public_url.get_public_url",
-                       return_value=("https://x/c1.mp4", None)),
-        ]
-        return q, yt_item, cfg, patches
+        bridge = _FakeBridge(blocked=blocked or {})
+        return q, yt_item, cfg, _patches(), bridge
 
     def test_youtube_publica_y_las_otras_tres_tambien(self):
         with tempfile.TemporaryDirectory() as tmp:
-            q, _yt, cfg, patches = self._setup_loop(tmp)
+            q, _yt, cfg, patches, bridge = self._setup_loop(tmp)
             notes = []
             for p in patches:
                 p.start()
@@ -359,7 +286,8 @@ class TestFanOutLoop(unittest.TestCase):
             stats = publish_loop(
                 q, live=True, once=True, cfg=cfg,
                 metrics_path=os.path.join(tmp, "metrics.db"),
-                notify_fn=lambda e, d: notes.append((e, d)))
+                notify_fn=lambda e, d: notes.append((e, d)),
+                bridge=bridge)
             self.assertEqual(stats["published"], 4, stats)
             self.assertEqual(stats["fanout"], 3, stats)
             for platform in ("youtube_shorts", "tiktok",
@@ -372,25 +300,25 @@ class TestFanOutLoop(unittest.TestCase):
             self.assertTrue(any(e == "fan-out" for e, _ in notes))
 
     def test_fallo_en_una_no_bloquea_las_otras(self):
+        # El Worker bloquea TikTok (tope diario): las otras 3
+        # publican igual; el ítem de TikTok queda en draft.
         with tempfile.TemporaryDirectory() as tmp:
-            q, _yt, cfg, patches = self._setup_loop(
-                tmp, tiktok_result={
-                    "ok": False, "mode": "draft",
-                    "reason": "sin ZERNIO_API_KEY en el entorno "
-                              "(secreto ZERNIO_API_KEY)"})
+            q, _yt, cfg, patches, bridge = self._setup_loop(
+                tmp, blocked={"tiktok": "tope diario"})
             for p in patches:
                 p.start()
                 self.addCleanup(p.stop)
             stats = publish_loop(
                 q, live=True, once=True, cfg=cfg,
-                metrics_path=os.path.join(tmp, "metrics.db"))
+                metrics_path=os.path.join(tmp, "metrics.db"),
+                bridge=bridge)
             self.assertEqual(stats["published"], 3, stats)
             self.assertEqual(stats["draft"], 1, stats)
             clip = os.path.join(tmp, "runs", "v1", "clips", "c1.mp4")
             self.assertEqual(
                 q._find(clip, "tiktok")["state"], "draft")
             self.assertIn(
-                "ZERNIO_API_KEY",
+                "tope diario",
                 q._find(clip, "tiktok")["history"][-1]["note"])
             self.assertEqual(
                 q._find(clip, "instagram_reels")["state"], "published")
@@ -399,16 +327,17 @@ class TestFanOutLoop(unittest.TestCase):
 
     def test_fanout_no_duplica_si_el_item_ya_existe(self):
         with tempfile.TemporaryDirectory() as tmp:
-            q, _yt, cfg, patches = self._setup_loop(tmp)
+            q, _yt, cfg, patches, bridge = self._setup_loop(tmp)
             clip = os.path.join(tmp, "runs", "v1", "clips", "c1.mp4")
             q.enqueue(clip, "tiktok", streamer="rubius", vod_id="v1",
-                      moment_key=["v1", 8])
+                      moment_key=["v1", 8], panel_clip_id=123)
             for p in patches:
                 p.start()
                 self.addCleanup(p.stop)
             stats = publish_loop(
                 q, live=True, once=True, cfg=cfg,
-                metrics_path=os.path.join(tmp, "metrics.db"))
+                metrics_path=os.path.join(tmp, "metrics.db"),
+                bridge=bridge)
             self.assertEqual(stats["published"], 4, stats)
             self.assertEqual(stats["fanout"], 2, stats)
             tk_items = [i for i in q.data["items"]
@@ -417,27 +346,29 @@ class TestFanOutLoop(unittest.TestCase):
 
     def test_fanout_desactivado_por_config(self):
         with tempfile.TemporaryDirectory() as tmp:
-            q, _yt, cfg, patches = self._setup_loop(tmp)
+            q, _yt, cfg, patches, bridge = self._setup_loop(tmp)
             cfg["fanout"]["enabled"] = False
             for p in patches:
                 p.start()
                 self.addCleanup(p.stop)
             stats = publish_loop(
                 q, live=True, once=True, cfg=cfg,
-                metrics_path=os.path.join(tmp, "metrics.db"))
+                metrics_path=os.path.join(tmp, "metrics.db"),
+                bridge=bridge)
             self.assertEqual(stats["published"], 1, stats)
             self.assertEqual(stats["fanout"], 0, stats)
             self.assertEqual(len(q.data["items"]), 1)
 
     def test_en_dry_run_no_hay_fanout(self):
         with tempfile.TemporaryDirectory() as tmp:
-            q, _yt, cfg, patches = self._setup_loop(tmp)
+            q, _yt, cfg, patches, bridge = self._setup_loop(tmp)
             for p in patches:
                 p.start()
                 self.addCleanup(p.stop)
             stats = publish_loop(
                 q, live=False, once=True, cfg=cfg,
-                metrics_path=os.path.join(tmp, "metrics.db"))
+                metrics_path=os.path.join(tmp, "metrics.db"),
+                bridge=bridge)
             self.assertEqual(stats["published"], 0, stats)
             self.assertEqual(stats["fanout"], 0, stats)
             self.assertEqual(len(q.data["items"]), 1)

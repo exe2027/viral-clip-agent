@@ -119,6 +119,35 @@ class TestWorkerPanelUpload(unittest.TestCase):
             finally:
                 q.close()
 
+    def test_sin_encolado_local_publicador_unico(self):
+        # P0 #8 (#64): el worker ya NO encola los clips en la cola
+        # local de publicación (la ejecutaba el publish loop --live
+        # por adapters directos y duplicaba con el Worker). La
+        # única salida es la Cola del panel; el ciclo del Worker
+        # auto-encola y publica.
+        import worker as worker_mod
+        from clipagent.publish import PublishQueue
+        with tempfile.TemporaryDirectory() as tmp:
+            q = Queue(os.path.join(tmp, "t.db"))
+            try:
+                job = self._job_en_cola(q, tmp)
+                bridge = mock.MagicMock()
+                bridge.create_clip.return_value = {"id": 123}
+                bridge.upload_video.return_value = {}
+                pq_path = os.path.join(tmp, "pq.json")
+                with mock.patch("clipagent.publish.QUEUE_STATE_FILE",
+                                pq_path):
+                    state = self._run_ok(worker_mod, q, job,
+                                         bridge=bridge)
+                self.assertEqual(state, "ready_for_review")
+                # El clip sí subió al panel...
+                self.assertEqual(bridge.create_clip.call_count, 1)
+                # ...pero la cola local de publicación quedó vacía.
+                self.assertEqual(
+                    PublishQueue(pq_path).data["items"], [])
+            finally:
+                q.close()
+
     def test_sin_credenciales_no_finge_subida(self):
         import worker as worker_mod
         with tempfile.TemporaryDirectory() as tmp:

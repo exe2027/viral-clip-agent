@@ -58,7 +58,7 @@ MIN_SEPARATION_S = 60
 # viralidad 44,5 y rechazada en VOD) -> 0. El múltiplo >= 3x se
 # conserva como vía alternativa (chat frío con pico enorme).
 # La viralidad (fórmula INTOCABLE), el SEO, la prioridad, los
-# filtros duros (viralidad >= 50, SEO >= 90), la duración 40-60 s,
+# filtros duros (viralidad >= 45, SEO >= 80), la duración 40-60 s,
 # los subtítulos y el layout RDJavi NO cambian: esto solo decide
 # QUÉ ventana se corta en vivo; el resto del pipeline la filtra
 # igual (viral_auto < 40 se descarta sin render).

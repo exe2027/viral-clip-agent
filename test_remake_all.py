@@ -58,6 +58,10 @@ def _clip(clip_id, status="en_carpeta", source_id=2932415021,
 
 
 def _veredicto(pasa=True, decision="aprobado", motivo=""):
+    # Veredicto realista de validate_final_clip: con scores de
+    # Gemini, palabras transcritas y checks de plantilla, para
+    # que build_quality_gate (P0 #4) recalcule "aprobado" y no
+    # "formato sin medir" / "sin voz verificable".
     return {
         "decision": decision,
         "pasa": pasa,
@@ -70,8 +74,38 @@ def _veredicto(pasa=True, decision="aprobado", motivo=""):
         "resumen": motivo,
         "frames_n": 10,
         "face": {"pasa": pasa},
-        "template": {"pasa": pasa},
+        "template": {"pasa": pasa, "checks": {
+            "dimensiones": {"pasa": pasa},
+            "titulo_banner": {"pasa": pasa},
+        }},
         "gemini": {"decision": decision},
+        "scores": {
+            "sin_barras_negras": 9 if pasa else 1,
+            "webcam_visible": 9 if pasa else 1,
+            "momento_comprensible": 9 if pasa else 1,
+            "titulo_legible": 9 if pasa else 1,
+        },
+        "transcript_words": 20 if pasa else 0,
+    }
+
+
+def _gate_aprobado():
+    """Veredicto B4 que build_quality_gate calcula del _veredicto
+    que pasa (los 6 criterios en True, sin fallos)."""
+    return {
+        "decision": "aprobado",
+        "pasa": True,
+        "criterios": {
+            "formato_9_16": {"pasa": True, "duro": True, "motivo": ""},
+            "webcam": {"pasa": True, "duro": True, "motivo": ""},
+            "hook": {"pasa": True, "duro": False, "motivo": ""},
+            "titulo": {"pasa": True, "duro": True, "motivo": ""},
+            "miniatura": {"pasa": True, "duro": True, "motivo": ""},
+            "audio": {"pasa": True, "duro": True, "motivo": ""},
+        },
+        "fallos": [],
+        "fallos_duros": [],
+        "motivo": "",
     }
 
 
@@ -253,9 +287,31 @@ class TestRemakeOne(_PatchBannerAss):
         self.assertEqual(len(bridge.uploads), 1)
         self.assertEqual(bridge.uploads[0][0], 7)
         self.assertTrue(bridge.uploads[0][1].endswith("rubius_r1.mp4"))
+        # P0 #4: el PATCH desbloquea Y refresca el quality_gate
+        # con el veredicto del re-make (el viejo "rechazado" no
+        # puede quedar: el gate del Worker lo seguiría leyendo).
         self.assertEqual(bridge.updates, [
-            (7, {"publish_blocked": 0, "subtitles_complete": 1}),
+            (7, {"publish_blocked": 0, "subtitles_complete": 1,
+                 "viral": {"quality_gate": _gate_aprobado()}}),
         ])
+        self.assertEqual(rec["quality_gate"], _gate_aprobado())
+
+    def test_pasa_refresca_quality_gate_en_el_reemplazo_publicado(self):
+        bridge = _FakeBridge()
+        rec = self._remake(
+            _clip(14, status="publicado"), bridge,
+            download_fn=_fake_download(),
+            transcribe_fn=_fake_transcribe(),
+            render_fn=_fake_render(),
+            validate_fn=lambda *a, **kw: _veredicto(True),
+            detect_fn=lambda *a: None,
+        )
+        self.assertEqual(rec["outcome"], "rehecho-reemplazo")
+        self.assertEqual(bridge.updates, [
+            (14, {"subtitles_complete": 1,
+                  "viral": {"quality_gate": _gate_aprobado()}}),
+        ])
+        self.assertEqual(rec["quality_gate"], _gate_aprobado())
 
     def test_publicado_que_pasa_reemplaza_pero_no_desbloquea(self):
         bridge = _FakeBridge()
@@ -271,9 +327,12 @@ class TestRemakeOne(_PatchBannerAss):
         self.assertEqual(rec["accion"], "re-make-replace")
         self.assertEqual(len(bridge.uploads), 1)
         # Sin publish_blocked en el PATCH: desbloquearlo haría
-        # que el auto-publicador lo volviera a publicar.
+        # que el auto-publicador lo volviera a publicar. El
+        # quality_gate sí se refresca (P0 #4): el vídeo nuevo
+        # tiene su propio veredicto.
         self.assertEqual(bridge.updates, [
-            (13, {"subtitles_complete": 1}),
+            (13, {"subtitles_complete": 1,
+                  "viral": {"quality_gate": _gate_aprobado()}}),
         ])
 
     def test_falla_de_validacion_reintenta_y_pasa(self):
@@ -400,9 +459,31 @@ class TestRemakeOne(_PatchBannerAss):
         self.assertEqual(rec["outcome"], "rehecho")
         self.assertEqual(rec["accion"], "desbloqueado")
         self.assertTrue(rec["no_speech"])
+        # P0 #4: el gate se refresca también sin voz. El audio es
+        # criterio duro y sin voz verificable falla: el veredicto
+        # nuevo es "rechazado" (como en el camino en vivo, que
+        # manda estos clips a borrador). El clip queda desbloqueado
+        # pero no publica hasta revisión humana (preview_seen=1,
+        # P0 #2): el veredicto viejo no puede quedar.
         self.assertEqual(bridge.updates, [
-            (25, {"publish_blocked": 0, "subtitles_complete": 0}),
+            (25, {"publish_blocked": 0, "subtitles_complete": 0,
+                  "viral": {"quality_gate": {
+                      "decision": "rechazado", "pasa": False,
+                      "criterios": {
+                          "formato_9_16": {"pasa": True, "duro": True, "motivo": ""},
+                          "webcam": {"pasa": True, "duro": True, "motivo": ""},
+                          "hook": {"pasa": True, "duro": False, "motivo": ""},
+                          "titulo": {"pasa": True, "duro": True, "motivo": ""},
+                          "miniatura": {"pasa": True, "duro": True, "motivo": ""},
+                          "audio": {"pasa": False, "duro": True, "motivo": "sin voz verificable"},
+                      },
+                      "fallos": ["audio"],
+                      "fallos_duros": ["audio"],
+                      "motivo": "calidad: audio (sin voz verificable)",
+                  }}}),
         ])
+        self.assertEqual(rec["quality_gate"]["decision"], "rechazado")
+        self.assertIs(rec["quality_gate"]["pasa"], False)
 
 
 class TestRunBatch(_PatchBannerAss):

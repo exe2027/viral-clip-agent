@@ -883,27 +883,75 @@ class FacebookAdapter:
     #   Bearer), headers offset y file_size, body binario. Reanudable
     #   por offset: la respuesta trae start_offset/end_offset.
     #   También acepta file_url con una URL pública en vez de bytes.
-    CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB por chunk
+    #
+    # FIX 2026-11-20 22:50 (Worker) / P0 #7 (Python, 2026-11-21):
+    # Meta espera en cada POST los bytes restantes (offset → EOF),
+    # no trozos fijos de 8 MB: un trozo de 8 MB lo rechaza con
+    # "Partial request (did not match length of file)" (job 8 clip
+    # 11, 2 sesiones nuevas). La guía de Reels manda el archivo
+    # entero en un solo POST y reanuda desde el offset con el resto.
+    # rupload responde 206 por chunk aceptado (con end_offset) y
+    # 200 solo al completar; un 200/206 con cuerpo de error no es
+    # éxito; sin end_offset no se avanza a ciegas: se pregunta al
+    # servidor cuánto guardó (GET /{video_id}?fields=status →
+    # uploading_phase.bytes_transfered). El patrón correcto ya
+    # existía en este archivo para IG/TikTok (aceptar 200/206).
+    CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB por chunk (legacy: ya no se usa para Reels)
+
+    def _server_offset(self, video_id):
+        """Offset real guardado por Facebook (GET Graph API).
+
+        GET /{video_id}?fields=status → status.uploading_phase.
+        bytes_transfered. Es la única fuente fiable para retomar:
+        el end_offset de rupload puede no coincidir con lo que el
+        servidor guardó de verdad. Devuelve el offset (int) o None
+        si no se puede saber. Nunca lanza.
+        """
+        access = self._token()
+        if not access:
+            return None
+        url = (f"{self.host}/{video_id}?fields=status&"
+               f"access_token={access}")
+        try:
+            status, resp = _http(
+                "GET", url, request_fn=self.request_fn)
+        except Exception:  # noqa: BLE001 - sin offset, error reintentable
+            return None
+        if status != 200:
+            return None
+        phase = (resp.get("status") or {}).get("uploading_phase") or {}
+        raw = phase.get("bytes_transfered",
+                        phase.get("bytes_transferred"))
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return n if n >= 0 else None
 
     def upload_file(self, video_id, clip_path, chunk_size=None):
-        """Fase 2: sube el archivo por chunks a rupload.
+        """Fase 2: sube el archivo a rupload.
 
-        Devuelve {"ok": True} al completar. Si la respuesta no
-        avanza el offset, es error (no se reintenta a ciegas)."""
+        Envía los bytes restantes (offset → EOF) en un solo POST
+        (Meta rechaza los trozos fijos de 8 MB) y acepta 200/206.
+        Si la respuesta no avanza el offset, es error (no se
+        reintenta a ciegas). ``chunk_size`` se ignora (compatibilidad:
+        antes partía el archivo en trozos fijos).
+        """
         access = self._token()
         if not access:
             return _draft("sin Page access token en tokens/")
         if not os.path.isfile(clip_path):
             return {"ok": False, "reason":
                     f"archivo no existe: {clip_path}"}
-        chunk_size = chunk_size or self.CHUNK_SIZE
         size = os.path.getsize(clip_path)
         url = (f"{self.upload_host}/video-upload/"
                f"{GRAPH_VERSION}/{video_id}")
         offset = 0
         with open(clip_path, "rb") as f:
             while offset < size:
-                chunk = f.read(chunk_size)
+                # Bytes restantes (offset → EOF) en un solo POST.
+                f.seek(offset)
+                chunk = f.read(size - offset)
                 if not chunk:
                     break
                 headers = {"Authorization": f"OAuth {access}",
@@ -913,11 +961,26 @@ class FacebookAdapter:
                 status, resp = _http(
                     "POST", url, headers, chunk,
                     request_fn=self.request_fn)
-                if status != 200:
+                if status not in (200, 206):
+                    return _error_result(status, resp)
+                # Un 200/206 con cuerpo de error (p. ej.
+                # PartialRequestError) no es un chunk aceptado.
+                dbg = resp.get("debug_info") or {}
+                if resp.get("error") or dbg.get("type"):
                     return _error_result(status, resp)
                 new_offset = resp.get("end_offset")
                 if new_offset is None:
-                    new_offset = offset + len(chunk)
+                    # Sin end_offset no se avanza a ciegas: se
+                    # pregunta al servidor cuánto guardó de verdad.
+                    srv = self._server_offset(video_id)
+                    if srv is not None and srv > offset:
+                        offset = srv
+                        continue
+                    return {"ok": False, "mode": "error",
+                            "reason": "rupload no confirmó los bytes "
+                                      f"del chunk {offset}/{size} bytes "
+                                      "(sin end_offset)",
+                            "retryable": True}
                 try:
                     new_offset = int(new_offset)
                 except (TypeError, ValueError):

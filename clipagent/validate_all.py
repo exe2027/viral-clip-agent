@@ -43,6 +43,15 @@ campo exista. Un nombre de plantilla desconocido falla en voz
 alta (``ConfigError``), nunca se valida contra otra en
 silencio.
 
+SRT: el validador final va CON el SRT. El MP4 se transcribe
+(modelo tiny) y el SRT generado se pasa al validador, para que
+el gate de plantilla mida la capa de subtítulos con los
+tiempos reales de la voz. Sin voz o si la transcripción falla,
+se valida sin SRT y la capa queda "sin medida" (débil). Antes
+se validaba siempre SIN SRT y la capa quedaba sin medir: un
+clip con subtítulos de línea completa (no rubius) pasaba la
+capa de subtítulos sin que nadie la midiera.
+
 Sin SRT: el panel no guarda el SRT del clip, así que el batch
 valida sin él. La puerta de plantilla lo registra como débil
 (``template_gate``: sin SRT la presencia de subtítulos no se
@@ -360,6 +369,46 @@ def load_clips_from_audit(path):
     return data
 
 
+def transcribe_clip_to_srt(video_path, work_dir, clip_id, language):
+    """Transcribe el MP4 del clip y genera un SRT (una palabra por
+    línea) para que el gate de plantilla mida la capa de
+    subtítulos con los tiempos reales de la voz.
+
+    Sin SRT, el gate de plantilla marca la capa de subtítulos
+    como "sin medida" (pasa débil): un clip con subtítulos de
+    línea completa (no rubius, caso scooter 2026-11-21) pasaría
+    la capa de subtítulos sin que nadie la midiera. Con el SRT,
+    el gate comprueba subtítulos blancos y una-palabra-a-la-vez
+    solo en los instantes en que hay subtítulo.
+
+    Devuelve la ruta del SRT, o None si no hay voz (clip sin
+    habla: el SRT no aplica y el gate vuelve a "sin medida", que
+    es lo correcto para un clip sin voz, regla 2026-11-19) o si
+    la transcripción falla (entonces se valida sin SRT: la capa
+    queda débil, no fuerte, y el fallo queda en el log).
+    """
+    from .transcribe import generate_srt, transcribe_audio
+
+    try:
+        transcript, _info = transcribe_audio(
+            video_path, language=language)
+    except Exception as exc:
+        print(f"  [validate_all] transcripción falló (clip {clip_id}): {exc}")
+        return None
+    if not transcript or transcript.get("no_speech"):
+        return None
+    words = [w for s in transcript.get("segments", [])
+             for w in s.get("words", [])]
+    if not words:
+        return None
+    clip_end = max(float(w.get("end", 0)) for w in words)
+    srt_path = os.path.join(work_dir, f"clip_{clip_id}.srt")
+    generado, _n = generate_srt(transcript, 0, clip_end, srt_path)
+    if not generado:
+        return None
+    return srt_path
+
+
 def validate_one(
     clip,
     work_dir,
@@ -367,12 +416,20 @@ def validate_one(
     plantilla_override=None,
     download_fn=None,
     validate_fn=None,
+    transcribe_fn=None,
 ):
     """Descarga + valida UN clip; nunca lanza por un clip.
 
     Devuelve el registro clasificado (ver classify_validation).
     Sin vídeo o con el validador lanzando: outcome ``error`` con
     acción ``avisar-humano`` y el motivo visible.
+
+    La validación va CON el SRT: el MP4 se transcribe (modelo
+    tiny) y el SRT generado se pasa al validador, para que el
+    gate de plantilla mida la capa de subtítulos con los tiempos
+    reales de la voz (antes se validaba SIN SRT y la capa quedaba
+    "sin medida"). Sin voz o si la transcripción falla, se valida
+    sin SRT (capa débil, como antes).
     """
     download_fn = download_fn or download_clip_video
     validate_fn = validate_fn or validate_final_clip
@@ -398,8 +455,23 @@ def validate_one(
         return _base_result(
             base, "error", ["sin_video"], ACCION_HUMANO, str(exc)
         )
+    # Con SRT: transcribe el MP4 y pasa los tiempos reales de la
+    # voz al validador, para que la capa de subtítulos se mida
+    # (sin SRT queda "sin medida" y un clip no-rubius pasaría).
+    srt_path = None
+    if transcribe_fn is None:
+        transcribe_fn = transcribe_clip_to_srt
+    if transcribe_fn is not None:
+        try:
+            srt_path = transcribe_fn(
+                path, work_dir, clip["id"],
+                clip.get("language") or "es")
+        except Exception as exc:  # noqa: BLE001 - sin SRT se
+            # valida igual; la capa de subtítulos queda débil.
+            print(f"  [validate_all] sin SRT (clip {clip['id']}): {exc}")
+            srt_path = None
     try:
-        result = validate_fn(path, base["title"], plantilla=plantilla, cfg=cfg)
+        result = validate_fn(path, base["title"], plantilla=plantilla, cfg=cfg, srt_path=srt_path)
     except Exception as exc:  # noqa: BLE001 - el validador
         # promete no lanzar; si lo hace, es error, no un pasa.
         return _base_result(
@@ -484,6 +556,7 @@ def run_batch(
     validate_fn=None,
     plantilla_override=None,
     default_template=None,
+    transcribe_fn=None,
 ):
     """Valida la lista y escribe el JSON de trabajo.
 
@@ -500,6 +573,7 @@ def run_batch(
                 plantilla_override=plantilla_override,
                 download_fn=download_fn,
                 validate_fn=validate_fn,
+                transcribe_fn=transcribe_fn,
             )
         except Exception as exc:  # noqa: BLE001 - un clip no
             # tumba el batch; queda como error visible.

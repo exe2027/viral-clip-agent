@@ -18,7 +18,7 @@ por debajo de viralidad 75 / SEO 98 (80,9) con el mismo chat (8x).
 - ``chat_norm``: múltiplo pico/mediana pasado a 0-100 con la misma
   escala de ``viral_score._chat_base`` (0-10) x10.
 - Filtros duros antes de ordenar (nunca cambian con el aprendizaje):
-  viralidad < 50 se descarta; SEO < 90 no se publica salvo override
+  viralidad < 45 se descarta; SEO < 80 no se publica salvo override
   registrado; clip con más de 7 días pierde 10 puntos por día de viejo;
   no dos clips del mismo momento el mismo día en la misma plataforma;
   clip con 3 días sin subir por prioridad baja se archiva solo.
@@ -48,8 +48,8 @@ DEFAULT_WEIGHTS = {"viral": 0.5, "seo": 0.3, "chat": 0.2}
 WEIGHTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "priority_weights.json")
 
-VIRAL_MIN_PUBLISH = 50      # < 50: descartado, no se publica
-SEO_GATE = 90               # < 90: no se publica salvo override registrado
+VIRAL_MIN_PUBLISH = 45      # < 45: descartado, no se publica
+SEO_GATE = 80               # < 80: no se publica salvo override registrado
 AGE_FREE_DAYS = 7           # hasta 7 días sin penalización
 AGE_PENALTY_PER_DAY = 10    # puntos que pierde por día de viejo
 STALE_DAYS = 3              # días sin subir por prioridad baja -> archivar solo
@@ -113,8 +113,8 @@ def publish_status(virality, seo, seo_override=False,
                    seo_gate=SEO_GATE, viral_min=VIRAL_MIN_PUBLISH):
     """Filtro duro de publicación. Devuelve (estado, motivo).
 
-    Estados: ``descartado`` (viralidad < 50), ``bloqueado_seo``
-    (SEO < 90 sin override), ``publicable_override`` (SEO < 90 con
+    Estados: ``descartado`` (viralidad < 45), ``bloqueado_seo``
+    (SEO < 80 sin override), ``publicable_override`` (SEO < 80 con
     override registrado), ``publicable``.
 
     Los umbrales se pueden leer de config.yaml (scoring.seo_gate,
