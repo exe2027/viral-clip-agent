@@ -1006,9 +1006,9 @@ def run(d1=None, bridge=None, http_get=None, now_ms=None, live=False,
         "unfixable": out.unfixable,
         "unfixable_fresh": out.unfixable_fresh, "notes": out.notes,
     }
-    _log(f"revisión {day_key} (franja: {slot or 'ninguna, '
-          'fuera de ventana de reparación'}; "
-          f"modo {'LIVE' if live else 'dry-run'})")
+    franja = slot or "ninguna, fuera de ventana de reparación"
+    modo = "LIVE" if live else "dry-run"
+    _log(f"revisión {day_key} (franja: {franja}; modo {modo})")
     if panel_quota_circuit_open():
         out.notes.append(
             "circuito 7500 abierto: cuota D1 agotada hasta las "
