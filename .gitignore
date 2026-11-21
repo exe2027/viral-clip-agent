@@ -26,3 +26,5 @@ seen_vods.json
 worker.lock
 # paquetes manuales de subida (estado local)
 drafts/
+
+accounts.yaml

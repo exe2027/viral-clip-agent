@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "viral-clip-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Detector de clips virales de VODs de Twitch/Kick: chat -> picos -> corte 9:16 -> subtítulos -> paquete SEO -> publicación con red de seguridad"
 requires-python = ">=3.10"
 dependencies = [
@@ -26,6 +26,13 @@ dependencies = [
     # la dejaba en el python del sistema, invisible para ese
     # intérprete.
     "fontTools>=4.0",
+    # Render (plantilla rubius, default desde 2026-11-19): el banner
+    # amarillo del título es un PNG dibujado con PIL
+    # (clipagent/rubius.py make_banner_png: rectángulo redondeado
+    # + borde blanco + dos líneas Arial Black). Sin Pillow el
+    # render rubius no puede componer el banner: es dependencia
+    # real del pipeline, no opcional (mismo caso que fontTools).
+    "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]

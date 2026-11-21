@@ -7,17 +7,18 @@ y el cerebro la lee por el endpoint puente del Worker, sin editar
 código:
 
     GET {worker_url}/api/bridge/settings?tenant={tenant}
-    Authorization: Bearer <BRIDGE_TOKEN>
+    Authorization: Bearer <sesión del cerebro o BRIDGE_TOKEN>
 
 Respuesta: {"settings": {...}} con los campos de PANEL_SETTINGS
-(abajo). Sin las variables de entorno PANEL_WORKER_URL y
-PANEL_BRIDGE_TOKEN, el cerebro usa solo config.yaml (comportamiento
-de siempre); con ellas, los Ajustes mandan sobre config.yaml.
+(abajo). Sin PANEL_WORKER_URL y sin token (PANEL_SESSION_TOKEN o
+PANEL_BRIDGE_TOKEN), el cerebro usa solo config.yaml
+(comportamiento de siempre); con ellos, los Ajustes mandan sobre
+config.yaml.
 
 Campos (mismos nombres en D1, en el Worker y aquí):
   layout: "rdjavi" | "plain" (default "rdjavi" para GTA 6)
   subtitle_style: "ref" | "karaoke" | "tiktok" | "highlight" (default "karaoke", 2026-11-18)
-  min_duration_s / max_duration_s: 40 / 60
+  min_duration_s / max_duration_s: 1 / 60 (sin mínimo desde 2026-11-21)
   min_virality: 50, min_seo: 90
   youtube_plan_per_day: 1, youtube_max_per_day: 2
   tiktok_plan_per_day: 2, tiktok_max_per_day: 3
@@ -267,22 +268,27 @@ def apply_panel_settings(cfg, settings):
 
 
 def fetch_panel_settings(worker_url=None, bridge_token=None, tenant=None,
-                         timeout=10):
+                         timeout=10, session_token=None):
     """Lee los Ajustes del panel por el endpoint puente.
 
     Devuelve el dict de settings o None (sin red, sin token, error
     HTTP o respuesta inválida: nunca lanza excepción por eso; el
     cerebro sigue con config.yaml).
 
-    Sin PANEL_WORKER_URL/PANEL_BRIDGE_TOKEN no hay panel que leer y
-    no hace falta tenant. Con ellos configurados, el tenant es
-    obligatorio: si falta PANEL_TENANT o no está en tenants.yaml,
-    levanta TenantError y el proceso aborta sin tocar la red (regla
-    2026-11-18: sin tenant por defecto).
+    Auth (2026-11-19, cerebro genérico): primero la sesión del
+    cerebro (PANEL_SESSION_TOKEN, canjeada del token de un solo
+    uso) y si no, el secreto compartido PANEL_BRIDGE_TOKEN
+    (compatibilidad). Sin PANEL_WORKER_URL ni token no hay panel
+    que leer y no hace falta tenant. Con ellos configurados, el
+    tenant es obligatorio: si falta PANEL_TENANT o no está en
+    tenants.yaml, levanta TenantError y el proceso aborta sin
+    tocar la red (regla 2026-11-18: sin tenant por defecto).
     """
     worker_url = (worker_url or os.environ.get("PANEL_WORKER_URL") or "").rstrip("/")
     bridge_token = bridge_token or os.environ.get("PANEL_BRIDGE_TOKEN")
-    if not worker_url or not bridge_token:
+    session_token = session_token or os.environ.get("PANEL_SESSION_TOKEN")
+    token = session_token or bridge_token
+    if not worker_url or not token:
         return None
     # Sin panel no hace falta tenant (regla 2026-11-18); el import va
     # aqui, despues del retorno temprano, para no exigir el modulo
@@ -292,7 +298,7 @@ def fetch_panel_settings(worker_url=None, bridge_token=None, tenant=None,
     tenant = require_tenant(tenant)
     url = f"{worker_url}/api/bridge/settings?tenant={tenant}"
     req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {bridge_token}",
+        "Authorization": f"Bearer {token}",
         "User-Agent": "viral-clip-agent/panel-settings",
     })
     try:
@@ -307,11 +313,12 @@ def fetch_panel_settings(worker_url=None, bridge_token=None, tenant=None,
 def load_config_with_panel():
     """load_config() + Ajustes del panel si hay entorno configurado.
 
-    Sin PANEL_WORKER_URL/PANEL_BRIDGE_TOKEN devuelve exactamente
-    load_config(). Con ellos, aplica los Ajustes encima. Si el panel
-    está configurado y falta PANEL_TENANT (o no está en la lista
-    blanca), levanta TenantError: el llamador no debe tragarlo con
-    un fallback silencioso a config.yaml.
+    Sin PANEL_WORKER_URL ni token (PANEL_SESSION_TOKEN o
+    PANEL_BRIDGE_TOKEN) devuelve exactamente load_config(). Con
+    ellos, aplica los Ajustes encima. Si el panel está configurado
+    y falta PANEL_TENANT (o no está en la lista blanca), levanta
+    TenantError: el llamador no debe tragarlo con un fallback
+    silencioso a config.yaml.
     """
     from .config import load_config
     cfg = load_config()

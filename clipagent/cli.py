@@ -337,11 +337,16 @@ def main(argv=None):
             # Ajustes del panel (2026-11-18): la marca de agua y
             # demás Ajustes mandan sobre config.yaml. Sin entorno
             # del panel, load_config_with_panel() devuelve
-            # load_config() (comportamiento de siempre); si falla,
-            # run_live_cut cae a load_config() con cfg=None.
+            # load_config() (comportamiento de siempre). Un
+            # TenantError (panel configurado sin PANEL_TENANT)
+            # NO se traga: el proceso aborta, no sigue con
+            # config.yaml como si nada.
             try:
                 from .panel_settings import load_config_with_panel
+                from .tenant import TenantError
                 live_cfg = load_config_with_panel()
+            except TenantError:
+                raise
             except Exception:
                 live_cfg = None
             result = run_live_cut(
@@ -412,7 +417,10 @@ def main(argv=None):
         from .live_cutter import CategoryGate, LiveCutterSession
         try:
             from .panel_settings import load_config_with_panel
+            from .tenant import TenantError
             replay_cfg = load_config_with_panel()
+        except TenantError:
+            raise
         except Exception:
             replay_cfg = None
         gate = CategoryGate(mode="vod", chat_path=args.chat)

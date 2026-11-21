@@ -1,0 +1,40 @@
+# accounts.example.yaml — PLANTILLA local (opcional).
+#
+# Copiar a accounts.yaml (gitignored) SOLO si se trabaja en local
+# sin panel. En el flujo normal las etiquetas de las cuentas salen
+# DEL PANEL del tenant (GET /api/accounts, clipagent/accounts.py
+# panel_labels): este archivo no es la fuente de verdad.
+#
+# Aquí solo viven identificadores NO secretos (handles y nombres) y
+# la fecha de la última verificación, que escribe `doctor`. El
+# estado se CALCULA comprobando credenciales reales (tokens/ y
+# client_secrets.json) y sondas de solo lectura (ver
+# clipagent/accounts.py y `clipagent doctor`). Nada de
+# oauth_configured / app_approved / scopes a mano: esos valores
+# salen de las comprobaciones. NUNCA poner secretos aquí.
+#
+# last_verified: 2026-11-19T00:00:00-0300
+
+youtube_shorts:
+  label: "YouTube ES — Tu canal (@tu-canal)"
+  handle: "@tu-canal"
+  notes: "Canal creado. Falta OAuth (Google Cloud proyecto + client_secrets.json) y verificar el canal."
+  created_at: "2026-11-19"
+
+tiktok:
+  label: "TikTok ES — Tu cuenta (@tu-cuenta)"
+  handle: "@tu-cuenta"
+  notes: "Cuenta creada. Sin app aprobada: solo draft-first (paquete manual)."
+  created_at: "2026-11-19"
+
+instagram_reels:
+  label: "Instagram ES — @tu-cuenta"
+  handle: "@tu-cuenta"
+  notes: "Cuenta creada y vinculada a tu Página."
+  created_at: "2026-11-19"
+
+facebook_reels:
+  label: "Facebook — Tu Página"
+  page_name: "Tu Página"
+  notes: "Página creada."
+  created_at: "2026-11-19"

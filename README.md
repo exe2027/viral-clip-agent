@@ -137,9 +137,10 @@ con `get_subtitle_style()` sin argumento. El estilo `karaoke` sigue
 disponible: la plantilla (rdjavi v2 en el código) genera su ASS con `make_karaoke_ass()`
 (`clipagent/rdjavi.py`). Subtítulos
 SIEMPRE y COMPLETOS: de TODO lo que dice el influencer, nunca
-inventar texto; sin voz verificable el clip queda BLOQUEADO
-(`needs_human_transcription` + `publish_blocked`) hasta
-transcribirlo de oído.
+inventar texto; sin voz verificable el clip se publica igual SIN
+subtítulos si pasa las puertas (viralidad ≥45, SEO ≥80, regla
+2026-11-19 18:41) — muchas veces es un grito, no silencio — y
+queda fuera si no las pasa.
 
 **Miniaturas estilo GTA 6 / Vice City**: texto de
 `THUMBNAIL_TEXTS` (`NO PUEDE SER`, `¡QUÉ LOCURA!`, `VICE CITY`,
@@ -781,9 +782,11 @@ En `subtitles.py` + `config.yaml`
   nada: el clip queda marcado como "solo gameplay/música" en el
   transcript JSON (`no_speech: true`,
   `audio_note: "solo gameplay/música"`) y el proceso termina con
-  código 0, sin fallar. El clip sigue su camino sin subtítulos.
-  Pendiente de conectar: que `auto_clips.py` / `viral_package.py`
-  lean ese campo y lo reflejen en el manifiesto.
+  código 0, sin fallar. El clip sigue su camino sin subtítulos: si
+  pasa las puertas (viralidad ≥45, SEO ≥80, regla 2026-11-19
+  18:41) se publica igual sin subtítulos — muchas veces es un
+  grito, no silencio — y si no las pasa queda fuera. El título sí
+  se quema aunque no haya voz. Nunca se inventa texto.
 - **Escalado condicional tiny → base:** SOLO si salta un umbral
   objetivo — repetición de la misma palabra/frase ≥3 veces,
   <8 palabras/min con voz, logprob medio < -0,8, idioma con prob.

@@ -38,7 +38,10 @@ from clipagent.rdjavi import (  # noqa: E402
     TITLE_BAND_Y0,
     TITLE_BAND_Y1,
     TITLE_FONT_SIZE,
+    TITLE_LINE_GAP,
     TITLE_LINE_H,
+    TITLE_MAX_W,
+    TITLE_OUTLINE,
     _game_filter,
     add_burned_title,
     build_filter,
@@ -46,6 +49,7 @@ from clipagent.rdjavi import (  # noqa: E402
     cam_cover_crop,
     clean_title_prefix,
     fit_title,
+    fit_title_lines,
     make_karaoke_ass,
     make_plain_ass,
     punch_cover_crop,
@@ -176,53 +180,98 @@ def test_clean_title_prefix_quita_gta6_inicial():
     assert clean_title_prefix("  GTA 6:  cromos  ") == "cromos"
 
 
-def test_fit_title_una_sola_linea_64px():
-    """Revision v2: el titulo de p7775 queda en UNA linea a
-    64 px, sin 'GTA 6' y acortado ('Rubius descubre los
-    cromos'): a 68 px solo caben 3 palabras, a 64 px caben 4."""
+def test_fit_title_completo_achica_la_letra():
+    """Revisión 2026-11-19 (corrección del usuario): el título sale
+    COMPLETO, nunca cortado por palabras. 'Rubius descubre los
+    cromos coleccionables' cabe en una línea a 40 px (964 px de
+    ancho); 'Risa imparable por un asesinato' a 56 px. La v2 lo
+    acortaba ('Rubius descubre los cromos' a 64 px)."""
     assert fit_title("GTA 6: Rubius descubre los cromos coleccionables") == (
-        "Rubius descubre los cromos", 64)
+        "Rubius descubre los cromos coleccionables", 40)
+    assert fit_title("Risa imparable por un asesinato") == (
+        "Risa imparable por un asesinato", 56)
     assert fit_title("GTA 6: cromos") == ("cromos", 68)
     assert fit_title("") == (None, None)
 
 
-def test_wrap_title_una_sola_linea_sin_gta6():
-    """wrap_title devuelve [linea] unica, nunca dos: el titulo
-    de p7775 se acorta a una linea y pierde el 'GTA 6'."""
+def test_fit_title_lines_muy_largo_parte_en_dos():
+    """Título que no cabe en una línea ni con el mínimo (32 px):
+    parte en dos líneas DENTRO de la franja (98 px de alto),
+    con el título entero. Una línea a 32 px mide 1674 px;
+    dos líneas a 36 px miden 90 px de alto en total."""
+    lines, size = fit_title_lines(
+        "GTA 6 Rubius descubre los cromos coleccionables legendarios "
+        "que se venden por un monton de pasta",
+        max_w=TITLE_MAX_W - 2 * TITLE_OUTLINE,
+        max_lines=2, max_h=TITLE_BAND_H)
+    assert len(lines) == 2
+    assert size == 36
+    assert " ".join(lines) == (
+        "Rubius descubre los cromos coleccionables legendarios que "
+        "se venden por un monton de pasta")
+    total_h = 2 * int(size * 1.15) + TITLE_LINE_GAP
+    assert total_h <= TITLE_BAND_H
+
+
+def test_wrap_title_completo_sin_gta6():
+    """wrap_title devuelve las líneas del título COMPLETO, nunca
+    cortado y sin 'GTA 6'. Una línea si cabe, dos si no."""
     assert wrap_title("GTA 6: Rubius descubre los cromos coleccionables") == [
-        "Rubius descubre los cromos"]
+        "Rubius descubre los cromos coleccionables"]
     assert wrap_title("GTA 6: cromos") == ["cromos"]
     assert wrap_title("") == []
 
 
-def test_wrap_title_largo_se_acorta_a_una_linea():
-    """Titulo imposible en una linea: se acorta por palabras,
-    nunca se parte en dos ni se achica la letra."""
+def test_wrap_title_largo_completo_en_dos_lineas():
+    """Título imposible en una línea: se parte en dos líneas con
+    el título entero, nunca se acorta por palabras (la v2 lo
+    dejaba en 'Rubius descubre los cromos')."""
     lines = wrap_title("GTA 6 Rubius descubre los cromos coleccionables "
                        "legendarios que se venden por un monton de pasta")
-    assert len(lines) == 1
-    assert lines[0] == "Rubius descubre los cromos"
-    assert "GTA 6" not in lines[0]
+    assert len(lines) == 2
+    assert " ".join(lines) == (
+        "Rubius descubre los cromos coleccionables legendarios que "
+        "se venden por un monton de pasta")
+    assert "GTA 6" not in " ".join(lines)
 
 
 def test_add_burned_title_en_franja_entre_webcam_y_gameplay():
     """El titulo quemado va en UNA SOLA LINEA, centrado
     verticalmente en la franja negra entre la webcam y el
-    gameplay (y 702..800, MarginV 714 a 64 px), dura todo el
-    clip y no toca los eventos karaoke. Sin 'GTA 6' delante."""
+    gameplay (y 702..800), dura todo el clip y no toca los
+    eventos karaoke. Sin 'GTA 6' delante y COMPLETO (revisión
+    2026-11-19: la v2 lo acortaba a 'Rubius descubre los
+    cromos'). El título entero cabe a 40 px: Fontsize ASS 56,
+    MarginV = 702 + (98 - 46)//2 = 728."""
     ass = make_karaoke_ass([(1.12, 5.18, "hola mundo")], KARAOKE_STYLE)
     titled = add_burned_title(
         ass, "GTA 6: Rubius descubre los cromos coleccionables", 48.02)
-    # 64 px REALES: el ASS lleva Fontsize 90 y Outline 7
-    # (= 64/5 px * 1,4102, ver ASS_FONT_SCALE).
-    assert "Style: Title,Arial Black,90" in titled
-    # 1 linea a 64 px: MarginV = 702 + (98 - 73)//2 = 714.
-    assert ",1,7,0,8,10,10,714,1" in titled
+    # 40 px REALES: el ASS lleva Fontsize 56 y Outline 7
+    # (= 40/5 px * 1,4102, ver ASS_FONT_SCALE).
+    assert "Style: Title,Arial Black,56" in titled
+    # 1 linea a 40 px: MarginV = 702 + (98 - 46)//2 = 728.
+    assert ",1,7,0,8,10,10,728,1" in titled
     assert ("Dialogue: 0,0:00:00.00,0:00:48.02,Title,,0,0,0,,"
-            "Rubius descubre los cromos" in titled)
+            "Rubius descubre los cromos coleccionables" in titled)
     assert "\\N" not in titled.split(",Title,,0,0,0,,")[1].split("\n")[0]
     assert "GTA 6" not in titled.split(",Title,,0,0,0,,")[1]
     assert "{\\k" in titled  # karaoke intacto
+    assert titled.count("Style: Title,") == 1
+
+
+def test_add_burned_title_muy_largo_en_dos_lineas():
+    """Título que no cabe en una línea ni a 32 px: dos líneas
+    en un solo evento (\\N), centradas en la franja, con el
+    título entero. A 36 px: MarginV = 702 + (98 - 90)//2 = 706."""
+    ass = make_karaoke_ass([(1.12, 5.18, "hola mundo")], KARAOKE_STYLE)
+    titled = add_burned_title(
+        ass, "GTA 6 Rubius descubre los cromos coleccionables "
+        "legendarios que se venden por un monton de pasta", 48.02)
+    assert "Style: Title,Arial Black,51" in titled
+    assert ",1,7,0,8,10,10,706,1" in titled
+    event = titled.split(",Title,,0,0,0,,")[1].split("\n")[0]
+    assert event == ("Rubius descubre los cromos coleccionables\\N"
+                     "legendarios que se venden por un monton de pasta")
     assert titled.count("Style: Title,") == 1
 
 
@@ -272,16 +321,20 @@ def test_fuente_pesada_tipo_arial_black_titulo_y_subtitulos():
     la rechazo: tiene que ser identica a la captura. En la
     revision v2 el titulo y los subtitulos van a 64 px (el
     karaoke sigue a 56 px reales, que lo fija su estilo: el ASS
-    lleva Fontsize 79 por la calibración libass)."""
+    lleva Fontsize 79 por la calibración libass). Desde la
+    corrección del título 2026-11-19, el título de p7775 sale
+    COMPLETO a 40 px (Fontsize 56) en vez de acortado a 64 px:
+    los subtítulos siguen a 64 px (Fontsize 90)."""
     from clipagent.rdjavi import SUBS_FONT
     assert SUBS_FONT == "Arial Black"
     ass = make_plain_ass(
         [(1.12, 5.18, "hola mundo")],
         title="GTA 6: Rubius descubre los cromos coleccionables",
         duration=48.06)
-    # 64 px REALES en titulo y subtitulos (Fontsize ASS 90).
+    # 64 px REALES en subtitulos (Fontsize ASS 90); el título
+    # completo a 40 px (Fontsize ASS 56).
     assert "Style: Subs,Arial Black,90" in ass
-    assert "Style: Title,Arial Black,90" in ass
+    assert "Style: Title,Arial Black,56" in ass
     karaoke = make_karaoke_ass([(1.12, 5.18, "hola mundo")],
                                KARAOKE_STYLE)
     assert "Style: Karaoke,Arial Black,79" in karaoke

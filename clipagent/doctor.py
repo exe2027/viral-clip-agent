@@ -162,7 +162,7 @@ def probe_facebook(base_dir=None, request_fn=None):
                         "nada que hacer")
         return _row("facebook_reels", label, "sin permisos",
                     "el token no ve ninguna Página",
-                    "revisar el rol en la Página Elclipdegta6 y "
+                    "revisar el rol en tu Página y "
                     "reautorizar: clipagent setup facebook_reels")
     code = (payload.get("error") or {}).get("code")
     if code in (190, 102):

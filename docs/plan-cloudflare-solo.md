@@ -1,5 +1,11 @@
 # Plan de respaldo degradado: solo Cloudflare $0 + APIs oficiales (+ manual)
 
+> **NOTA 2026-11-19 — §1 actualizada.** La arquitectura de respaldo
+> ya NO es "una instalación por persona": es la misma UNA sola
+> instalación multi-tenant del plan principal (Pages `avc`, Worker
+> `avc`, D1 `clips-avc`, R2 `clips-avc`, `tenant_id` por fila) y el
+> cerebro genérico. El tenant "colega" se eliminó el 2026-11-19.
+
 Fecha: 17 nov 2026. **ESTE PLAN YA NO ES LA VÍA PRINCIPAL.**
 
 Decisión del usuario 17 nov 2026 ("Todo automático"): la vía
@@ -11,19 +17,19 @@ ser manuales (el usuario corta el clip en el teléfono con CapCut y
 sube el MP4 9:16 al panel). Se pierde el corte, los subtítulos y la
 detección automáticos; el resto sigue automático tras Iniciar.
 
-## 1. Arquitectura del respaldo (una instalación por persona)
+## 1. Arquitectura del respaldo (UNA sola instalación, multi-tenant)
 
 | Pieza | Recurso | Qué hace |
 |---|---|---|
-| Panel web | Cloudflare Pages `panel-sebastian` / `panel-colega` | Login, cuentas, subtítulos, ajustes, botón Iniciar, Cola, Tracking |
-| API + cola + estados | Cloudflare Worker (TypeScript) por panel | Endpoints del panel, máquina de estados, cola |
-| Datos | D1 por panel | Clips, estados, cuentas, `started`, registro de atascos |
-| Videos | R2 por panel (10 GB gratis) | MP4 9:16 ya cortados, listos para publicar |
+| Panel web | Cloudflare Pages `avc` | Login por usuario, cuentas, subtítulos, ajustes, botón Iniciar, Cola, Tracking |
+| API + cola + estados | Cloudflare Worker `avc` (TypeScript) | Endpoints del panel, máquina de estados, cola |
+| Datos | D1 `clips-avc` con `tenant_id` | Clips, estados, cuentas, `started`, registro de atascos |
+| Videos | R2 `clips-avc` con prefijo por tenant | MP4 9:16 ya cortados, listos para publicar |
 | Scheduler | Cron Triggers del Worker (09:00 America/Santiago) | Revisión diaria: VODs nuevos, cola pendiente |
 | Cola | Cloudflare Queues | Trabajo pendiente entre cron y publicación |
 
 Compartido: código, esquema SQL, fórmula de prioridad, reglas.
-Duplicado por persona: Pages, Worker, D1, R2, secretos, cron.
+Por tenant: solo credenciales, cuentas, colas y sesiones (en el panel).
 
 ## 2. Qué queda automatizado y qué no (honesto, en este respaldo)
 

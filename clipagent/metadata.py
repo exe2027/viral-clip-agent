@@ -236,7 +236,7 @@ GAME_ALIASES = {
 
 # Hashtags y tags por juego real. Sin juego conocido: genéricos, sin #GTA6.
 GAME_HASHTAGS = {
-    "GTA 6": (["#GTA6", "#GTA6Clips", "#ElClipDeGTA6", "#GTA", "#RockstarGames"],
+    "GTA 6": (["#GTA6", "#GTA6Clips", "#GTA", "#RockstarGames"],
               ["GTA 6", "GTA VI", "clips GTA 6", "GTA 6 gameplay", "Rockstar Games"]),
     "GTA V RP": (["#GTAV", "#GTARP", "#GTA5", "#Roleplay", "#GTA"],
                  ["GTA V RP", "GTA 5 RP", "GTA V roleplay", "GTA 5 gameplay", "Rockstar Games"]),

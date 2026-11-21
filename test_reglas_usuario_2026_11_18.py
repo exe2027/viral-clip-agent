@@ -6,8 +6,11 @@ codificadas en el repo (código/config), no solo en chat/memoria.
 Este archivo fija las decisiones del 2026-11-18 y las reglas
 anteriores que siguen vigentes, con su punto de aplicación:
 
-1. Duración 40-60 s (hoy): nunca < 40 ni > 60, nunca 30 s exacto,
-   rango 25-35 prohibido. El clip p2010 de Rubius (38 s) queda fuera.
+1. Duración: la regla 40-60 s con mínimo 40 y rango 25-35 prohibido
+   fue ELIMINADA por el usuario el 2026-11-21 ("para siempre, en todo
+   el canal"). Sin mínimo ni rango prohibido; solo queda el tope duro
+   de 60 s. El clip p2010 de Rubius (38 s) ya pasa duración (sigue
+   descartado por viralidad 44,5 < 50).
 2. Hype por ráfaga v2 (hoy, ver test_hype_v2.py): velocidad por 10 s
    y 60 s contra baseline rodante (mediana 5 min); la ráfaga pesa
    más que el total.
@@ -24,9 +27,11 @@ anteriores que siguen vigentes, con su punto de aplicación:
 5. Layout split vertical (2026-11-16): juego arriba, cámara abajo
    más chica, sin tapar minimapa ni HUD, dos webcams apiladas; si
    el juego no se ve, la cámara se achica, nunca al revés.
-6. Subtítulos SIEMPRE y COMPLETOS (2026-11-17 22:10): quemados,
-   todo lo que dice el influencer, nunca inventar texto; sin voz
-   verificable = BLOCKED / needs_human_transcription, no publicar.
+6. Subtítulos SIEMPRE y COMPLETOS cuando hay voz (2026-11-17
+   22:10, matizada 2026-11-19 18:41): quemados, todo lo que dice
+   el influencer, nunca inventar texto; sin voz verificable +
+   pasa puertas (45/80) = se publica igual sin subtítulos, sin
+   voz + bajo puertas = fuera.
 7. Descargar SOLO la parte del clip, nunca el video entero; chat
    solo en la ventana alrededor del pico (±120 s).
 8. Prioridad LIVE sobre VOD, fórmula INTOCABLE
@@ -89,28 +94,30 @@ def _clip(duration=40.0, viral=80, seo=95, platform="youtube_shorts"):
 
 
 class TestReglas20261118Duracion(unittest.TestCase):
-    def test_entre_40_y_60(self):
-        self.assertEqual(RULES_MIN_DURATION_S, 40)
+    # Regla 40-60 / 25-35 ELIMINADA por el usuario el 2026-11-21
+    # ("para siempre, en todo el canal"): sin mínimo ni rango
+    # prohibido; solo queda el tope duro de 60 s.
+    def test_sin_minimo_ni_rango_prohibido(self):
+        self.assertEqual(RULES_MIN_DURATION_S, 1)
         self.assertEqual(RULES_HARD_CAP_S, 60)
-        self.assertEqual(RULES_FORBIDDEN_DURATION_RANGE, (25, 35))
-        for bad in (21.0, 30.0, 35.0, 38.0, 39.9, 61.0):
+        self.assertEqual(RULES_FORBIDDEN_DURATION_RANGE, ())
+        for bad in (61.0,):
             ok, _ = clip_duration_ok(bad)
             self.assertFalse(ok, f"{bad} s debe rechazarse")
-        for good in (40.0, 50.0, 60.0):
+        for good in (15.0, 21.0, 25.6, 30.0, 38.0, 40.0, 50.0, 60.0):
             ok, _ = clip_duration_ok(good)
             self.assertTrue(ok, f"{good} s debe pasar")
 
-    def test_p2010_38s_rechazado_por_duracion_y_por_viralidad(self):
-        ok, why = clip_duration_ok(38.005)
-        self.assertFalse(ok)
-        self.assertIn("40", why)
-        # Y además su viralidad 44,5 < 50 lo descarta sin override.
+    def test_p2010_38s_pasa_duracion_pero_sigue_descartado_por_viralidad(self):
+        ok, _ = clip_duration_ok(38.005)
+        self.assertTrue(ok)
+        # Su viralidad 44,5 < 50 lo descarta sin override.
         status, _ = publish_status(44.5, 98, seo_override=True)
         self.assertEqual(status, "descartado")
         clip = _clip(duration=38.005, viral=44, seo=98)
         dec = evaluate(clip, "youtube_shorts")
-        self.assertEqual(dec["decision"], "retenido")
-        self.assertIn("40", dec["reason"])
+        self.assertEqual(dec["decision"], "descartado")
+        self.assertNotIn("40", dec["reason"])
 
 
 class TestReglas20261118Streamers(unittest.TestCase):
@@ -206,8 +213,10 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
         self.assertEqual(cfg["split_cam_h"], 600)
         # Caja normal: juego 1320, cámara 600.
         p = _split_params([10, 10, 40, 20], DEFAULT_CONFIG["clips"])
-        # Variante por defecto para GTA 6: RDJavi; encuadre cara.
-        self.assertEqual(p["split_variant"], "rdjavi")
+        # Variante por defecto para GTA 6: Rubius (decisión del
+        # usuario 2026-11-19 20:48, todos los clips a rubius);
+        # encuadre cara.
+        self.assertEqual(p["split_variant"], "rubius")
         self.assertEqual(p["framing"], "face")
         self.assertEqual(p["game_h"], 1320)
         self.assertEqual(p["cam_h"], 600)
@@ -218,12 +227,15 @@ class TestReglasLayoutSubtitulosDescarga(unittest.TestCase):
         self.assertEqual(p2["cam_h"], 480)
         self.assertEqual(p2["game_h"], 1440)
 
-    def test_subtitulos_siempre_completos_y_bloqueo_sin_voz(self):
+    def test_subtitulos_siempre_completos_y_sin_voz_publica_si_pasa(self):
+        # Regla 2026-11-17 22:10, matizada 2026-11-19 18:41:
+        # subtítulos siempre y completos cuando hay voz; sin voz +
+        # pasa puertas (45/80) el clip se publica igual sin
+        # subtítulos, nunca se inventa texto.
         subs = load_config()["subtitles"]
         self.assertTrue(subs["required"])
         self.assertTrue(subs["complete"])
-        self.assertTrue(subs["block_without_subtitles"])
-        self.assertTrue(subs["needs_human_transcription_on_no_speech"])
+        self.assertTrue(subs["publish_no_speech_if_passes_gates"])
         from clipagent.transcribe import (
             effective_subtitle_margin_v,
             subtitles_overlap_webcam,

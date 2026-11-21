@@ -396,23 +396,31 @@ def gate_peak_for_render(chat_path, peak_ts, score, multiple, detail,
 
 
 def _do_cut(video, start_sec, duration, output, layout_mode="auto",
-            crf=23, cfg=None):
+            crf=23, cfg=None, hype_s=None):
     """Un corte 9:16 con layout (render.cut_clip_with_layout).
     Función separada para poder sustituirla en tests."""
     from .render import cut_clip_with_layout
     layout_cfg = None
     if cfg:
         layout_cfg = (cfg.get("layout") or {}).copy()
+    if hype_s is not None:
+        layout_cfg = dict(layout_cfg or {})
+        layout_cfg["hype_s"] = list(hype_s)
     return cut_clip_with_layout(
         video, start_sec, duration, output, crf=crf, preset="fast",
-        layout_mode=layout_mode, cfg=layout_cfg)
+        layout_mode=layout_mode, cfg=layout_cfg, hype_s=hype_s)
 
 
 def cut_clip(video, start_sec, duration, output, layout_mode="auto",
-             crf=23, cfg=None):
+             crf=23, cfg=None, hype_s=None):
     """Corta un clip vertical. Idempotente: si ``output`` ya existe
     y no está vacío, NO vuelve a llamar a ffmpeg: devuelve el
-    archivo existente marcado como reutilizado."""
+    archivo existente marcado como reutilizado.
+
+    ``hype_s``: segundos de hype en tiempo del clip (gritos del
+    streamer / explosión del chat). Con ellos, el punch-in va en
+    ventanas de 4 s alrededor de cada momento (no la fija 16-26 s).
+    """
     if not os.path.isfile(video):
         raise StepError(f"vídeo no existe: {video}", kind="permanent")
     if os.path.isfile(output) and os.path.getsize(output) > 0:
@@ -421,7 +429,8 @@ def cut_clip(video, start_sec, duration, output, layout_mode="auto",
                 "duration": float(duration)}
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     decision = _do_cut(video, start_sec, duration, output,
-                       layout_mode=layout_mode, crf=crf, cfg=cfg)
+                       layout_mode=layout_mode, crf=crf, cfg=cfg,
+                       hype_s=hype_s)
     if not os.path.isfile(output) or os.path.getsize(output) == 0:
         raise StepError(f"el corte no dejó archivo: {output}",
                         kind="permanent")
@@ -443,23 +452,45 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
                   lang=None, model="tiny", chat_lang=None, title=None):
     """Transcribe + SRT (+ quemado opcional). Idempotente: si el SRT
     ya existe, se reutiliza sin re-transcribir. Si el clip no tiene
-    voz, termina OK marcado ``no_speech`` (no es un fallo del paso),
-    PERO con ``needs_human_transcription=True`` y
-    ``publish_blocked=True`` (regla 2026-11-17 22:10: SIEMPRE
-    subtítulos completos, sin subtítulos no se publica). El estilo
-    sale del payload o de config.yaml (subtitles.default_style).
-    ``title`` quema además el título en UNA línea en la franja
-    702-800 (plantilla v2, burn_subtitles con style rdjavi/karaoke);
-    sin él la franja queda en negro, como antes."""
+    voz, termina OK marcado ``no_speech`` (no es un fallo del paso)
+    y SIN bloquear: la decisión de publicar la toman las puertas
+    con los scores (policy.no_speech_blocked, regla 2026-11-19
+    18:41: sin voz + pasa 45/80 -> se publica igual sin
+    subtítulos; nunca se inventa texto). El título SÍ se quema
+    aunque no haya voz (SRT vacío: solo la franja del título).
+    El estilo sale del payload o de config.yaml
+    (subtitles.default_style). ``title`` quema además el título en
+    UNA línea en la franja 702-800 (plantilla v2, burn_subtitles
+    con el style de config.yaml); sin él la franja queda en negro,
+    como antes."""
     if not os.path.isfile(video):
         raise StepError(f"vídeo no existe: {video}", kind="permanent")
     cfg = cfg or {}
     srt = srt or (os.path.splitext(video)[0] + ".srt")
+    # El estilo sale del payload o de config.yaml
+    # (subtitles.default_style: "rubius" desde 2026-11-19). Sin él
+    # en el cfg (cfg parcial, p. ej. tests), se carga config.yaml
+    # en disco, mismo patrón que load_validator_config. Si el
+    # archivo no lo trae, falla fuerte: sin defaults silenciosos
+    # (el "rdjavi" silencioso de antes quemaba el VOD como willyrex
+    # aunque el default acordado fuera otro; clip 23, 2026-11-19).
+    # OJO: DEFAULT_CONFIG ya trae default_style "rubius", así que
+    # el ConfigError de abajo solo salta si falta también ahí; el
+    # fallo en vivo es para templates.default, que DEFAULT_CONFIG
+    # no define.
     style = style or ((cfg.get("subtitles") or {}).get("default_style")
-                      # Plantilla acordada (config.yaml): rdjavi. El
-                      # default silencioso era "karaoke" y el camino
-                      # VOD lo quemaba asi (clip 23, 2026-11-19).
-                      or "rdjavi")
+                      or None)
+    if not style:
+        from .config import load_config
+        full = load_config()
+        style = ((full.get("subtitles") or {}).get("default_style")
+                 or None)
+    if not style:
+        from .validate import ConfigError
+        raise ConfigError(
+            "subtitles.default_style: falta en config.yaml (el estilo "
+            "por defecto es rubius desde 2026-11-19; sin defaults "
+            "silenciosos)")
     result = {"video": video, "srt": srt, "style": style,
               "burn": burn, "no_speech": False, "reused_srt": False,
               "needs_human_transcription": False,
@@ -484,19 +515,27 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
         result["transcript"] = transcript_path
         if transcript.get("no_speech"):
             result["no_speech"] = True
-            result["needs_human_transcription"] = True
-            result["publish_blocked"] = True
-            return result
-        from .transcribe import generate_srt
-        sub_cfg = (cfg.get("subtitles") or {})
-        ok, _n = generate_srt(
-            transcript, 0, 10 ** 9, srt,
-            corrections=sub_cfg.get("gta6_corrections"))
-        if not ok:
-            result["no_speech"] = True
-            result["needs_human_transcription"] = True
-            result["publish_blocked"] = True
-            return result
+            result["needs_human_transcription"] = False
+            result["publish_blocked"] = False
+            # Sin voz no hay SRT que quemar, pero el TÍTULO sí se
+            # quema (regla 2026-11-19: el clip sin voz con buen
+            # score se publica igual y la plantilla exige la franja
+            # de título). SRT vacío -> burn_subtitles solo quema
+            # el título, sin inventar ni una palabra.
+            with open(srt, "w", encoding="utf-8") as f:
+                f.write("")
+        else:
+            from .transcribe import generate_srt
+            sub_cfg = (cfg.get("subtitles") or {})
+            ok, _n = generate_srt(
+                transcript, 0, 10 ** 9, srt,
+                corrections=sub_cfg.get("gta6_corrections"))
+            if not ok:
+                result["no_speech"] = True
+                result["needs_human_transcription"] = False
+                result["publish_blocked"] = False
+                with open(srt, "w", encoding="utf-8") as f:
+                    f.write("")
     if burn:
         from .transcribe import burn_subtitles
         burn_subtitles(video, srt, burn, style=style, config=cfg,
@@ -504,12 +543,64 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
         result["burned"] = burn
     if transcript is not None:
         result["no_speech"] = bool(transcript.get("no_speech"))
-        result["needs_human_transcription"] = bool(
-            transcript.get("needs_human_transcription"))
-        result["publish_blocked"] = bool(
-            transcript.get("publish_blocked"))
+        # La decisión de bloquear ya NO vive en la transcripción
+        # (regla 2026-11-19): la toman las puertas con los scores.
+        # Un transcript viejo en disco puede traer
+        # publish_blocked=true: se ignora, nunca se propaga.
+        result["needs_human_transcription"] = False
+        result["publish_blocked"] = False
         result["words"] = transcript.get("word_count")
     return result
+
+
+def apply_sfx(video, transcript_path=None, srt_path=None, payoff_s=20.0,
+              cfg=None, out_path=None):
+    """Mezcla SFX sobre el MP4 ya renderizado (2026-11-19: SFX por
+    defecto en el render, vivo y VOD).
+
+    ``cfg["sfx"]``: enabled (default True), max_sfx (default 2),
+    lift (default True). La decisión de qué efectos y dónde la
+    toma ``decide_sfx`` (payoff + dip de silencio -> vine boom;
+    riser antes; fail visual si se conoce). Sin eventos, solo se
+    aplica el lift de volumen. Si la mezcla falla por lo que sea,
+    devuelve el vídeo original sin tocar (nunca tumba el clip).
+    Devuelve (ruta_final, info).
+    """
+    sfx_cfg = ((cfg or {}).get("sfx") or {})
+    if not sfx_cfg.get("enabled", True):
+        return video, {"enabled": False, "events": []}
+    if out_path is None:
+        base, ext = os.path.splitext(video)
+        out_path = f"{base}_sfx{ext}"
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        return out_path, {"enabled": True, "events": [], "reused": True}
+    transcript = None
+    if transcript_path and os.path.isfile(transcript_path):
+        try:
+            with open(transcript_path, encoding="utf-8") as f:
+                transcript = json.load(f)
+        except Exception:
+            transcript = None
+    if transcript is None and srt_path:
+        tpath = os.path.splitext(srt_path)[0] + ".transcript.json"
+        if os.path.isfile(tpath):
+            try:
+                with open(tpath, encoding="utf-8") as f:
+                    transcript = json.load(f)
+            except Exception:
+                transcript = None
+    try:
+        from .sfx_mix import mix_clip_with_sfx
+        out, info = mix_clip_with_sfx(
+            video, transcript=transcript, payoff_s=float(payoff_s),
+            out_path=out_path, lift=bool(sfx_cfg.get("lift", True)),
+            max_sfx=int(sfx_cfg.get("max_sfx", 2)))
+        info = dict(info or {})
+        info["enabled"] = True
+        return out, info
+    except Exception as e:  # noqa: BLE001 - el clip sigue sin SFX
+        return video, {"enabled": True, "events": [],
+                       "error": f"mezcla SFX falló: {e}"}
 
 
 def package_clip_step(clip, title, description="", tags=None,
@@ -639,10 +730,23 @@ def _h_corte(store, job, cfg):
             raise StepError(
                 f"puerta de render: {gate['motivo']} (sin render)",
                 kind="permanent")
-    return cut_clip(payload["video"], float(payload["start_sec"]),
+    result = cut_clip(payload["video"], float(payload["start_sec"]),
                     float(payload["duration"]), payload["output"],
                     layout_mode=payload.get("layout_mode", "auto"),
-                    crf=int(payload.get("crf", 23)), cfg=cfg)
+                    crf=int(payload.get("crf", 23)), cfg=cfg,
+                    hype_s=payload.get("hype_s"))
+    # Plantilla del clip (2026-11-19): la explícita del job manda;
+    # si no, la que declara el render o la que produce su variante
+    # ("rdjavi" -> willyrex v2). Fluye al paso empaquetar, donde el
+    # validador final la usa; sin ella, el default (rubius).
+    layout = (result or {}).get("layout") or {}
+    from .config import template_for_variant
+    result = dict(result)
+    result["plantilla"] = (
+        payload.get("plantilla")
+        or layout.get("plantilla")
+        or template_for_variant(layout.get("split_variant")))
+    return result
 
 
 def _h_subtitulos(store, job, cfg):
@@ -819,8 +923,10 @@ def advance_pipeline(store, job, result, cfg=None):
       2026-11-18 por orden del usuario: 100% automático): solo
       TikTok se auto-encola; YouTube/Instagram/Facebook siguen
       manuales (panel). La puerta de subtítulos es dura: si el
-      clip viene con publish_blocked (sin voz verificable), NO
-      se encola nada. El resto de puertas (viralidad >= 50,
+      clip viene con publish_blocked, NO se encola nada; sin voz
+      verificable solo se frena si no pasa las puertas (regla
+      2026-11-19: sin voz + buen score se publica igual sin
+      subtítulos). El resto de puertas (viralidad >= 50,
       SEO >= 90, duración 40-60 s, topes diarios, lista blanca)
       las aplica publish_one al ejecutar el job de publicar.
     Devuelve la lista de jobs creados.
@@ -880,7 +986,8 @@ def advance_pipeline(store, job, result, cfg=None):
     merged.update({k: v for k, v in (result or {}).items()
                    if k in ("output", "burned", "package_path", "srt",
                             "video", "clip", "publish_blocked",
-                            "needs_human_transcription")})
+                            "plantilla",
+                            "needs_human_transcription", "no_speech")})
     if paso == "corte":
         merged["video"] = (result or {}).get("output") or merged.get("video")
     if paso == "subtitulos":
@@ -898,29 +1005,43 @@ def advance_pipeline(store, job, result, cfg=None):
 def _advance_empaquetar_to_publish(store, job, result, cfg=None):
     """empaquetar -> publicar (TikTok, mode api, automático).
 
-    Puerta dura de subtítulos: publish_blocked (sin voz
-    verificable, regla 2026-11-17 22:10) -> no se encola nada y
-    la cadena se detiene con motivo visible. Sin clip o sin
-    archivo -> tampoco. En el resto, el job de publicar en modo
-    api pasa por publish_one, que aplica el resto de puertas
-    (viralidad, SEO, duración, topes, lista blanca); si no las
-    pasa, queda retenido/descartado, nunca se publica.
+    Puerta dura de subtítulos (regla 2026-11-17 22:10, matizada
+    2026-11-19 18:41): publish_blocked explícito -> no se encola
+    nada y la cadena se detiene con motivo visible. Sin voz
+    verificable (no_speech) -> solo se frena si NO pasa las
+    puertas (policy.no_speech_blocked, viralidad/SEO de
+    config.yaml): sin voz + buen score se publica igual sin
+    subtítulos. Sin clip o sin archivo -> tampoco. En el resto, el
+    job de publicar en modo api pasa por publish_one, que aplica
+    el resto de puertas (viralidad, SEO, duración, topes, lista
+    blanca); si no las pasa, queda retenido/descartado, nunca se
+    publica. Sin scores en el payload no se puede probar que pase
+    las puertas: se frena (falla cerrado).
     Idempotente: store.enqueue no duplica por clave.
 
     Validación final del preview (2026-11-18, final_review.py):
-    DESPUÉS del render y ANTES de auto-encolar. Rechazado -> no
-    se encola nada. Pendiente (sin Gemini) -> el job se encola
-    en modo draft para revisión humana, nunca en api. ENCENDIDA
-    por defecto (2026-11-18 22:57); desactivada explícitamente
-    (FINAL_REVIEW_ENABLED=0) -> comportamiento de antes (mode api).
+    DESPUÉS del render y ANTES de auto-encolar. Puerta DURA de
+    cara + plantilla (2026-11-19): rechazado -> no se encola nada.
+    Pendiente (sin Gemini) -> el job se encola en modo draft para
+    revisión humana, nunca en api. ENCENDIDA por defecto
+    (2026-11-18 22:57); desactivada explícitamente
+    (final_review.enabled=False) -> comportamiento de antes
+    (mode api).
     """
+    from .policy import no_speech_blocked
     payload = dict(job["payload"] or {})
     blocked = bool(payload.get("publish_blocked")
-                   or (result or {}).get("publish_blocked"))
+                   or (result or {}).get("publish_blocked")
+                   or no_speech_blocked(
+                       bool(payload.get("no_speech")
+                            or (result or {}).get("no_speech")),
+                       payload.get("viral_total"),
+                       payload.get("seo_scores"), cfg))
     if blocked:
         store._log(job["id"], "pipeline_stop",
                    "empaquetar: subtítulos incompletos "
-                   "(publish_blocked): no se auto-encola publicar")
+                   "(publish_blocked o sin voz bajo puertas): "
+                   "no se auto-encola publicar")
         return []
     clip = (payload.get("clip") or (result or {}).get("clip")
             or payload.get("video") or (result or {}).get("video"))
@@ -929,13 +1050,28 @@ def _advance_empaquetar_to_publish(store, job, result, cfg=None):
                    "empaquetar: sin clip en disco: no se auto-encola "
                    "publicar")
         return []
+    # Validación final del preview (2026-11-18, final_review.py):
+    # DESPUÉS del render y ANTES de auto-encolar. Puerta DURA de
+    # cara + plantilla (2026-11-19, validate_final_clip): si la
+    # cara o la plantilla fallan, NO se encola nada y la cadena se
+    # detiene con motivo visible para revisión humana (nunca en
+    # silencio); el re-render automático en este camino queda
+    # pendiente de poder pasar una config por job al paso "corte"
+    # (hoy la cfg es global del run_step). Pendiente (sin Gemini)
+    # -> el job se encola en modo draft para revisión humana, nunca
+    # en api. ENCENDIDA por defecto (2026-11-18 22:57);
+    # desactivada explícitamente (final_review.enabled=False) ->
+    # comportamiento de antes (mode api). Sin config del gate,
+    # ConfigError: falla en voz alta, nunca con defaults.
     from .final_review import (
-        maybe_review_final_clip, transcript_text_for_srt)
+        transcript_text_for_srt, validate_final_clip)
     transcript = (payload.get("transcript_text") or
                   transcript_text_for_srt(payload.get("srt")))
-    final_review = maybe_review_final_clip(
+    final_review = validate_final_clip(
         clip, payload.get("title") or "",
-        transcript_text=transcript, cfg=cfg)
+        transcript_text=transcript,
+        srt_path=payload.get("srt"), cfg=cfg,
+        plantilla=payload.get("plantilla"))
     decision = final_review.get("decision")
     store._log(job["id"], "pipeline_advance",
                f"validación final del preview: {decision} "
@@ -944,7 +1080,10 @@ def _advance_empaquetar_to_publish(store, job, result, cfg=None):
         store._log(job["id"], "pipeline_stop",
                    "validación final: "
                    f"{final_review.get('motivo')}: no se auto-encola "
-                   "publicar")
+                   "publicar"
+                   + (" (revisión humana)"
+                      if final_review.get("needs_human_review")
+                      else ""))
         return []
     mode = "draft" if decision == "pendiente_revision" else "api"
     pub = store.enqueue(

@@ -26,8 +26,19 @@ solo con la cola del cerebro (el motivo queda registrado).
 """
 import json
 import os
+import time
 import urllib.error
 import urllib.request
+
+from .retry import (
+    MAX_RETRIES_PER_DAY,
+    RetryBudget,
+    is_d1_quota_error,
+    is_transient_panel_error,
+    panel_quota_circuit_open,
+    retry_delay_seconds,
+    trip_panel_quota_circuit,
+)
 
 DEFAULT_BASE_URL = "https://avc.vikingosfoodspa.workers.dev"
 USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -50,11 +61,18 @@ class PanelBridge:
     """Cliente mínimo del panel web (urllib, sin dependencias)."""
 
     def __init__(self, base_url=None, username=None, password=None,
-                 tenant=None, token=None, brain_token=None):
+                 tenant=None, token=None, brain_token=None, *,
+                 sleep_fn=None):
         self.base_url = (base_url or os.environ.get("PANEL_BASE_URL")
                          or DEFAULT_BASE_URL).rstrip("/")
         self.username = username or os.environ.get("PANEL_USERNAME")
         self.password = password or os.environ.get("PANEL_PASSWORD")
+        # Espera entre reintentos (inyectable en tests; en
+        # producción es time.sleep). Ver _request_retry.
+        self._sleep = sleep_fn or time.sleep
+        # Presupuesto de reintentos por operación y día (A4,
+        # clipagent/retry.py): solo memoria del proceso.
+        self._retry_budget = RetryBudget()
         # Token de un solo uso del dispatch (2026-11-19, cerebro
         # genérico): se canjea una vez por una sesión y se borra
         # de la memoria. Sin él, el cerebro en Actions no puede
@@ -101,6 +119,64 @@ class PanelBridge:
     # -- HTTP ----------------------------------------------------------
     def _request(self, method, path, body=None, raw=None,
                  content_type="application/json"):
+        """Un intento al panel, con el circuito 7500 (A4).
+
+        Si el circuito está abierto (se vio un 7500 en este
+        proceso), levanta sin tocar la red. Si ESTE intento
+        devuelve un 7500, dispara el circuito antes de levantar:
+        ningún bucle de este proceso vuelve a intentarlo hasta el
+        reset de cuota (00:00 UTC = 21:00 -03)."""
+        if panel_quota_circuit_open():
+            raise PanelError(
+                f"{method} {path} -> circuito 7500 abierto: cuota "
+                "D1 agotada hasta las 21:00 (-03); sin reintentos")
+        try:
+            return self._request_once(
+                method, path, body=body, raw=raw,
+                content_type=content_type)
+        except PanelError as e:
+            if is_d1_quota_error(e):
+                trip_panel_quota_circuit()
+            raise
+
+    def _request_retry(self, method, path, key=None, body=None,
+                       raw=None, content_type="application/json"):
+        """Como _request, con reintento acotado (A4).
+
+        Solo fallos TRANSITORIOS (429, 5xx, red) se reintentan, con
+        backoff 1/5/15 min y tope 3 reintentos por operación y día
+        (RetryBudget, clave ``key`` o "MÉTODO ruta"). Un 400/401/
+        403/404 levanta al primer intento. Un 7500 levanta al
+        primer intento y abre el circuito (ver _request): nada de
+        reintentos mientras dure. ``key`` distingue por clip en
+        las rutas con id (p. ej. publish de cada clip tiene su
+        propio presupuesto de 3/día).
+        """
+        op_key = key or f"{method} {path}"
+        attempt = 0
+        while True:
+            try:
+                return self._request(
+                    method, path, body=body, raw=raw,
+                    content_type=content_type)
+            except PanelError as e:
+                if is_d1_quota_error(e):
+                    raise
+                if not is_transient_panel_error(e):
+                    raise
+                attempt += 1
+                if not self._retry_budget.can_retry(op_key):
+                    raise PanelError(
+                        f"{method} {path} -> sin más reintentos "
+                        f"hoy (tope {MAX_RETRIES_PER_DAY}/día): {e}")
+                self._retry_budget.record_retry(op_key)
+                delay = retry_delay_seconds(attempt)
+                if delay is None:
+                    raise
+                self._sleep(delay)
+
+    def _request_once(self, method, path, body=None, raw=None,
+                      content_type="application/json"):
         url = self.base_url + path
         headers = {"User-Agent": USER_AGENT}
         if self._token:
@@ -179,7 +255,12 @@ class PanelBridge:
 
     # -- Cola ------------------------------------------------------------
     def create_clip(self, payload):
-        """POST /api/clips -> clip (dict con id)."""
+        """POST /api/clips -> clip (dict con id).
+
+        SIN reintento (A4): el POST no es idempotente — un
+        reintento tras un fallo ambiguo crearía un clip duplicado
+        en la Cola. Si falla, el llamador (live_cutter) lo registra
+        y sigue con el siguiente clip."""
         self._ensure_login()
         res = self._request("POST", "/api/clips", body=payload)
         clip = res.get("clip") or {}
@@ -188,7 +269,11 @@ class PanelBridge:
         return clip
 
     def upload_video(self, clip_id, video_path):
-        """PUT /api/clips/:id/video con el MP4 (máx. 128 MB)."""
+        """PUT /api/clips/:id/video con el MP4 (máx. 128 MB).
+
+        SIN reintento (A4): re-subir 128 MB tras cada fallo
+        transitorio quemaría ancho de banda y tiempo de corrida; el
+        llamador decide si el clip se reintenta entero."""
         self._ensure_login()
         with open(video_path, "rb") as f:
             data = f.read()
@@ -198,12 +283,18 @@ class PanelBridge:
         return res
 
     def tracking_step(self, clip_id, step, message, estado="completado"):
-        """POST /api/tracking/step (pasos canónicos del diseño)."""
+        """POST /api/tracking/step (pasos canónicos del diseño).
+
+        Reintentable (A4): un paso es idempotente a efectos del
+        panel (la dedupe de 6 h del Worker lo registra una vez) y
+        perderlo es perder trazabilidad del clip."""
         self._ensure_login()
-        return self._request("POST", "/api/tracking/step", body={
-            "clip_id": int(clip_id), "step": step,
-            "message": message, "estado": estado,
-            "actor": "live-cutter"})
+        return self._request_retry(
+            "POST", "/api/tracking/step",
+            key=f"POST /api/tracking/step/{clip_id}", body={
+                "clip_id": int(clip_id), "step": step,
+                "message": message, "estado": estado,
+                "actor": "live-cutter"})
 
     def report_phase(self, phase, detail="", run_id=""):
         """POST /api/worker/phase: qué está haciendo el cerebro AHORA.
@@ -252,57 +343,172 @@ class PanelBridge:
         lo que falte en el panel). Nunca se registra el contenido:
         el llamador (panel_credentials) enmascara cada valor."""
         self._ensure_login()
-        return self._request("GET", "/api/bridge/credentials")
+        return self._request_retry("GET", "/api/bridge/credentials")
 
     def list_influencers(self):
         """GET /api/influencers (los del tenant de la sesión)."""
         self._ensure_login()
-        return self._request("GET", "/api/influencers").get("influencers") or []
+        return self._request_retry(
+            "GET", "/api/influencers").get("influencers") or []
 
     def list_api_accounts(self):
         """GET /api/accounts (cuentas API del tenant, con madurez)."""
         self._ensure_login()
-        return self._request("GET", "/api/accounts").get("accounts") or []
+        return self._request_retry(
+            "GET", "/api/accounts").get("accounts") or []
 
     def list_clips(self):
         """GET /api/clips (Cola del tenant)."""
         self._ensure_login()
-        return self._request("GET", "/api/clips").get("clips") or []
+        return self._request_retry(
+            "GET", "/api/clips").get("clips") or []
 
     def get_clip(self, clip_id):
         """GET /api/clips/:id."""
         self._ensure_login()
-        return self._request("GET", f"/api/clips/{clip_id}").get("clip") or {}
+        return self._request_retry(
+            "GET", f"/api/clips/{clip_id}",
+            key=f"GET /api/clips/{clip_id}").get("clip") or {}
+
+    def download_video(self, clip_id, out_path):
+        """GET /api/clips/:id/video: baja el MP4 del clip a disco.
+
+        La descarga es binaria (no JSON como ``_request``), así que
+        va por su propio GET con el token de sesión. Lo usa el
+        recuperador de fuente VOD (clipagent/recover_vod_source.py)
+        para el match de audio contra el VOD."""
+        import urllib.error
+        import urllib.request
+
+        self._ensure_login()
+        url = self.base_url + f"/api/clips/{clip_id}/video"
+        headers = {"User-Agent": USER_AGENT}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                if resp.status != 200:
+                    raise PanelError(
+                        f"GET /api/clips/{clip_id}/video -> "
+                        f"HTTP {resp.status}")
+                with open(out_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "ignore")[:300]
+            raise PanelError(
+                f"GET /api/clips/{clip_id}/video -> HTTP {e.code}: {detail}")
+        except urllib.error.URLError as e:
+            raise PanelError(f"GET /api/clips/{clip_id}/video -> {e}")
+        return out_path
+
+    def update_clip(self, clip_id, fields):
+        """PATCH /api/clips/:id: actualiza campos del clip
+        (publish_blocked, subtitles_complete, ...). Lo usa el
+        re-hecho a rubius (clipagent/remake_all.py) para
+        desbloquear el clip cuando su vídeo corregido ya pasó
+        la validación y se subió. Reintentable (A4): un PATCH con
+        los mismos campos es idempotente."""
+        self._ensure_login()
+        return self._request_retry(
+            "PATCH", f"/api/clips/{clip_id}",
+            key=f"PATCH /api/clips/{clip_id}", body=fields)
 
     def preview_seen(self, clip_id):
         """POST /api/clips/:id/preview-seen: levanta el freno de
-        publishGate ('falta ver el preview en el Editor')."""
+        publishGate ('falta ver el preview en el Editor').
+        Reintentable (A4): marcar visto dos veces no cambia nada."""
         self._ensure_login()
-        return self._request("POST", f"/api/clips/{clip_id}/preview-seen")
+        return self._request_retry(
+            "POST", f"/api/clips/{clip_id}/preview-seen",
+            key=f"POST /api/clips/{clip_id}/preview-seen")
 
     def publish_clip(self, clip_id):
         """POST /api/clips/:id/publish: encola jobs por plataforma
         (las que pasan publishGate). NO publica en el acto: el
         Worker (cron */5) ejecuta los jobs y cada 'posted' lleva su
-        evidence_url. Devuelve {jobs, blocked}."""
+        evidence_url. Devuelve {jobs, blocked}. Reintentable (A4):
+        el Worker encola por idempotency_key, así que un segundo
+        intento no duplica jobs."""
         self._ensure_login()
-        return self._request("POST", f"/api/clips/{clip_id}/publish")
+        return self._request_retry(
+            "POST", f"/api/clips/{clip_id}/publish",
+            key=f"POST /api/clips/{clip_id}/publish")
 
     def list_jobs(self, state=None, limit=50):
         """GET /api/jobs (vista del usuario)."""
         self._ensure_login()
         q = f"?limit={limit}" + (f"&state={state}" if state else "")
-        return self._request("GET", f"/api/jobs{q}").get("jobs") or []
+        return self._request_retry("GET", f"/api/jobs{q}").get("jobs") or []
 
     def worker_state(self):
         """GET /api/worker/state (flag running del tenant de la
         sesión; lo usa la puerta Iniciar del workflow diario)."""
         self._ensure_login()
-        return self._request("GET", "/api/worker/state")
+        return self._request_retry("GET", "/api/worker/state")
+
+    # -- Vigilante (2026-11-19, auto-reparación) -----------------------
+    # Solo lectura de logs + reinicio + aviso por Telegram. El
+    # registro de pasos del vigilante NO va por report_event: el
+    # servidor valida kind contra (clip_cortado, clip_encolado,
+    # clip_descartado, corte_fallido) y "watchdog" da 400
+    # (worker-phase.ts:136,154); hasta que el panel lo acepte, los
+    # pasos viven en el log de la corrida (ver watchdog.py).
+    def list_worker_events(self):
+        """Actividad reciente del Worker (worker_events, 50).
+
+        GET /api/worker/state devuelve {running, startedAt,
+        lastNote, activity, validation, phase, lastSweepAt,
+        lastClipAt, nextRunAt}; activity es la lista {at, kind,
+        message} (SELECT ... ORDER BY at DESC LIMIT 50). Es la
+        primera fuente del vigilante: los logs mandan.
+        """
+        self._ensure_login()
+        state = self._request_retry("GET", "/api/worker/state")
+        return state.get("activity") or []
+
+    def list_clip_events(self, clip_id):
+        """Eventos de tracking de un clip (clip_events).
+
+        GET /api/clips/:id/tracking -> {ok, events} (SELECT * FROM
+        clip_events WHERE clip_id = ? AND tenant_id = ? ORDER BY
+        at ASC).
+        """
+        self._ensure_login()
+        return self._request_retry(
+            "GET", f"/api/clips/{clip_id}/tracking",
+            key=f"GET /api/clips/{clip_id}/tracking").get("events") or []
+
+    def restart_worker(self):
+        """POST /api/worker/start: el botón Iniciar del panel.
+
+        Pone running=1 y dispara panel-start al cerebro (lo escucha
+        cerebro.yml, no cerebro-live). Es el peldaño RESTART_WORKER
+        de la escalera del vigilante. Reintentable (A4): poner
+        running=1 es idempotente.
+        """
+        self._ensure_login()
+        return self._request_retry("POST", "/api/worker/start")
+
+    def notify_telegram(self, message):
+        """POST /api/bridge/notify {message}: aviso del vigilante.
+
+        PENDIENTE del panel: la ruta no existe aún (la crea el otro
+        agente); hasta entonces levanta PanelError (HTTP 404) con
+        mensaje claro y el vigilante deja el Telegram como borrador
+        en el log. Nunca se traga el error en silencio.
+        """
+        self._ensure_login()
+        return self._request("POST", "/api/bridge/notify",
+                             body={"message": message})
 
     def health(self):
         """GET /api/health (sin auth)."""
-        return self._request("GET", "/api/health")
+        return self._request_retry("GET", "/api/health")
 
 
 def report_brain_phase(phase, detail="", bridge=None):

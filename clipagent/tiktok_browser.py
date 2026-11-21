@@ -48,7 +48,7 @@ Uso (runner autoalojado, tras instalar Playwright, ver README abajo):
     python -m clipagent.tiktok_browser login
     python -m clipagent.tiktok_browser upload --clip clip.mp4 \\
         --title "Título" --description "Descripción" \\
-        --hashtags gta6,gta6clips --account @elclipdegta6
+        --hashtags gta6,gta6clips --account @tu-cuenta
     python -m clipagent.tiktok_browser verify --clip clip.mp4
     python -m clipagent.tiktok_browser status
 
@@ -122,7 +122,23 @@ REJECTED_TEXT = re.compile(
 MAX_POSTS_PER_DAY = 1          # cuenta nueva: 1/día, sin excepciones
 RETRY_PAUSE = timedelta(hours=2)  # pausa tras rechazo, sin reintentos
 MAX_ATTEMPTS = 2               # intento inicial + 1 reintento, misma sesión
-DEFAULT_ACCOUNT = "@elclipdegta6"
+def default_account():
+    """Cuenta de TikTok por defecto: la del tenant (del panel).
+
+    Sin panel (ni PANEL_TENANT ni bridge), None: entonces
+    --account es obligatorio. Nunca la cuenta de otro tenant
+    (2026-11-19, cerebro genérico: no hay cuenta por defecto).
+    """
+    try:
+        from .accounts import panel_labels
+        label = panel_labels().get("tiktok")
+        if label:
+            return label
+    except Exception:
+        pass
+    return None
+
+
 DEFAULT_PROFILE_DIR = os.path.expanduser(
     "~/.cache/clipagent/tiktok-profile")
 DEFAULT_STATE_DIR = os.path.join(
@@ -146,14 +162,22 @@ class TikTokClip:
     title: str
     description: str = ""
     hashtags: list = field(default_factory=list)
-    account: str = DEFAULT_ACCOUNT
+    account: str = ""  # vacío = se resuelve del panel (--account si no)
     date: str = ""  # YYYY-MM-DD America/Santiago; hoy si vacío
 
     def __post_init__(self):
         if not self.date:
             self.date = datetime.now(CHILE_TZ).strftime("%Y-%m-%d")
-        self.account = self.account if self.account.startswith("@") \
-            else "@" + self.account
+        if not self.account:
+            resolved = default_account()
+            if not resolved:
+                raise TikTokBrowserError(
+                    "--account es obligatorio: pasa la cuenta de "
+                    "TikTok o define PANEL_TENANT con el panel "
+                    "conectado (la cuenta se resuelve de SU panel).")
+            self.account = resolved
+        if " " not in self.account and not self.account.startswith("@"):
+            self.account = "@" + self.account
 
     @property
     def caption(self):
@@ -673,7 +697,7 @@ def build_parser():
     p_up.add_argument("--description", default="")
     p_up.add_argument("--hashtags", default="",
                       help="separados por coma, sin #")
-    p_up.add_argument("--account", default=DEFAULT_ACCOUNT)
+    p_up.add_argument("--account", default=None, help="Cuenta de TikTok (si no, se resuelve del panel)")
     p_up.add_argument("--date", default="",
                       help="YYYY-MM-DD America/Santiago (hoy si vacío)")
     p_up.add_argument("--profile-dir", default=DEFAULT_PROFILE_DIR)
@@ -689,13 +713,13 @@ def build_parser():
     p_ver = sub.add_parser("verify", help="Confirmar en el perfil un "
                            "clip en needs_verification.")
     p_ver.add_argument("--clip", required=True)
-    p_ver.add_argument("--account", default=DEFAULT_ACCOUNT)
+    p_ver.add_argument("--account", default=None, help="Cuenta de TikTok (si no, se resuelve del panel)")
     p_ver.add_argument("--date", default="")
     p_ver.add_argument("--profile-dir", default=DEFAULT_PROFILE_DIR)
     p_ver.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
 
     p_st = sub.add_parser("status", help="Estado de hoy para la cuenta.")
-    p_st.add_argument("--account", default=DEFAULT_ACCOUNT)
+    p_st.add_argument("--account", default=None, help="Cuenta de TikTok (si no, se resuelve del panel)")
     p_st.add_argument("--date", default="")
     p_st.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
     return p
@@ -717,6 +741,11 @@ def main(argv=None):
     store = StateStore(args.state_dir)
     agent = TikTokBrowserAgent(store)
     today = args.date or datetime.now(CHILE_TZ).strftime("%Y-%m-%d")
+
+    # Sin --account, la cuenta se resuelve del panel (PANEL_TENANT);
+    # sin panel queda None y el clip la exige con error claro.
+    if args.command in ("upload", "verify", "status") and not args.account:
+        args.account = default_account()
 
     if args.command == "status":
         print(json.dumps(

@@ -60,11 +60,15 @@ def _rdjavi_graph(box=FACE_BOX, **over):
                                 1280, 720, dict(DEFAULTS))
 
 
-class TestVarianteRdjaviDefault(unittest.TestCase):
-    def test_auto_resuelve_rdjavi_para_gta6(self):
+class TestVarianteRubiusDefault(unittest.TestCase):
+    def test_auto_resuelve_rubius_para_gta6(self):
+        # Default rubius (decisión del usuario 2026-11-19 20:48,
+        # todos los clips a rubius): "auto" o cfg vacío leen
+        # templates.default de config.yaml (única fuente); sin
+        # defaults silenciosos a rdjavi.
         self.assertEqual(resolve_split_variant({"split_variant": "auto"}),
-                         "rdjavi")
-        self.assertEqual(resolve_split_variant({}), "rdjavi")
+                         "rubius")
+        self.assertEqual(resolve_split_variant({}), "rubius")
         self.assertEqual(resolve_split_variant({"split_variant": "rdjavi"}),
                          "rdjavi")
 
@@ -91,12 +95,14 @@ class TestDeteccionEncuadre(unittest.TestCase):
     def test_split_params_guarda_framing_y_variante(self):
         p = _split_params(FACE_BOX, dict(DEFAULTS))
         self.assertEqual(p["framing"], "face")
-        self.assertEqual(p["split_variant"], "rdjavi")
+        # Sin templates en el cfg, la variante es el default de
+        # config.yaml (rubius desde 2026-11-19).
+        self.assertEqual(p["split_variant"], "rubius")
         p2 = _split_params(SETUP_BOX, dict(DEFAULTS))
         self.assertEqual(p2["framing"], "setup")
         # Aunque el encuadre sea setup, la variante sigue siendo
-        # RDJavi mientras DJ Mariio esté aparcado.
-        self.assertEqual(p2["split_variant"], "rdjavi")
+        # el default (rubius) mientras DJ Mariio esté aparcado.
+        self.assertEqual(p2["split_variant"], "rubius")
 
 
 class TestGrafoRdjaviV2(unittest.TestCase):

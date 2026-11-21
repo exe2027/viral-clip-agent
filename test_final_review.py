@@ -269,12 +269,30 @@ class TestVodHook(unittest.TestCase):
                "payload": {"clip": clip, "title": "Título"},
                "prioridad": 0, "vod_job_id": None}
         verdict = {"decision": decision, "pasa": decision == "aprobado",
-                   "motivo": "", "resumen": decision}
+                   "hard_pasa": decision != "rechazado",
+                   "needs_rerender": False, "rerender_reason": "",
+                   "hard_failures": [],
+                   "motivo": "", "resumen": decision,
+                   "fallos": [], "scores": {}, "frames_n": 0,
+                   "model": "", "transcript_words": 0,
+                   "observe_only": True,
+                   "face": {"pasa": decision != "rechazado"},
+                   "template": {"pasa": decision != "rechazado"},
+                   "gemini": {"decision": decision}}
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
-                "clipagent.final_review.maybe_review_final_clip",
+                "clipagent.final_review.validate_final_clip",
                 return_value=verdict):
-            cfg = ({"final_review": {"enabled": True}}
-                   if decision != "desactivada" else {})
+            cfg = {"validator": {
+                "face_sample_every_s": 2, "face_min_frames": 8,
+                "face_min_share": 0.5, "face_min_width_frac": 0.08,
+                "min_score": 5, "max_rerenders": 1,
+                "gemini_hard": False,
+                "chain": ["facecrop", "edge", "yunet"]},
+                "final_review": {
+                    "enabled": decision != "desactivada",
+                    "observe_only": True},
+                "layout": {"split_variant": "auto"},
+                "subtitles": {"default_style": "rdjavi"}}
             return advance_pipeline(store, job, {}, cfg=cfg)
 
     def test_aprobado_encola_api(self):

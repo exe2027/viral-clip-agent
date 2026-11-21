@@ -47,7 +47,7 @@ Reglas duras (las del usuario, no se tocan salvo orden suya):
 
 El estado vive en runs/vod-fallback/state.json y se restaura/guarda
 con el artefacto `cerebro-live-vod-state` del workflow (como el
-estado diario de cerebro-sebastian, pero separado para no pisarlo).
+estado diario de cerebro, pero separado para no pisarlo).
 """
 
 import argparse
@@ -439,33 +439,180 @@ def run_auto_clips(vod_url, out_dir, top_n=TOP_N_PER_VOD,
 # Quemado de subtítulos + encolado en el panel (SIN publicar)
 # ---------------------------------------------------------------------------
 
+def _parse_fmt_ts(text):
+    """'07h12m34s' / '12m34s' / '45s' -> segundos, o None.
+
+    Es el formato del nombre de los segmentos del VOD
+    (segments/seg_{n:02d}_t*.mp4): el inicio absoluto del segmento
+    en el VOD. Sirve para reconstruir dónde empieza el clip dentro
+    de su segmento al re-hacerlo.
+    """
+    import re
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?",
+                     str(text or "").strip())
+    if not m or not any(m.groups()):
+        return None
+    h, mnt, s = (int(v) if v else 0 for v in m.groups())
+    return h * 3600 + mnt * 60 + s
+
+
+def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
+                       clip, cfg, lang, title, plantilla=None):
+    """UN re-render VOD tras un fallo de la puerta dura (2026-11-19).
+
+    Re-corta el mismo pico desde su segmento fuente
+    (segments/seg_{n:02d}_t*.mp4) con la cara forzada (facecam_box
+    de la cadena face-crop -> bordes -> YuNet en el segmento) +
+    re-quema subtítulos y título (reutiliza el SRT ya transcrito)
+    + SFX por defecto, y vuelve a validar el vídeo re-hecho.
+    Devuelve (final_review, final_video) del re-render si salió, o
+    la revisión original (con needs_human_review=True) si no se
+    pudo re-hacer o sigue fallando: el llamador NO encola y deja
+    el motivo visible para revisión humana. Nunca levanta salvo
+    ConfigError (falta la config del gate).
+    """
+    import glob
+    from .final_review import (
+        find_facecam_box_in_source, transcript_text_for_srt,
+        validate_final_clip)
+    from .validate import ConfigError
+    from .workers import apply_sfx, subtitle_clip
+
+    def _human_review(motivo_extra):
+        review = dict(final_review)
+        review["needs_human_review"] = True
+        review["motivo"] = ((final_review.get("motivo") or "")
+                            + " — " + motivo_extra
+                            + ": revisión humana")
+        return review, final_video
+
+    hard = final_review.get("hard_failures") or []
+    idx = clip.get("n")
+    seg_glob = ""
+    if idx is not None:
+        try:
+            seg_glob = os.path.join(
+                out_dir, "segments", f"seg_{int(idx):02d}_t*.mp4")
+        except (TypeError, ValueError):
+            seg_glob = ""
+    segs = sorted(glob.glob(seg_glob)) if seg_glob else []
+    if not segs:
+        return _human_review("sin segmento fuente para re-hacerlo")
+    seg_path = segs[0]
+    seg_start = _parse_fmt_ts(
+        os.path.basename(seg_path).split("_t", 1)[-1]
+        .rsplit(".", 1)[0])
+    if seg_start is None:
+        return _human_review(
+            "inicio del segmento no reconstruible del nombre")
+    cut_start = float(clip.get("start", 0) or 0) - seg_start
+    cut_dur = float(clip.get("duration") or 0)
+    if cut_start < 0 or cut_dur <= 0:
+        return _human_review(
+            "inicio/duración del pico no reconstruible")
+    face_box = None
+    if "cara" in hard:
+        try:
+            from .thumbnails import get_duration
+            seg_dur = get_duration(seg_path) or 0
+        except Exception:  # noqa: BLE001 - sin duración no hay caja
+            seg_dur = 0
+        found = find_facecam_box_in_source(seg_path, seg_dur, cfg)
+        if not found:
+            return _human_review("sin cara detectable en la fuente")
+        face_box = found["box"]
+    try:
+        from .config import get_layout_config
+        from .render import cut_clip_with_layout
+        layout_cfg = get_layout_config(cfg)
+        if face_box is not None:
+            layout_cfg["facecam_box"] = face_box
+        if clip.get("game_voice"):
+            layout_cfg["game_voice"] = clip["game_voice"]
+        out2 = os.path.splitext(video)[0] + "_r1.mp4"
+        cut_clip_with_layout(
+            seg_path, cut_start, cut_dur, out2,
+            layout_mode="auto", cfg=layout_cfg)
+    except Exception:  # noqa: BLE001 - sin re-render, no tumba
+        return _human_review("el re-corte falló")
+    burned2 = os.path.splitext(out2)[0] + "_subs.mp4"
+    try:
+        sub2 = subtitle_clip(
+            out2, srt=sub.get("srt"), burn=burned2, cfg=cfg or {},
+            lang=lang, title=title)
+    except Exception:  # noqa: BLE001 - sin re-render, no tumba
+        return _human_review("el re-quemado falló")
+    final2 = burned2 if os.path.isfile(burned2) else out2
+    try:
+        final2, _sfx2 = apply_sfx(
+            final2, transcript_path=sub2.get("transcript"),
+            srt_path=sub2.get("srt"), payoff_s=20.0, cfg=cfg or {})
+    except Exception:  # noqa: BLE001 - el SFX nunca tumba
+        pass
+    _log(f"  pico {clip.get('peak')}: re-hecho tras la puerta dura "
+         f"({final_review.get('rerender_reason') or ''})")
+    try:
+        review2 = validate_final_clip(
+            final2, title,
+            transcript_text=transcript_text_for_srt(
+                sub2.get("srt") or ""),
+            srt_path=sub2.get("srt") or "",
+            cfg=cfg or {}, plantilla=plantilla)
+    except ConfigError:
+        raise
+    except Exception:  # noqa: BLE001 - sin veredicto, no tumba
+        return _human_review("sin veredicto del re-render")
+    review2 = dict(review2)
+    review2["rerendered_from"] = final_video
+    review2["rerender_facecam_box"] = face_box
+    if review2.get("decision") == "rechazado":
+        review2["needs_human_review"] = True
+    return review2, final2
+
+
 def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
                      lang="es"):
     """Quema subtítulos + título y encola el clip en el panel.
 
-    Devuelve (panel_id o None, motivo). Si no hay voz verificable
-    el clip queda fuera (publish_blocked): nunca se encola sin
-    subtítulos completos y nunca se inventa texto. `lang` ("es" o
-    "en") es el idioma del streamer: subtítulos, título y
-    `language` del payload van en ese idioma.
+    Devuelve (panel_id o None, motivo). Sin voz verificable el
+    clip ya NO queda fuera siempre (regla 2026-11-19 18:41): si
+    pasa las puertas (viralidad >=45, SEO >=80) se encola
+    PUBLICABLE sin subtítulos (subtitles_complete=0, honesto);
+    sin voz + bajo las puertas sigue fuera. Nunca se inventa
+    texto de subtítulos. `lang` ("es" o "en") es el idioma del
+    streamer: subtítulos, título y `language` del payload van en
+    ese idioma.
     """
     from .workers import subtitle_clip
     lang = lang if lang in ("es", "en") else "es"
     if not cfg:
         # 2026-11-19 (clip 23, TheGrefg): el fallback nunca cargaba
         # config.yaml y subtitle_clip caia en su default silencioso
-        # "karaoke". La plantilla acordada es rdjavi
-        # (config.yaml subtitles.default_style). Se carga la config
-        # real para que el quemado y el validador final usen los
-        # mismos ajustes que el camino en vivo.
+        # "karaoke". La plantilla acordada es la de config.yaml
+        # (subtitles.default_style; decisión 2026-11-19 20:48 TODOS
+        # a rubius). Se carga la config real para que el quemado y
+        # el validador final usen los mismos ajustes que el camino
+        # en vivo. Sin config real no hay gate válido: falla en voz
+        # alta (ConfigError) en vez de seguir con {} y defaults
+        # inventados.
         try:
             from .config import load_config
             cfg = load_config()
-        except Exception:  # noqa: BLE001 - sin config, sigue con {}
-            cfg = {}
+        except Exception as exc:
+            from .validate import ConfigError
+            raise ConfigError(
+                "vod_fallback: sin config.yaml válido para el "
+                f"validador final: {exc}") from exc
     viral = clip.get("viral") or {}
     title_key = "title_en" if lang == "en" else "title_es"
+    # El título es el del paquete del manifiesto (best_title,
+    # Gemini cuando el VOD lo trae): vídeo, seo_title y panel
+    # usan el MISMO. El título crudo de la ficha solo es el
+    # fallback si el paquete no trae best_title.
     title = viral.get("best_title") or clip.get(title_key) or ""
+    # Texto de miniatura del paquete del manifiesto (2026-11-19):
+    # viaja al panel (columna thumb_text); sin él queda vacía.
+    thumbnail_text = (viral.get("thumbnail_text") or "").strip()
     video = os.path.join(out_dir, clip.get("file", ""))
     if not os.path.isfile(video):
         return None, f"falta el MP4 {video}"
@@ -475,33 +622,72 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
                             lang=lang, title=title)
     except Exception as e:  # noqa: BLE001 - un clip no tumba la corrida
         return None, f"subtítulos fallaron ({e})"
-    if sub.get("publish_blocked") or sub.get("no_speech"):
-        return None, ("sin voz verificable: subtítulos incompletos, "
-                      "no se encola (publish_blocked)")
-    final_video = burned if os.path.isfile(burned) else video
-    # Validación final del render (2026-11-19, final_review.py):
-    # el mismo juez visual del camino en vivo. Rechazado -> no
-    # se encola nada. Aprobado -> tras subir, el preview queda
-    # validado (preview_seen) sin inventar un visto humano.
-    # Pendiente (sin Gemini) o desactivada -> se encola sin
-    # marcar: el freno sigue para revisión humana.
-    try:
-        from .final_review import (
-            maybe_review_final_clip, transcript_text_for_srt)
-        final_review = maybe_review_final_clip(
-            final_video, title,
-            transcript_text=transcript_text_for_srt(
-                sub.get("srt") or ""),
-            cfg=cfg or {})
-    except Exception:  # noqa: BLE001 - sin veredicto no se aprueba
-        final_review = {"decision": "pendiente_revision"}
-    if final_review.get("decision") == "rechazado":
-        return None, (f"validación final: "
-                      f"{final_review.get('motivo') or ''}: "
-                      f"no se encola")
+    # Puerta sin voz (regla 2026-11-19 18:41): los scores del clip
+    # ya se conocen (el manifiesto los trae) y la corrida ya pasó
+    # clip_passes_gates antes de llegar aquí, así que un sin voz
+    # que llega hasta aquí pasa las puertas y se encola publicable
+    # sin subtítulos. La comprobación explícita deja la función
+    # correcta también si se la llama directa: sin voz + bajo
+    # puertas sigue fuera, como antes. No se confía en
+    # sub["publish_blocked"]: subtitle_clip ya no lo marca.
     viral_score = clip.get("viral_score") or {}
     total = viral_score.get("total") or 0
     seo = clip.get("seo_scores") or {}
+    from .policy import no_speech_blocked
+    no_speech = bool(sub.get("no_speech"))
+    if no_speech_blocked(no_speech, total, seo, cfg):
+        return None, ("sin voz verificable y bajo las puertas "
+                      "(viralidad/SEO): no se encola")
+    final_video = burned if os.path.isfile(burned) else video
+    # SFX por defecto (2026-11-19): sobre el MP4 final y antes de
+    # la validación final (el validador ve el archivo que se
+    # publica). Si la mezcla falla, el clip sigue sin SFX.
+    try:
+        from .workers import apply_sfx
+        final_video, _sfx_info = apply_sfx(
+            final_video, transcript_path=sub.get("transcript"),
+            srt_path=sub.get("srt"), payoff_s=20.0, cfg=cfg or {})
+    except Exception:  # noqa: BLE001 - el clip sigue sin SFX
+        pass
+    # Validación final DEFINITIVA (2026-11-19, final_review.py):
+    # puerta dura de cara + plantilla sobre el MP4 final + juez
+    # Gemini. La plantilla es la del clip (campo plantilla del
+    # manifiesto) o la que produce el render (variante "rdjavi" ->
+    # willyrex v2); sin ella, el validador usa el default de
+    # config.yaml (rubius). Si la puerta dura falla, UN re-render
+    # con la cara forzada (segmento fuente + facecam_box) y se
+    # vuelve a validar; si sigue fallando, NO se encola y el motivo
+    # queda visible para revisión humana (nunca bloqueado en
+    # silencio). Pendiente (sin Gemini) o desactivada -> se encola
+    # sin marcar: el freno sigue para revisión humana.
+    from .config import template_for_variant
+    from .render import resolve_split_variant
+    plantilla = (clip.get("plantilla")
+                 or template_for_variant(resolve_split_variant(
+                     (cfg or {}).get("layout") or {})))
+    try:
+        from .final_review import (
+            transcript_text_for_srt, validate_final_clip)
+        from .validate import ConfigError
+        final_review = validate_final_clip(
+            final_video, title,
+            transcript_text=transcript_text_for_srt(
+                sub.get("srt") or ""),
+            srt_path=sub.get("srt") or "",
+            cfg=cfg or {}, plantilla=plantilla)
+    except ConfigError:
+        raise
+    except Exception:  # noqa: BLE001 - sin veredicto no se aprueba
+        final_review = {"decision": "pendiente_revision"}
+    if final_review.get("needs_rerender"):
+        final_review, final_video = _rerender_vod_clip(
+            final_review, final_video, video, sub, out_dir, clip,
+            cfg, lang, title, plantilla=plantilla)
+    if final_review.get("decision") == "rechazado":
+        human = bool(final_review.get("needs_human_review"))
+        return None, (f"validación final: "
+                      f"{final_review.get('motivo') or ''}: "
+                      f"{'revisión humana' if human else 'no se encola'}")
     chat_multiple = (viral_score.get("chat_multiple")
                      or (viral or {}).get("viral_multiple") or 1.0)
     start = int(clip.get("start", 0))
@@ -525,7 +711,9 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
                             or viral.get("description_first_2_lines")
                             or ""),
         "seo_tags": viral.get("tags") or [],
-        "subtitles_complete": 1,
+        # Honesto: 0 cuando no hay voz (el clip se publica igual
+        # sin subtítulos por la regla 2026-11-19); 1 con voz.
+        "subtitles_complete": 0 if no_speech else 1,
         "needs_human_transcription": 0,
         "origin": "vod",
         "game": "GTA VI",
@@ -534,9 +722,17 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
         # caería en las cuentas ES al publicar.
         "language": lang,
         "reason": (f"VOD GTA VI ({streamer}, VOD {vod_id}, {lang}) — "
-                   f"viralidad {total} — SEO {seo_txt} — subtítulos "
-                   "completos"),
+                   f"viralidad {total} — SEO {seo_txt} — "
+                   + ("sin subtítulos (sin voz: se publica igual, "
+                      "pasa puertas)" if no_speech else
+                      "subtítulos completos")
+                   + (" — re-hecho tras puerta dura"
+                      if final_review.get("rerendered_from") else "")),
     }
+    # Solo si hay texto: el panel rechaza thumbnail_text null
+    # con 400.
+    if thumbnail_text:
+        payload["thumbnail_text"] = thumbnail_text
     try:
         created = bridge.create_clip(payload)
         panel_id = created.get("id")

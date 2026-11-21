@@ -62,6 +62,54 @@ def load_scoring_config(cfg=None):
     return seo_gate, viral_min
 
 
+def passes_publish_gates(viral_total, seo_scores, cfg=None):
+    """¿Pasa las puertas duras de publicación (config.yaml scoring)?
+
+    Viralidad >= viral_min y AL MENOS UNA plataforma con
+    SEO >= seo_gate. Es la misma puerta que publish_status por
+    plataforma: un clip es publicable si alguna plataforma lo es.
+    Falla cerrado: sin viralidad o sin SEO medido, no pasa.
+    ``seo_scores`` acepta números (camino en vivo) o mapas con
+    "score" (camino VOD).
+    """
+    seo_gate, viral_min = load_scoring_config(cfg)
+    try:
+        viral = float(viral_total or 0)
+    except (TypeError, ValueError):
+        return False
+    if viral < viral_min:
+        return False
+    for s in (seo_scores or {}).values():
+        score = s.get("score") if isinstance(s, dict) else s
+        try:
+            if float(score or 0) >= seo_gate:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def no_speech_blocked(no_speech, viral_total, seo_scores, cfg=None):
+    """¿Un clip sin voz verificable queda bloqueado? (regla del
+    usuario 2026-11-19 18:41, reemplaza la del 2026-11-17 22:10).
+
+    Sin voz + pasa las puertas -> NO se bloquea: se publica igual
+    SIN subtítulos (muchas veces no hay subtítulo porque el
+    streamer estaba gritando, y eso es hype, no silencio). Nunca
+    se inventa texto de subtítulos. Sin voz + bajo las puertas ->
+    sigue bloqueado, como antes. Con voz nunca bloquea por esto.
+    La excepción se apaga con
+    subtitles.publish_no_speech_if_passes_gates=false en
+    config.yaml (entonces cualquier sin voz vuelve a bloquear).
+    """
+    if not no_speech:
+        return False
+    subs = ((cfg or {}).get("subtitles") or {})
+    if subs.get("publish_no_speech_if_passes_gates", True) is not True:
+        return True
+    return not passes_publish_gates(viral_total, seo_scores, cfg)
+
+
 def load_auto_approve_config(cfg=None):
     """Config `auto_approve:` (6.3)."""
     if cfg is None:
@@ -137,11 +185,9 @@ def evaluate(clip, platform, queue=None, cfg=None, red_flags=None,
         return _deny("retenido",
                      f"sin score SEO para {platform} en el manifiesto")
 
-    # 0. Duración (reglas del usuario 2026-11-18): ningún clip por
-    # debajo de 40 s, ninguno dentro del rango prohibido 25-35 s
-    # (regla de oro: ningún clip de 30 s) y ninguno por encima del
-    # tope duro de 60 s. Un clip corto no se publica aunque pase
-    # viralidad y SEO: se retiene para re-cortarlo más largo.
+    # 0. Duración: sin mínimo ni rango prohibido desde 2026-11-21
+    # (regla 40-60 / 25-35 eliminada por el usuario, para siempre).
+    # Solo se retiene por encima del tope duro de 60 s.
     duration = clip.get("duration")
     if duration is not None:
         try:

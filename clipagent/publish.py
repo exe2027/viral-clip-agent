@@ -728,6 +728,49 @@ def hashtag_limit(platform):
     return int(HASHTAG_MAX.get(platform, HASHTAG_MAX.get("default", 5)))
 
 
+def _manual_account_text(platform):
+    """Cómo nombrar la cuenta en los pasos manuales.
+
+    Panel primero (la etiqueta de SU cuenta en el panel), luego
+    el handle de accounts.yaml local, si no genérico ("tu cuenta
+    de TikTok"). Nunca el handle de otro tenant (2026-11-19).
+    """
+    try:
+        from .accounts import panel_labels
+        label = panel_labels().get(platform)
+        if label:
+            return label
+    except Exception:
+        pass
+    try:
+        from .accounts import load_identifiers
+        ident = load_identifiers().get(platform) or {}
+        if ident.get("handle"):
+            return ident["handle"]
+        if ident.get("page_name"):
+            return ident["page_name"]
+    except Exception:
+        pass
+    return {"tiktok": "tu cuenta de TikTok",
+            "instagram_reels": "tu cuenta de Instagram",
+            "facebook_reels": "tu Página de Facebook"}.get(
+                platform, "tu cuenta")
+
+
+def _panel_stage_for(platform):
+    """Etapa del panel para la plataforma ("week1"|"week2"|
+    "normal"), o None si no hay panel (local/dev) o falla.
+
+    accounts.panel_maturity() cachea por proceso (una sola
+    llamada a GET /api/accounts por corrida). Nunca levanta.
+    """
+    try:
+        from .accounts import panel_maturity
+        return panel_maturity().get(platform)
+    except Exception:
+        return None
+
+
 def check_limits(queue, platform, now=None, warmup_stage=None,
                  rest_day=False, enforce_window=False):
     """Topes antes de publicar: (ok, motivo).
@@ -1091,11 +1134,17 @@ def plan_daily(clips, queue=None, day=None, accounts_info=None,
     for platform in order:
         info = accounts_info.get(platform) or {}
         stage = info.get("warmup_stage")
+        if stage is not None:
+            # accounts_info puede traer la etapa DEL PANEL
+            # ("semana1"/...) o la del cerebro ("week1"/...).
+            from .accounts import warmup_stage_from_panel as _wsfp
+            stage = _wsfp(stage) or stage
         if stage is None:
             try:
                 from .accounts import warmup_stage as _ws
                 stage = _ws(platform, queue=queue,
-                            published_count=info.get("published_count"))
+                            published_count=info.get("published_count"),
+                            panel_stage=_panel_stage_for(platform))
             except Exception:
                 stage = "normal"
         if stage in ("week1", "week2"):
@@ -1528,17 +1577,18 @@ class DraftFirstPublisher:
                 f"BLOQUEADO: {wl_msg} — no subir hasta que el usuario lo agregue a la lista"}
 
     def _manual_steps(self):
+        account = _manual_account_text(self.platform)
         if self.platform == "tiktok":
-            return ["1. Abrir TikTok (app o web) con @elclipdegta6____bits.",
+            return [f"1. Abrir TikTok (app o web) con {account}.",
                     "2. Subir el video, pegar el caption tal cual.",
                     "3. Activar subtítulos automáticos si hace falta (el video ya lleva quemados).",
                     "4. Publicar. No usar 'Direct Post' hasta aprobar la app."]
         if self.platform == "instagram_reels":
-            return ["1. Abrir Instagram con @elclipdegta6 (cuando esté creada).",
+            return [f"1. Abrir Instagram con {account}.",
                     "2. Nuevo Reel, subir el video, pegar el caption.",
                     "3. Portada: usar el frame con el texto de miniatura.",
                     "4. Publicar. Requiere cuenta Profesional + Page vinculada."]
-        return ["1. Abrir Facebook con la Página El Clip de GTA 6 (cuando esté creada).",
+        return [f"1. Abrir Facebook con {account}.",
                 "2. Crear Reel, subir el video, pegar el caption.",
                 "3. Publicar SOLO en la Página, nunca en el perfil personal.",
                 "4. Duración 3-90 s: el clip de 60 s cabe justo."]
@@ -1839,9 +1889,11 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
                 "reason": f"{platform} pausada: {is_paused(platform)[1]}"}
     # 6.5 / reglas 2026-11-19: calentamiento (< 14 días o < 20
     # publicaciones): semana 1 y 2 a 1/día, con el conteo real de
-    # la cola. La etapa sale de accounts.warmup_stage.
+    # la cola. La etapa sale de accounts.warmup_stage (del panel
+    # cuando hay bridge, si no del cálculo local).
     from .accounts import warmup_stage
-    stage = warmup_stage(platform, queue=queue)
+    stage = warmup_stage(platform, queue=queue,
+                         panel_stage=_panel_stage_for(platform))
     if stage in ("week1", "week2"):
         today = queue.published_today(platform)
         if len(today) >= NEW_ACCOUNT_DAILY:

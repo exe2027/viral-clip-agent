@@ -1,5 +1,16 @@
 # Proyecto Clips GTA 6 — Plan de independencia (fuera de Muse, en Cloudflare)
 
+> **HISTÓRICO — 2026-11-19.** Este documento describe el modelo
+> **una instalación por persona** (un panel, Worker, D1, R2 y
+> Environment de GitHub por usuario), que quedó **superseded**: la
+> decisión vigente es **UNA sola instalación** (Pages `avc`,
+> Worker `avc`, D1 `clips-avc`, R2 `clips-avc`) con `tenant_id` en
+> cada fila, y el cerebro GENÉRICO (`cerebro.yml` + `cerebro-live.yml`,
+> sin workflows ni secretos por tenant en GitHub: las credenciales
+> salen del panel con un token de un solo uso). El tenant "colega"
+> se eliminó el 2026-11-19 ("colega" nunca fue un usuario). No
+> aplicar §3 ni la tabla de recursos por persona.
+
 Fecha: 17 nov 2026. Estado: plan + auditorías completadas. Nada desplegado en producción, ninguna cuenta creada, ninguna credencial pedida ni guardada.
 
 **Decisión del usuario 17 nov 2026 (tarde): "Todo automático".**

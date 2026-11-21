@@ -1,0 +1,108 @@
+# Cerebro — Vigilante (watchdog, GENÉRICO)
+#
+# 2026-11-19, activación del vigilante: el vigilante vive EN EL
+# CEREBRO (clipagent/watchdog.py) y este workflow es solo su
+# lanzadera. El panel lo dispara y recibe sus avisos; el vigilante
+# no pregunta, actúa solo: revisa último clip, vivos en Twitch,
+# dispatches y token, y si no llegan clips en 30-60 min habiendo
+# vivos, re-dispara el cerebro, refresca el token Twitch, reinicia
+# el ciclo y corta de VOD si hace falta. Solo avisa por Telegram
+# (POST /api/bridge/notify) si tras intentarlo todo sigue atascado,
+# con diagnóstico y qué necesita un humano.
+#
+# Disparadores:
+# - repository_dispatch panel-watchdog (PRINCIPAL): lo dispara el
+#   Worker cada ~10 min por tenant en marcha (throttle en D1, sin
+#   disparar si ya hay una corrida de este workflow en curso para
+#   ese tenant). El client_payload trae tenant + brain_token, igual
+#   que panel-live: el bootstrap canjea el token por una sesión de
+#   12 h y materializa las credenciales en el runner.
+# - workflow_dispatch manual (tenant obligatorio, sin default).
+# - schedule cron "*/10 * * * *" (SECUNDARIO y DEGRADADO: el cron
+#   de GitHub es POCO FIABLE — medido 2026-11-19, el cron */15 de
+#   cerebro-live solo disparó 1 vez en todo el día, y el incidente
+#   de esa noche fue justo 1 h sin clips por un dispatch que nadie
+#   escuchaba. El disparo real es el del Worker (panel-watchdog);
+#   el cron es solo red de seguridad. Una corrida por cron NO tiene
+#   token (no hay client_payload), así que corre en modo --no-panel:
+#   solo chequeos sin panel — scan en vivo + corridas de GitHub +
+#   validación de Twitch — y NUNCA falla por falta de token: el
+#   módulo garantiza exit 0 y la corrida termina en éxito si el
+#   chequeo corrió.
+#
+# Sin environment, sin secretos por tenant (diseño genérico, igual
+# que cerebro-live): las credenciales salen DEL PANEL.
+#
+# Concurrencia por tenant: dos corridas del MISMO tenant nunca van
+# en paralelo (cancel-in-progress: false, encolan); las de tenants
+# distintos sí pueden correr a la vez. El cron (sin tenant) cae en
+# el grupo "cerebro-watchdog-" y se serializa consigo mismo.
+#
+# Timeout corto (10 min): el vigilante solo vigila y, como último
+# recurso, ejecuta VOD dentro de su propia corrida. No hay jobs de
+# corte separados.
+name: Cerebro — Vigilante
+
+on:
+  repository_dispatch:
+    types: [panel-watchdog]
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant del panel (p. ej. sebastian, kaez)"
+        required: true
+  schedule:
+    - cron: "*/10 * * * *"
+
+concurrency:
+  group: cerebro-watchdog-${{ github.event.client_payload.tenant || inputs.tenant }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watchdog:
+    name: Vigilar suministro de clips
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: python -m pip install -q -e .
+      # Bootstrap: credenciales del tenant desde el panel. Canjea
+      # el token de un solo uso del dispatch por una sesión de 12 h
+      # (PANEL_SESSION_TOKEN en $GITHUB_ENV, enmascarada). Solo
+      # corre si el dispatch trajo token: el cron y el disparo
+      # manual no lo traen, y en ese caso el paso siguiente corre
+      # en modo --no-panel en vez de fallar con error críptico.
+      - name: Credenciales desde el panel
+        id: bootstrap
+        if: ${{ github.event.client_payload.brain_token != '' }}
+        env:
+          PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+          PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
+        run: python -m clipagent.panel_credentials
+      # Con token (dispatch del Worker): vigilancia completa contra
+      # el panel — último clip, vivos, dispatches, token Twitch —
+      # con avisos por Telegram vía POST /api/bridge/notify.
+      - name: Vigilar (con panel)
+        if: ${{ github.event.client_payload.brain_token != '' }}
+        env:
+          PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m clipagent.watchdog --tenant "${{ github.event.client_payload.tenant || inputs.tenant }}"
+      # Sin token (cron o disparo manual): solo chequeos sin panel.
+      # El log deja claro que los pasos de panel se saltaron por
+      # falta de token; la corrida termina en éxito si el chequeo
+      # corrió (el módulo garantiza exit 0 salvo crash).
+      - name: Vigilar (sin panel, solo chequeos sin token)
+        if: ${{ github.event.client_payload.brain_token == '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "[watchdog] Sin PANEL_BRAIN_TOKEN (cron o disparo manual sin token): se saltan los pasos de panel (sin sesion, sin avisos por Telegram)."
+          python -m clipagent.watchdog --no-panel

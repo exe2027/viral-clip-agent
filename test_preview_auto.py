@@ -173,10 +173,21 @@ class TestVodPreviewAuto(unittest.TestCase):
         return patcher.start()
 
     def _patch_review(self, decision):
+        verdict = {"decision": decision, "pasa": decision == "aprobado",
+                   "hard_pasa": decision != "rechazado",
+                   "needs_rerender": False, "rerender_reason": "",
+                   "hard_failures": [],
+                   "needs_human_review": decision == "rechazado",
+                   "motivo": "x" if decision == "rechazado" else "",
+                   "fallos": [], "scores": {}, "frames_n": 0,
+                   "model": "", "transcript_words": 0,
+                   "observe_only": True,
+                   "face": {"pasa": decision != "rechazado"},
+                   "template": {"pasa": decision != "rechazado"},
+                   "gemini": {"decision": decision}}
         patcher = mock.patch(
-            "clipagent.final_review.maybe_review_final_clip",
-            return_value={"decision": decision, "pasa": decision == "aprobado",
-                          "motivo": "x" if decision == "rechazado" else ""})
+            "clipagent.final_review.validate_final_clip",
+            return_value=verdict)
         self.addCleanup(patcher.stop)
         return patcher.start()
 

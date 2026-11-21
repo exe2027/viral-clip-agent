@@ -68,7 +68,8 @@ las plataformas publicables se encolan en mode `api` (publicación
 automática, MÁSTER PROMPT FINAL). Las puertas duras no cambian
 nunca: viralidad < 50 descartado, SEO < 90 sin override,
 duración 40-60 s, rango 25-35 prohibido, subtítulos completos
-(sin voz verificable = BLOQUEADO), streamer con permiso, topes
+cuando hay voz (sin voz + pasa puertas 45/80 = se publica igual
+sin subtítulos; sin voz + bajo puertas = fuera), streamer con permiso, topes
 diarios y cooldown.
 
 ## Regla de oro: 100% automático DESDE LA WEB (2026-11-18 15:05)

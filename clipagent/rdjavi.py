@@ -17,13 +17,17 @@ franja negra era muy alta):
     Sobre fondo desenfocado morado/magenta + gradiente
     atardecer Vice City (hoy invisible: la webcam tapa todo
     el ancho; el fondo queda por si la caja cambia).
-  * TITULO QUEMADO en UNA SOLA LINEA en la franja negra de
-    ancho completo ENTRE la webcam y el gameplay (y=702..800,
-    98 px): texto blanco Arial Black 64 px con contorno negro
-    grueso, centrado verticalmente en la franja. NUNCA "GTA 6"
-    delante (obvio y redundante: se limpia automaticamente) y
-    NUNCA dos lineas: si no cabe se acorta por palabras, nunca
-    se achica la letra por debajo de 64 px. Ver fit_title() /
+  * TITULO QUEMADO en la franja negra de ancho completo ENTRE
+    la webcam y el gameplay (y=702..800, 98 px): texto blanco
+    Arial Black con contorno negro grueso, centrado
+    verticalmente en la franja. NUNCA "GTA 6" delante (obvio y
+    redundante: se limpia automaticamente) y NUNCA cortado: el
+    titulo aparece SIEMPRE COMPLETO (correccion del usuario
+    2026-11-19: la v2 lo acortaba por palabras y "Risa
+    imparable por un asesinato" salia "Risa imparable por
+    un"). El ajuste automatico achica la letra hasta que quepa
+    en una linea y, si ni con el minimo cabe, parte en dos
+    lineas dentro de la franja. Ver fit_title_lines() /
     add_burned_title().
   * Gameplay ABAJO: y=800..1740 (940 px), recorte 1440x1252
     (aspecto 1080:940, sin el aplastado vertical del 1:1
@@ -185,13 +189,16 @@ SUBS_COLOR = "#FFFF00"  # amarillo fijo (todo el texto, no solo la activa)
 # UNA SOLA LINEA en la franja negra de ancho completo ENTRE
 # la webcam y el gameplay (y 702..800, 98 px). Blanco, contorno
 # grueso (5 px reales). NUNCA "GTA 6" delante (se limpia en
-# clean_title_prefix) y NUNCA dos lineas: si no cabe se acorta
-# por palabras (ver fit_title), nunca se achica la letra por
-# debajo de 64 px reales. Se prueba 68 px primero y se baja a
-# 64 px si el titulo acortado no cabe. El ASS lleva Fontsize
-# 90/96 (= px * 1,4102, ver ass_font_size).
+# clean_title_prefix) y NUNCA cortado: el titulo aparece SIEMPRE
+# COMPLETO (correccion del usuario 2026-11-19: antes se acortaba
+# por palabras). El ajuste automatico (ver fit_title_lines)
+# achica la letra por la escalera TITLE_FONT_SIZES hasta que el
+# titulo entero quepa en una linea y, si ni con el minimo cabe,
+# parte en dos lineas dentro de la franja. Se prueba 68 px
+# primero. El ASS lleva Fontsize = px * 1,4102 (ver ass_font_size).
 TITLE_FONT_SIZE = 64
-TITLE_FONT_SIZES = (68, 64)
+TITLE_FONT_SIZES = (68, 64, 60, 56, 52, 48, 44, 40, 36, 32)
+TITLE_LINE_GAP = 8  # separacion entre las dos lineas de la banda
 TITLE_BAND_Y0 = 702
 TITLE_BAND_Y1 = 800
 TITLE_BAND_H = TITLE_BAND_Y1 - TITLE_BAND_Y0  # 98
@@ -425,65 +432,146 @@ def _text_width_px(text, size):
     return len(text) * size * 0.60
 
 
+def _split_title_lines(words, n_lines, size, max_w):
+    """Reparte ``words`` en ``n_lines`` líneas equilibradas por ancho.
+
+    Devuelve [línea, ...] si todas caben en ``max_w`` a ``size`` px
+    (medido con la fuente real), o None si no hay reparto posible
+    (p. ej. una sola palabra más ancha que max_w). Con 1 línea es
+    el título entero; con 2, el reparto que minimiza el ancho de
+    la línea más ancha; con 3+, empaquetado voraz por palabras.
+    """
+    if not words:
+        return []
+    if n_lines <= 1:
+        line = " ".join(words)
+        if _text_width_px(line, size) <= max_w:
+            return [line]
+        return None
+    if n_lines == 2:
+        best = None
+        for i in range(1, len(words)):
+            line1 = " ".join(words[:i])
+            line2 = " ".join(words[i:])
+            worst = max(_text_width_px(line1, size),
+                        _text_width_px(line2, size))
+            if best is None or worst < best[0]:
+                best = (worst, [line1, line2])
+        if best is not None and best[0] <= max_w:
+            return best[1]
+        return None
+    lines, cur = [], []
+    for w in words:
+        cand = " ".join(cur + [w])
+        if cur and _text_width_px(cand, size) > max_w:
+            lines.append(" ".join(cur))
+            cur = [w]
+        else:
+            cur = cur + [w]
+    if cur:
+        lines.append(" ".join(cur))
+    if len(lines) > n_lines:
+        return None
+    if any(_text_width_px(ln, size) > max_w for ln in lines):
+        return None
+    return lines
+
+
+def fit_title_lines(title, max_w=TITLE_MAX_W, sizes=TITLE_FONT_SIZES,
+                    max_lines=2, max_h=None, line_gap=TITLE_LINE_GAP):
+    """Ajuste AUTOMÁTICO del título (corrección del usuario 2026-11-19).
+
+    El título aparece SIEMPRE COMPLETO, nunca cortado ni con puntos
+    suspensivos: mide el texto con la fuente real (Arial Black) y
+    reduce el tamaño hasta que quepa en el ancho disponible; si ni
+    con el mínimo cabe en una línea, parte en dos líneas dentro del
+    espacio disponible. Busca de mayor a menor tamaño; para cada
+    tamaño prueba 1 línea, luego 2, ... hasta ``max_lines`` (con
+    ``max_h``, el total de líneas tiene que caber en alto).
+    Devuelve (líneas, tamaño) o ([], None) si no hay título. Si ni
+    con el mínimo cabe en ``max_lines`` líneas, devuelve el título
+    entero con el tamaño mínimo y el máximo de líneas (en la práctica
+    no ocurre con títulos reales: a 32 px dos líneas aguantan ~60
+    caracteres en la banda). Es la ÚNICA fuente del ajuste: la usan
+    la banda willyrex (title_ass_lines) y el banner rubius
+    (clipagent/rubius.py).
+    """
+    words = clean_title_prefix(title).split()
+    if not words:
+        return [], None
+    for size in sizes:
+        line_h = int(size * 1.15)
+        for n in range(1, max_lines + 1):
+            if (max_h is not None
+                    and n * line_h + (n - 1) * line_gap > max_h):
+                continue
+            lines = _split_title_lines(words, n, size, max_w)
+            if lines:
+                return lines, size
+    size = sizes[-1]
+    lines = (_split_title_lines(words, max_lines, size, max_w)
+             or [" ".join(words)])
+    return lines, size
+
+
 def fit_title(title, sizes=TITLE_FONT_SIZES, max_w=TITLE_MAX_W):
-    """Titulo en UNA SOLA LINEA (revision v2 2026-11-18 21:01):
-    limpia el prefijo 'GTA 6' y acorta por palabras hasta caber.
-    Prueba el tamano mas grande primero; se queda la variante
-    con MAS palabras y, en empate, la letra mas grande. La
-    letra nunca baja de sizes[-1]: antes acortar el titulo que
-    achicarla. Devuelve (texto, tamano) o (None, None).
+    """Título en UNA SOLA LÍNEA, COMPLETO (revisión 2026-11-19):
+    limpia el prefijo 'GTA 6' y ACHICA LA LETRA hasta que el título
+    entero quepa; nunca acorta por palabras (la v2 2026-11-18
+    cortaba: 'Risa imparable por un asesinato' salía 'Risa
+    imparable por un'). Devuelve (texto, tamaño) o (None, None).
+    Si ni con el mínimo cabe en una línea, devuelve el título
+    entero con el tamaño mínimo (el llamador que necesite el
+    repliegue a dos líneas usa fit_title_lines).
     Ej: 'GTA 6: Rubius descubre los cromos coleccionables' ->
-    ('Rubius descubre los cromos', 64): a 68 px solo caben
-    3 palabras ('Rubius descubre los'), a 64 px caben 4."""
+    ('Rubius descubre los cromos coleccionables', 40)."""
     words = clean_title_prefix(title).split()
     if not words:
         return None, None
     limit = max_w - 2 * TITLE_OUTLINE  # el contorno ensancha el texto
-    best = None
+    text = " ".join(words)
     for size in sizes:
-        kept = list(words)
-        while (len(kept) > 1
-               and _text_width_px(" ".join(kept), size) > limit):
-            kept.pop()
-        if _text_width_px(" ".join(kept), size) > limit:
-            continue
-        cand = (len(kept), size, " ".join(kept))
-        if (best is None or cand[0] > best[0]
-                or (cand[0] == best[0] and cand[1] > best[1])):
-            best = cand
-    if best is None:
-        return words[0], sizes[-1]
-    return best[2], best[1]
+        if _text_width_px(text, size) <= limit:
+            return text, size
+    return text, sizes[-1]
 
 
 def wrap_title(title, max_chars=None):
-    """Titulo en UNA SOLA LINEA (revision v2 2026-11-18 21:01):
-    nunca dos lineas y nunca con 'GTA 6' delante. Si no cabe,
-    se acorta por palabras (ver fit_title). Devuelve [linea]
-    por compatibilidad con el uso anterior. ``max_chars`` es
-    legado y ya no se usa: el ajuste es por ancho en px con
-    la fuente real."""
-    text, _size = fit_title(title)
-    return [text] if text else []
+    """Título ajustado (revisión 2026-11-19): devuelve las líneas
+    del título COMPLETO (una o dos, ver fit_title_lines), nunca
+    con 'GTA 6' delante y nunca cortado. Con las medidas de la
+    banda (ancho útil y 98 px de alto): primero achica la letra,
+    solo después parte en dos líneas. ``max_chars`` es legado
+    y ya no se usa: el ajuste es por ancho en px con la fuente
+    real."""
+    lines, _size = fit_title_lines(
+        title, max_w=TITLE_MAX_W - 2 * TITLE_OUTLINE,
+        max_lines=2, max_h=TITLE_BAND_H)
+    return lines
 
 
 def title_ass_lines(title, duration,
                     font_size=None):
-    """Linea ASS del titulo quemado: estilo + evento 0..duration.
+    """Líneas ASS del título quemado: estilo + evento 0..duration.
 
-    El titulo va en UNA SOLA LINEA, centrado verticalmente en
-    la franja negra entre la webcam y el gameplay (y 702..800):
-    a 64 px MarginV 714. Nunca dentro de la camara ni sobre los
-    subtitulos (que van abajo del todo). Blanco Arial Black,
-    contorno negro 5. El texto y el tamano los decide fit_title
-    (sin 'GTA 6' delante, acortado si no cabe en una linea).
+    El título va en la franja negra entre la webcam y el gameplay
+    (y 702..800), centrado verticalmente en la franja: UNA línea
+    si cabe (a 64 px MarginV 714) o DOS líneas si el título es muy
+    largo (letra más chica, ver fit_title_lines). Blanco Arial
+    Black, contorno negro 5. El texto y el tamaño los decide
+    fit_title_lines (sin 'GTA 6' delante, COMPLETO: nunca se
+    acorta por palabras). Dos líneas van en un solo evento con
+    \\N (salto de línea ASS).
     """
-    text, size = fit_title(title)
-    if not text:
+    sizes = (font_size,) if font_size else TITLE_FONT_SIZES
+    lines, size = fit_title_lines(
+        title, max_w=TITLE_MAX_W - 2 * TITLE_OUTLINE, sizes=sizes,
+        max_lines=2, max_h=TITLE_BAND_H)
+    if not lines:
         return None, None
-    size = font_size or size
     line_h = int(size * 1.15)
-    margin_v = TITLE_BAND_Y0 + (TITLE_BAND_H - line_h) // 2
+    total_h = len(lines) * line_h + (len(lines) - 1) * TITLE_LINE_GAP
+    margin_v = TITLE_BAND_Y0 + (TITLE_BAND_H - total_h) // 2
     # ``size`` y TITLE_OUTLINE son pixeles REALES; el ASS lleva
     # Fontsize/Outline convertidos (ver ASS_FONT_SCALE).
     style = (
@@ -491,6 +579,7 @@ def title_ass_lines(title, duration,
         f"&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,"
         f"1,{ass_font_size(TITLE_OUTLINE)},0,8,10,10,{margin_v},1"
     )
+    text = "\\N".join(lines)
     event = (f"Dialogue: 0,0:00:00.00,{_ass_time(duration)},Title,,"
              f"0,0,0,,{text}")
     return style, event

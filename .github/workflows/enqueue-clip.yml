@@ -4,11 +4,14 @@
 # error exacto en el log, corregirlo en el Worker/panel, redeplegar
 # y reintentar. NUNCA publicar la version simple como atajo.
 #
-# Por qué existe: PANEL_SESSION_TOKEN / PANEL_USERNAME+PASSWORD viven
-# solo como secretos del entorno `sebastian` de GitHub y la API no los
-# devuelve; la única forma segura de encolar/publicar sin pedir
-# credenciales en chat es correrlo DENTRO del runner, donde los
-# secretos se inyectan como variables de entorno y nunca salen en logs.
+# GENÉRICO (2026-11-19): un solo workflow para todos los tenants.
+# La autenticación es un token de un solo uso del panel (input
+# brain_token, requerido): el paso bootstrap lo canjea por una
+# sesión de 12 h y los scripts (enqueue_clip.py, publish_clip.py,
+# check_jobs.py) la usan vía PANEL_SESSION_TOKEN. Nada de
+# `environment: <tenant>` ni PANEL_USERNAME/PASSWORD en GitHub.
+# El token se consigue en el panel (donde el usuario ya está
+# logueado); sin él el bootstrap falla con mensaje claro.
 #
 # Flujo (verificado en worker/src/index.ts + gate.ts):
 #   1. enqueue_clip.py: POST /api/clips + PUT del MP4 a R2 (no publica).
@@ -20,8 +23,10 @@
 #   3. Poll de GET /api/jobs hasta posted/failed/draft (max 14 min).
 #
 # Uso: Actions > Enqueue clip > Run workflow
-#   run_dir:    carpeta del run con manifest.json
-#   video_path: MP4 final con subtitulos quemados (la v3 karaoke)
+#   tenant:         tenant del panel (p. ej. sebastian, kaez)
+#   brain_token:    token de un solo uso emitido por el panel
+#   run_dir:        carpeta del run con manifest.json
+#   video_path:     MP4 final con subtitulos quemados (la v3 karaoke)
 #   subtitle_style: tiktok | highlight | karaoke (default karaoke)
 #
 # Nota: se llama a la URL DIRECTA del Worker, NO al front de Pages:
@@ -33,6 +38,12 @@ name: Enqueue clip
 on:
   workflow_dispatch:
     inputs:
+      tenant:
+        description: "Tenant del panel (p. ej. sebastian, kaez)"
+        required: true
+      brain_token:
+        description: "Token de un solo uso emitido por el panel (sin él el bootstrap falla)"
+        required: true
       run_dir:
         description: "Carpeta del run con manifest.json"
         default: "runs/2932415021-p3220"
@@ -56,15 +67,29 @@ jobs:
   enqueue-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    environment: sebastian
     env:
-      PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
-      PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_TENANT: ${{ inputs.tenant }}
       PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
       PANEL_URL: https://avc.vikingosfoodspa.workers.dev
       SUBTITLE_STYLE: ${{ inputs.subtitle_style }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Bootstrap: canjea el token de un solo uso por una sesión
+      # de 12 h del tenant (PANEL_SESSION_TOKEN en el entorno del
+      # runner, enmascarada). Sin token válido, falla aquí.
+      # El token NO va en env: (el runner imprime el bloque env:
+      # del paso en el registro y quedaba en claro — mismo fallo
+      # que cerebro-live.yml, verificado 2026-11-20). Se lee del
+      # archivo del evento, se enmascara y solo vive en este paso.
+      - name: Credenciales desde el panel
+        run: |
+          TOKEN="$(python -c "import json, os; print(json.load(open(os.environ['GITHUB_EVENT_PATH'])).get('inputs', {}).get('brain_token', ''))")"
+          test -n "$TOKEN" || { echo "ERROR: sin token del cerebro en los inputs" >&2; exit 1; }
+          echo "::add-mask::$TOKEN"
+          PANEL_BRAIN_TOKEN="$TOKEN" python -m clipagent.panel_credentials
       - name: Solo verificar jobs (lectura, sin publicar)
         if: ${{ inputs.check_only == 'true' }}
         run: |

@@ -69,10 +69,12 @@ class TestBurnRdjaviAuto(unittest.TestCase):
     # Coordenadas en el fotograma escalado a 540x960 (factor 0,5):
     # barra de subtítulos 1740-1920 -> 870-960; zona de diálogo
     # del juego 1590-1670 -> 795-835; franja del título 702-800
-    # -> 351-400.
+    # -> 351-400; banner amarillo del título rubius 811-1099
+    # -> 405-549.
     BAR = (870, 960)
     DIALOGO = (795, 835)
     TITULO = (351, 400)
+    BANNER = (405, 549)
 
     def _burn(self, title=None, style="rdjavi"):
         tmp = tempfile.mkdtemp()
@@ -188,21 +190,22 @@ class TestTitleWiring(unittest.TestCase):
                               cfg=load_config())
             self.assertIsNone(burn.call_args.kwargs["title"])
 
-    def test_subtitle_clip_quema_titulo_en_la_franja(self):
+    def test_subtitle_clip_quema_titulo_en_el_banner(self):
         from clipagent.workers import subtitle_clip
         with tempfile.TemporaryDirectory() as tmp:
             src, srt, out = self._video_con_srt(tmp)
             subtitle_clip(src, srt=srt, burn=out, cfg=load_config(),
                           title="Rubius descubre los cromos")
             fr = _frame(out, 1.0)
-            self.assertGreater(_count_white(fr, *TestBurnRdjaviAuto.TITULO),
-                               50, "sin título en la franja")
+            # Plantilla rubius (default 2026-11-19): el título va
+            # en el banner amarillo 811-1099, no en la franja
+            # 702-800; las comprobaciones de franja/barra willyrex
+            # viven en TestBurnRdjaviAuto con style="rdjavi"
+            # explícito.
+            self.assertGreater(_count_yellow(fr, *TestBurnRdjaviAuto.BANNER),
+                               50, "sin título en el banner")
             self.assertEqual(_count_white(fr, 0, 351), 0,
                              "título sobre la webcam")
-            self.assertEqual(_count_white(fr, 400, 795), 0,
-                             "título sobre el gameplay")
-            self.assertGreater(_count_yellow(fr, *TestBurnRdjaviAuto.BAR),
-                               50, "sin amarillo en la barra")
 
     def test_h_subtitulos_usa_pre_corte_title(self):
         from unittest import mock

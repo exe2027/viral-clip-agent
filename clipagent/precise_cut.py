@@ -52,13 +52,11 @@ import sys
 
 
 DEFAULT_MAX_DURATION = 60
-DEFAULT_MIN_DURATION = 40   # decisión del usuario 2026-11-18: entre
-# 40 y 60 s, nunca menos de 40 (reemplaza el mínimo 36 s de 2026-11-17;
-# el clip de 38 s de Rubius p2010 también queda fuera). El rango
-# prohibido 25-35 (regla de oro: ningún clip de 30 s) sigue vigente;
-# el objetivo es 40 s y el tope duro 60 s.
+DEFAULT_MIN_DURATION = 1    # sin mínimo: regla 40-60 / 25-35 eliminada
+# por el usuario el 2026-11-21 (para siempre, en todo el canal).
+# El objetivo sigue siendo 40 s y el tope duro 60 s.
 DEFAULT_TARGET_DURATION = 40
-FORBIDDEN_DURATION_RANGE = (25, 35)  # regla de oro, inclusivo
+FORBIDDEN_DURATION_RANGE = ()  # sin rango prohibido (eliminado 2026-11-21)
 DEFAULT_PRE_ROLL = 2.5      # inicio 2-3 s antes del disparador
 DEFAULT_POST_ROLL = 1.5     # fin 1-2 s después del fin de frase/risa
 DEFAULT_FIXED_PRE = 20      # caída: corte fijo actual (pico -20 s)
@@ -170,10 +168,8 @@ def refine_cut(segment_duration, peak_rel, transcript=None, silences=None,
     Devuelve dict {start, end, duration, method, reason}.
     method: 'phrase' (por palabra+silencio) o 'fixed' (caída).
 
-    REGLA 2026-11-18: ningún corte sale de aquí por debajo del mínimo
-    (40 s) ni dentro del rango prohibido 25-35 s: el corte afinado se
-    ALARGA hasta el mínimo (nunca se recorta el momento), y el tope
-    duro es 60 s.
+    Sin mínimo desde 2026-11-21 (regla 40-60 / 25-35 eliminada):
+    el corte afinado ya no se alarga hasta 40 s; el tope duro es 60 s.
     """
     words = _words_from_transcript(transcript)
     if len(words) < 3:

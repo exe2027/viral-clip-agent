@@ -445,12 +445,18 @@ def download_twitch_segment(vod_id: str, start_sec: float, end_sec: float,
     RuntimeError si falla (el llamador salta ese pico y sigue con el
     siguiente). El trim es el Exact por defecto del CLI: el segmento
     sale con la duración pedida (80.002 s en la prueba 2930700035).
+
+    ``--collision Overwrite`` es obligatorio: si el archivo de
+    salida existe pero está vacío (descarga parcial de un intento
+    anterior), el CLI preguntaría si sobrescribir y se colgaría sin
+    stdin en un reintento; con Overwrite nunca pregunta.
     """
     if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
         print(f"Segmento ya descargado, se reutiliza: {out_path}")
         return out_path
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     cmd = [twitch_cli(), "videodownload", "--id", str(vod_id),
+           "--collision", "Overwrite",
            "-b", f"{int(start_sec)}s", "-e", f"{int(end_sec)}s",
            "-o", out_path]
     print(f"$ {' '.join(cmd)}")
@@ -802,7 +808,7 @@ def main() -> int:
     clip_cfg = (cfg or {}).get("clips") or {}
     target_dur = args.duration or int(clip_cfg.get("target_duration_s") or 40)
     max_dur = args.duration or int(clip_cfg.get("max_duration_s") or 60)
-    min_dur = 1 if args.duration else int(clip_cfg.get("min_duration_s") or 40)
+    min_dur = 1 if args.duration else int(clip_cfg.get("min_duration_s") or 1)
     use_precise = (args.precise_cut if args.precise_cut is not None
                    else bool(clip_cfg.get("precise_cut", True)))
     seg_len = args.pre_roll + max(target_dur, max_dur)

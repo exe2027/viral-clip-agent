@@ -64,9 +64,9 @@ PLATFORMS = {
         "console_url": "https://developers.facebook.com/apps/",
         "docs_url": "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/",
         "steps": [
-            ("manual", "Pasa la cuenta @elclipdegta6 a Profesional (Creador o Empresa) en la app de Instagram",
+            ("manual", "Pasa tu cuenta de Instagram a Profesional (Creador o Empresa) en la app de Instagram",
              None),
-            ("manual", "Vincula la cuenta a la Página de Facebook Elclipdegta6 (ya está vinculada: verificarlo en doctor)",
+            ("manual", "Vincula la cuenta a tu Página de Facebook (verificarlo en doctor)",
              None),
             ("manual", "Crea una app en Meta for Developers con el producto Instagram API y los permisos instagram_business_content_publish e instagram_business_basic",
              "https://developers.facebook.com/apps/"),
@@ -83,7 +83,7 @@ PLATFORMS = {
         "console_url": "https://developers.facebook.com/apps/",
         "docs_url": "https://developers.facebook.com/docs/video-api/",
         "steps": [
-            ("manual", "Confirma que la Página Elclipdegta6 existe y que tienes rol de administrador o editor (Reels solo se publican a Página, nunca a perfil personal)",
+            ("manual", "Confirma que tu Página existe y que tienes rol de administrador o editor (Reels solo se publican a Página, nunca a perfil personal)",
              "https://www.facebook.com/pages/"),
             ("manual", "En tu app de Meta, pide los permisos pages_manage_posts, pages_read_engagement y pages_show_list",
              "https://developers.facebook.com/apps/"),

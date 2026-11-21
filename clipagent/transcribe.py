@@ -88,16 +88,20 @@ VAD + anti-alucinación + puerta "sin voz" + escalado — v2.6
     compression_ratio_threshold 2,4, logprob_threshold -1,0,
     condition_on_previous_text=False (sin contexto previo no se
     encadenan alucinaciones).
-  * Puerta "sin voz" (REGLA DEL USUARIO 2026-11-17 22:10: SIEMPRE
-    subtítulos, COMPLETOS): si el clip tiene <5 palabras por cada
-    60 s o la voz cubre <10% de la duración, NO se genera SRT ni se
-    quema nada, PERO el clip queda BLOQUEADO para publicar
-    (no_speech=true, needs_human_transcription=true,
-    publish_blocked=true) hasta que el usuario lo transcriba de
-    oído. Nunca se publica sin subtítulos y nunca se quema texto
-    alucinado. El proceso termina con código 0 (el paso de
-    transcripción en sí no falla), el bloqueo vive en el transcript
-    y en subtitle_clip().
+  * Puerta "sin voz" (REGLA DEL USUARIO 2026-11-17 22:10,
+    matizada 2026-11-19 18:41): si el clip tiene <5 palabras por
+    cada 60 s o la voz cubre <10% de la duración, NO se genera SRT
+    ni se quema nada, PERO el clip ya NO queda bloqueado en la
+    transcripción (no_speech=true,
+    needs_human_transcription=false, publish_blocked=false): la
+    decisión de publicar la toman las puertas con los scores
+    (policy.no_speech_blocked: sin voz + viralidad >=45 y SEO
+    >=80 -> se publica igual sin subtítulos, porque muchas veces
+    es un grito, no silencio). Nunca se inventa texto de
+    subtítulos y nunca se quema texto alucinado. El proceso
+    termina con código 0 (el paso de transcripción en sí no
+    falla); el bloqueo vive en subtitle_clip() y en quien encola,
+    no en el transcript.
   * Escalado condicional tiny -> base: SOLO si salta un umbral
     objetivo (repetición >=3 veces, <8 palabras/min con voz,
     logprob medio bajo, idioma con prob. <0,5). Nunca base por
@@ -538,14 +542,15 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
         un umbral objetivo (ver check_escalation), se repite con
         base y se guarda el motivo en
         transcript["escalation_reasons"]. Nunca base por defecto.
-      * Puerta "sin voz" (regla 2026-11-17 22:10): si el resultado
-        final tiene <5 palabras por cada 60 s o la voz cubre <10%
-        de la duración, transcript["no_speech"]=True,
-        transcript["needs_human_transcription"]=True y
-        transcript["publish_blocked"]=True,
+      * Puerta "sin voz" (regla 2026-11-17 22:10, matizada
+        2026-11-19 18:41): si el resultado final tiene <5 palabras
+        por cada 60 s o la voz cubre <10% de la duración,
+        transcript["no_speech"]=True (y
+        needs_human_transcription / publish_blocked en False: la
+        transcripción ya no bloquea, la decisión es de las puertas
+        con los scores),
         transcript["audio_note"]="solo gameplay/música": main() no
-        genera SRT ni quema nada y termina con código 0, pero el
-        clip queda bloqueado para publicar hasta revisión humana.
+        genera SRT ni quema nada y termina con código 0.
       * Siempre se guardan source_language, probabilidad y task.
 
     Nota: no se pasa el vídeo (ni un archivo de audio) directamente a
@@ -572,9 +577,9 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
         policy = policy or {"es": "transcribe-only",
                             "others": "translate-to-en"}
 
-    # Fallback de idioma: streamer > canal (channel.language) > "es".
-    channel_lang = ((cfg.get("channel") or {}).get("language")
-                    or sub_cfg.get("fallback_language") or "es")
+    # Fallback de idioma: streamer > fallback_language > "es".
+    # (La identidad del canal ya no vive en config: es del tenant.)
+    channel_lang = (sub_cfg.get("fallback_language") or "es")
     fallback_lang = sub_cfg.get("streamer_language") or channel_lang
     chat_lang = chat_lang or sub_cfg.get("chat_language") or None
     vad = bool(sub_cfg.get("vad", True)) if vad else False
@@ -711,11 +716,12 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
             transcript, info_lang = base_transcript, detected
         else:
             info_lang = detected
-        # Puerta "sin voz" (v2.6 + regla 2026-11-17 22:10: SIEMPRE
-        # subtítulos): <5 palabras por cada 60 s o habla <10% de la
-        # duración -> no hay voz que subtitular, pero el clip queda
-        # BLOQUEADO para publicar hasta que el usuario lo transcriba
-        # de oído. No es un error del paso, es un bloqueo de salida.
+        # Puerta "sin voz" (v2.6 + regla 2026-11-17 22:10, matizada
+        # 2026-11-19 18:41): <5 palabras por cada 60 s o habla <10%
+        # de la duración -> no hay voz que subtitular. La
+        # transcripción marca no_speech pero YA NO bloquea: la
+        # decisión de publicar la toman las puertas con los scores
+        # (policy.no_speech_blocked). No es un error del paso.
         min_words = max(3, round(sub_cfg.get(
             "no_speech_min_words", DEFAULT_NO_SPEECH_MIN_WORDS)
             * duration / 60.0))
@@ -725,14 +731,14 @@ def transcribe_audio(video_path, model_name=DEFAULT_MODEL, language=None,
         ratio = transcript["speech_ratio"]
         if word_count < min_words or ratio < min_ratio:
             transcript["no_speech"] = True
-            transcript["needs_human_transcription"] = True
-            transcript["publish_blocked"] = True
+            transcript["needs_human_transcription"] = False
+            transcript["publish_blocked"] = False
             transcript["audio_note"] = "solo gameplay/música"
             print(f"SIN VOZ: {word_count} palabras "
                   f"(mín. {min_words}) | habla {ratio * 100:.0f}% "
                   f"(mín. {min_ratio * 100:.0f}%) -> sin SRT, sin quemar; "
-                  f"clip BLOQUEADO para publicar: necesita "
-                  f"transcripción humana.")
+                  f"el clip sigue su camino y las puertas deciden "
+                  f"con viralidad/SEO si se publica sin subtítulos.")
         else:
             transcript["no_speech"] = False
             transcript["needs_human_transcription"] = False
@@ -1185,17 +1191,111 @@ def burn_subtitles(video_path, srt_path, output_path, fontsize=DEFAULT_FONTSIZE,
     # viejo con MarginV 230 baja solo al máximo (a 64 px: 100) y la
     # posición v2 es 12 (texto en y≈1908). Vale para karaoke y
     # rdjavi (ASS) y para SRT (force_style), porque el clamp va
-    # antes de las ramas.
-    try:
-        _margin_cfg = cfg if style else config
-    except NameError:  # sin style no existe cfg: manda config o 200
-        _margin_cfg = config
-    _safe_mv = effective_subtitle_margin_v(margin_v, _margin_cfg,
-                                           fontsize=fontsize)
-    if margin_v != _safe_mv:
-        print(f"MarginV {margin_v} -> {_safe_mv}: el subtítulo no puede "
-              f"tapar la webcam ni bajar a la banda (regla del usuario)")
-        margin_v = _safe_mv
+    # antes de las ramas. EXCEPCIÓN rubius (2026-11-19): los
+    # subtítulos van SOBRE el gameplay por diseño (y 900-1020,
+    # MarginV 900); el clamp los bajaría a la banda y rompería la
+    # plantilla, así que no se aplica con style="rubius".
+    if (style or "").lower() != "rubius":
+        try:
+            _margin_cfg = cfg if style else config
+        except NameError:  # sin style no existe cfg: manda config o 200
+            _margin_cfg = config
+        _safe_mv = effective_subtitle_margin_v(margin_v, _margin_cfg,
+                                               fontsize=fontsize)
+        if margin_v != _safe_mv:
+            print(f"MarginV {margin_v} -> {_safe_mv}: el subtítulo no "
+                  f"puede tapar la webcam ni bajar a la banda "
+                  f"(regla del usuario)")
+            margin_v = _safe_mv
+    if (style or "").lower() == "rubius":
+        # Plantilla rubius: subtítulos palabra por palabra BLANCOS
+        # sobre el gameplay (y 900-1020, ver rubius.make_word_ass)
+        # + banner amarillo del título (PNG transitorio, ver
+        # rubius.make_banner_png). El banner es una segunda entrada
+        # en loop; el ASS se quema con el filtro subtitles sobre
+        # el vídeo y el banner se compone encima. Los temporales
+        # se borran tras quemar.
+        import tempfile
+
+        from .rubius import (
+            BANNER_SHOW,
+            BANNER_X0,
+            BANNER_Y0,
+            make_banner_png,
+            make_word_ass,
+        )
+        duration = get_duration(video_path)
+        # El banner se decide ANTES que el ASS: las palabras que
+        # caen bajo el banner no se emiten (ver make_word_ass);
+        # sin titulo no hay banner y no se suprime ninguna.
+        banner_png = None
+        if title:
+            banner_png = os.path.join(
+                tempfile.gettempdir(), f"rubius_banner_{os.getpid()}.png")
+            make_banner_png(title, banner_png)
+        ass_text = make_word_ass(
+            parse_srt(srt_path),
+            max_end=duration,
+            font_size=fontsize,
+            banner_show=BANNER_SHOW if banner_png else None,
+        )
+        with tempfile.NamedTemporaryFile(
+                suffix=".ass", delete=False,
+                mode="w", encoding="utf-8") as tmp:
+            tmp.write(ass_text)
+            ass_path = tmp.name
+        try:
+            safe_ass_path = ass_path.replace("\\", "/").replace(":", "\\:")
+            if banner_png:
+                b0, b1 = BANNER_SHOW
+                filt = (
+                    f"[0:v]subtitles='{safe_ass_path}'[sub];"
+                    f"[sub][1:v]overlay={BANNER_X0}:{BANNER_Y0}:"
+                    f"enable='between(t,{b0:g},{b1:g})'[v]")
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", video_path,
+                    "-loop", "1", "-t", str(duration), "-i", banner_png,
+                    "-filter_complex", filt,
+                    "-map", "[v]", "-map", "0:a",
+                    "-c:a", "copy",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    output_path,
+                ]
+            else:
+                vf = f"subtitles='{safe_ass_path}'"
+                if context_text:
+                    vf += "," + context_banner_filter(
+                        context_text, duration_s=context_duration)
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", video_path,
+                    "-vf", vf,
+                    "-c:a", "copy",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    output_path,
+                ]
+            print(f"Quemando subtítulos rubius en {output_path}")
+            result = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                print(f"Error de FFmpeg: {result.stderr.decode()[-2000:]}",
+                      file=sys.stderr)
+                raise RuntimeError("FFmpeg falló al quemar subtítulos")
+            _apply_watermark_if_enabled(output_path, config)
+            return True
+        finally:
+            try:
+                os.unlink(ass_path)
+            except OSError:
+                pass
+            if banner_png:
+                try:
+                    os.unlink(banner_png)
+                except OSError:
+                    pass
     if (style or "").lower() in ("karaoke", "rdjavi"):
         # ASS (karaoke palabra por palabra o rdjavi fijo amarillo):
         # se escribe a un temporal y se borra tras quemar.
@@ -1497,13 +1597,13 @@ def main() -> int:
         with open(args.transcript, "w", encoding="utf-8") as f:
             json.dump(transcript, f, ensure_ascii=False, indent=2)
 
-    # Puerta "sin voz" (v2.6 + regla 2026-11-17 22:10): no hay SRT
-    # ni quemado, y NO es un error del paso, pero el clip queda
-    # BLOQUEADO para publicar hasta transcripción humana.
+    # Puerta "sin voz" (v2.6 + regla 2026-11-17 22:10, matizada
+    # 2026-11-19 18:41): no hay SRT ni quemado, y NO es un error
+    # del paso; el clip sigue su camino y las puertas deciden con
+    # viralidad/SEO si se publica sin subtítulos.
     if transcript.get("no_speech"):
         print(f"Clip sin voz ({transcript.get('audio_note')}): "
-              f"sin SRT ni quemado. BLOQUEADO para publicar: "
-              f"necesita transcripción humana. Código 0.")
+              f"sin SRT ni quemado. Código 0.")
         return 0
 
     duration = get_duration(args.video)

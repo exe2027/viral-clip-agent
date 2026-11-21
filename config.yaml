@@ -38,19 +38,15 @@ games:
 allowlist:
   - illojuan
 
-channel:
-  name: "El Clip de GTA 6"
-  handle: "@elclipdegta6"
-  game: "GTA 6"
-  streamer: ""            # streamer del VOD (vacío = cualquiera)
-  niche: "clips de directos"
-  language: "es"          # es | en | both
-
+# La identidad del canal (nombre, handle, idioma, hashtags de marca)
+# NO vive aquí: es de cada tenant y sale de SU panel. config.yaml
+# solo lleva reglas comunes. El idioma del clip lo decide el
+# streamer (su idioma en el panel); los hashtags de marca los pone
+# cada tenant en su panel (ver channel_tag en seo_score.py).
 hashtags:
   es:
     - "#GTA6"
     - "#GTA6Clips"
-    - "#ElClipDeGTA6"
     - "#GTA"
     - "#RockstarGames"
     - "#gaming"
@@ -66,21 +62,19 @@ clips:
   crop: "center"          # center | left | right
   crf: 23
   preset: "fast"
-  # REGLAS DE DURACIÓN (decisión del usuario 2026-11-18, ver rules: abajo;
-  # reemplaza el mínimo 36 s de 2026-11-17): entre 40 y 60 s, nunca menos
-  # de 40 ni más de 60. El clip publicado de 21 s era "muy poco" y el de
-  # 38 s (Rubius p2010) también queda fuera. El rango prohibido por la
-  # regla de oro (25-35 s) sigue vigente. Por eso: mínimo 40 s; objetivo
-  # 40 s = 20 s de pre-roll + 20 s tras el pico (payoff a 20 s dentro
-  # del clip); tope duro 60 s = máximo de un Short de YouTube y tope
-  # del proyecto, nunca el default. refine_cut alarga (nunca recorta)
-  # cualquier corte por debajo del mínimo, y policy.py lo retiene.
+  # REGLAS DE DURACIÓN: la regla 40-60 s con mínimo 40 y rango prohibido
+  # 25-35 s fue ELIMINADA por orden del usuario el 2026-11-21 ("para
+  # siempre, en todo el canal"). Ya NO hay mínimo de duración ni rango
+  # prohibido: un clip de 25 s (o menos) es válido. Objetivo 40 s = 20 s
+  # de pre-roll + 20 s tras el pico (payoff a 20 s dentro del clip);
+  # tope duro 60 s = máximo de un Short de YouTube y tope del proyecto,
+  # nunca el default. refine_cut ya no alarga cortes cortos.
   duration: 40            # duración del clip en segundos (legado, = target)
   target_duration_s: 40   # objetivo del corte (default)
-  min_duration_s: 40      # mínimo: 40 s (decisión del usuario 2026-11-18)
+  min_duration_s: 1       # sin mínimo (regla 40-60 eliminada 2026-11-21)
   max_duration_s: 60      # máximo del corte variable = tope duro 60 s
   hard_cap_s: 60          # tope duro absoluto, nunca se pasa
-  forbidden_duration_range: [25, 35]  # regla de oro: ningún clip de 25-35 s
+  forbidden_duration_range: []  # sin rango prohibido (eliminado 2026-11-21)
   precise_cut: true       # afinar inicio/fin por frase/silencio si se puede
   pre_roll: 20            # segundos antes del pico (regla: 20 s de contexto)
   window: 10              # ventana de chat en segundos
@@ -98,16 +92,19 @@ clips:
   split_cam_h: 600        # alto del panel de cámara (split simple)
 
 subtitles:
-  default_style: "rdjavi" # rdjavi (default, plantilla v2 2026-11-18) | karaoke | ref | tiktok | highlight
+  default_style: "rubius" # rubius (default, plantilla 2026-11-19) | rdjavi | karaoke | ref | tiktok | highlight
   subtitle_lang: "auto"   # auto | es | en — idioma de salida de los subtítulos
   translate: true         # si se traduce a inglés lo que no sea español
-  # REGLA DEL USUARIO 2026-11-17 22:10: SIEMPRE subtítulos, COMPLETOS.
-  # Todo clip lleva subtítulos quemados de TODO lo que dice el
-  # influencer, no solo del pico. Sin subtítulos no se publica.
-  required: true              # subtítulos obligatorios en todo clip
+  # REGLA DEL USUARIO 2026-11-19 18:41 (reemplaza la del 2026-11-17
+  # 22:10): subtítulos SIEMPRE y COMPLETOS cuando hay voz — nunca
+  # se inventa texto. Pero sin voz verificable el clip ya NO se
+  # bloquea siempre: si pasa las puertas (viralidad >=45, SEO >=80,
+  # scoring) se PUBLICA IGUAL, sin subtítulos (muchas veces no hay
+  # subtítulo porque el streamer estaba gritando, y eso es hype,
+  # no silencio). Sin voz + bajo las puertas sigue fuera.
+  required: true              # subtítulos obligatorios cuando hay voz
   complete: true              # transcribir el clip entero, no solo el pico
-  block_without_subtitles: true  # sin SRT quemado -> clip BLOQUEADO, no publicable
-  needs_human_transcription_on_no_speech: true  # si Whisper no encuentra voz, lo revisa el usuario de oído, no se publica sin subtítulos ni se inventa texto
+  publish_no_speech_if_passes_gates: true  # sin voz + pasa puertas -> publicable sin subtítulos
 
   # ZONA DE SUBTÍTULOS (plantilla v2, 2026-11-18): los subtítulos
   # viven ENTEROS en la barra negra inferior (1740-1920 px,
@@ -211,7 +208,7 @@ subtitle_policy:
 # (1740-1920 px), nunca sobre el gameplay (ahí van los
 # subtítulos propios de GTA 6) ni sobre la cámara (0-702 px).
 subtitle_styles:
-  rdjavi:                 # plantilla v2 (default): subtítulos fijos
+  rdjavi:                 # plantilla v2: subtítulos fijos
     # amarillos, Arial Black 64 px reales, contorno negro grueso,
     # en la barra negra abajo del todo. Sin karaoke.
     font_color: "#FFFF00"
@@ -258,7 +255,7 @@ subtitle_styles:
   karaoke:                # palabra por palabra con cambio de color (ASS \k real):
     # la palabra activa va en amarillo, el resto en blanco; grande,
     # negrita, borde negro, centrado abajo. Opción secundaria desde
-    # la v2 (2026-11-18): el default es rdjavi (fijo amarillo).
+    # la v2 (2026-11-18).
     font_color: "#FFFFFF"       # palabras pendientes: blanco
     active_word_color: "#FFFF00" # palabra activa: amarillo
     border_color: "#000000"
@@ -269,6 +266,35 @@ subtitle_styles:
     max_chars: 8
     max_duration: 1.0
     box: false
+  rubius:                # palabra por palabra, UNA a la vez, BLANCA con
+    # contorno negro grueso, centrada SOBRE el gameplay (y 900-1020,
+    # Alignment 8, MarginV 900). Solo en la plantilla rubius: en
+    # rdjavi/willyrex los subtítulos sobre el gameplay están
+    # PROHIBIDOS (van en la barra negra 1740-1920). El banner del
+    # título NO va en este estilo: es un PNG aparte (clipagent/rubius.py).
+    font_color: "#FFFFFF"
+    border_color: "#000000"
+    border_width: 10
+    fontsize: 100
+    bold: true
+    margin_v: 900
+    max_chars: 20
+    max_duration: 1.0
+    box: false
+
+# EFECTOS DE SONIDO (2026-11-19, pedido del usuario: SFX por
+# defecto en el render, vivo y VOD). La mezcla es
+# ``clipagent/sfx_mix.py``: vine boom en el payoff (con dip de
+# silencio), riser antes, fail visual si se conoce; nunca sobre
+# gritos del streamer, ni en el hook (s=0-3) ni en los últimos
+# 2 s. El objetivo de nivel es el RMS del segundo mezclado
+# (~-11 dBFS el boom: el primer A/B no se oyó en el celular con
+# RMS -22,6 dBFS). Además, lift general de volumen con
+# compresión ascendente (el clip "sonaba muy despacio").
+sfx:
+  enabled: true   # SFX por defecto en todo clip renderizado
+  max_sfx: 2      # tope de efectos por clip en el camino automático
+  lift: true      # lift general de volumen (compand ascendente)
 
 # Layout RESPONSIVE (regla del proyecto, 2026-11-16): el recorte vertical
 # no es un recorte ciego al centro. Cada clip decide su layout por
@@ -302,9 +328,9 @@ layout:
   # DJ Mariio esté aparcado, el layout sigue siendo RDJavi.
   framing_wide_aspect: 1.8       # aspecto >= 1.8 = plano ancho
   framing_wide_width_frac: 0.6  # y ancho >= 60% del frame
-  # BRANDING GTA 6 / VICE CITY (2026-11-18): handle centrado en la
-  # banda inferior + barra atardecer en la costura gameplay/banda.
-  channel_handle: "@ELCLIPDEGTA6 | GTA VI"
+  # BRANDING GTA 6 / VICE CITY (2026-11-18): barra atardecer en la
+  # costura gameplay/banda. Sin handle del canal: la plantilla no
+  # lleva marca de un tenant concreto.
   sunset_colors: ["#FF2E88", "#7B2FFF", "#FF9E00"]  # rosa, violeta, naranja
   # PUNCH-IN (2026-11-18): zoom cerrado puntual sobre la webcam en un
   # momento de reacción (excepción del reel: la cámara es fija salvo
@@ -411,6 +437,96 @@ scoring:
   audio_weight: 1.0
   audio_weight_kick: 1.5
 
+# Validación final del vídeo renderizado (2026-11-19, puerta dura
+# de cara + plantilla; orden del usuario 18:23-18:41).
+# ``enabled``: la validación existe y corre en vivo, VOD y manual.
+# ``observe_only``: SOLO los criterios SUBJETIVOS de Gemini
+# (momento comprensible, coherencia de subtítulos, legibilidad del
+# título) se registran sin frenar. La cara y la plantilla NUNCA
+# están en observación: un fallo de cara o de plantilla frena el
+# clip y dispara re-render, siempre, sin excepción. El default
+# silencioso "observa todo" (que dejó pasar los clips sin cara)
+# queda prohibido: si falta esta sección, el gate falla en voz
+# alta y el run para (ver load_validator_config en config.py).
+final_review:
+  enabled: true
+  observe_only: true
+
+# Puerta dura del validador final (2026-11-19). ÚNICA fuente de
+# estos valores: config.yaml. El código NO lleva copias literales
+# ni defaults silenciosos: si falta una clave, load_validator_config
+# levanta ConfigError nombrándola y el run para.
+validator:
+  face_sample_every_s: 2   # un fotograma cada N s, en TODO el clip
+  face_min_frames: 8       # mínimo de fotogramas muestreados
+  face_min_share: 0.5      # cara visible en >= 50% de las muestras
+  face_min_width_frac: 0.08  # ancho mínimo de la cara vs ancho de banda
+  min_score: 5             # nota mínima por criterio Gemini (0-10)
+  max_rerenders: 1         # re-renders automáticos por clip y fallo
+  gemini_hard: false       # false = criterios subjetivos de Gemini en
+                           # observación (registrados, no frenan); true =
+                           # cualquier rechazo de Gemini dispara re-render
+  chain: ["facecrop", "edge", "yunet"]  # orden de los fallbacks de cara
+
+# Plantillas del validador final (2026-11-19). TRES recetas
+# (1080x1920), ÚNICA fuente: config.yaml. El validador valida el
+# vídeo final contra LA PLANTILLA DEL CLIP (campo plantilla); un
+# clip sin plantilla se valida contra `default` (rubius, decisión
+# del usuario 2026-11-19 19:09). Un clip que no coincida con
+# ninguna de las tres no pasa y se vuelve a hacer.
+#   rdjavi (v1, commit d21cca5): streamer centrado casi 1:1
+#     583x595 (x=248, y=0) sobre fondo desenfocado morado/magenta
+#     + gradiente atardecer; subtítulos KARAOKE palabra por palabra
+#     (activa amarilla, resto blanco, 56 px negrita, contorno negro)
+#     AL PIE DE LA CÁMARA (banda 595-749), nunca sobre el gameplay;
+#     gameplay y 749-1786; barra negra abajo y 1786-1920.
+#   willyrex (v2, commits e7d47c7 + 4b7110a, código rdjavi.py):
+#     webcam ancho completo y 0-702; banda negra del medio y
+#     702-800 = TÍTULO en una línea, blanco Arial Black; gameplay
+#     y 800-1740; banda negra abajo y 1740-1920 = subtítulos FIJOS
+#     amarillos Arial Black 64 px.
+#   rubius (medido por píxeles): cámara ancho completo y 0-840; gameplay
+#     y 840-1920, corte limpio SIN bandas; TÍTULO = banner amarillo
+#     redondeado con borde blanco (x 103-967, y 811-1099), dos
+#     líneas centradas (línea 1 NEGRA, línea 2 ROJA, Arial Black
+#     gruesa), transitorio (solo en el momento clave); SUBTÍTULOS
+#     palabra por palabra, una palabra a la vez, BLANCO con borde
+#     negro grueso, centrados, y 900-1020 (parte superior del
+#     gameplay), ~120 px alto.
+# Regla de subtítulos sobre el gameplay POR PLANTILLA: en rubius
+# VAN sobre el gameplay (arriba, palabra por palabra en blanco) y
+# eso es correcto; en rdjavi/willyrex siguen prohibidos (van al pie
+# de la cámara / banda de abajo).
+templates:
+  default: rubius
+  rdjavi:
+    cam: {x: 248, y: 0, w: 583, h: 595}
+    karaoke_band: {y0: 595, y1: 749}
+    game: {y0: 749, y1: 1786}
+    subs_band: {y0: 1786, y1: 1920}
+    subs_style: karaoke
+    subs_over_game: false
+    cam_full_width: false
+    blurred_bg: true
+  willyrex:
+    cam: {x: 0, y: 0, w: 1080, h: 702}
+    title_band: {y0: 702, y1: 800}
+    game: {y0: 800, y1: 1740}
+    subs_band: {y0: 1740, y1: 1920}
+    subs_style: fixed_yellow
+    subs_over_game: false
+    cam_full_width: true
+    blurred_bg: false
+  rubius:
+    cam: {x: 0, y: 0, w: 1080, h: 840}
+    game: {y0: 840, y1: 1920}
+    title_banner: {x0: 103, x1: 967, y0: 811, y1: 1099}
+    subs_zone: {y0: 900, y1: 1020}
+    subs_style: word_white
+    subs_over_game: true
+    cam_full_width: true
+    blurred_bg: false
+
 # Señales de Uri (clipper-directos, 2026-11-17): heatmap de YouTube,
 # % de juego en movimiento y voz del juego. Son DIAGNÓSTICO en el
 # manifiesto (signals.*): NO cambian la fórmula de viralidad (7
@@ -501,14 +617,13 @@ panel:
 # clipagent/config.py RULES, precise_cut.py, transcribe.py y
 # policy.py); si una regla cambia, cambia aquí Y en el código.
 rules:
-  # Duración: entre 40 y 60 s, nunca menos de 40 ni más de 60, nunca
-  # 30 s exacto (decisión 2026-11-18; reemplaza el mínimo 36 s de
-  # 2026-11-17: el clip de 21 s publicado en test era "muy poco" y
-  # el de 38 s (Rubius p2010) también queda fuera).
-  min_duration_s: 40        # mínimo: 40 s (decisión del usuario 2026-11-18)
+  # Duración: sin mínimo ni rango prohibido (regla 40-60 / 25-35
+  # eliminada por el usuario el 2026-11-21, para siempre). Solo queda
+  # el tope duro de 60 s (máximo de un Short).
+  min_duration_s: 1         # sin mínimo (regla eliminada 2026-11-21)
   target_duration_s: 40     # objetivo: 40 s (20 pre-roll + 20 post-pico)
   hard_cap_s: 60            # tope duro: 60 s (máximo de un Short)
-  forbidden_duration_range: [25, 35]  # regla de oro: ningún clip de 25-35 s
+  forbidden_duration_range: []  # sin rango prohibido (eliminado 2026-11-21)
   pre_roll_s: 20            # 20 s de contexto antes del pico
   # Layout split vertical RDJavi (2026-11-16, invertido 2026-11-18):
   # streamer arriba, gameplay abajo, sin superponerse (salvo los 50 px
@@ -528,14 +643,31 @@ rules:
   # (*.transcript_corrected.json en el run) o no quemar nada.
   never_burn_hallucinated_subtitles: true
   user_corrected_transcript_wins: true
-  # Subtítulos SIEMPRE y COMPLETOS (regla 2026-11-17 22:10):
-  # todo clip lleva subtítulos quemados de todo lo que dice el
-  # influencer; sin subtítulos no se publica.
+  # Subtítulos SIEMPRE y COMPLETOS cuando hay voz (regla
+  # 2026-11-17 22:10, matizada 2026-11-19 18:41): todo clip lleva
+  # subtítulos quemados de todo lo que dice el influencer; sin voz
+  # verificable + pasa puertas (45/80) se publica igual sin
+  # subtítulos, nunca se inventa texto.
   subtitles_always: true
   subtitles_complete: true
-  block_without_subtitles: true
+  publish_no_speech_if_passes_gates: true
   # Categoría (regla 2026-11-18): solo vale GTA VI. El
   # watcher/detector lee la categoría por API oficial (Helix
   # /streams y /channels en Twitch, /api/v2/channels en Kick) y
   # por capítulos del VOD; policy.py y el gate del panel la exigen.
   category_gta6_only: true
+
+# Vigilante con auto-reparación (2026-11-19, orden del usuario:
+# los logs son la primera fuente; los chequeos de estado solo
+# corroboran). Única fuente de estos valores: clipagent/watchdog.py
+# (load_watchdog_config) falla fuerte si falta uno.
+watchdog:
+  stuck_after_min: 45     # sin clip nuevo en 45 min = atasco (con vivos)
+  cooldown_min: 30        # máx 1 escalera cada 30 min
+  no_dispatch_min: 20     # dispatch sin corrida posterior en 20 min = no dispara
+  no_cycle_min: 20        # sin eventos de ciclo en 20 min con running=1 = silencio
+  max_vod_clips: 2        # VOD como último recurso: máx 2 clips
+  max_redispatch_per_hour: 2  # tope de re-disparos del vigilante por hora (2026-11-20, cuota D1)
+  telegram_enabled: true  # avisar por Telegram solo si sigue atascado
+  dispatch_workflow: cerebro-live.yml
+  watchdog_workflow: cerebro-watchdog.yml

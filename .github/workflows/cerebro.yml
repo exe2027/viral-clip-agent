@@ -1,0 +1,406 @@
+name: Cerebro — Diario
+
+# Cerebro diario GENÉRICO (2026-11-19): UN solo workflow para TODOS
+# los tenants. Reemplaza cerebro-sebastian.yml (borrado). Nada de `environment: <tenant>` ni secretos por tenant
+# en GitHub: las credenciales salen DEL PANEL (donde cada usuario
+# ya conecta sus cuentas). El Worker dispara `panel-daily` (09:00
+# America/Santiago, solo si el Worker está en marcha) y
+# `panel-start` (botón Iniciar); ambos tipos son FIJOS y el tenant
+# viaja en el client_payload junto a un token de un solo uso, que el
+# paso bootstrap canjea por una sesión de 12 h y materializa las
+# credenciales en el runner. Sin cron aquí: un run por cron no
+# tendría token para autenticarse. Un workflow_dispatch manual exige
+# `tenant` (sin default).
+#
+# VÍA PRINCIPAL (decisión del usuario 17 nov 2026: "Todo
+# automático"). Cloudflare (panel/API/cola) + GitHub Actions como
+# compute principal $0: el cerebro Python (ffmpeg/Whisper) corre
+# aquí, sin VPS ni PC prendida. La lentitud no importa: el trabajo
+# es programado (09:00). Solo Cloudflare + manual queda como
+# respaldo degradado.
+#
+# EXPERIENCIA: login → configurar cuentas / subtítulos / ajustes →
+# botón Iniciar en el panel → 100% automatizado, sin pasos manuales
+# después. El usuario NO toca GitHub Actions, ni terminal, ni
+# instala nada después de Iniciar. El botón Iniciar del panel
+# dispara este workflow con un repository_dispatch (el Worker del
+# panel llama a la API de GitHub con un token guardado como secreto
+# del Worker, nunca en el repo).
+#
+# El flag started vive en D1 (worker_state), NO en
+# state/panel-state.json: la puerta Iniciar pregunta al panel
+# (GET /api/worker/state vía PanelBridge) cuando force=false. Un
+# dispatch manual con force=true es una orden de trabajar.
+# El agente navegador TikTok NO corre aquí: necesita sesión
+# persistente en disco local, misma IP y un humano para el captcha
+# (corre en el runner autoalojado de su PC).
+
+on:
+  repository_dispatch:
+    types: [panel-daily, panel-start]
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant del panel (p. ej. sebastian, kaez)"
+        required: true
+      force:
+        description: "Trabajar aunque el panel esté detenido (true: orden de trabajar; false: respetar el estado del panel)"
+        required: false
+        default: "true"
+        type: boolean
+      streamer:
+        description: "Solo este streamer (p. ej. rubius, para rescates); vacío = todos los vigilados"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: cerebro-${{ github.event.client_payload.tenant || inputs.tenant }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # El paso "Resolver run previo exitoso" lista runs del workflow
+  # con `gh api` usando GITHUB_TOKEN.
+  actions: read
+
+jobs:
+  vod-check-and-publish:
+    runs-on: ubuntu-latest
+    env:
+      TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+      PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+      # URL DIRECTA del Worker, NO el front de Pages: Pages corta
+      # las llamadas API desde Actions (RemoteDisconnected / 405
+      # vacíos; medido 2026-11-18). El front para humanos sigue en
+      # Pages.
+      PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+
+      # TwitchDownloaderCLI (solo Twitch: chat + segmento de vídeo).
+      # Sin él auto_clips falla en VODs de Twitch ("no está en el
+      # PATH"). Versión fijada: la misma del plan (1.56.5). El zip
+      # Linux es autocontenido (no exige instalar .NET). Si este
+      # paso falla, el fallo es visible aquí, no en silencio dentro
+      # del worker.
+      - name: Instalar TwitchDownloaderCLI
+        run: |
+          TDL_VERSION="1.56.5"
+          curl -sSL -o /tmp/twitchdownloader.zip \
+            "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
+          sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
+          # --help sale con exit 1 en esta versión; no debe tumbar el
+          # paso (bash -e) aunque el binario esté bien instalado.
+          TwitchDownloaderCLI --help || true
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,youtube,whisper]
+
+      # Bootstrap: credenciales del tenant desde el panel. Canjea el
+      # token de un solo uso del dispatch por una sesión de 12 h y
+      # materializa Twitch/Gemini/Zernio/Meta/YouTube en el entorno
+      # del runner (con ::add-mask:: por valor; el resumen solo
+      # nombra, nunca muestra valores). Sin token (p. ej. un run
+      # lanzado a mano sin pasar por el panel) falla con mensaje
+      # claro: dispara desde el panel con Iniciar.
+      - name: Credenciales desde el panel
+        env:
+          PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
+        run: python -m clipagent.panel_credentials
+
+      - name: Ruff
+        run: ruff check .
+
+      # Puerta rápida antes de procesar: si el cerebro está roto, no
+      # se toca la cola. La suite completa corre en CI (ci.yml).
+      - name: Tests de humo
+        run: pytest -q test_smoke.py test_tiktok_browser.py test_policy.py
+
+      # Estado persistente entre días: el runner es efímero y queue.db /
+      # seen_vods.json están gitignored. Se restauran del artefacto
+      # del día anterior y se vuelven a subir al final. El nombre del
+      # artefacto lleva el tenant: el estado de un tenant no es el
+      # de otro. (Migración pendiente a D1, plan §6.4.)
+      # download-artifact sin run-id busca el artefacto en el run
+      # en curso y siempre falla. Se resuelve el último run exitoso
+      # de este workflow (el run actual aún no es exitoso, así que el
+      # primero de la lista es siempre un run anterior). Sin run
+      # previo exitoso, o si la API falla, se sigue sin estado: el
+      # workflow no falla por esto.
+      - name: Resolver run previo exitoso
+        id: prev-run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cerebro.yml/runs?status=success&per_page=1" --jq '.workflow_runs[0].id // empty' || true)"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          if [ -n "$RUN_ID" ]; then
+            echo "Último run exitoso: ${RUN_ID}"
+          else
+            echo "Sin run previo exitoso: se arranca sin estado restaurado."
+          fi
+
+      # download-artifact@v4 con run-id falló SIEMPRE en este repo
+      # ("Artifact not found") aunque el artefacto existe y es
+      # listable por API. Se restaura con `gh run download`, misma
+      # API REST, y se lista lo restaurado en el log para que un
+      # fallo no sea silencioso.
+      - name: Restaurar estado del día anterior
+        if: steps.prev-run.outputs.run_id != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ steps.prev-run.outputs.run_id }}" \
+            -n "cerebro-state-$TENANT" -D . \
+            --repo "${GITHUB_REPOSITORY}" || exit 0
+          echo "Estado restaurado:"
+          ls -la queue.db seen_vods.json 2>/dev/null || true
+
+      # Puerta Iniciar: el flag started vive en D1 (worker_state).
+      # - panel-start (botón Iniciar): orden de trabajar.
+      # - panel-daily (09:00): el Worker solo dispara si está en
+      #   marcha, así que es orden de trabajar.
+      # - workflow_dispatch manual: force=true es orden de trabajar;
+      #   force=false respeta el estado del panel (GET
+      #   /api/worker/state vía PanelBridge, con la sesión del
+      #   bootstrap). Nunca un paro silencioso: queda en el log.
+      - name: Puerta Iniciar (botón del panel)
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_TYPE: ${{ github.event.action }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          python - <<'EOF'
+          import os
+          from clipagent.panel_bridge import PanelBridge
+
+          event = os.environ.get("EVENT")
+          action = os.environ.get("DISPATCH_TYPE")
+          force_raw = os.environ.get("FORCE", "")
+
+
+          def _force():
+              # workflow_dispatch con type:boolean entrega
+              # "true"/"false"; repository_dispatch no tiene inputs
+              # -> "" se trata como True (trabajar).
+              return force_raw.strip().lower() not in ("false", "0", "no")
+
+
+          def _panel_running():
+              try:
+                  bridge = PanelBridge.from_env()
+                  if bridge is None:
+                      print("Sin sesión del panel: no se puede leer "
+                            "el estado.")
+                      return False
+                  state = bridge.worker_state() or {}
+                  return bool(state.get("running"))
+              except Exception as exc:  # noqa: BLE001
+                  print(f"::warning::no se pudo leer el estado del "
+                        f"panel: {exc}")
+                  return False
+
+
+          started = False
+          if event == "repository_dispatch" \
+                  and action in ("panel-start", "panel-daily"):
+              started = True
+          elif event == "workflow_dispatch":
+              started = True if _force() else _panel_running()
+
+          print(f"Panel iniciado: {started} "
+                f"(evento={event} acción={action} "
+                f"force={force_raw!r})")
+          if not started:
+              print("Panel no iniciado: esperando el botón Iniciar; "
+                    "sin procesar nada.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"started={'true' if started else 'false'}\n")
+          EOF
+
+      # Revisión diaria de VODs nuevos (09:00 America/Santiago).
+      # --live es obligatorio: sin él watch es dry-run y jamás
+      # encola nada (watcher.py: dry_run = not args.live).
+      # Observabilidad: el resumen que imprime watch
+      # ("Resumen: ... encolados=N | ... | errores=M", watcher.py)
+      # se parsea a salidas del job y al resumen del paso; el run
+      # falla con mensaje claro solo si encolados==0 y errores>0.
+      # Un watch con errores pero algún encolado avisa y sigue: un
+      # influencer roto no tumba la pasada (el exit 2 propio de
+      # watch se absorbe y se re-decide desde el resumen).
+      - name: Revisión de VODs
+        id: watch
+        if: steps.gate.outputs.started == 'true'
+        run: |
+          set +e
+          # Rescate dirigido (input streamer del workflow_dispatch,
+          # p. ej. rubius): solo ese streamer. Vacío = todos.
+          WATCH_ARGS="--once --live"
+          if [ -n "${{ inputs.streamer }}" ]; then
+            WATCH_ARGS="$WATCH_ARGS --streamer ${{ inputs.streamer }}"
+          fi
+          # shellcheck disable=SC2086
+          python -m clipagent watch $WATCH_ARGS 2>&1 | tee watch.log
+          WATCH_EXIT="${PIPESTATUS[0]}"
+          set -e
+          WATCH_EXIT="$WATCH_EXIT" python - <<'PYEOF'
+          import os
+          import re
+          import sys
+
+          SUMMARY_RE = re.compile(
+              r"Resumen: en vivo=(?P<live>\d+)"
+              r" \| VODs revisados=(?P<new_vods>\d+)"
+              r" \| encolados=(?P<enqueued>\d+)"
+              r" \| encolar[ií]an? \(dry-run\)=(?P<would_enqueue>\d+)"
+              r" \| descartados=(?P<skipped>\d+)"
+              r" \| ya vistos=(?P<seen>\d+)"
+              r" \| errores=(?P<errors>\d+)"
+          )
+          KEYS = ("live", "new_vods", "enqueued", "would_enqueue",
+                  "skipped", "seen", "errors")
+          LABELS = (("En vivo", "live"), ("VODs revisados", "new_vods"),
+                    ("Encolados", "enqueued"),
+                    ("Encolarían (dry-run)", "would_enqueue"),
+                    ("Descartados", "skipped"), ("Ya vistos", "seen"),
+                    ("Errores", "errors"))
+
+          watch_exit = int(os.environ.get("WATCH_EXIT", "0"))
+          summary = None
+          try:
+              with open("watch.log", encoding="utf-8",
+                        errors="replace") as f:
+                  for line in f:
+                      match = SUMMARY_RE.search(line)
+                      if match:
+                          summary = {k: int(v) for k, v in
+                                     match.groupdict().items()}
+          except OSError as exc:
+              print(f"No se pudo leer watch.log: {exc}")
+
+
+          def _emit(name, value):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write(f"{name}={value}\n")
+
+
+          if summary is None:
+              _emit("enqueued", 0)
+              _emit("errors", 1 if watch_exit else 0)
+              _emit("watch_exit", watch_exit)
+              if watch_exit != 0:
+                  print(f"::error::watch terminó con exit {watch_exit} "
+                        "y no emitió la línea 'Resumen:' (watcher.py); "
+                        "no se puede saber cuántos VODs se encolaron.")
+                  sys.exit(1)
+              print("::warning::watch no emitió la línea 'Resumen:' "
+                    "(p. ej. lista de influencers vacía); se sigue "
+                    "sin contadores.")
+              sys.exit(0)
+
+          for key in KEYS:
+              _emit(key, summary[key])
+          _emit("watch_exit", watch_exit)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("## Revisión de VODs (watch --live)\n\n")
+              s.write("| Métrica | Valor |\n|---|---:|\n")
+              for label, key in LABELS:
+                  s.write(f"| {label} | {summary[key]} |\n")
+              s.write(f"\nExit de watch: `{watch_exit}`\n")
+
+          print(f"Watch: encolados={summary['enqueued']} "
+                f"descartados={summary['skipped']} "
+                f"errores={summary['errors']} (exit {watch_exit})")
+          if summary["enqueued"] == 0 and summary["errors"] > 0:
+              print("::error::watch no encoló ningún VOD y tuvo "
+                    f"{summary['errors']} error(es); revisa watch.log.")
+              sys.exit(1)
+          if summary["errors"] > 0:
+              print(f"::warning::watch tuvo {summary['errors']} "
+                    "error(es) pero encoló "
+                    f"{summary['enqueued']} VOD(s); se sigue.")
+          PYEOF
+
+      # Cadena completa en una pasada (tras pulsar Iniciar no hay
+      # pasos manuales): el worker monolítico corre auto_clips
+      # (detección de picos por chat → corte 9:16 con ffmpeg →
+      # subtítulos faster-whisper → empaquetado SEO) y encola los
+      # clips; el publish loop publica por API con --live (YouTube
+      # real; TikTok Direct Post, IG contenedor y FB 3 fases cuando
+      # sus credenciales/IDs están configurados; si falta algo, el
+      # ítem cae a draft con el motivo visible, nunca se finge una
+      # publicación). La auditoría después del bucle refleja el
+      # estado ya publicado. El agente navegador TikTok NO corre
+      # aquí (sesión persistente, misma IP y captcha humano:
+      # runner autoalojado en su PC): sus clips quedan en draft
+      # hasta que los publica el agente o se suben a mano.
+      # RETIRO PENDIENTE (2026-11-19): publicar solo por el panel
+      # (PanelBridge.publish_clip → Worker jobs) en vez del publish
+      # loop directo; refactor aparte, no en este cambio.
+      - name: Cadena completa (detectar, cortar, subtitular, publicar)
+        if: steps.gate.outputs.started == 'true'
+        run: |
+          python -m clipagent worker --once --top-n 5
+          python -m clipagent publish loop --once --live
+          python -m clipagent publish audit
+          python -m clipagent status
+
+      # Si algo se atasca: queda registrado con motivo y hora en
+      # state/run-log.jsonl (artefacto cerebro-logs-<tenant>), no
+      # parado en silencio. El panel debe mostrar ese registro.
+      - name: Registrar atasco (motivo + hora, visible)
+        if: failure()
+        run: |
+          python - <<'EOF'
+          import json, os
+          from datetime import datetime, timezone
+          os.makedirs("state", exist_ok=True)
+          entry = {
+              "at": datetime.now(timezone.utc).isoformat(),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "job": "vod-check-and-publish",
+              "tenant": os.environ.get("TENANT"),
+              "conclusion": "failure",
+          }
+          with open("state/run-log.jsonl", "a") as f:
+              f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+          print(json.dumps(entry, ensure_ascii=False))
+          EOF
+
+      - name: Subir registro de atascos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-logs-${{ github.event.client_payload.tenant || inputs.tenant }}
+          path: state/run-log.jsonl
+          if-no-files-found: ignore
+          retention-days: 90
+
+      # El flag started vive en D1: aquí solo se guarda el estado
+      # operativo (queue.db, seen_vods, counter). NUNCA se sube
+      # state/tiktok_browser.json (sesión de navegador TikTok en
+      # claro; el repo es público) ni un panel-state.json.
+      - name: Guardar estado para mañana
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-state-${{ github.event.client_payload.tenant || inputs.tenant }}
+          path: |
+            queue.db
+            seen_vods.json
+            state/counter.json
+          if-no-files-found: ignore
+          retention-days: 30

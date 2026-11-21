@@ -269,6 +269,21 @@ DEFAULTS = {
     "track_dead_zone_frac": 0.15,  # zona muerta: fracción del ancho de recorte
     "track_max_speed_frac": 0.03,  # velocidad máx. del centro: fracción del ancho / s
     "track_split_max_speed_frac": 0.01,  # el divisor casi no se mueve
+    # Fallback YuNet (2026-11-19, clip 23 TheGrefg): detector de
+    # webcam vendoreado (clipagent/yunet_facecam.py). Solo se intenta
+    # cuando todo lo demás falla (detect_vod_facecam en none o
+    # decide_layout todo center); nunca pisa una caja ya detectada.
+    # Sin modelo vendoreado devuelve None y no cambia nada.
+    "yunet_fallback": True,
+    # Rescate por bordes fijos (2026-11-19, clip 23): detector de
+    # webcam por bordes rectos que no se mueven + interior casi
+    # quieto (clipagent/edge_facecam.py, solo numpy + ffmpeg, sin
+    # modelo ni IA). Se intenta ANTES que YuNet cuando el voto por
+    # proximidad falla, y solo se acepta con conf "high"; si da
+    # None o "low", se sigue a YuNet como antes. Nunca pisa una
+    # caja ya detectada. Con "edge_facecam_fallback": False se
+    # apaga y el camino queda exactamente como antes.
+    "edge_facecam_fallback": True,
 }
 
 # ---------------------------------------------------------------------------
@@ -313,16 +328,26 @@ RDJAVI_PUNCH_WINDOW = (16, 26)
 RDJAVI_PUNCH_ZOOM = 1.30
 RDJAVI_GAME_ZOOM_WINDOW = (18, 24)
 RDJAVI_GAME_ZOOM_FACTOR = 1.15
-# Branding viejo del canal (Vice City: rosa/violeta/naranja
-# atardecer): RETIRADO con la v2 (la plantilla no lleva handle ni
-# barra atardecer). Las constantes quedan por compatibilidad con
-# código que las importe, pero el grafo RDJavi ya no las usa.
-CHANNEL_HANDLE = "@ELCLIPDEGTA6 | GTA VI"
-SUNSET_BAR_H = 6          # barra atardecer en la costura gameplay/banda
-SUNSET_COLORS = ("#FF2E88", "#7B2FFF", "#FF9E00")  # rosa, violeta, naranja
-CHANNEL_HANDLE_FONTSIZE = 34
-CHANNEL_HANDLE_FONTFILE = ("/usr/share/fonts/truetype/dejavu/"
-                           "DejaVuSans-Bold.ttf")
+
+# Geometría de la plantilla RUBIUS (2026-11-19, default para renders
+# nuevos, decisión del usuario: TODOS los clips a rubius): corte
+# limpio sin bandas — webcam a ancho completo 0-840, gameplay
+# 840-1920 (1080x1080, recorte 1:1), banner amarillo del título a
+# caballo del corte (el banner se compone en el paso de subtítulos,
+# no en este grafo: el título solo se conoce ahí) y subtítulos
+# palabra por palabra blancos SOBRE el gameplay (y 900-1020).
+# Receta en config.yaml (templates.rubius); render en
+# clipagent/rubius.py. Punch-in 1,18x (menos marcado que willyrex).
+RUBIUS_CAM_W, RUBIUS_CAM_H = 1080, 840
+RUBIUS_CAM_X, RUBIUS_CAM_Y = 0, 0
+RUBIUS_GAME_Y0 = 840
+RUBIUS_GAME_H = 1080
+RUBIUS_GAME_CROP_FRACS = (1440 / 2560, 1440 / 1440,
+                           560 / 2560, 0)  # w, h, x, y
+RUBIUS_PUNCH_WINDOW = (16, 26)
+RUBIUS_PUNCH_ZOOM = 1.18
+RUBIUS_GAME_ZOOM_WINDOW = (18, 24)
+RUBIUS_GAME_ZOOM_FACTOR = 1.15
 
 
 def detect_framing(box_sample, cfg=None):
@@ -352,11 +377,12 @@ def detect_framing(box_sample, cfg=None):
 def resolve_split_variant(cfg=None, framing=None):
     """Variante del split para un clip de GTA 6.
 
-    "auto" (default) -> "rdjavi" siempre (GTA 6 es el único juego
-    del panel; RDJavi es el layout base por orden del usuario).
-    "rdjavi" -> "rdjavi". "plain" -> split simple. "djmariio" está
-    APARCADO (2026-11-18): se resuelve a "rdjavi" y se avisa, no se
-    usa como layout. El encuadre ("framing") se registra en el
+    "auto" (default) -> la plantilla por defecto de config.yaml
+    (templates.default: "rubius" desde 2026-11-19; antes "rdjavi").
+    "rubius" -> "rubius". "rdjavi" -> "rdjavi" (plantilla willyrex
+    v2). "plain" -> split simple. "djmariio" está APARCADO
+    (2026-11-18): se resuelve a "rdjavi" y se avisa, no se usa
+    como layout. El encuadre ("framing") se registra en el
     manifiesto pero no cambia la variante mientras DJ Mariio esté
     aparcado.
     """
@@ -368,7 +394,31 @@ def resolve_split_variant(cfg=None, framing=None):
         return "rdjavi"
     if variant == "plain":
         return "plain"
-    return "rdjavi"
+    if variant in ("rdjavi", "rubius"):
+        return variant
+    # "auto": la plantilla por defecto, única fuente config.yaml
+    # (templates.default: "rubius" desde 2026-11-19). Sin sección
+    # templates (cfg parcial, p. ej. tests), se carga config.yaml
+    # en disco, mismo patrón que load_validator_config: un dict
+    # vacío NO es "sin config", es "carga la de disco". Si el
+    # ARCHIVO no trae el valor, falla fuerte (ConfigError): sin
+    # defaults silenciosos, nunca "rdjavi" por omisión (ese default
+    # contradecía el default rubius acordado y quemaba el VOD como
+    # willyrex; clip 23, 2026-11-19).
+    default = str(((cfg.get("templates") or {}).get("default") or "")
+                  ).lower()
+    if default not in ("rdjavi", "rubius"):
+        from .config import load_config
+        full = load_config()
+        default = str(((full.get("templates") or {}).get("default")
+                       or "")).lower()
+    if default in ("rdjavi", "rubius"):
+        return default
+    from .validate import ConfigError
+    raise ConfigError(
+        "templates.default: falta en config.yaml (la plantilla por "
+        "defecto es rubius desde 2026-11-19; sin defaults "
+        "silenciosos)")
 
 
 def _punch_crop_expr(normal, punched, punch):
@@ -1460,7 +1510,7 @@ def _face_cam_box(video_path, duration, start_offset, src_w, src_h, cfg,
     # mira las cartas y la cara cae ~75 px); los 8 instantes
     # regulares no lo ven y el punch-in la cortaría. Solo si el
     # punch-in no está desactivado en cfg.
-    punch_win = _punch_window(cfg)
+    punch_win = _punch_window(cfg, duration)
     if punch_win is not None:
         p0, p1 = punch_win
         extra = [t for t in (p0, p0 + 3, p1 - 1)
@@ -1600,7 +1650,68 @@ def _face_union_box(kept, src_w, src_h, margin_frac=0.6, min_factor=2.8):
     return [x0, y0, x1 - x0, y1 - y0]
 
 
-def _punch_window(cfg):
+# Zoom por hype (2026-11-19, pedido del usuario: punch-in en los
+# momentos que sean necesarios, no un zoom fijo en 16-26 s).
+# Ventana por defecto: 4 s (1 s antes del grito + 3 s de reacción).
+# Una ventana de 10 s acumula tanto viaje de la cara que el zoom
+# no cabe y _punch_for_box lo desactiva (p7775); en 4 s el viaje
+# es chico y el 1,30x cabe: el zoom se ve justo en el momento.
+HYPE_PUNCH_WINDOW_S = 4.0
+HYPE_PUNCH_PRE_S = 1.0
+HYPE_PUNCH_MAX_WINDOWS = 3
+
+
+def hype_punch_windows(hype_s, duration=None,
+                       window_s=HYPE_PUNCH_WINDOW_S,
+                       max_windows=HYPE_PUNCH_MAX_WINDOWS):
+    """Ventanas de punch-in [(t0, t1), ...] desde segundos de hype.
+
+    Cada segundo de hype da una ventana de ``window_s`` segundos
+    (``HYPE_PUNCH_PRE_S`` antes del segundo, el resto después: la
+    reacción). Se ordenan, se fusionan las que se solapan y se
+    recortan a [0, duration] (sin duration no hay recorte alto);
+    como mucho ``max_windows`` (las primeras en el tiempo: el pico
+    va primero por construcción). Sin segundos de hype, lista
+    vacía (el llamador usa el default v2 fijo 16-26 s).
+    """
+    if not hype_s:
+        return []
+    wins = []
+    for s in sorted(float(v) for v in hype_s):
+        t0 = max(0.0, s - HYPE_PUNCH_PRE_S)
+        t1 = t0 + window_s
+        if duration is not None:
+            t1 = min(float(duration), t1)
+        if t1 <= t0:
+            continue
+        if wins and t0 <= wins[-1][1]:
+            wins[-1] = (wins[-1][0], max(wins[-1][1], t1))
+        else:
+            wins.append((t0, t1))
+    return wins[:max_windows]
+
+
+def hype_seconds_from_audio(video_path, peak_s, radius_s=10.0):
+    """Segundos de hype (gritos) cerca del pico, solo con audio.
+
+    Mide el RMS por segundo y busca saltos bruscos (gritos) en
+    [peak_s - radius_s, peak_s + radius_s]. Es la vía sin
+    transcripción: no distingue grito del streamer de explosión
+    del juego, pero cerca del pico (elegido por hype del chat) el
+    salto es la reacción del streamer. Sin audio o sin saltos,
+    lista vacía (nunca lanza: el llamador cae al pico).
+    """
+    try:
+        from .audio import rms_per_second, shout_spikes
+        rms = rms_per_second(video_path)
+        spikes = shout_spikes(rms)
+    except Exception:
+        return []
+    lo, hi = float(peak_s) - radius_s, float(peak_s) + radius_s
+    return [float(s) for s in spikes if lo <= s <= hi]
+
+
+def _punch_window(cfg, duration=None):
     """Ventana del punch-in (t0, t1) en segundos del clip, o None si
     el punch-in está desactivado en cfg."""
     punch = (cfg or {}).get("punch_in")
@@ -1609,6 +1720,11 @@ def _punch_window(cfg):
     if isinstance(punch, dict):
         return (float(punch.get("t0", RDJAVI_PUNCH_WINDOW[0])),
                 float(punch.get("t1", RDJAVI_PUNCH_WINDOW[1])))
+    # Hype (2026-11-19): con segundos de hype, la ventana
+    # principal es la primera ventana de hype, no la fija 16-26 s.
+    wins = hype_punch_windows((cfg or {}).get("hype_s") or [], duration)
+    if wins:
+        return wins[0]
     return RDJAVI_PUNCH_WINDOW
 
 
@@ -1663,21 +1779,106 @@ def _punch_for_box(box, kept, punch_win):
             "cx": pcx, "cy": pcy}
 
 
+def _punch_face_center(video_path, start_offset, punch_win, src_w, src_h,
+                      cfg):
+    """Centro de la cara en la ventana del punch-in (px originales).
+
+    Muestrea 3 instantes de la ventana con Haar (_detect_faces_at)
+    y toma en cada uno la cara MÁS GRANDE (el streamer, no un
+    póster de fondo); devuelve la mediana de los centros. Sin cara
+    en ningún instante, None: el llamador desactiva el punch-in.
+    Sin este centro, el grafo centra el zoom en el CENTRO DE LA
+    CAJA de la webcam, y si la cara no está ahí (TheGrefg la tiene
+    abajo: centro de cara y=301 de caja 103-354, clip 23,
+    2026-11-19), el zoom corta la barbilla y la cara sale del
+    recorte. Un punch-in sin cara conocida es peor que no hacer
+    zoom: nunca se centra a ciegas.
+    """
+    if not punch_win:
+        return None
+    t0, t1 = float(punch_win[0]), float(punch_win[1])
+    if t1 <= t0:
+        return None
+    centers = []
+    for t in (t0, (t0 + t1) / 2.0, max(t0, t1 - 0.1)):
+        try:
+            faces = _detect_faces_at(video_path, start_offset + t,
+                                     src_w, src_h, cfg)
+        except Exception:
+            continue
+        if not faces:
+            continue
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+        centers.append((x + w / 2.0, y + h / 2.0))
+    if not centers:
+        return None
+    xs = sorted(c[0] for c in centers)
+    ys = sorted(c[1] for c in centers)
+    n = len(centers)
+    return (float(xs[n // 2]), float(ys[n // 2]))
+
+
+def _fill_punch_face_centers(video_path, start_offset, segments, cfg):
+    """Centra el punch-in en la cara en los tramos split que no
+    traen centro (caja explícita y pip->split: _split_params no
+    conoce la cara). El tramo center ya trae cx/cy del viaje de
+    la cara y no se toca. Sin cara en la ventana, el punch-in se
+    desactiva (nunca un zoom a ciegas que corte la cara)."""
+    if not segments:
+        return
+    need = [s for s in segments
+            if s.get("layout") == "split"
+            and isinstance((s.get("params") or {}).get("punch_in"), dict)
+            and ("cx" not in (s["params"]["punch_in"] or {})
+                 or "cy" not in (s["params"]["punch_in"] or {}))]
+    if not need:
+        return
+    try:
+        sw, sh = _probe_size(video_path)
+    except Exception:
+        return
+    for seg in need:
+        punch = dict(seg["params"]["punch_in"])
+        win = (float(punch.get("t0", RDJAVI_PUNCH_WINDOW[0])),
+               float(punch.get("t1", RDJAVI_PUNCH_WINDOW[1])))
+        center = _punch_face_center(
+            video_path, start_offset + float(seg.get("start", 0.0)),
+            win, sw, sh, cfg)
+        if center is None:
+            seg["params"] = dict(seg["params"])
+            seg["params"]["punch_in"] = False
+            seg["reason"] = (seg.get("reason", "")
+                             + " | punch-in off (sin cara en la "
+                               "ventana de hype)")
+            continue
+        punch["cx"] = center[0] * SAMPLE_W / sw
+        punch["cy"] = center[1] * SAMPLE_H / sh
+        seg["params"] = dict(seg["params"])
+        seg["params"]["punch_in"] = punch
+        for w in seg["params"].get("punch_windows") or []:
+            w["cx"] = punch["cx"]
+            w["cy"] = punch["cy"]
+        seg["reason"] = (seg.get("reason", "")
+                         + f" | punch-in centrado en la cara "
+                           f"({int(center[0])},{int(center[1])})")
+
+
 def _split_params(box_sample, cfg):
     """Params del layout split a partir de la caja de la webcam.
 
     box_sample: [x0, y0, w, h] en el fotograma de muestra (160x90).
     Devuelve params con la caja, la ventana de juego (game_x0, en
     muestra) y las alturas de los paneles. El streamer va ARRIBA
-    y el juego ABAJO; la variante por defecto para GTA 6 es RDJavi
-    (plantilla v2, 2026-11-18: webcam a ancho completo 0-702,
-    franja de título 702-800, gameplay 800-1740, barra de
-    subtítulos 1740-1920). Si la caja de la cámara es muy ancha
+    y el juego ABAJO; la variante por defecto para GTA 6 es Rubius
+    (2026-11-19, decisión del usuario: todos los clips a rubius;
+    la geometría willyrex/rdjavi queda en los defaults de clips:
+    webcam a ancho completo 0-702, franja de título 702-800,
+    gameplay 800-1740, barra de subtítulos 1740-1920). Si la caja de la cámara es muy ancha
     (> 45% del frame, el juego no se vería) la cámara se achica
     a 480 px y el juego crece a 1440 px (split simple). El
     encuadre ("framing": face/setup) se detecta y se guarda en
     params; la variante se resuelve con resolve_split_variant
-    (DJ Mariio aparcado: siempre RDJavi para GTA 6).
+    (DJ Mariio aparcado: siempre Rubius para GTA 6).
     (Orden invertido 2026-11-18 por el usuario: antes juego arriba
     y cámara abajo; referencia RDJavi Df4sy4bxlmr.)
 
@@ -1709,11 +1910,29 @@ def _split_params(box_sample, cfg):
     zoom = cfg.get("game_zoom")
     zoom = zoom if (isinstance(zoom, (dict, tuple, list))
                    or zoom is False) else None
-    return {"box": [float(v) for v in box_sample[:4]],
-            "game_x0": float(game_x0), "game_h": game_h, "cam_h": cam_h,
-            "framing": framing,
-            "split_variant": resolve_split_variant(cfg, framing),
-            "punch_in": punch, "game_zoom": zoom}
+    # Hype (2026-11-19): con segundos de hype y sin punch_in
+    # explícito, el punch-in va en las ventanas de hype (no la
+    # fija 16-26 s) y el zoom del gameplay se ancla al hype
+    # principal (2 s antes, 4 s después) en vez de 18-24 s.
+    punch_windows = None
+    hype_s = cfg.get("hype_s") or []
+    if hype_s and punch is not False:
+        wins = hype_punch_windows(hype_s)
+        if wins:
+            if punch is None:
+                punch = {"t0": wins[0][0], "t1": wins[0][1]}
+            punch_windows = [{"t0": t0, "t1": t1} for t0, t1 in wins]
+            if zoom is None:
+                zoom = {"t0": max(0.0, wins[0][0] - 2.0),
+                        "t1": wins[0][0] + 4.0}
+    params = {"box": [float(v) for v in box_sample[:4]],
+              "game_x0": float(game_x0), "game_h": game_h, "cam_h": cam_h,
+              "framing": framing,
+              "split_variant": resolve_split_variant(cfg, framing),
+              "punch_in": punch, "game_zoom": zoom}
+    if punch_windows:
+        params["punch_windows"] = punch_windows
+    return params
 
 
 def _scan_frames(video_path, duration, start_offset, cfg):
@@ -2056,6 +2275,8 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                                     "arriba, gameplay abajo (sin PiP en el centro)")}]
             if game_voice:
                 segments = apply_game_voice(segments, game_voice, duration)
+            _fill_punch_face_centers(video_path, start_offset,
+                                     segments, cfg)
             return {"mode": "split", "segments": segments, "samples": []}
         # Sin tamaño del vídeo no se puede convertir la caja: caer al
         # auto de abajo en vez de un PiP con coords imposibles.
@@ -2241,6 +2462,16 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                     video_path, r["end"] - r["start"],
                     start_offset + r["start"], sw, sh, cfg,
                     with_punch=True)
+                # Fallback YuNet (detrás de _face_cam_box, nunca
+                # antes): solo si la cara no dio caja. Sin punch-in:
+                # YuNet da la caja, no el viaje de la cara.
+                yunet = False
+                if fbox is None and cfg.get("yunet_fallback", True):
+                    fbox = _yunet_facecam_box(
+                        video_path, r["end"] - r["start"],
+                        start_offset + r["start"], sw, sh, cfg)
+                    punch = None
+                    yunet = fbox is not None
                 if fbox is not None:
                     box_s = [fbox[0] * SAMPLE_W / sw, fbox[1] * SAMPLE_H / sh,
                              fbox[2] * SAMPLE_W / sw, fbox[3] * SAMPLE_H / sh]
@@ -2260,14 +2491,35 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                             pc["cx"] = punch["cx"] * SAMPLE_W / sw
                             pc["cy"] = punch["cy"] * SAMPLE_H / sh
                             r["params"]["punch_in"] = pc
+                            # Hype (2026-11-19): las demás ventanas de
+                            # hype usan el mismo recorte con zoom
+                            # (centro y zoom de la ventana principal);
+                            # el grafo las enciende en unión.
+                            hype_s = cfg.get("hype_s") or []
+                            if hype_s:
+                                wins = hype_punch_windows(
+                                    hype_s,
+                                    r["end"] - r["start"])
+                                if len(wins) > 1:
+                                    r["params"]["punch_windows"] = [
+                                        {"t0": t0, "t1": t1,
+                                         "zoom": pc.get("zoom"),
+                                         "cx": pc.get("cx"),
+                                         "cy": pc.get("cy")}
+                                        for t0, t1 in wins]
                             r["reason"] += (f" | punch-in "
                                            f"{punch['zoom']}x en "
                                            f"({int(punch['cx'])},"
                                            f"{int(punch['cy'])})")
                     r["layout"] = "split"
-                    r["reason"] += (f" | webcam por cara en "
-                                    f"{[int(v) for v in fbox]} -> split "
-                                    f"vertical: juego arriba, cámara abajo")
+                    if yunet:
+                        r["reason"] += (f" | webcam YuNet en "
+                                        f"{[int(v) for v in fbox]} -> split "
+                                        f"vertical: juego arriba, cámara abajo")
+                    else:
+                        r["reason"] += (f" | webcam por cara en "
+                                        f"{[int(v) for v in fbox]} -> split "
+                                        f"vertical: juego arriba, cámara abajo")
     # Voz del juego (idea de Uri): los tramos en los que habla el
     # juego pasan a "game" (juego a pantalla completa); el resto
     # conserva su layout. Se aplica ANTES del seguimiento de cara /
@@ -2323,6 +2575,11 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                 r["params"]["track"] = track
                 r["reason"] += (f" | seguimiento de cara "
                                 f"({len(track['knots'])} knots)")
+    # Punch-in centrado en la cara (2026-11-19): los tramos split
+    # que llegaron sin cx/cy (caja explícita, pip->split, YuNet)
+    # centran el zoom en la cara detectada en la ventana de hype;
+    # sin cara, el punch-in se desactiva (nunca a ciegas).
+    _fill_punch_face_centers(video_path, start_offset, merged, cfg)
     out = {"mode": "auto", "segments": merged, "samples": samples}
     if scan_segments_out is not None:
         out["scan_segments"] = scan_segments_out["segments"]
@@ -2460,6 +2717,24 @@ def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg,
         punch_win = (punch_win[0] - t_offset, punch_win[1] - t_offset)
         if punch_win[1] <= 0:
             punch_win = None
+    # Ventanas de hype (2026-11-19): varias ventanas de punch-in
+    # en el mismo clip. El recorte con zoom es uno solo (el de la
+    # ventana principal: centro y zoom del punch); lo que cambia
+    # es el enable: la cámara con zoom se muestra en la UNIÓN de
+    # las ventanas, la normal en el resto.
+    punch_wins = []
+    if punch_win is not None:
+        for w in (params or {}).get("punch_windows") or []:
+            try:
+                a = float(w.get("t0", punch_win[0] + t_offset))
+                b = float(w.get("t1", punch_win[1] + t_offset))
+            except Exception:
+                continue
+            a, b = a - t_offset, b - t_offset
+            if b > 0:
+                punch_wins.append((a, b))
+        if len(punch_wins) <= 1:
+            punch_wins = []
     gz = (params or {}).get("game_zoom")
     if gz is False:
         game_zoom = None
@@ -2493,11 +2768,25 @@ def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg,
             f"setsar=1[camN];"
             f"[cam_z]crop={zc},scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H},"
             f"setsar=1[camZ];")
-        cam_overlay = (
-            f"[canvas][camN]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
-            f"enable='lt(t,{p0})+gte(t,{p1})'[step2a];"
-            f"[step2a][camZ]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
-            f"enable='gte(t,{p0})*lt(t,{p1})'[step2];")
+        if punch_wins:
+            # Unión de ventanas: la cámara con zoom se ve si t cae
+            # en ALGUNA ventana; la normal, si no cae en ninguna
+            # (producto de complementos: 1 solo fuera de todas).
+            cond_z = "+".join(
+                f"(gte(t,{a:g})*lt(t,{b:g}))" for a, b in punch_wins)
+            cond_n = "*".join(
+                f"(lt(t,{a:g})+gte(t,{b:g}))" for a, b in punch_wins)
+            cam_overlay = (
+                f"[canvas][camN]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
+                f"enable='{cond_n}'[step2a];"
+                f"[step2a][camZ]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
+                f"enable='{cond_z}'[step2];")
+        else:
+            cam_overlay = (
+                f"[canvas][camN]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
+                f"enable='lt(t,{p0})+gte(t,{p1})'[step2a];"
+                f"[step2a][camZ]overlay={RDJAVI_CAM_X}:{RDJAVI_CAM_Y}:"
+                f"enable='gte(t,{p0})*lt(t,{p1})'[step2];")
     else:
         parts.append(
             f"[cam_src]crop={cover},scale={RDJAVI_CAM_W}:{RDJAVI_CAM_H},"
@@ -2507,6 +2796,151 @@ def _split_rdjavi_graph(vin, vout, params, src_w, src_h, cfg,
     parts.append(
         f"[game_src]{game_filt}[game];"
         f"[game]pad={OUT_W}:{OUT_H}:0:{RDJAVI_GAME_Y0}:black[canvas];")
+    parts.append(cam_overlay)
+    parts.append(f"[step2]format=yuv420p[{vout}]")
+    return "".join(parts)
+
+
+def _rubius_game_crop(src_w, src_h):
+    """Recorte del gameplay rubius ('w:h:x:y'): las fracciones de
+    rubius.GAME_CROP (1440:1440:560:0 sobre 2560x1440), aspecto
+    1:1. Valores pares (yuv420p) y dentro del fotograma."""
+    fw, fh, fx, fy = RUBIUS_GAME_CROP_FRACS
+    gw = max(2, int(src_w * fw) // 2 * 2)
+    gh = max(2, int(src_h * fh) // 2 * 2)
+    gx0 = max(0, min(int(src_w * fx) // 2 * 2, src_w - gw))
+    gy0 = max(0, min(int(src_h * fy) // 2 * 2, src_h - gh))
+    return f"{gw}:{gh}:{gx0}:{gy0}"
+
+
+def _split_rubius_graph(vin, vout, params, src_w, src_h, cfg,
+                        t_offset=0.0):
+    """Grafo de filtros de la variante Rubius (GTA 6, 1080x1920).
+
+    PLANTILLA rubius (2026-11-19, clipagent/rubius.py), portada al
+    camino automático; default para renders nuevos (decisión del
+    usuario: TODOS los clips a rubius):
+      * Webcam ARRIBA a ANCHO COMPLETO 1080x840 (y 0-840): COVER
+        del rectángulo PiP detectado por clip (params["box"], nunca
+        un default silencioso). Sin barras negras, sin fondo
+        desenfocado (la webcam tapa todo el ancho).
+      * Gameplay 840-1920 (1080x1080, recorte 1:1 sin aplastar),
+        con zoom SUAVE 1,15x en el payoff (18-24 s del clip,
+        rampa de 2 s, anclado abajo) — ver rubius._game_filter.
+      * Sin bandas: el corte es limpio. El BANNER del título
+        (amarillo, a caballo del corte 811-1099) y los SUBTÍTULOS
+        palabra por palabra blancos SOBRE el gameplay (y 900-1020)
+        se queman después, en el paso de subtítulos
+        (burn_subtitles con style="rubius" y title=...); el grafo
+        solo deja el lienzo limpio.
+      * Punch-in de la webcam 1,18x en la reacción (16-26 s del
+        clip, centrado en la cara), con doble rama + overlay
+        enable (opción C). Ventanas de hype (varias) como en
+        willyrex: la cámara con zoom se ve en la UNIÓN de las
+        ventanas.
+    El pico va en el segundo 20 del clip por construcción (corte
+    pico -20 s / +40 s), así que las ventanas 16-26 y 18-24 son
+    relativas al clip; ``t_offset`` las desplaza al tramo (en
+    multi-tramo, t es relativo al tramo).
+    """
+    from .rdjavi import cam_cover_crop, punch_cover_crop
+    from .rubius import _game_filter as _rubius_game_filter
+    p = _scale_to_sample(params, src_w, src_h)
+    bx, by, bw, bh = p["box"]
+    cam_box = f"{bw}:{bh}:{bx}:{by}"
+    cover = cam_cover_crop(cam_box, RUBIUS_CAM_W, RUBIUS_CAM_H)
+    # Ventanas relativas al tramo (t_offset = inicio del tramo en
+    # el clip; 0 en un solo tramo).
+    punch = (params or {}).get("punch_in")
+    if punch is False:
+        punch_win, punch_zoom = None, RUBIUS_PUNCH_ZOOM
+    else:
+        punch_win = (float((punch or {}).get("t0", RUBIUS_PUNCH_WINDOW[0])),
+                     float((punch or {}).get("t1", RUBIUS_PUNCH_WINDOW[1])))
+        punch_zoom = float((punch or {}).get("zoom", RUBIUS_PUNCH_ZOOM))
+        punch_win = (punch_win[0] - t_offset, punch_win[1] - t_offset)
+        if punch_win[1] <= 0:
+            punch_win = None
+    # Ventanas de hype (2026-11-19): varias ventanas de punch-in
+    # en el mismo clip. El recorte con zoom es uno solo (el de la
+    # ventana principal: centro y zoom del punch); lo que cambia
+    # es el enable: la cámara con zoom se muestra en la UNIÓN de
+    # las ventanas, la normal en el resto.
+    punch_wins = []
+    if punch_win is not None:
+        for w in (params or {}).get("punch_windows") or []:
+            try:
+                a = float(w.get("t0", punch_win[0] + t_offset))
+                b = float(w.get("t1", punch_win[1] + t_offset))
+            except Exception:
+                continue
+            a, b = a - t_offset, b - t_offset
+            if b > 0:
+                punch_wins.append((a, b))
+        if len(punch_wins) <= 1:
+            punch_wins = []
+    gz = (params or {}).get("game_zoom")
+    if gz is False:
+        game_zoom = None
+    else:
+        if isinstance(gz, (tuple, list)):
+            game_zoom = (float(gz[0]), float(gz[1]))
+        elif isinstance(gz, dict):
+            game_zoom = (float(gz.get("t0", RUBIUS_GAME_ZOOM_WINDOW[0])),
+                         float(gz.get("t1", RUBIUS_GAME_ZOOM_WINDOW[1])))
+        else:
+            game_zoom = RUBIUS_GAME_ZOOM_WINDOW
+        game_zoom = (game_zoom[0] - t_offset, game_zoom[1] - t_offset)
+        if game_zoom[1] <= 0:
+            game_zoom = None
+    game_filt = _rubius_game_filter(_rubius_game_crop(src_w, src_h),
+                                    game_zoom)
+    parts = [f"[{vin}]split=2[cam_src][game_src];"]
+    if punch_win is not None:
+        if punch is not None and "cx" in punch and "cy" in punch:
+            # Centro automático del punch-in (coords de muestra
+            # 160x90 -> px reales): el centro del viaje de la cara
+            # en 16-26 s, no el centro de la caja.
+            cx = round(float(punch["cx"]) * src_w / SAMPLE_W)
+            cy = round(float(punch["cy"]) * src_h / SAMPLE_H)
+        else:
+            cx, cy = bx + bw // 2, by + bh // 2
+        zc = punch_cover_crop(cover, cx, cy, zoom=punch_zoom)
+        p0, p1 = (f"{v:g}" for v in punch_win)
+        parts.append(
+            f"[cam_src]split=2[cam_n][cam_z];"
+            f"[cam_n]crop={cover},scale={RUBIUS_CAM_W}:{RUBIUS_CAM_H},"
+            f"setsar=1[camN];"
+            f"[cam_z]crop={zc},scale={RUBIUS_CAM_W}:{RUBIUS_CAM_H},"
+            f"setsar=1[camZ];")
+        if punch_wins:
+            # Unión de ventanas: la cámara con zoom se ve si t cae
+            # en ALGUNA ventana; la normal, si no cae en ninguna
+            # (producto de complementos: 1 solo fuera de todas).
+            cond_z = "+".join(
+                f"(gte(t,{a:g})*lt(t,{b:g}))" for a, b in punch_wins)
+            cond_n = "*".join(
+                f"(lt(t,{a:g})+gte(t,{b:g}))" for a, b in punch_wins)
+            cam_overlay = (
+                f"[canvas][camN]overlay={RUBIUS_CAM_X}:{RUBIUS_CAM_Y}:"
+                f"enable='{cond_n}'[step2a];"
+                f"[step2a][camZ]overlay={RUBIUS_CAM_X}:{RUBIUS_CAM_Y}:"
+                f"enable='{cond_z}'[step2];")
+        else:
+            cam_overlay = (
+                f"[canvas][camN]overlay={RUBIUS_CAM_X}:{RUBIUS_CAM_Y}:"
+                f"enable='lt(t,{p0})+gte(t,{p1})'[step2a];"
+                f"[step2a][camZ]overlay={RUBIUS_CAM_X}:{RUBIUS_CAM_Y}:"
+                f"enable='gte(t,{p0})*lt(t,{p1})'[step2];")
+    else:
+        parts.append(
+            f"[cam_src]crop={cover},scale={RUBIUS_CAM_W}:{RUBIUS_CAM_H},"
+            f"setsar=1[cam];")
+        cam_overlay = (
+            f"[canvas][cam]overlay={RUBIUS_CAM_X}:{RUBIUS_CAM_Y}[step2];")
+    parts.append(
+        f"[game_src]{game_filt}[game];"
+        f"[game]pad={OUT_W}:{OUT_H}:0:{RUBIUS_GAME_Y0}:black[canvas];")
     parts.append(cam_overlay)
     parts.append(f"[step2]format=yuv420p[{vout}]")
     return "".join(parts)
@@ -2525,19 +2959,26 @@ def segment_filter_graph(vin, vout, layout, params, src_w, src_h, cfg,
     if layout == "split":
         # Split vertical (regla 2026-11-16, INVERTIDO 2026-11-18):
         # STREAMER ARRIBA y JUEGO ABAJO, sin superponerse nunca.
-        # Variante por defecto para GTA 6: RDJavi v2 (plantilla
-        # 2026-11-18, clipagent/rdjavi.py): webcam a ancho completo
-        # 0-702, franja de título 702-800, gameplay 800-1740 con
-        # zoom suave en el payoff, barra de subtítulos 1740-1920.
+        # Variante por defecto para GTA 6: Rubius (plantilla
+        # 2026-11-19, clipagent/rubius.py): webcam a ancho completo
+        # 0-840, gameplay 840-1920 sin bandas, banner amarillo del
+        # título y subtítulos blancos palabra por palabra sobre el
+        # gameplay (se queman en el paso de subtítulos). La variante
+        # "rdjavi" sigue disponible (plantilla willyrex v2:
+        # webcam 0-702, franja de título 702-800, gameplay 800-1740
+        # con zoom suave en el payoff, barra de subtítulos 1740-1920).
         # Sin fondo desenfocado, sin handle ni barra atardecer.
         # La cámara es FIJA por tramo salvo el punch-in (zoom
         # puntual sobre la webcam en un momento de reacción) vía
         # params["punch_in"] = {"t0", "t1", "zoom"} (tiempos
-        # relativos al clip; el default v2 es 16-26 s, zoom 1,30)
+        # relativos al clip; el default rubius es 16-26 s, zoom 1,18)
         # y params["game_zoom"] = {"t0", "t1"} (default 18-24 s).
         # Variante "plain": split simple (cámara 600 arriba /
         # juego 1320 abajo).
         variant = (params or {}).get("split_variant") or resolve_split_variant(cfg)
+        if variant == "rubius":
+            return _split_rubius_graph(vin, vout, params, src_w, src_h,
+                                       cfg, t_offset=t_offset)
         if variant == "rdjavi":
             return _split_rdjavi_graph(vin, vout, params, src_w, src_h,
                                        cfg, t_offset=t_offset)
@@ -2727,6 +3168,89 @@ def _caja_mediana(cajas):
             for i in range(4)]
 
 
+_YUNET_FACECAM_CACHE = {}
+
+
+def _yunet_facecam_box(video_path, duration, start_offset, src_w, src_h,
+                       cfg):
+    """Caja de webcam YuNet en px del vídeo original, o None.
+
+    Fallback DETRÁS de ``_face_cam_box``: el llamador solo lo intenta
+    cuando la detección por cara no dio caja. Con caché por ventana
+    (el mismo tramo no se vuelve a analizar en el proceso). Sin
+    modelo vendoreado o sin cv2 devuelve None sin levantar.
+    """
+    if not (cfg or {}).get("yunet_fallback", True):
+        return None
+    if not duration or duration <= 0 or not os.path.isfile(video_path):
+        return None
+    key = (os.path.abspath(video_path), round(float(start_offset), 2),
+           round(float(duration), 2))
+    if key in _YUNET_FACECAM_CACHE:
+        return _YUNET_FACECAM_CACHE[key]
+    box = None
+    try:
+        from clipagent.yunet_facecam import yunet_facecam_box as _yunet_box
+        res = _yunet_box(video_path, start_offset,
+                         start_offset + duration)
+        if res:
+            box = [int(v) for v in res["box"]]
+    except Exception:  # noqa: BLE001 - el fallback nunca tumba el clip
+        box = None
+    if len(_YUNET_FACECAM_CACHE) > 8:
+        _YUNET_FACECAM_CACHE.clear()
+    _YUNET_FACECAM_CACHE[key] = box
+    return box
+
+
+def _yunet_vod_box_sample(video_path, duration, cfg):
+    """Caja YuNet en coords de muestra (160x90), o None.
+
+    Para ``detect_vod_facecam``, que trabaja en coords de muestra.
+    """
+    try:
+        sw, sh = _probe_size(video_path)
+    except Exception:  # noqa: BLE001 - sin tamaño no hay conversión
+        return None
+    if not sw or not sh:
+        return None
+    box = _yunet_facecam_box(video_path, duration, 0.0, sw, sh, cfg)
+    if not box:
+        return None
+    return [int(round(box[0] * SAMPLE_W / sw)),
+            int(round(box[1] * SAMPLE_H / sh)),
+            int(round(box[2] * SAMPLE_W / sw)),
+            int(round(box[3] * SAMPLE_H / sh))]
+
+
+def _edge_vod_box_sample(video_path, duration, cfg):
+    """Caja por bordes fijos en coords de muestra (160x90), o None.
+
+    Para ``detect_vod_facecam``, que trabaja en coords de muestra.
+    Solo se acepta con conf "high": una caja "low" (el interior se
+    mueve casi como el juego) no rescata nada y se sigue a YuNet.
+    """
+    if not (cfg or {}).get("edge_facecam_fallback", True):
+        return None
+    try:
+        from clipagent.edge_facecam import detect as _edge_detect
+        res = _edge_detect(video_path)
+    except Exception:  # noqa: BLE001 - el rescate nunca tumba el clip
+        return None
+    if not res or res.get("conf") != "high":
+        return None
+    try:
+        sw, sh = _probe_size(video_path)
+    except Exception:  # noqa: BLE001 - sin tamaño no hay conversión
+        return None
+    if not sw or not sh:
+        return None
+    return [int(round(res["x"] * SAMPLE_W / sw)),
+            int(round(res["y"] * SAMPLE_H / sh)),
+            int(round(res["w"] * SAMPLE_W / sw)),
+            int(round(res["h"] * SAMPLE_H / sh))]
+
+
 def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
     """Detecta la facecam UNA vez por VOD (7.4).
 
@@ -2735,9 +3259,12 @@ def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
     ±10 px, ver _box_cercana) votan juntas y el grupo con al menos 2
     votos es la facecam del VOD. Devuelve {"facecam_box": [x, y, w, h]
     en el fotograma de muestra (160x90) o None, "method":
-    "detected"|"none", "samples": n, "hits": m, "boxes": cajas
-    votadas}. Si `facecam_box` ya está en config, no detecta nada
-    (manda siempre, ver decide_layout): devuelve method "config".
+    "detected"|"edge"|"yunet"|"none", "samples": n, "hits": m,
+    "boxes": cajas votadas}. Si `facecam_box` ya está en config, no
+    detecta nada (manda siempre, ver decide_layout): devuelve
+    method "config". Si el voto por proximidad falla, se intenta
+    primero el rescate por bordes fijos (method "edge", solo con
+    conf "high") y después el fallback YuNet (method "yunet").
     """
     cfg = {**DEFAULTS, **(cfg or {})}
     if cfg.get("facecam_box"):
@@ -2765,9 +3292,29 @@ def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
             continue
         boxes.append(tuple(int(round(float(v))) for v in box[:4]))
     voted = [list(b) for b in boxes]
+
+    def _edge_rescue():
+        """Rescate por bordes fijos cuando el voto no da caja (clip 23).
+
+        Solo con conf "high"; si no, None y se sigue a YuNet."""
+        eb = _edge_vod_box_sample(video_path, duration, cfg)
+        if not eb:
+            return None
+        return {"facecam_box": eb, "method": "edge",
+                "samples": samples, "hits": 1, "boxes": [eb]}
+
+    def _yunet_rescue():
+        """Fallback YuNet cuando el voto no da caja (clip 23)."""
+        yb = _yunet_vod_box_sample(video_path, duration, cfg)
+        if not yb:
+            return None
+        return {"facecam_box": yb, "method": "yunet",
+                "samples": samples, "hits": 1, "boxes": [yb]}
+
     if not boxes:
-        return {"facecam_box": None, "method": "none",
-                "samples": samples, "hits": 0, "boxes": voted}
+        return _edge_rescue() or _yunet_rescue() or {"facecam_box": None, "method": "none",
+                                   "samples": samples, "hits": 0,
+                                   "boxes": voted}
     # Voto por proximidad (2026-11-19, backfill 0/9): la caja que
     # devuelve Haar varía unos px entre muestras aunque la webcam no
     # se mueva (38 vs 41 px de ancho en el mismo VOD); exigir la caja
@@ -2784,15 +3331,17 @@ def detect_vod_facecam(video_path, duration, cfg=None, n_samples=5):
     best = max(clusters, key=len)
     hits = len(best)
     if hits < 2:
-        return {"facecam_box": None, "method": "none",
-                "samples": samples, "hits": hits, "boxes": voted}
+        return _edge_rescue() or _yunet_rescue() or {"facecam_box": None, "method": "none",
+                                   "samples": samples, "hits": hits,
+                                   "boxes": voted}
     return {"facecam_box": _caja_mediana(best), "method": "detected",
             "samples": samples, "hits": hits, "boxes": voted}
 
 
 def cut_clip_with_layout(video_path, start_sec, duration, output_path,
                          crf=23, preset="fast", crop="center",
-                         layout_mode="auto", cfg=None, game_voice=None):
+                         layout_mode="auto", cfg=None, game_voice=None,
+                         hype_s=None):
     """Corta un clip vertical 1080x1920 con layout responsive.
 
     Devuelve la decisión de layout (para el manifiesto). Si el layout
@@ -2802,8 +3351,16 @@ def cut_clip_with_layout(video_path, start_sec, duration, output_path,
     ``game_voice``: tramos de voz del juego (ver game_voice.py;
     también vale ``cfg["game_voice"]``). Esos tramos se cortan en
     layout "game" (juego a pantalla completa).
+
+    ``hype_s``: segundos de hype en tiempo del clip (gritos del
+    streamer / explosión del chat). Con ellos, el punch-in va en
+    ventanas de 4 s alrededor de cada momento (no la fija 16-26 s)
+    y el zoom del gameplay se ancla al hype principal. Sin ellos,
+    el comportamiento es el de siempre (default v2).
     """
     cfg = {**DEFAULTS, **(cfg or {})}
+    if hype_s is not None:
+        cfg["hype_s"] = list(hype_s)
     if layout_mode is not None:
         # --layout en CLI manda sobre config.yaml; None = usar config.
         cfg["mode"] = layout_mode
@@ -2926,10 +3483,22 @@ def _crop_rects_for_frame(src_w, src_h, layout, params, cfg, t=None):
         return [("gameplay", cx, 0, cw, src_h)]
     if layout == "split":
         # Variante RDJavi v2: el gameplay es el recorte 1080:940
-        # (_v2_game_crop); la variante "plain" usa la ventana
+        # (_v2_game_crop); la variante rubius es el recorte 1:1
+        # (_rubius_game_crop); la variante "plain" usa la ventana
         # game_x0/game_h. La cara es la caja detectada.
         variant = (params or {}).get("split_variant")
-        if variant == "rdjavi" or variant is None:
+        if variant is None:
+            # Sin variante declarada: la misma resolución que el
+            # render real (templates.default de config.yaml,
+            # rubius). Nunca rdjavi por omisión: ese default
+            # silencioso contradecía el default rubius acordado.
+            variant = resolve_split_variant(cfg)
+        if variant == "rubius":
+            fw, fh, fx, fy = RUBIUS_GAME_CROP_FRACS
+            gw, gh = int(src_w * fw), int(src_h * fh)
+            gx0, gy0 = int(src_w * fx), int(src_h * fy)
+            rects = [("gameplay", gx0, gy0, gw, gh)]
+        elif variant == "rdjavi":
             fw, fh, fx, fy = RDJAVI_GAME_CROP_FRACS
             gw, gh = int(src_w * fw), int(src_h * fh)
             gx0, gy0 = int(src_w * fx), int(src_h * fy)

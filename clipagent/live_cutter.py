@@ -70,6 +70,7 @@ from datetime import datetime, timezone
 
 from .category import (chapter_category_from_chat, is_gta6)
 from .live import LiveLimits, LiveSession
+from .quality_gate import QualityDiscardTracker
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -401,6 +402,50 @@ def build_title(detail, layout_decision, payoff_ts_clip=20.0,
             else "Chat went wild 😂 GTA 6"
 
 
+def _publication_package(reviewed, detector, peak_ts, score, multiple,
+                         detail, median_score, lang, streamer, rec_start,
+                         category, visible):
+    """Paquete de publicación (título Gemini + descripción + tags +
+    miniatura) para el quemado y el panel.
+
+    Reutiliza el paquete pre-corte de la revisión si trae
+    best_title; si no (camino directo, o paquete pre-corte sin
+    construir), lo construye ahora con pre_corte_package (los
+    mismos datos que usaba el paso 7). Si no se puede construir,
+    {} (el llamador cae al título de reglas): el clip NUNCA muere
+    porque falle Gemini. Sin detector (tests) el paquete se
+    construye sin chat.
+
+    Devuelve el dict tal cual lo usa el paso 7 (best_title,
+    description, tags, hashtags, thumbnail_text, pkg_source).
+    """
+    pub_pkg = (reviewed or {}).get("package") or {}
+    if pub_pkg.get("best_title"):
+        return pub_pkg
+    try:
+        from .live import _chat_json_path
+        from .workers import CLIP_DURATION_S, pre_corte_package
+        chat_path = (_chat_json_path(detector.messages)
+                     if detector is not None else None)
+        pub_pkg_full, _pub_seo = pre_corte_package(
+            chat_path, peak_ts, score, multiple, detail,
+            median_score=median_score, all_scores=[],
+            lang=lang, game="GTA 6", streamer=streamer,
+            clip_start=rec_start, duration=CLIP_DURATION_S,
+            category=category, visible=visible)
+        return {
+            "best_title": pub_pkg_full.get("best_title"),
+            "description": pub_pkg_full.get(
+                "description_first_2_lines"),
+            "tags": pub_pkg_full.get("tags") or [],
+            "hashtags": pub_pkg_full.get("hashtags") or [],
+            "thumbnail_text": pub_pkg_full.get("thumbnail_text"),
+            "pkg_source": pub_pkg_full.get("pkg_source"),
+        }
+    except Exception:  # noqa: BLE001 - paquete de reglas
+        return {}
+
+
 def finalize_package(package_path, viral_total, chat_multiple, cfg=None):
     """Prioridad + estado por plataforma (misma fórmula que el
     empaquetar del worker, sin reimplementarla). Escribe el
@@ -535,6 +580,10 @@ class LiveCutterSession(LiveSession):
             BASE_DIR, "runs", "live",
             f"{streamer}_{self.stream_id}", "clips")
         os.makedirs(self.out_dir, exist_ok=True)
+        # Puerta de calidad B4: contador diario de descartes +
+        # alerta del 30% (estado local en out_dir, nunca en D1).
+        self._quality_tracker = QualityDiscardTracker(
+            os.path.join(self.out_dir, "quality_gate_daily.json"))
         self._store = store
         self.bridge = bridge
         self._cut_queue = queue.Queue()
@@ -665,6 +714,96 @@ class LiveCutterSession(LiveSession):
         if self._cutter_thread is not None:
             self._cutter_thread.join(timeout=5)
 
+    def _rerender_after_gate(self, final_review, final_clip, sub,
+                             work_dir, video_for_cut, cut_start,
+                             title, n, hype_s=None, plantilla=None):
+        """UN re-render tras un fallo de la puerta dura (2026-11-19).
+
+        Re-corta el mismo tramo con la cara forzada (facecam_box de
+        la cadena face-crop -> bordes -> YuNet en el segmento
+        fuente) + re-quema subtítulos y título (reutiliza el SRT ya
+        transcrito) + SFX por defecto (zoom en los momentos de hype
+        ya lo lleva el re-corte, mismo hype_s), y vuelve a validar
+        el vídeo re-hecho. Devuelve (final_review, final_clip, sub)
+        del re-render si salió, o la revisión original (con
+        needs_human_review=True) si no se pudo re-hacer o sigue
+        fallando: el llamador NO encola y deja el motivo visible
+        para revisión humana. Nunca levanta salvo ConfigError (falta
+        la config del gate: falla en voz alta, no se captura).
+        """
+        from .final_review import (
+            find_facecam_box_in_source, transcript_text_for_srt,
+            validate_final_clip)
+        from .validate import ConfigError
+        from .workers import apply_sfx, cut_clip, subtitle_clip
+        hard = final_review.get("hard_failures") or []
+        face_box = None
+        if "cara" in hard:
+            found = find_facecam_box_in_source(
+                video_for_cut, CLIP_DURATION_S, self.cfg)
+            if not found:
+                review = dict(final_review)
+                review["needs_human_review"] = True
+                review["motivo"] = (
+                    (final_review.get("motivo") or "")
+                    + " — sin cara detectable en la fuente: "
+                    "revisión humana")
+                return review, final_clip, sub
+            face_box = found["box"]
+        cfg2 = dict(self.cfg or {})
+        if face_box is not None:
+            cfg2["facecam_box"] = face_box
+        raw2 = os.path.join(work_dir, f"clip_{n:02d}_r1.mp4")
+        try:
+            cut_clip(video_for_cut, cut_start, CLIP_DURATION_S,
+                     raw2, layout_mode="auto", cfg=cfg2, hype_s=hype_s)
+        except Exception:  # noqa: BLE001 - sin re-render, no tumba
+            review = dict(final_review)
+            review["needs_human_review"] = True
+            return review, final_clip, sub
+        burned2 = os.path.join(work_dir, f"clip_{n:02d}_r1_subs.mp4")
+        try:
+            sub2 = subtitle_clip(
+                raw2, srt=sub.get("srt"), burn=burned2, cfg=cfg2,
+                lang=self.lang, title=title)
+        except Exception:  # noqa: BLE001 - sin re-render, no tumba
+            review = dict(final_review)
+            review["needs_human_review"] = True
+            return review, final_clip, sub
+        final2 = burned2 if os.path.isfile(burned2) else raw2
+        try:
+            final2, _sfx2 = apply_sfx(
+                final2, transcript_path=sub2.get("transcript"),
+                srt_path=sub2.get("srt"), payoff_s=float(CLIP_PRE_S),
+                cfg=cfg2)
+        except Exception:  # noqa: BLE001 - el SFX nunca tumba
+            pass
+        self._report_event(
+            "clip_rehecho",
+            f"{self.streamer}: «{title}» re-hecho tras la puerta "
+            f"dura ({final_review.get('rerender_reason') or ''})")
+        try:
+            review2 = validate_final_clip(
+                final2, title,
+                transcript_text=transcript_text_for_srt(
+                    sub2.get("srt")),
+                srt_path=sub2.get("srt"),
+                out_dir=os.path.join(work_dir, "final_review_r1"),
+                cfg=self.cfg, gemini_fn=self.final_review_fn,
+                plantilla=plantilla)
+        except ConfigError:
+            raise
+        except Exception:  # noqa: BLE001 - sin veredicto, no tumba
+            review = dict(final_review)
+            review["needs_human_review"] = True
+            return review, final_clip, sub
+        review2 = dict(review2)
+        review2["rerendered_from"] = final_clip
+        review2["rerender_facecam_box"] = face_box
+        if review2.get("decision") == "rechazado":
+            review2["needs_human_review"] = True
+        return review2, final2, sub2
+
     # -- el corte de UN pico -------------------------------------------
     def process_peak(self, peak):
         """Pico (ts, score, multiple, detail) -> clip + cola + publish.
@@ -766,26 +905,84 @@ class LiveCutterSession(LiveSession):
                     f"{reviewed.get('viral_revisado')})")
                 return None
         # 5. Corte vertical split RDJavi (streamer arriba, gameplay abajo).
+        # 4b. Segundos de hype para el zoom (2026-11-19): gritos
+        # cerca del pico en el audio de la ventana (sin
+        # transcripción: el pico lo eligió el hype del chat, así
+        # que el salto cerca de él es la reacción del streamer).
+        # Sin saltos, el pico: la ventana va sobre él.
+        hype_s = [float(CLIP_PRE_S)]
+        try:
+            from .render import hype_seconds_from_audio
+            spikes = hype_seconds_from_audio(
+                video_for_cut, float(cut_start) + CLIP_PRE_S,
+                radius_s=10.0)
+            if spikes:
+                hype_s = sorted(
+                    float(s) - float(cut_start) for s in spikes)
+                if float(CLIP_PRE_S) not in hype_s:
+                    hype_s = sorted(hype_s + [float(CLIP_PRE_S)])
+        except Exception:
+            pass
         raw_clip = os.path.join(work_dir, f"clip_{n:02d}.mp4")
         cut = cut_clip(video_for_cut, cut_start, CLIP_DURATION_S,
-                       raw_clip, layout_mode="auto", cfg=self.cfg)
+                       raw_clip, layout_mode="auto", cfg=self.cfg,
+                       hype_s=hype_s)
         layout = cut.get("layout") or {}
-        # 5b. Título ANTES del quemado (port v2, 2026-11-19): la
-        # franja 702-800 se quema en el paso de subtítulos, así que
-        # el título tiene que existir ya aquí. Es el título de
-        # REGLAS que se quema en el vídeo; el paquete de publicación
-        # del paso 7 usa el título Gemini (mejor SEO) sin tocar
-        # este (2026-11-19, calibración).
-        title = build_title(detail, layout,
-                            payoff_ts_clip=CLIP_PRE_S, lang=self.lang,
-                            game="GTA 6")
-        # 6. Subtítulos quemados COMPLETOS. Sin voz verificable el
-        # clip queda BLOQUEADO (nunca se publica, nunca se inventa).
+        # Plantilla del clip (2026-11-19): la que produce el render
+        # (variante "rdjavi" -> willyrex v2); si el render declara
+        # "plantilla", manda. Sin ella, el validador usa el default
+        # de config.yaml (rubius).
+        from .config import template_for_variant
+        plantilla = (layout.get("plantilla")
+                     or template_for_variant(
+                         layout.get("split_variant")))
+        # 5b. Paquete de publicación ANTES del quemado (2026-11-19):
+        # el título que se quema en la franja es el del paquete
+        # Gemini (mejor SEO), no el de reglas: vídeo, panel y
+        # plataformas usan el MISMO título. En el camino con
+        # revisión se reutiliza el paquete pre-corte (ya existe
+        # antes del corte); en el directo se construye ahora con
+        # lo visible real del layout. Si Gemini no está o el
+        # paquete no se puede construir, se cae al título de
+        # reglas como antes: el clip NUNCA muere porque falle
+        # Gemini.
+        visible = _visible_from_layout(layout)
+        pub_pkg = _publication_package(
+            reviewed, getattr(self, "detector", None), peak_ts,
+            score, multiple, detail,
+            median_score=(float(score) / float(multiple)
+                          if multiple and float(multiple) > 0
+                          else None),
+            lang=self.lang, streamer=self.streamer,
+            rec_start=rec_start, category=category,
+            visible=visible)
+        title = pub_pkg.get("best_title") or build_title(
+            detail, layout, payoff_ts_clip=CLIP_PRE_S,
+            lang=self.lang, game="GTA 6")
+        # 6. Subtítulos quemados COMPLETOS cuando hay voz. Sin voz
+        # verificable el clip NO se bloquea aquí (regla 2026-11-19
+        # 18:41): la decisión llega en el paso 8, con las puertas
+        # (viralidad/SEO); nunca se inventa texto. El título sí se
+        # quema aunque no haya voz (subtitle_clip, SRT vacío).
         burned = os.path.join(work_dir, f"clip_{n:02d}_subs.mp4")
         sub = subtitle_clip(raw_clip, burn=burned, cfg=self.cfg,
                             lang=self.lang, title=title)
         final_clip = burned if os.path.isfile(burned) else raw_clip
-        blocked = bool(sub.get("publish_blocked"))
+        no_speech = bool(sub.get("no_speech"))
+        # 6a. SFX por defecto (2026-11-19): boom/riser en el payoff
+        # (pico en CLIP_PRE_S) + lift de volumen, sobre el MP4
+        # final y antes de la validación final (el validador ve el
+        # archivo que se publica). Si la mezcla falla, el clip
+        # sigue sin SFX: nunca lo tumba. También sin voz
+        # verificable: desde 2026-11-19 esos clips se publican
+        # igual (muchas veces es un grito, no silencio) y el boom
+        # va sobre el dip de silencio, no sobre el grito.
+        sfx_info = {}
+        from .workers import apply_sfx
+        final_clip, sfx_info = apply_sfx(
+            final_clip, transcript_path=sub.get("transcript"),
+            srt_path=sub.get("srt"), payoff_s=float(CLIP_PRE_S),
+            cfg=self.cfg)
         # 6b. Frases hype del streamer en su propia voz (2026-11-18):
         # la revisión ya las midió sobre la misma transcripción; si
         # no hubo revisión, se leen del .transcript.json del subtítulo.
@@ -809,29 +1006,24 @@ class LiveCutterSession(LiveSession):
                 pass
         # Clip cortado: el render con subtítulos ya existe; se
         # reporta al panel (2026-11-19) aunque luego lo frenen el
-        # SEO o la validación final. Sin voz verificable el clip
-        # queda BLOQUEADO (nunca se publica, nunca se inventa):
-        # también se reporta el descarte, con el primer motivo.
+        # SEO o la validación final. El descarte por sin voz (si
+        # el clip no pasa las puertas) se reporta en el paso 8,
+        # cuando se conocen viralidad y SEO.
         self._report_event(
             "clip_cortado",
             f"{self.streamer}: «{title}» cortado (40 s, viral auto "
             f"{viral_auto:.1f})")
-        if blocked:
-            self._report_discard_once(
-                clip_id,
-                f"{self.streamer}: «{title}» descartado — sin voz "
-                f"verificable: BLOQUEADO (queda en Cola para "
-                f"transcripción humana; viral auto {viral_auto:.1f})")
-        # 7. Paquete SEO + prioridad (intocable). El SEO post-corte
-        # se mide sobre el paquete de PUBLICACIÓN (título Gemini +
-        # descripción + tags + miniatura), NO sobre el título de
-        # reglas sin tags: antes se puntuaba solo ese título y el
-        # SEO colapsaba 92 -> 49, bloqueando publicar TODOS los
-        # clips en vivo (2026-11-19, calibración). Si hubo revisión
-        # se reutiliza su paquete pre-corte; si no (camino directo),
-        # se construye el mismo paquete Gemini ahora. Lo visible es
-        # el layout real del corte (no None): la coherencia pasa de
-        # 80 a 100 cuando el juego está verificado y se ve.
+        # 7. Paquete SEO + prioridad (intocable). El paquete de
+        # publicación ya se construyó en el paso 5b (antes del
+        # quemado) para que el título quemado sea el Gemini; aquí
+        # solo se reutiliza. El SEO post-corte se mide sobre el
+        # paquete de PUBLICACIÓN (título Gemini + descripción +
+        # tags + miniatura), NO sobre el título de reglas sin tags:
+        # antes se puntuaba solo ese título y el SEO colapsaba
+        # 92 -> 49, bloqueando publicar TODOS los clips en vivo
+        # (2026-11-19, calibración). Lo visible es el layout real
+        # del corte (no None): la coherencia pasa de 80 a 100
+        # cuando el juego está verificado y se ve.
         # Si hubo revisión, la viralidad post-corte usa sus valores
         # REALES (human Gemini + audio medido), no la estimación.
         if reviewed is not None:
@@ -841,39 +1033,10 @@ class LiveCutterSession(LiveSession):
         else:
             viral = _score_clip(detail, multiple)
         viral_total = viral.get("total")
-        visible = _visible_from_layout(layout)
-        pub_pkg = (reviewed or {}).get("package") or {}
-        if not pub_pkg.get("best_title"):
-            # Sin revisión (camino directo) o con el paquete pre-corte
-            # sin construir: se construye el mismo paquete Gemini
-            # ahora. Si TAMPOCO se puede (mismo fallo que en la
-            # revisión), se cae al comportamiento de antes (título de
-            # reglas, sin tags): el clip no muere por el paquete.
-            try:
-                from .live import _chat_json_path
-                from .workers import pre_corte_package
-                chat_path = _chat_json_path(self.detector.messages)
-                median_score = (float(score) / float(multiple)
-                                if multiple and float(multiple) > 0
-                                else None)
-                pub_pkg_full, _pub_seo = pre_corte_package(
-                    chat_path, peak_ts, score, multiple, detail,
-                    median_score=median_score, all_scores=[],
-                    lang=self.lang, game="GTA 6", streamer=self.streamer,
-                    clip_start=rec_start, duration=CLIP_DURATION_S,
-                    category=category, visible=visible)
-                pub_pkg = {
-                    "best_title": pub_pkg_full.get("best_title"),
-                    "description": pub_pkg_full.get(
-                        "description_first_2_lines"),
-                    "tags": pub_pkg_full.get("tags") or [],
-                    "hashtags": pub_pkg_full.get("hashtags") or [],
-                    "thumbnail_text": pub_pkg_full.get("thumbnail_text"),
-                    "pkg_source": pub_pkg_full.get("pkg_source"),
-                }
-            except Exception:  # noqa: BLE001 - paquete de reglas
-                pub_pkg = {}
-        pub_title = pub_pkg.get("best_title") or title
+        # pub_title es el título quemado en el paso 5b (el del
+        # paquete Gemini cuando existe, o el de reglas): vídeo,
+        # panel y plataformas usan el MISMO.
+        pub_title = title
         pkg = package_clip_step(
             final_clip, pub_title,
             description=pub_pkg.get("description") or "",
@@ -911,12 +1074,20 @@ class LiveCutterSession(LiveSession):
             statuses[platform] = publish_status(viral_total, s,
                                                 seo_gate=seo_gate,
                                                 viral_min=viral_min)
+        # Puerta sin voz (regla 2026-11-19 18:41): sin voz + alguna
+        # plataforma publicable -> el clip se publica igual SIN
+        # subtítulos (subtitles_complete=0, honesto); sin voz y sin
+        # ninguna plataforma publicable -> BLOQUEADO, como antes.
+        _gates_ok = any(s[0] in ("publicable", "publicable_override")
+                        for s in statuses.values())
+        blocked = bool(no_speech and not _gates_ok)
         record = {
             "clip_id": clip_id, "streamer": self.streamer,
             "platform": self.platform, "vod_id": self.vod_id,
             "peak_ts": peak_ts, "start_sec": int(rec_start),
             "end_sec": int(rec_start + CLIP_DURATION_S),
             "duration_s": CLIP_DURATION_S,
+            "plantilla": plantilla,
             "category": category, "category_source": source,
             "game": "GTA 6", "origin": "live",
             "score": score, "multiple": multiple,
@@ -938,30 +1109,59 @@ class LiveCutterSession(LiveSession):
             "hype_ratio": detail.get("hype_ratio"),
             "streamer_hype": streamer_hype,
             "title": pub_title, "burned_title": title,
-            "clip": final_clip,
+            # 2026-11-19: el quemado y la publicación usan el MISMO
+            # título (pub_title == title por construcción); el
+            # origen del paquete queda trazado (gemini/rules) y el
+            # texto de miniatura viaja al panel con el record.
+            "pkg_source": pub_pkg.get("pkg_source"),
+            "thumbnail_text": pub_pkg.get("thumbnail_text"),
+            "clip": final_clip, "hype_s": hype_s, "sfx": sfx_info,
             "package_path": pkg["package_path"],
-            "subtitles_complete": not blocked,
+            "subtitles_complete": not no_speech,
             "publish_blocked": blocked,
+            "no_speech": no_speech,
             "seo": seo, "publish_status": {
                 p: {"status": s[0], "reason": s[1]}
                 for p, s in statuses.items()},
             "at": datetime.now(timezone.utc).isoformat(),
         }
-        # 8b. Validación final del preview con Gemini (2026-11-18):
-        # ve el MP4 final y lo valida (webcam, título, subtítulos,
-        # barras negras, coherencia). ENCENDIDA por defecto (orden
-        # del usuario 2026-11-18 22:57, 100% automático; se apaga
-        # solo con FINAL_REVIEW_ENABLED=0 o cfg enabled=False).
-        # Rechazado -> no se encola nada. Pendiente
-        # (sin Gemini) -> solo Cola del panel, jobs en draft.
+        if blocked:
+            # Sin voz y bajo las puertas: el descarte se reporta
+            # aquí (antes que el de SEO del paso 9, que
+            # _report_discard_once suprime por ser el mismo clip).
+            self._report_discard_once(
+                clip_id,
+                f"{self.streamer}: «{pub_title}» descartado — sin "
+                f"voz verificable y bajo las puertas (viralidad "
+                f"{viral_total}, SEO {_seo_summary(seo)}): queda en "
+                f"Cola BLOQUEADO, sin subtítulos")
+        # 8b. Validador final DEFINITIVO (2026-11-19, final_review.py):
+        # puerta DURA de cara + plantilla sobre el MP4 final (la cara
+        # se verifica en todo el clip y la receta Willyrex en píxeles)
+        # + juez Gemini. La puerta dura NO la anula el modo
+        # observación: si falla, UN re-render con la cara forzada
+        # (facecam_box de la cadena en el segmento fuente) + SFX, y
+        # se vuelve a validar. Si tras re-hacerlo sigue sin cara, el
+        # clip queda para revisión humana con motivo visible y NO se
+        # encola (nunca bloqueado en silencio). La config del gate se
+        # carga en validate_final_clip: si falta, ConfigError y el
+        # run falla en voz alta (no se captura aquí).
+        # Rechazado (tras el re-render, si lo hubo) -> no se encola
+        # nada. Pendiente (sin Gemini) -> solo Cola del panel, jobs
+        # en draft.
+        from .final_review import (
+            transcript_text_for_srt, validate_final_clip)
+        from .validate import ConfigError
         try:
-            from .final_review import (
-                maybe_review_final_clip, transcript_text_for_srt)
-            final_review = maybe_review_final_clip(
+            final_review = validate_final_clip(
                 final_clip, title,
                 transcript_text=transcript_text_for_srt(sub.get("srt")),
+                srt_path=sub.get("srt"),
                 out_dir=os.path.join(work_dir, "final_review"),
-                cfg=self.cfg, gemini_fn=self.final_review_fn)
+                cfg=self.cfg, gemini_fn=self.final_review_fn,
+                plantilla=plantilla)
+        except ConfigError:
+            raise
         except Exception as exc:  # noqa: BLE001 - sin validación
             # no hay veredicto: a revisión humana, nunca aprobado.
             final_review = {
@@ -972,6 +1172,15 @@ class LiveCutterSession(LiveSession):
                 "resumen": f"validación final sin ejecutar: {exc}",
                 "frames_n": 0, "model": "",
                 "transcript_words": 0}
+        if final_review.get("needs_rerender"):
+            final_review, final_clip, sub = self._rerender_after_gate(
+                final_review, final_clip, sub, work_dir,
+                video_for_cut, cut_start, title, n, hype_s,
+                plantilla=plantilla)
+            record["clip"] = final_clip
+            package["clip"] = final_clip
+            record["rerendered"] = bool(
+                final_review.get("rerendered_from"))
         record["final_review"] = final_review
         package["final_review"] = {
             "decision": final_review.get("decision"),
@@ -981,25 +1190,66 @@ class LiveCutterSession(LiveSession):
             "resumen": final_review.get("resumen") or "",
             "scores": final_review.get("scores") or {},
             "frames_n": final_review.get("frames_n") or 0,
+            "hard_pasa": final_review.get("hard_pasa"),
+            "needs_human_review": bool(
+                final_review.get("needs_human_review")),
         }
+        # 8c. Puerta de calidad B4 (2026-11-20): los 6 criterios
+        # obligatorios sobre el veredicto anterior (formato 9:16,
+        # webcam, hook, título, miniatura, audio). El veredicto
+        # viaja en el record, en el paquete y al panel (viral.
+        # quality_gate) para que el Worker no cree jobs de clips
+        # sin validar o defectuosos. Sin veredicto no hay
+        # publicable: el clip va en borrador (ver paso 9). El
+        # contador diario alimenta la alerta del 30% (Telegram si
+        # está configurado, si no stderr): nunca tumba el corte.
+        from .quality_gate import build_quality_gate
+        try:
+            quality_gate = build_quality_gate(
+                final_review,
+                thumbnail_text=record.get("thumbnail_text"),
+                no_speech=bool(no_speech))
+        except Exception as exc:  # noqa: BLE001 - sin veredicto,
+            # a revisión humana, nunca aprobado.
+            quality_gate = {
+                "decision": "pendiente_revision", "pasa": False,
+                "criterios": {}, "fallos": [], "fallos_duros": [],
+                "motivo": f"puerta de calidad sin ejecutar: {exc}"}
+        record["quality_gate"] = quality_gate
+        record["quality_blocked"] = quality_gate.get("pasa") is False
+        package["quality_gate"] = quality_gate
+        try:
+            _q_alert = self._quality_tracker.record(quality_gate)
+        except Exception:  # noqa: BLE001 - la alerta no tumba nada
+            _q_alert = None
+        if _q_alert:
+            try:
+                from .notify import notify as _default_notify
+                (self.notify_fn or _default_notify)(
+                    "calidad_descartes", _q_alert)
+            except Exception:  # noqa: BLE001 - la alerta no tumba
+                pass
         with open(pkg["package_path"], "w", encoding="utf-8") as f:
             json.dump(package, f, ensure_ascii=False, indent=2)
         self._record(record)
         # 9. Panel web (Cola LIVE) + publicación automática.
         fr_decision = (final_review or {}).get("decision")
         if fr_decision == "rechazado":
+            human = bool(final_review.get("needs_human_review"))
+            reason = (f"validación final: "
+                      f"{final_review.get('motivo')}")
             self.skipped.append({
                 "ts": peak_ts,
-                "reason": f"validación final: "
-                          f"{final_review.get('motivo')}",
+                "reason": reason,
                 "viral_total": viral_total,
                 "final_review": final_review.get("fallos"),
+                "needs_human_review": human,
                 "at": datetime.now(timezone.utc).isoformat()})
             self._report_discard_once(
                 clip_id,
-                f"{self.streamer}: «{pub_title}» descartado — "
-                f"validación final: {final_review.get('motivo')} "
-                f"(viralidad {viral_total})")
+                f"{self.streamer}: «{pub_title}» "
+                f"{'revisión humana — ' if human else 'descartado — '}"
+                f"{reason} (viralidad {viral_total})")
             return record
         # Puerta de publicación (2026-11-19): si ninguna plataforma
         # es publicable y no hubo rescate por gritos, el clip no
@@ -1029,9 +1279,16 @@ class LiveCutterSession(LiveSession):
         if self.bridge is not None and not self.dry_run:
             panel_clip_id = self._enqueue_panel(record)
         if not self.dry_run:
+            # Puerta de calidad B4: sin veredicto que pase no hay
+            # publicable — el clip va en borrador para revisión
+            # humana (antes solo la pendiente de Gemini forzaba
+            # draft; ahora también la desactivada y la observada
+            # sin pasa). Un "rechazado" no llega aquí (retorno
+            # temprano arriba) y _enqueue_publish lo descarta
+            # igual por si se llama desde otro camino.
             self._enqueue_publish(
                 record, panel_clip_id,
-                force_draft=(fr_decision == "pendiente_revision"))
+                force_draft=(quality_gate.get("pasa") is not True))
         return record
 
     def _enqueue_panel(self, record):
@@ -1105,6 +1362,12 @@ class LiveCutterSession(LiveSession):
                 "game": "GTA VI",
                 "reason": _reason,
             }
+            # 2026-11-19: el texto de miniatura viaja al panel
+            # (columna thumb_text): sin él la miniatura queda
+            # vacía en todos los clips. Solo si hay texto: el
+            # panel rechaza thumbnail_text null con 400.
+            if record.get("thumbnail_text"):
+                payload["thumbnail_text"] = record["thumbnail_text"]
             if _is_rescue:
                 # Solo en rescate se mandan viralidad real + SEO:
                 # sin ellos el panel no puede verificar la marca.
@@ -1117,6 +1380,14 @@ class LiveCutterSession(LiveSession):
                     if _viral_revisado is not None else float(
                         record.get("viral_total") or 0)
                 payload["seo_scores"] = record.get("seo") or {}
+            # Puerta de calidad B4 (2026-11-20): el veredicto viaja
+            # al panel dentro de `viral` (el panel lo guarda en
+            # clips.viral.quality_gate y publishGate lo lee antes
+            # de crear jobs). Solo si hay veredicto: los records
+            # viejos sin él no cambian su payload.
+            if record.get("quality_gate"):
+                payload["viral"] = {
+                    "quality_gate": record["quality_gate"]}
             clip = self.bridge.create_clip(payload)
             panel_id = clip.get("id")
             preview_ok = False
@@ -1154,7 +1425,10 @@ class LiveCutterSession(LiveSession):
                      f"{record['end_sec']}"),
                     ("subtitulos", "subtítulos completos quemados"
                      if record["subtitles_complete"] else
-                     "sin voz verificable: BLOQUEADO"),
+                     ("sin voz verificable: se publica igual sin "
+                      "subtítulos (pasa puertas)"
+                      if not record["publish_blocked"] else
+                      "sin voz verificable: BLOQUEADO (bajo puertas)")),
                     ("paquete", f"SEO {record.get('seo')}"),
                     ("cola_publicacion",
                      "en Cola LIVE del panel")):
@@ -1189,12 +1463,22 @@ class LiveCutterSession(LiveSession):
         (bloqueado_seo / descartado) no se encola nunca."""
         if record.get("publish_blocked"):
             return []
+        from .quality_gate import publish_mode_for_quality
         from .workers import enqueue_publish
-        # ``force_draft=True`` (validación final pendiente, sin
-        # Gemini): aunque auto_publish esté encendido, el clip solo
-        # queda en borrador para revisión humana.
-        mode = "draft" if force_draft else (
-            "api" if self.auto_publish else "draft")
+        # Puerta de calidad B4: un "rechazado" no encola nada (ni
+        # en borrador: el clip defectuoso no es publicable y el
+        # re-hecho lo trae de vuelta validado). El modo sale de
+        # publish_mode_for_quality (única fuente: "api" solo con
+        # veredicto que pasa y auto_publish encendido); el
+        # force_draft del llamador solo puede bajar a borrador,
+        # nunca subir a "api" (p. ej. validación pendiente).
+        _qg = record.get("quality_gate") or {}
+        if _qg.get("decision") == "rechazado":
+            return []
+        mode = publish_mode_for_quality(
+            _qg or None, self.auto_publish)
+        if force_draft:
+            mode = "draft"
         created = []
         for platform, st in (record.get("publish_status") or {}).items():
             if st.get("status") == "publicable":

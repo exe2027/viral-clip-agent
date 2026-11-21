@@ -22,16 +22,12 @@ valores por defecto de abajo.
 import os
 
 DEFAULT_CONFIG = {
-    "channel": {
-        "name": "El Clip de GTA 6",
-        "handle": "@elclipdegta6",
-        "game": "GTA 6",
-        "streamer": "",
-        "niche": "clips de directos",
-        "language": "es",
-    },
+    # La identidad del canal (nombre, handle, idioma, hashtags de
+    # marca) NO vive aquí: es de cada tenant y sale de SU panel.
+    # El idioma del clip lo decide el streamer (su idioma en el
+    # panel). Ver config.yaml.
     "hashtags": {
-        "es": ["#GTA6", "#GTA6Clips", "#ElClipDeGTA6", "#GTA", "#RockstarGames", "#gaming"],
+        "es": ["#GTA6", "#GTA6Clips", "#GTA", "#RockstarGames", "#gaming"],
         "en": ["#GTA6", "#GTA6Clips", "#GTA", "#RockstarGames", "#gaming", "#clips"],
     },
     # Herramientas externas (rutas). Vacío = buscar en el PATH.
@@ -57,21 +53,19 @@ DEFAULT_CONFIG = {
         "crop": "center",
         "crf": 23,
         "preset": "fast",
-        # REGLAS DE DURACIÓN (decisión del usuario 2026-11-18, ver
-        # rules: en config.yaml; reemplaza el mínimo 36 s de 2026-11-17):
-        # entre 40 y 60 s, nunca menos de 40 ni más de 60. El clip de
-        # 21 s publicado en test era "muy poco" y el de 38 s (Rubius
-        # p2010) también queda fuera. El rango 25-35 sigue prohibido
-        # (regla de oro: ningún clip de 30 s).
+        # REGLAS DE DURACIÓN: la regla 40-60 s con mínimo 40 y rango
+        # prohibido 25-35 fue ELIMINADA por el usuario el 2026-11-21
+        # ("para siempre, en todo el canal"). Sin mínimo ni rango
+        # prohibido; solo queda el tope duro de 60 s.
         # Objetivo 40 s = 20 s pre-roll + 20 s tras el pico (payoff
         # a 20 s dentro del clip). Tope duro 60 s = máximo de un
         # Short de YouTube y tope del proyecto, nunca el default.
         "duration": 40,
         "target_duration_s": 40,
-        "min_duration_s": 40,
+        "min_duration_s": 1,
         "max_duration_s": 60,
         "hard_cap_s": 60,
-        "forbidden_duration_range": [25, 35],
+        "forbidden_duration_range": [],
         "precise_cut": True,
         "pre_roll": 20,
         "window": 10,
@@ -83,19 +77,21 @@ DEFAULT_CONFIG = {
         "split_cam_h": 600,
     },
     "subtitles": {
-        # Estilo por defecto "rdjavi" (plantilla v2, 2026-11-18):
-        # subtítulos fijos amarillos, Arial Black 64 px reales,
-        # en la barra negra 1740-1920, nunca sobre el gameplay.
-        # El karaoke queda como opción secundaria.
-        "default_style": "rdjavi",
+        # Estilo por defecto "rubius" (plantilla 2026-11-19, decision
+        # del usuario: TODOS los clips a rubius): palabra por palabra,
+        # blanca, Arial Black 100 px reales, sobre el gameplay
+        # (y 900-1020). El rdjavi (fijo amarillo en la barra negra)
+        # queda como opción secundaria.
+        "default_style": "rubius",
         "subtitle_lang": "auto",  # auto | es | en
         "translate": True,        # traducir a inglés lo que no sea español
-        # Regla del usuario 2026-11-17 22:10: SIEMPRE subtítulos,
-        # COMPLETOS. Sin subtítulos quemados el clip no se publica.
+        # Regla del usuario 2026-11-17 22:10, matizada 2026-11-19
+        # 18:41: SIEMPRE subtítulos, COMPLETOS, cuando hay voz.
+        # Sin voz verificable + pasa puertas (45/80) el clip se
+        # publica igual sin subtítulos; nunca se inventa texto.
         "required": True,
         "complete": True,
-        "block_without_subtitles": True,
-        "needs_human_transcription_on_no_speech": True,
+        "publish_no_speech_if_passes_gates": True,
         # Zona de subtítulos (plantilla v2, 2026-11-18): siempre en
         # la barra negra inferior (1740-1920 px, MarginV 12), nunca
         # sobre la webcam (0-702 px) ni sobre el gameplay
@@ -112,12 +108,32 @@ DEFAULT_CONFIG = {
         "es": "transcribe-only",
         "others": "translate-to-en",
     },
+    # Efectos de sonido (2026-11-19, pedido del usuario: SFX por
+    # defecto en el render, vivo y VOD). Ver clipagent/sfx_mix.py.
+    "sfx": {
+        "enabled": True,
+        "max_sfx": 2,
+        "lift": True,
+    },
     "subtitle_styles": {
-        # Plantilla v2 (2026-11-18): TODOS los estilos queman en la
-        # barra negra inferior (MarginV 12, texto en 1740-1920 px),
-        # nunca sobre el gameplay (ahí van los subtítulos propios
-        # de GTA 6). El clamp de burn_subtitles corrige cualquier
-        # MarginV viejo a la barra.
+        # Plantilla v2 (2026-11-18): los estilos rdjavi/ref/tiktok/
+        # highlight/karaoke queman en la barra negra inferior
+        # (MarginV 12, texto en 1740-1920 px), nunca sobre el
+        # gameplay (ahí van los subtítulos propios de GTA 6). La
+        # excepción es rubius (default 2026-11-19): palabra por
+        # palabra blanca SOBRE el gameplay (MarginV 900).
+        "rubius": {
+            # Plantilla rubius (default 2026-11-19, decisión del
+            # usuario: TODOS los clips a rubius): palabra por
+            # palabra, blanca, Arial Black 100 px reales, contorno
+            # negro grueso (10), centrada sobre el gameplay
+            # (y 900-1020, MarginV 900). El banner del título NO va
+            # en este estilo: es un PNG aparte (clipagent/rubius.py).
+            "font_color": "#FFFFFF", "border_color": "#000000",
+            "border_width": 10, "fontsize": 100, "bold": True,
+            "margin_v": 900, "max_chars": 20, "max_duration": 1.0,
+            "box": False,
+        },
         "rdjavi": {
             # Estilo v2 (default): subtítulos fijos amarillos,
             # Arial Black 64 px reales, contorno negro grueso (6),
@@ -272,12 +288,9 @@ DEFAULT_CONFIG = {
 # código cuando no hay config.yaml. Si una regla cambia, cambia en
 # los dos sitios. Las impone: precise_cut.py (duración), transcribe.py
 # (subtítulos), policy.py (puerta de publicación) y validate.py.
-#   * Duración: entre 40 y 60 s (decisión del usuario 2026-11-18;
-#     reemplaza el mínimo 36 s de 2026-11-17), nunca menos de 40 ni
-#     más de 60; prohibido 25-35 s (regla de oro: ningún clip de
-#     30 s). El clip de 21 s publicado en test el 2026-11-17 era
-#     "muy poco" (usuario) y el de 38 s (Rubius p2010) también
-#     queda fuera por esta regla.
+#   * Duración: sin mínimo ni rango prohibido (regla 40-60 / 25-35
+#     eliminada por el usuario el 2026-11-21, para siempre). Solo
+#     queda el tope duro de 60 s.
 #   * Pre-roll: 20 s de contexto antes del pico.
 #   * Subtítulos: siempre en la zona de juego, nunca sobre la cara
 #     del influencer / la webcam (split: juego 0-1320 px, cámara
@@ -286,10 +299,10 @@ DEFAULT_CONFIG = {
 #   * Nunca tapar minimapa ni HUD; layout split vertical.
 #   * Nunca afirmar un juego no verificado; nunca quemar subtítulos
 #     alucinados (manda la transcripción corregida por el usuario).
-RULES_MIN_DURATION_S = 40
+RULES_MIN_DURATION_S = 1  # sin mínimo (regla eliminada 2026-11-21)
 RULES_TARGET_DURATION_S = 40
 RULES_HARD_CAP_S = 60
-RULES_FORBIDDEN_DURATION_RANGE = (25, 35)
+RULES_FORBIDDEN_DURATION_RANGE = ()  # sin rango prohibido (eliminado 2026-11-21)
 RULES_PRE_ROLL_S = 20
 RULES_SPLIT_GAME_H = 1320
 RULES_SPLIT_CAM_H = 600
@@ -313,9 +326,9 @@ RULES_SUBTITLE_REF_MARGIN_V = 12  # referencia v2: texto en la barra
 def clip_duration_ok(duration_s, cfg=None):
     """(ok, motivo) para la duración de un clip según las reglas.
 
-    Rechaza: < 40 s (decisión del usuario 2026-11-18: entre 40 y
-    60 s, nunca menos de 40), dentro del rango prohibido
-    25-35 s (regla de oro), o > tope duro 60 s.
+    Sin mínimo ni rango prohibido desde 2026-11-21 (regla 40-60 /
+    25-35 eliminada por el usuario, para siempre). Rechaza solo
+    > tope duro 60 s.
     """
     if cfg is not None:
         clips = (cfg or {}).get("clips") or {}
@@ -327,11 +340,10 @@ def clip_duration_ok(duration_s, cfg=None):
         min_d, max_d = RULES_MIN_DURATION_S, RULES_HARD_CAP_S
         fr = list(RULES_FORBIDDEN_DURATION_RANGE)
     if duration_s < min_d:
-        return False, (f"duración {duration_s:.1f} s < mínimo {min_d} s "
-                       f"(regla del usuario 2026-11-18: clips de 40-60 s)")
+        return False, (f"duración {duration_s:.1f} s < mínimo {min_d} s")
     if fr and float(fr[0]) <= duration_s <= float(fr[1]):
         return False, (f"duración {duration_s:.1f} s en el rango prohibido "
-                       f"{fr[0]}-{fr[1]} s (regla de oro: ningún clip de 30 s)")
+                       f"{fr[0]}-{fr[1]} s")
     if duration_s > max_d:
         return False, (f"duración {duration_s:.1f} s > tope duro {max_d} s")
     return True, ""
@@ -534,6 +546,211 @@ def resolve_subtitle_task(detected_lang, subtitle_lang="auto",
     if translate is True or policy.get("others") == "translate-to-en":
         return "translate", "en"
     return "transcribe", lang
+
+
+TEMPLATE_NAMES = ("rdjavi", "willyrex", "rubius")
+
+# Recetas de plantilla (2026-11-19): claves obligatorias por
+# receta en config.yaml (sección `templates`). `cam` y `game`
+# las llevan las tres; el resto depende del estilo de subtítulos:
+# karaoke (rdjavi v1) exige karaoke_band + subs_band; fixed_yellow
+# (willyrex v2) exige title_band + subs_band; word_white (rubius)
+# exige title_banner + subs_zone.
+TEMPLATE_REQUIRED_KEYS = {
+    "rdjavi": ("cam", "karaoke_band", "game", "subs_band",
+               "subs_style", "subs_over_game", "cam_full_width",
+               "blurred_bg"),
+    "willyrex": ("cam", "title_band", "game", "subs_band",
+                 "subs_style", "subs_over_game", "cam_full_width",
+                 "blurred_bg"),
+    "rubius": ("cam", "game", "title_banner", "subs_zone",
+               "subs_style", "subs_over_game", "cam_full_width",
+               "blurred_bg"),
+}
+
+# Variante de render -> plantilla que produce. El render de hoy
+# (resolve_split_variant "rdjavi", código rdjavi.py v2) produce la
+# plantilla willyrex; "rubius" (clipagent/rubius.py, default desde
+# 2026-11-19) produce la plantilla rubius; "plain" no tiene receta
+# de validador (el clip se valida contra el default).
+TEMPLATE_BY_VARIANT = {
+    "rdjavi": "willyrex",
+    "rubius": "rubius",
+    "plain": None,
+}
+
+
+def template_for_variant(variant):
+    """Plantilla que produce una variante de render, o None si no
+    tiene receta de validador (el clip cae al default)."""
+    return TEMPLATE_BY_VARIANT.get(
+        str(variant or "").lower())
+
+
+def load_validator_config(cfg=None):
+    """Config de la puerta dura del validador final (2026-11-19).
+
+    ÚNICA fuente: las secciones ``validator``, ``final_review`` y
+    ``templates`` de config.yaml. NO hay defaults silenciosos: si
+    falta una sección o una clave, levanta ConfigError nombrando
+    la clave exacta y el run para, nunca sigue con un valor
+    inventado. Es el fallo que dejó pasar los clips sin cara: el
+    modo observación era un default silencioso de "pasa" y el
+    camino VOD ni cargaba la config.
+
+    TRES plantillas (2026-11-19 19:07): rdjavi (v1), willyrex
+    (v2) y rubius. El default (`templates.default`) es
+    rubius (decisión del usuario 2026-11-19 19:09): un clip sin
+    plantilla declarada se valida contra rubius.
+
+    Devuelve un dict plano con los valores resueltos (umbrales de
+    cara, muestreo, observe_only, max_rerenders) + ``templates``
+    (las tres recetas) + ``default_template``. ``cfg`` puede ser
+    el dict de load_config(), un dict mínimo en tests, o None/{}
+    (en ese caso se carga config.yaml en disco, la única fuente:
+    un dict vacío NO es "sin config", es "carga la de disco").
+    Si la validación está apagada explícitamente
+    (``final_review.enabled`` es False), devuelve una vcfg
+    desactivada SIN exigir umbrales ni recetas (una puerta apagada
+    no necesita geometría); esa vcfg solo lleva lo que necesita el
+    veredicto "desactivada" y NO se pasa a los gates. En cualquier
+    otro caso, si falta una sección o una clave, ConfigError.
+    """
+    from .validate import ConfigError
+
+    # Sin cfg (None o {}): la única fuente es config.yaml en disco
+    # (mismo patrón que get_layout_config). Lo que falla en voz
+    # alta es que el ARCHIVO no traiga el valor, no que el
+    # llamador no pase el dict (eso rompía los pasos que se
+    # construyen con cfg={} y los tests de revisión).
+    cfg = cfg or load_config()
+    review = cfg.get("final_review")
+    # Validación apagada explícitamente: no hay veredicto y no
+    # hacen falta umbrales ni recetas. La clave tiene que existir
+    # y ser False de verdad: si falta, el camino estricto de abajo
+    # levanta ConfigError (no se apaga nada en silencio).
+    if isinstance(review, dict) and review.get("enabled") is False:
+        templates = cfg.get("templates")
+        default = ((templates or {}).get("default")
+                   if isinstance(templates, dict) else None)
+        return {
+            "enabled": False,
+            "observe_only": bool(review.get("observe_only", False)),
+            "templates": (templates
+                          if isinstance(templates, dict) else {}),
+            "default_template": (
+                default if default in TEMPLATE_NAMES else "rubius"),
+        }
+    section = cfg.get("validator")
+    if not isinstance(section, dict):
+        raise ConfigError(
+            "validator: falta la sección 'validator' en config.yaml "
+            "(el validador final no arranca sin sus umbrales; "
+            "sin defaults silenciosos)")
+    required = (
+        "face_sample_every_s", "face_min_frames", "face_min_share",
+        "face_min_width_frac", "min_score", "max_rerenders",
+        "gemini_hard", "chain",
+    )
+    missing = [k for k in required if k not in section]
+    if missing:
+        raise ConfigError(
+            "validator: faltan claves en config.yaml: "
+            + ", ".join(f"validator.{k}" for k in missing)
+            + " (sin defaults silenciosos)")
+    chain = list(section.get("chain") or [])
+    if chain != ["facecrop", "edge", "yunet"]:
+        raise ConfigError(
+            "validator.chain: debe ser [facecrop, edge, yunet] en "
+            "ese orden (orden del usuario 2026-11-19), "
+            f"es {chain!r}")
+    # (``review`` ya se leyó arriba; aquí enabled es True o la
+    # clave falta: en ambos casos se exige la sección completa.)
+    if not isinstance(review, dict):
+        raise ConfigError(
+            "final_review: falta la sección 'final_review' en "
+            "config.yaml (el validador final no arranca sin ella)")
+    for key in ("enabled", "observe_only"):
+        if key not in review:
+            raise ConfigError(
+                f"final_review.{key}: falta en config.yaml "
+                "(sin defaults silenciosos)")
+    templates = cfg.get("templates")
+    if not isinstance(templates, dict):
+        raise ConfigError(
+            "templates: falta la sección 'templates' en config.yaml "
+            "(el validador final verifica TRES recetas; sin "
+            "defaults silenciosos)")
+    default = templates.get("default")
+    if default not in TEMPLATE_NAMES:
+        raise ConfigError(
+            "templates.default: debe ser rdjavi, willyrex o rubius "
+            f"(decisión del usuario: rubius), es {default!r}")
+    recipes = {}
+    for name in TEMPLATE_NAMES:
+        recipe = templates.get(name)
+        if not isinstance(recipe, dict):
+            raise ConfigError(
+                f"templates.{name}: falta la receta {name!r} en "
+                "config.yaml")
+        missing_r = [k for k in TEMPLATE_REQUIRED_KEYS[name]
+                     if k not in recipe]
+        if missing_r:
+            raise ConfigError(
+                f"templates.{name}: faltan claves en config.yaml: "
+                + ", ".join(f"templates.{name}.{k}"
+                            for k in missing_r)
+                + " (sin defaults silenciosos)")
+        cam = recipe.get("cam") or {}
+        game = recipe.get("game") or {}
+        for key in ("x", "y", "w", "h"):
+            if key not in cam:
+                raise ConfigError(
+                    f"templates.{name}.cam.{key}: falta en "
+                    "config.yaml")
+        for key in ("y0", "y1"):
+            if key not in game:
+                raise ConfigError(
+                    f"templates.{name}.game.{key}: falta en "
+                    "config.yaml")
+        recipes[name] = dict(recipe)
+    return {
+        "face_sample_every_s": float(
+            section["face_sample_every_s"]),
+        "face_min_frames": int(section["face_min_frames"]),
+        "face_min_share": float(section["face_min_share"]),
+        "face_min_width_frac": float(
+            section["face_min_width_frac"]),
+        "min_score": float(section["min_score"]),
+        "max_rerenders": int(section["max_rerenders"]),
+        "gemini_hard": bool(section["gemini_hard"]),
+        "chain": chain,
+        "enabled": bool(review["enabled"]),
+        "observe_only": bool(review["observe_only"]),
+        "templates": recipes,
+        "default_template": default,
+    }
+
+
+def resolve_template(vcfg, plantilla=None):
+    """(nombre, receta) de la plantilla a validar.
+
+    ``plantilla`` es la declarada por el clip; sin ella se usa el
+    default de config.yaml (rubius). Un nombre desconocido falla
+    en voz alta con ConfigError: nunca se valida contra otra
+    plantilla en silencio.
+    """
+    from .validate import ConfigError
+
+    name = (str(plantilla).strip().lower()
+            if plantilla else None) or vcfg["default_template"]
+    recipe = (vcfg.get("templates") or {}).get(name)
+    if recipe is None:
+        raise ConfigError(
+            f"plantilla {name!r}: no es rdjavi, willyrex ni rubius "
+            "(revisa el campo plantilla del clip o "
+            "templates.default en config.yaml)")
+    return name, recipe
 
 
 def get_layout_config(cfg=None):

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Tests del workflow cerebro-sebastian.yml (auditoría 19 nov 2026).
+"""Tests del workflow cerebro.yml (diario genérico, 19 nov 2026).
 
-C1/C3 puerta Iniciar, C2 persistencia con run-id, C6 --live y C9
-observabilidad del watch. Los scripts Python embebidos en el YAML se
-extraen y se ejecutan de verdad en un directorio temporal, no solo se
-comprueba que el texto exista.
+Puerta Iniciar (flag en D1 vía PanelBridge, no panel-state.json),
+persistencia con run-id, --live y observabilidad del watch. Los
+scripts Python embebidos en el YAML se extraen y se ejecutan de
+verdad en un directorio temporal, no solo se comprueba que el texto
+exista. El gate importa clipagent.panel_bridge: se simula con un
+paquete falso en PYTHONPATH (sin red).
 """
-import json
 import os
 import subprocess
 import sys
@@ -16,7 +17,7 @@ import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKFLOW = os.path.join(
-    HERE, ".github", "workflows", "cerebro-sebastian.yml")
+    HERE, ".github", "workflows", "cerebro.yml")
 
 GATE_STEP = "Puerta Iniciar (botón del panel)"
 WATCH_STEP = "Revisión de VODs"
@@ -44,6 +45,25 @@ WATCH_LOG_OK_PLURAL = (
     "\nResumen: en vivo=1 | VODs revisados=3 | encolados=2 | "
     "encolarían (dry-run)=0 | descartados=1 | ya vistos=0 | errores=0\n"
 )
+
+FAKE_BRIDGE = '''\
+import os
+
+
+class PanelBridge:
+    """Simula el bridge: running sale de PANEL_RUNNING; sin
+    sesión (PANEL_NO_SESSION=1), from_env devuelve None."""
+
+    @classmethod
+    def from_env(cls):
+        if os.environ.get("PANEL_NO_SESSION") == "1":
+            return None
+        return cls()
+
+    def worker_state(self):
+        return {"running":
+                os.environ.get("PANEL_RUNNING", "false") == "true"}
+'''
 
 
 @pytest.fixture(scope="module")
@@ -84,11 +104,13 @@ def _read_outputs(path):
         if "=" in line)
 
 
-def _run_gate(script, tmp_path, event, action="", force="", state=None):
-    if state is not None:
-        (tmp_path / "state").mkdir(exist_ok=True)
-        (tmp_path / "state" / "panel-state.json").write_text(
-            json.dumps({"started": state}), encoding="utf-8")
+def _run_gate(script, tmp_path, event, action="", force="",
+              panel_running=None):
+    fake = tmp_path / "fake"
+    (fake / "clipagent").mkdir(parents=True, exist_ok=True)
+    (fake / "clipagent" / "__init__.py").write_text("", encoding="utf-8")
+    (fake / "clipagent" / "panel_bridge.py").write_text(
+        FAKE_BRIDGE, encoding="utf-8")
     gh_out = tmp_path / "gh_out"
     gh_out.write_text("", encoding="utf-8")
     env = dict(os.environ)
@@ -97,50 +119,48 @@ def _run_gate(script, tmp_path, event, action="", force="", state=None):
         "DISPATCH_TYPE": action,
         "FORCE": force,
         "GITHUB_OUTPUT": str(gh_out),
+        "PYTHONPATH": str(fake),
     })
+    if panel_running is None:
+        env["PANEL_NO_SESSION"] = "1"
+    else:
+        env["PANEL_RUNNING"] = "true" if panel_running else "false"
     proc = subprocess.run(
         [sys.executable, "-"], input=script, text=True, cwd=tmp_path,
         env=env, capture_output=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
-    state_file = tmp_path / "state" / "panel-state.json"
-    saved = None
-    if state_file.exists():
-        saved = json.loads(state_file.read_text(encoding="utf-8"))
-    return _read_outputs(gh_out), saved
+    return _read_outputs(gh_out)
 
 
-# (evento, acción, force, estado previo, started, persist, guardado)
-# guardado: valor de started en panel-state.json tras el run, o None
-# si el archivo no debe existir/crearse.
+# (evento, acción, force, running del panel, started)
+# running None = sin sesión del panel (from_env devuelve None).
 GATE_CASES = [
-    ("workflow_dispatch", "", "true", None, True, False, None),
-    ("workflow_dispatch", "", "", None, True, False, None),
-    ("schedule", "", "", False, True, False, False),
-    ("schedule", "", "", None, True, False, None),
-    ("repository_dispatch", "panel-start-sebastian", "", False,
-     True, True, True),
-    ("repository_dispatch", "panel-stop-sebastian", "", True,
-     False, True, False),
-    ("workflow_dispatch", "", "false", False, False, False, False),
-    ("workflow_dispatch", "", "false", True, True, False, True),
-    ("workflow_dispatch", "", "false", None, False, False, None),
+    ("repository_dispatch", "panel-start", "", None, True),
+    ("repository_dispatch", "panel-daily", "", None, True),
+    ("repository_dispatch", "panel-daily", "", False, True),
+    ("workflow_dispatch", "", "true", None, True),
+    ("workflow_dispatch", "", "", None, True),
+    ("workflow_dispatch", "", "false", True, True),
+    ("workflow_dispatch", "", "false", False, False),
+    ("workflow_dispatch", "", "false", None, False),
 ]
 
 
 @pytest.mark.parametrize(
-    "event,action,force,prior,started,persist,saved", GATE_CASES)
-def test_gate(tmp_path, steps, event, action, force, prior,
-             started, persist, saved):
+    "event,action,force,panel_running,started", GATE_CASES)
+def test_gate(tmp_path, steps, event, action, force, panel_running,
+             started):
     script = _heredoc(_step(steps, GATE_STEP)["run"], "EOF")
-    outputs, on_disk = _run_gate(
-        script, tmp_path, event, action, force, prior)
+    outputs = _run_gate(
+        script, tmp_path, event, action, force, panel_running)
     assert outputs["started"] == ("true" if started else "false")
-    assert outputs["persist_panel_state"] == (
-        "true" if persist else "false")
-    if saved is None:
-        assert on_disk is None
-    else:
-        assert on_disk is not None and on_disk["started"] is saved
+    assert "persist_panel_state" not in outputs
+
+
+def test_gate_no_usa_panel_state_json(steps):
+    run = _step(steps, GATE_STEP)["run"]
+    assert "panel-state.json" not in run
+    assert "worker_state" in run
 
 
 def test_watch_usa_live(steps):
@@ -161,7 +181,8 @@ def test_restore_usa_run_id_del_ultimo_exitoso(steps):
     run = prev["run"]
     assert "status=success" in run
     assert "per_page=1" in run
-    assert "cerebro-sebastian.yml/runs" in run
+    assert "cerebro.yml/runs" in run
+    assert "cerebro-sebastian.yml" not in run
     assert "GH_TOKEN" in prev.get("env", {})
     restore = _step(steps, "Restaurar estado del día anterior")
     # download-artifact@v4 con run-id falló siempre en este repo
@@ -169,7 +190,9 @@ def test_restore_usa_run_id_del_ultimo_exitoso(steps):
     # con `gh run download` (runs 44474668621 y 44476907092).
     assert "actions/download-artifact" not in str(restore)
     assert "gh run download" in restore["run"]
-    assert "cerebro-state-sebastian" in restore["run"]
+    # Artefacto por tenant, nunca el nombre fijo de un tenant.
+    assert "cerebro-state-" in restore["run"]
+    assert "cerebro-state-sebastian" not in restore["run"]
     assert "steps.prev-run.outputs.run_id" in restore["run"]
     assert "GH_TOKEN" in restore.get("env", {})
     assert restore.get("continue-on-error") is True
@@ -180,8 +203,14 @@ def test_permisos_incluyen_actions_read(workflow):
     assert workflow["permissions"]["actions"] == "read"
 
 
-def test_dispatch_manual_tiene_input_force(workflow):
+def test_dispatch_manual_tiene_input_tenant(workflow):
     # PyYAML lee la clave `on` como True (YAML 1.1).
+    tenant = workflow[True]["workflow_dispatch"]["inputs"]["tenant"]
+    assert tenant["required"] is True
+    assert "default" not in tenant
+
+
+def test_dispatch_manual_tiene_input_force(workflow):
     force = workflow[True]["workflow_dispatch"]["inputs"]["force"]
     assert force["default"] == "true"
     assert force["type"] == "boolean"
@@ -193,9 +222,45 @@ def test_dispatch_manual_tiene_input_streamer(workflow):
     assert streamer["type"] == "string"
 
 
+def test_dispatch_types_fijos_sin_tenant(workflow):
+    types = workflow[True]["repository_dispatch"]["types"]
+    assert types == ["panel-daily", "panel-start"]
+
+
+def test_sin_environment_ni_secretos_por_tenant(workflow, steps):
+    text = open(WORKFLOW, encoding="utf-8").read()
+    # Ningún job declara `environment:` (solo se nombra en
+    # comentarios, diciendo que no se usa).
+    for job in workflow["jobs"].values():
+        assert "environment" not in job
+    assert "secrets.PANEL_USERNAME" not in text
+    assert "secrets.PANEL_PASSWORD" not in text
+    assert "secrets.TWITCH_CLIENT_ID" not in text
+    assert "secrets.GEMINI_API_KEY" not in text
+    # "cerebro-sebastian" solo se nombra en el comentario de
+    # cabecera (qué reemplaza este workflow): en el YAML parseado
+    # (sin comentarios) no aparece.
+    assert "cerebro-sebastian" not in yaml.dump(workflow)
+    # panel-state.json solo se nombra en comentarios (qué NO se
+    # hace): ningún paso lo lee ni lo sube como artefacto.
+    save = _step(steps, "Guardar estado para mañana")
+    assert "panel-state.json" not in str(save.get("with", {}))
+    gate = _step(steps, GATE_STEP)
+    assert "panel-state.json" not in gate["run"]
+
+
+def test_bootstrap_antes_de_trabajar(steps):
+    names = [s.get("name") for s in steps]
+    boot = names.index("Credenciales desde el panel")
+    assert boot < names.index(WATCH_STEP)
+    assert boot < names.index(
+        "Cadena completa (detectar, cortar, subtitular, publicar)")
+    run = _step(steps, "Credenciales desde el panel")["run"]
+    assert "python -m clipagent.panel_credentials" in run
+
+
 def test_pasos_de_trabajo_siguen_bajo_la_puerta(steps):
-    for name in ("Credenciales YouTube (solo si existen los secretos)",
-                 WATCH_STEP,
+    for name in (WATCH_STEP,
                  "Cadena completa (detectar, cortar, subtitular, publicar)"):
         assert _step(steps, name)["if"] == (
             "steps.gate.outputs.started == 'true'")

@@ -212,10 +212,15 @@ def test_h_corte_pasa_y_sin_scores_corta(monkeypatch):
     ok = {"payload": {"video": "v.mp4", "start_sec": 0,
                       "duration": 48, "output": "o.mp4",
                       "viral_total": 55.0, "seo_scores": SEO_BUENO}}
-    assert workers._h_corte(None, ok, cfg={}) == {"output": "x.mp4"}
+    # _h_corte añade la clave 'plantilla' (diseño del validador,
+    # 2026-11-19): None aquí porque el corte simulado no trae
+    # layout; sin ella el validador cae al default (rubius).
+    assert workers._h_corte(None, ok, cfg={}) == {
+        "output": "x.mp4", "plantilla": None}
     manual = {"payload": {"video": "v.mp4", "start_sec": 0,
                           "duration": 48, "output": "o.mp4"}}
-    assert workers._h_corte(None, manual, cfg={}) == {"output": "x.mp4"}
+    assert workers._h_corte(None, manual, cfg={}) == {
+        "output": "x.mp4", "plantilla": None}
     assert len(calls) == 2
 
 

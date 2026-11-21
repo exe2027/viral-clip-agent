@@ -1,0 +1,136 @@
+# Recuperación de la fuente VOD de los clips en vivo sin source_id
+#
+# Corre `python -m clipagent.recover_vod_source --from-panel`:
+# toma los clips con publish_blocked=1 de la Cola del panel y por
+# cada uno localiza su VOD de origen (corrida cerebro-live que lo
+# cortó -> VOD de Twitch que cubre created_at -> offset exacto por
+# match de audio) y escribe el mapa de fuentes (source-map.json),
+# el reporte (report.json) y los UPDATE de D1 (update-d1.sql).
+#
+# El workflow NO escribe en D1 ni sube nada al panel: solo genera
+# el mapa. El mapa se aplica después (SQL por la API de D1, ojo
+# con el límite diario de escrituras del plan gratis, error 7500)
+# y se pasa al re-hecho con `remake_all.py --source-map`.
+# Solo las recuperaciones de confianza ALTA entran en el mapa;
+# lo dudoso y lo sin VOD quedan en el reporte (avisar-humano).
+#
+# Disparadores (como remake-all: sin cron, un run por cron no
+# tendría token para autenticarse):
+# - repository_dispatch panel-recover-vod (lo dispara el panel /
+#   el Worker con un token de un solo uso en client_payload,
+#   igual que panel-live y panel-remake-all; el tenant va en
+#   client_payload). El Worker todavía NO sabe disparar
+#   panel-recover-vod (falta el cambio en el panel): hasta que
+#   exista, se dispara con workflow_dispatch.
+# - workflow_dispatch manual (tenant obligatorio). Sin token de
+#   un solo uso el bootstrap falla con mensaje claro: dispara
+#   desde el panel. No hay secreto PANEL_BRAIN_TOKEN en el repo.
+#
+# Concurrencia por tenant: dos recuperaciones del MISMO tenant
+# nunca van en paralelo (cancel-in-progress: false, encolan).
+# Timeout 360 min: ~109 clips en serie (audio del VOD + vídeo
+# del clip + match) tardan ~1 h; el límite de GitHub por job es
+# 360. Por eso el batch se corre POR TROZOS con los inputs
+# ids/limit (varias corridas hasta completar la lista).
+name: Recuperar fuente VOD de los clips en vivo
+
+on:
+  repository_dispatch:
+    types: [panel-recover-vod]
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant del panel (p. ej. sebastian, kaez)"
+        required: true
+      ids:
+        description: "Solo estos ids de clip, separados por comas (vacío = todos los bloqueados)"
+        required: false
+        default: ""
+      limit:
+        description: "Máximo de clips a recuperar (vacío = todos; usa trozos, 360 min por corrida)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Solo metadata (corrida + VOD + candidato), sin descargar ni hacer match"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: recover-vod-${{ github.event.client_payload.tenant || inputs.tenant }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    name: Recuperar fuente VOD de los clips en vivo
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache de pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
+      - name: Instalar ffmpeg, TwitchDownloaderCLI, yt-dlp y dependencias
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          # TwitchDownloaderCLI 1.56.5: baja el audio del VOD
+          # (-q audio_only). Mismo bloque que el job vod-fallback
+          # de cerebro-live.yml y que remake-all.yml.
+          TDL_VERSION="1.56.5"
+          curl -sSL -o /tmp/twitchdownloader.zip \
+            "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
+          sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
+          TwitchDownloaderCLI --help || true
+          # yt-dlp: descubrimiento de VODs (solo metadatos; NUNCA
+          # para bajar el segmento: --download-sections descarga
+          # un rango distinto al pedido en Twitch). No está en
+          # pyproject.toml: se instala aquí.
+          python -m pip install -q -e . yt-dlp
+      # Bootstrap: credenciales del tenant desde el panel. Canjea
+      # el token de un solo uso del dispatch por una sesión de 12 h
+      # (PANEL_SESSION_TOKEN en $GITHUB_ENV, la usa el recuperador
+      # para leer la Cola y bajar los vídeos por el panel). Sin
+      # token falla con mensaje claro: dispara desde el panel.
+      - name: Credenciales desde el panel
+        id: bootstrap
+        env:
+          PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+          PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token || '' }}
+        run: python -m clipagent.panel_credentials
+      - name: Recuperar fuente VOD
+        env:
+          # URL DIRECTA del Worker, NO el front de Pages: Pages
+          # corta las llamadas API desde Actions (medido
+          # 2026-11-18 en cerebro-live).
+          PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+          PANEL_WORKER_URL: https://avc.vikingosfoodspa.workers.dev
+        run: |
+          TENANT="${{ github.event.client_payload.tenant || inputs.tenant }}"
+          ARGS="--from-panel --clip-video panel --out-map runs/recover-vod-source-map-${TENANT}.json --out-report runs/recover-vod-${TENANT}.json --out-sql runs/recover-vod-update-d1-${TENANT}.sql --vod-cache runs/recover-vod-cache-${TENANT}.json"
+          if [ -n "${{ inputs.ids }}" ]; then ARGS="$ARGS --ids ${{ inputs.ids }}"; fi
+          if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          python -m clipagent.recover_vod_source $ARGS
+      - name: Subir mapa, reporte y SQL
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recover-vod-${{ github.event.client_payload.tenant || inputs.tenant }}
+          path: |
+            runs/recover-vod-source-map-*.json
+            runs/recover-vod-*.json
+            runs/recover-vod-update-d1-*.sql
+            runs/recover-vod-cache-*.json
+          if-no-files-found: error

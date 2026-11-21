@@ -1,9 +1,12 @@
-"""Una sola lista de streamers (Fase 4.1).
+"""Lista de streamers por tenant (Fase 4.1, genérica 2026-11-19).
 
-`streamers.yaml` es la ÚNICA lista: la leen el watcher, la cola y
-el publicador. Las tres listas viejas (config.yaml/allowlist,
-influencers.yaml, allowed_streamers.yaml) quedan como respaldo de
-solo lectura si streamers.yaml no existe; no se editan más.
+FUENTE DE VERDAD: el panel (GET /api/influencers del tenant).
+`load_streamers()` la pide al panel cuando hay bridge o
+PANEL_TENANT en el entorno (el cerebro en GitHub Actions); si el
+panel falla, se levanta (nunca se cae en silencio al
+streamers.yaml del repo, que es la lista de OTRO tenant).
+`streamers.yaml` queda como respaldo local/dev (sin PANEL_TENANT
+ni bridge) y para herramientas con `path` explícito.
 
 REGLA DEL USUARIO: estar en la lista = permiso ya dado. Solo
 `denegado` / `revocado` excluyen. `evidencia_url` es opcional.
@@ -103,8 +106,68 @@ def _legacy_streamers(base_dir):
     return list(merged.values())
 
 
-def load_streamers(path=None, base_dir=None):
-    """La lista única, normalizada. [] si no hay ninguna lista."""
+def _from_panel(rows):
+    """Mapea GET /api/influencers a entradas canónicas.
+
+    El panel devuelve {handle, name, platform, profile_url,
+    language, permission, active, game, permission_date,
+    publish_platforms, notes}. `estado` es "concedido" solo con
+    permiso y activo; `enabled` igual (sin permiso o inactivo no
+    se vigila ni se publican sus clips nuevos)."""
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        name = str(r.get("handle") or r.get("name") or "").strip().lower()
+        if not name:
+            continue
+        permission = bool(r.get("permission"))
+        active = bool(r.get("active"))
+        publish = r.get("publish_platforms") or list(PUBLISH_PLATFORMS)
+        out.append({
+            "name": name,
+            "platform": str(r.get("platform") or "twitch").strip().lower(),
+            "channel_url": str(r.get("profile_url") or r.get("url") or "").strip(),
+            "game": str(r.get("game") or "").strip(),
+            "language": str(r.get("language") or "es").strip().lower() or "es",
+            "estado": "concedido" if (permission and active) else "pendiente",
+            "fecha_permiso": str(r.get("permission_date") or "").strip(),
+            "evidencia_url": "",
+            "publish_platforms": [str(p).strip().lower() for p in publish],
+            "notas": str(r.get("notes") or "").strip(),
+            "enabled": bool(active and permission),
+        })
+    return out
+
+
+def load_streamers(path=None, base_dir=None, bridge=None):
+    """La lista única, normalizada. [] si no hay ninguna lista.
+
+    Panel primero (2026-11-19, cerebro genérico): con bridge
+    explícito, o con PANEL_TENANT en el entorno (el bridge se
+    construye de PANEL_BRAIN_TOKEN o del login), la lista sale de
+    GET /api/influencers del tenant. Si el panel falla, se levanta:
+    nunca se cae en silencio al streamers.yaml del repo (la lista
+    de otro tenant). Si PANEL_TENANT está definido pero no hay
+    credenciales del panel, también se levanta (una corrida de un
+    tenant sin forma de leer SU lista es un error de
+    configuración, no un caso para leer la lista de otro).
+    Sin PANEL_TENANT ni bridge (local / tests), se lee
+    streamers.yaml como antes. Un `path` explícito siempre gana
+    (herramientas locales y tests con fixtures).
+    """
+    if path is None and bridge is None and os.environ.get("PANEL_TENANT"):
+        from .panel_bridge import PanelBridge
+        bridge = PanelBridge.from_env()
+        if bridge is None:
+            raise RuntimeError(
+                "PANEL_TENANT está definido pero no hay credenciales "
+                "del panel (ni PANEL_BRAIN_TOKEN ni login): no se "
+                "puede leer la lista de influencers del tenant y no "
+                "se cae al streamers.yaml del repo (sería la lista "
+                "de otro tenant). Dispara desde el panel con Iniciar.")
+    if bridge is not None:
+        return _from_panel(bridge.list_influencers())
     base = base_dir or BASE_DIR
     path = path or os.path.join(base, "streamers.yaml")
     data = _load_yaml(path)

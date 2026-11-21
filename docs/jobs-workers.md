@@ -236,9 +236,10 @@ pero deja de ser 100% automática. No es el plan principal.
   runner). Sin esto, el supervisor en GH Actions valida VODs pero
   no produce clips.
 - **Cambiar el paso del cerebro en los workflows (PENDIENTE,
-  coordinar con el agente de workflows).** Los archivos
-  `.github/workflows/cerebro-sebastian.yml` y `cerebro-colega.yml`
-  hoy llaman al worker monolítico legacy (`clipagent worker
+  coordinar con el agente de workflows).** El archivo
+  `.github/workflows/cerebro.yml` (diario genérico; antes
+  `cerebro-sebastian.yml` / `cerebro-colega.yml`, borrados el
+  2026-11-19) hoy llama al worker monolítico legacy (`clipagent worker
   --once`) + `publish loop --once --live`: esa es la cadena que
   funciona hoy (auto_clips descarga chat+vídeo él mismo). Su
   cabecera ya se corrigió en la reconciliación del 17 nov (decía

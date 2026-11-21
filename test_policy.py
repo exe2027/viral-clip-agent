@@ -267,5 +267,61 @@ class TestWorkerEnqueue(unittest.TestCase):
             self.assertEqual(n, 4)  # illojuan publica en las 4
 
 
+class TestNoSpeech(unittest.TestCase):
+    """Regla 2026-11-19 18:41: sin voz + pasa puertas (45/80) ->
+    publicable sin subtítulos; sin voz + bajo puertas -> bloqueado;
+    nunca se inventa texto."""
+
+    def _cfg(self, **subs):
+        cfg = {"scoring": {"seo_gate": 80, "viral_min": 45},
+               "subtitles": {"publish_no_speech_if_passes_gates": True}}
+        cfg["subtitles"].update(subs)
+        return cfg
+
+    def test_pasa_puertas_acepta_numeros_y_mapas(self):
+        cfg = self._cfg()
+        # Camino en vivo: SEO por plataforma como número.
+        self.assertTrue(policy.passes_publish_gates(
+            53.8, {"youtube_shorts": 94, "tiktok": 90}, cfg))
+        # Camino VOD: SEO por plataforma como mapa con "score".
+        self.assertTrue(policy.passes_publish_gates(
+            53.8, {"youtube_shorts": {"score": 94}}, cfg))
+        self.assertFalse(policy.passes_publish_gates(
+            53.8, {"youtube_shorts": 79, "tiktok": 70}, cfg))
+        self.assertFalse(policy.passes_publish_gates(
+            44.9, {"youtube_shorts": 94}, cfg))
+        self.assertFalse(policy.passes_publish_gates(53.8, {}, cfg))
+        self.assertFalse(policy.passes_publish_gates(None, {}, cfg))
+
+    def test_sin_voz_con_puertas_no_bloquea(self):
+        self.assertFalse(policy.no_speech_blocked(
+            True, 53.8, {"youtube_shorts": {"score": 94}},
+            self._cfg()))
+
+    def test_sin_voz_bajo_viralidad_bloquea(self):
+        self.assertTrue(policy.no_speech_blocked(
+            True, 30.0, {"youtube_shorts": {"score": 94}},
+            self._cfg()))
+
+    def test_sin_voz_bajo_seo_bloquea(self):
+        self.assertTrue(policy.no_speech_blocked(
+            True, 53.8, {"youtube_shorts": {"score": 79}},
+            self._cfg()))
+
+    def test_sin_voz_sin_scores_bloquea_falla_cerrado(self):
+        self.assertTrue(policy.no_speech_blocked(
+            True, None, {}, self._cfg()))
+
+    def test_con_voz_nunca_bloquea_por_esto(self):
+        self.assertFalse(policy.no_speech_blocked(
+            False, 10.0, {"youtube_shorts": {"score": 10}},
+            self._cfg()))
+
+    def test_excepcion_apagada_vuelve_a_bloquear(self):
+        cfg = self._cfg(publish_no_speech_if_passes_gates=False)
+        self.assertTrue(policy.no_speech_blocked(
+            True, 53.8, {"youtube_shorts": {"score": 94}}, cfg))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

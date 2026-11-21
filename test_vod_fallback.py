@@ -16,8 +16,10 @@ módulo no tiene ninguna llamada a publicar.
   plataformas, 40-60 s, juego GTA VI; falla cerrado sin datos
   (2026-11-19, orden del usuario: listones bajados de 50/90).
 - already_enqueued: dedup contra el panel por (VOD, inicio).
-- burn_and_enqueue: subtítulos completos o no se encola; nunca
-  llama a publicar; el payload lleva language ("es"/"en").
+- burn_and_enqueue: subtítulos completos, o sin voz + pasa
+  puertas (45/80) con subtitles_complete=0 honesto; sin voz +
+  bajo puertas no se encola; nunca se inventa texto ni se llama
+  a publicar; el payload lleva language ("es"/"en").
 - run: sin directos en GTA VI -> modo VOD (ES y EN); con directos
   (ES o EN) -> no hace nada.
 """
@@ -287,8 +289,28 @@ class TestBurnAndEnqueue(unittest.TestCase):
         self.addCleanup(patcher.stop)
         return patcher.start()
 
+    def _patch_review(self):
+        # El vídeo es falso (sin duración medible): la puerta dura
+        # real lo rechazaría. El test cubre el encolado, no el gate
+        # (que tiene sus propios tests en test_final_gate.py).
+        verdict = {"decision": "aprobado", "pasa": True,
+                   "hard_pasa": True, "needs_rerender": False,
+                   "rerender_reason": "", "hard_failures": [],
+                   "motivo": "", "resumen": "aprobado",
+                   "fallos": [], "scores": {}, "frames_n": 0,
+                   "model": "", "transcript_words": 0,
+                   "observe_only": True,
+                   "face": {"pasa": True}, "template": {"pasa": True},
+                   "gemini": {"decision": "aprobado"}}
+        patcher = mock.patch(
+            "clipagent.final_review.validate_final_clip",
+            return_value=verdict)
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
     def test_encola_sin_publicar(self):
         self._patch_subtitles()
+        self._patch_review()
         bridge = FakeBridge()
         clip = _clip()
         panel_id, why = burn_and_enqueue(
@@ -313,6 +335,7 @@ class TestBurnAndEnqueue(unittest.TestCase):
         # (sin él el panel asume "es"), el título EN y los
         # subtítulos transcritos en inglés.
         sub_mock = self._patch_subtitles()
+        self._patch_review()
         bridge = FakeBridge()
         clip = _clip(viral={"best_title": "", "game": "GTA VI",
                             "description": "Kai Cenat loses it.",
@@ -332,23 +355,52 @@ class TestBurnAndEnqueue(unittest.TestCase):
         self.assertEqual(sub_mock.call_args.kwargs.get("lang"), "en")
         self.assertEqual(bridge.published, [])
 
-    def test_sin_voz_no_se_encola(self):
+    def test_sin_voz_con_puertas_se_encola_sin_subtitulos(self):
+        # Regla 2026-11-19 18:41: sin voz + viral 53,8 / SEO 94
+        # (pasa 45/80) -> se encola PUBLICABLE sin subtítulos. El
+        # mock trae publish_blocked=True viejo: burn_and_enqueue
+        # ya no se fía de ese flag, decide con no_speech + puertas.
         self._patch_subtitles(publish_blocked=True, no_speech=True)
+        self._patch_review()
         bridge = FakeBridge()
         panel_id, why = burn_and_enqueue(
             bridge, "rubius", "2932415021", self.tmp.name, _clip())
+        self.assertEqual(panel_id, 101, why)
+        self.assertEqual(len(bridge.created), 1)
+        payload = bridge.created[0]
+        self.assertEqual(payload["subtitles_complete"], 0)
+        self.assertEqual(payload["needs_human_transcription"], 0)
+        self.assertIn("sin subtítulos", payload["reason"])
+        self.assertEqual(len(bridge.uploaded), 1)
+        # NUNCA publica: ni publish_clip ni publish loop.
+        self.assertEqual(bridge.published, [])
+
+    def test_sin_voz_bajo_puertas_no_se_encola(self):
+        # Sin voz + viral 30 (< 45) -> sigue fuera, como antes.
+        self._patch_subtitles(publish_blocked=True, no_speech=True)
+        bridge = FakeBridge()
+        clip = _clip(viral_score={"total": 30.0,
+                                  "chat_multiple": 1.9})
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "2932415021", self.tmp.name, clip)
         self.assertIsNone(panel_id)
         self.assertIn("sin voz", why)
         self.assertEqual(bridge.created, [])
         self.assertEqual(bridge.uploaded, [])
 
-    def test_burn_and_enqueue_usa_plantilla_rdjavi(self):
+    def test_burn_and_enqueue_usa_plantilla_rubius(self):
         # 2026-11-19 (clip 23, TheGrefg): el fallback llamaba a
         # subtitle_clip con cfg={} y el default silencioso era
-        # "karaoke". La plantilla acordada es rdjavi (config.yaml
-        # subtitles.default_style): el quemado VOD debe usarla
-        # igual que el camino en vivo.
+        # "karaoke". La plantilla acordada es la de config.yaml
+        # (subtitles.default_style): el quemado VOD debe usarla
+        # igual que el camino en vivo. Decisión 2026-11-19 20:48
+        # (TODOS a rubius): el default es rubius, no rdjavi.
+        # La expectativa se lee de la misma config que carga el
+        # código (una sola fuente), nunca se fija a mano.
+        from clipagent.config import load_config
+
         sub_mock = self._patch_subtitles()
+        self._patch_review()
         bridge = FakeBridge()
         panel_id, why = burn_and_enqueue(
             bridge, "rubius", "2932415021", self.tmp.name, _clip())
@@ -356,18 +408,23 @@ class TestBurnAndEnqueue(unittest.TestCase):
         cfg = sub_mock.call_args.kwargs.get("cfg") or {}
         self.assertEqual(
             (cfg.get("subtitles") or {}).get("default_style"),
-            "rdjavi")
+            load_config()["subtitles"]["default_style"])
+        self.assertNotEqual(
+            (cfg.get("subtitles") or {}).get("default_style"),
+            "karaoke")
 
-    def test_subtitle_clip_sin_cfg_usa_rdjavi(self):
-        # El default silencioso de subtitle_clip era "karaoke":
-        # cualquier llamada sin cfg quemaba karaoke. La plantilla
-        # acordada es rdjavi.
+    def test_subtitle_clip_sin_cfg_usa_default_config(self):
+        # El default silencioso de subtitle_clip era "karaoke" y
+        # luego "rdjavi": cualquier llamada sin cfg quemaba con la
+        # plantilla vieja. Ahora sigue config.yaml (única fuente):
+        # hoy subtitles.default_style es rubius (decisión del
+        # usuario 2026-11-19 20:48, todos los clips a rubius).
         from clipagent.workers import subtitle_clip
         srt = os.path.splitext(self.video)[0] + ".srt"
         with open(srt, "w", encoding="utf-8") as f:
             f.write("1\n00:00:00,000 --> 00:00:02,000\nHola\n")
         res = subtitle_clip(self.video, cfg={})
-        self.assertEqual(res["style"], "rdjavi")
+        self.assertEqual(res["style"], "rubius")
 
 
 class TestRun(unittest.TestCase):

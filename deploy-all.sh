@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# deploy-all.sh — despliega EL MISMO commit a los dos paneles.
+# deploy-all.sh — despliega EL MISMO commit a la instalación única.
 #
-# Regla de oro (plan §3): nunca desplegar a mano a un solo panel. Este
-# script toma el HEAD actual, lo despliega a Sebastián y al colega, y
-# hace health check de cada panel. Si un panel falla, el script falla
-# (el otro ya puede estar desplegado: revisa el reporte y reintenta).
-#
-# Estado 2026-11-17: el backend del panel (Worker + D1 + R2) aún NO
-# existe en el repo (falta §6.4 del plan). Mientras no exista
-# panel-deploy/<panel>/wrangler.toml, ese panel se SALTA con aviso y
-# solo se hace su health check si PANEL_<PANEL>_URL está definida.
-# No se inventa un despliegue que no existe.
+# Modelo vigente (decisión del usuario 17 nov 2026, 15:05 y 15:33):
+# UNA sola página https://avc-em9.pages.dev con login por tenant,
+# UN Worker, UNA D1 y UN R2. No hay paneles por tenant ni workflows
+# por tenant: el cerebro es genérico (workflows parametrizados por
+# tenant) y las credenciales viven en el panel, no en GitHub.
+# El archivo anterior desplegaba "a Sebastián y al colega" con
+# PANELS="sebastian colega" y panel-deploy/<tenant>/ (modelo revocado
+# 2026-11-17); se reescribió el 2026-11-19 para el despliegue único.
+# El tenant "colega" se eliminó el 2026-11-19: nunca fue un usuario.
 #
 # Vía principal (decisión 17 nov 2026 "Todo automático"): Cloudflare
 # + GitHub Actions. El panel se despliega aquí (wrangler); el cerebro
@@ -23,8 +22,10 @@
 # Uso:
 #   ./deploy-all.sh [--check-only] [--commit <sha>]
 # Variables:
-#   PANEL_SEBASTIAN_URL, PANEL_COLEGA_URL  (p. ej. https://panel-sebastian.pages.dev)
-#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (para wrangler, cuando exista)
+#   PANEL_URL  (p. ej. https://avc-em9.pages.dev; default ese)
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (para wrangler)
+#   Además, antes de desplegar: wrangler d1 migrations apply clips-avc
+#   (las migraciones pendientes van primero, el código después).
 set -euo pipefail
 
 CHECK_ONLY=0
@@ -50,45 +51,24 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "AVISO: hay cambios sin commitear; se despliega el commit, no el árbol sucio."
 fi
 
-PANELS="sebastian colega"
+PANEL_URL="${PANEL_URL:-https://avc-em9.pages.dev}"
+PANEL_DIR="independencia/panel-backend"
 FAILED=0
 
 health_check() {
-  local name="$1" url="$2"
+  local url="$1"
   if [ -z "$url" ]; then
-    echo "  [$name] sin PANEL_${name^^}_URL: health check omitido."
+    echo "  sin PANEL_URL: health check omitido."
     return 0
   fi
   local code
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)"
   if [ "$code" = "200" ]; then
-    echo "  [$name] OK ($url -> HTTP 200)"
+    echo "  OK ($url -> HTTP 200)"
   else
-    echo "  [$name] FALLO ($url -> HTTP $code)"
+    echo "  FALLO ($url -> HTTP $code)"
     FAILED=1
   fi
-}
-
-deploy_panel() {
-  local name="$1"
-  local dir="panel-deploy/$name"
-  echo "== Panel: $name =="
-  if [ "$CHECK_ONLY" = "1" ]; then
-    echo "  --check-only: sin despliegue."
-  elif [ -f "$dir/wrangler.toml" ]; then
-    if ! command -v wrangler >/dev/null 2>&1; then
-      echo "  FALLO: wrangler no instalado (npm i -g wrangler)."
-      FAILED=1
-    else
-      (cd "$dir" && wrangler deploy)
-      echo "  [$name] desplegado (commit $COMMIT)."
-    fi
-  else
-    echo "  SIN backend en el repo ($dir/wrangler.toml no existe)."
-    echo "  Pendiente plan §6.4 (Worker + D1 + R2). No se despliega nada."
-  fi
-  local var="PANEL_${name^^}_URL"
-  health_check "$name" "${!var:-}"
 }
 
 # Verifica la vía principal de cómputo: los workflows del cerebro
@@ -96,7 +76,7 @@ deploy_panel() {
 check_workflows() {
   echo "== Workflows del cerebro (vía principal) =="
   local missing=0
-  for wf in cerebro-sebastian cerebro-colega; do
+  for wf in cerebro cerebro-live; do
     if [ ! -f ".github/workflows/$wf.yml" ]; then
       echo "  [$wf] FALLO: no existe .github/workflows/$wf.yml."
       FAILED=1
@@ -106,8 +86,8 @@ check_workflows() {
   [ "$missing" = "1" ] && return 0
   if command -v python3 >/dev/null 2>&1 \
       && python3 -c "import yaml" 2>/dev/null; then
-    if python3 -c "import yaml; [yaml.safe_load(open(f'.github/workflows/{n}.yml')) for n in ('cerebro-sebastian', 'cerebro-colega')]"; then
-      echo "  [workflows] OK: cerebro-sebastian.yml y cerebro-colega.yml son YAML válido."
+    if python3 -c "import yaml; [yaml.safe_load(open(f'.github/workflows/{n}.yml')) for n in ('cerebro', 'cerebro-live')]"; then
+      echo "  [workflows] OK: cerebro.yml y cerebro-live.yml son YAML válido."
     else
       echo "  [workflows] FALLO: YAML inválido en un workflow del cerebro."
       FAILED=1
@@ -117,14 +97,30 @@ check_workflows() {
   fi
 }
 
-check_workflows
+deploy_panel() {
+  echo "== Panel único ($PANEL_URL) =="
+  if [ "$CHECK_ONLY" = "1" ]; then
+    echo "  --check-only: sin despliegue."
+  elif [ -f "$PANEL_DIR/wrangler.toml" ]; then
+    if ! command -v wrangler >/dev/null 2>&1; then
+      echo "  FALLO: wrangler no instalado (npm i -g wrangler)."
+      FAILED=1
+    else
+      (cd "$PANEL_DIR" && wrangler deploy)
+      echo "  [panel] desplegado (commit $COMMIT)."
+    fi
+  else
+    echo "  SIN wrangler.toml en $PANEL_DIR: no se despliega nada."
+    FAILED=1
+  fi
+  health_check "$PANEL_URL"
+}
 
-for panel in $PANELS; do
-  deploy_panel "$panel"
-done
+check_workflows
+deploy_panel
 
 if [ "$FAILED" = "1" ]; then
-  echo "RESULTADO: FALLO en al menos un panel (commit $COMMIT)."
+  echo "RESULTADO: FALLO (commit $COMMIT)."
   exit 1
 fi
-echo "RESULTADO: OK — mismo commit $COMMIT en los dos paneles (o saltados por falta de backend)."
+echo "RESULTADO: OK — mismo commit $COMMIT en el panel único."

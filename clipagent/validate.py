@@ -24,6 +24,7 @@ AUTOPUBLISH_MODES = {"gradual", "full"}
 KNOWN_TOP_KEYS = {
     "channel", "hashtags", "tools", "game", "games", "allowlist",
     "clips", "subtitles", "subtitle_policy", "subtitle_styles",
+    "sfx",
     "layout", "facecam_box", "watcher", "reel_study", "autopublish",
     # Llegan en fases posteriores (6.3, 6B): se validan entonces.
     "auto_approve", "scoring", "breaker", "metadata", "live",
@@ -31,6 +32,11 @@ KNOWN_TOP_KEYS = {
     "fanout", "public_url", "platform_accounts",
     # Panel web en Cloudflare (regla 2026-11-18: TODO ES PARA LA WEB).
     "panel",
+    # Validación final del vídeo renderizado (2026-11-19): puerta
+    # dura de cara + plantilla; se valida abajo cuando está presente.
+    "final_review", "validator", "templates",
+    # Vigilante con auto-reparación (2026-11-19); se valida abajo.
+    "watchdog",
     # Señales de Uri (2026-11-17): solo diagnóstico, no puntaje.
     "signals",
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
@@ -185,20 +191,9 @@ def validate_config(cfg, source="config.yaml"):
                   "clips.max_duration_s",
                   f"debe cumplirse min <= objetivo <= max, "
                   f"es {minimum_d} <= {target} <= {maximum_d}")
-        # Reglas 2026-11-18 (usuario): entre 40 y 60 s, nunca menos
-        # de 40 ni más de 60 (reemplaza el mínimo 36 s de 2026-11-17);
-        # el objetivo no puede caer dentro del rango prohibido 25-35
-        # (el objetivo viejo, 30 s, era imposible de publicar por la
-        # propia puerta del panel); el tope duro es 60 s (máximo de
-        # un Short).
-        if minimum_d < 40:
-            c.err("clips.min_duration_s",
-                  "debe ser 40 s (mínimo 40 s, regla del usuario "
-                  "2026-11-18: clips de 40-60 s)")
-        if 25 <= target <= 35:
-            c.err("clips.target_duration_s",
-                  "no puede estar en 25-35 s (regla de oro: ningún "
-                  "clip de 30 s)")
+        # Regla 40-60 / 25-35 ELIMINADA por el usuario el 2026-11-21
+        # (para siempre): sin mínimo ni rango prohibido; el tope duro
+        # es 60 s (máximo de un Short).
         if maximum_d > 60:
             c.err("clips.max_duration_s",
                   "no puede pasar de 60 s (tope duro)")
@@ -209,8 +204,8 @@ def validate_config(cfg, source="config.yaml"):
     # la lista canónica `rules:` debe coincidir con clips/subtitles.
     rules = c.check(cfg, "rules", "dict")
     if rules is not None:
-        c.check(cfg, "rules.min_duration_s", "int", minimum=40)
-        c.check(cfg, "rules.target_duration_s", "int", minimum=40)
+        c.check(cfg, "rules.min_duration_s", "int", minimum=1)
+        c.check(cfg, "rules.target_duration_s", "int", minimum=1)
         c.check(cfg, "rules.hard_cap_s", "int", minimum=40, maximum=60)
         c.check(cfg, "rules.pre_roll_s", "int", minimum=20)
         c.check(cfg, "rules.subtitle_zone", "str",
@@ -222,8 +217,10 @@ def validate_config(cfg, source="config.yaml"):
             c.err("rules.target_duration_s",
                   "debe coincidir con clips.target_duration_s")
 
-    # subtitles (regla 2026-11-17 22:10: SIEMPRE subtítulos
-    # completos; sin subtítulos el clip no se publica)
+    # subtitles (regla 2026-11-17 22:10, matizada 2026-11-19 18:41:
+    # subtítulos SIEMPRE y COMPLETOS cuando hay voz; sin voz +
+    # pasa puertas (45/80) el clip se publica igual sin subtítulos,
+    # nunca se inventa texto)
     c.check(cfg, "subtitles", "dict")
     c.check(cfg, "subtitles.default_style", "str")
     c.check(cfg, "subtitles.subtitle_lang", "str",
@@ -231,14 +228,16 @@ def validate_config(cfg, source="config.yaml"):
     c.check(cfg, "subtitles.translate", "bool")
     c.check(cfg, "subtitles.required", "bool")
     c.check(cfg, "subtitles.complete", "bool")
-    c.check(cfg, "subtitles.block_without_subtitles", "bool")
+    c.check(cfg, "subtitles.publish_no_speech_if_passes_gates",
+            "bool")
     subs = cfg.get("subtitles") or {}
     if subs.get("required") is not True:
         c.err("subtitles.required",
               "debe ser true: siempre subtítulos (regla 2026-11-17)")
-    if subs.get("block_without_subtitles") is not True:
-        c.err("subtitles.block_without_subtitles",
-              "debe ser true: sin subtítulos no se publica")
+    if subs.get("publish_no_speech_if_passes_gates") is not True:
+        c.err("subtitles.publish_no_speech_if_passes_gates",
+              "debe ser true: sin voz + pasa puertas -> publicable "
+              "sin subtítulos (regla 2026-11-19)")
     c.check(cfg, "subtitle_policy", "dict")
     for k in ("es", "others"):
         c.check(cfg, f"subtitle_policy.{k}", "str",
@@ -265,6 +264,13 @@ def validate_config(cfg, source="config.yaml"):
             default_style not in styles:
         c.err("subtitles.default_style",
               f"no existe en subtitle_styles: {default_style!r}")
+
+    # sfx (2026-11-19, pedido del usuario: SFX por defecto en el
+    # render, vivo y VOD).
+    c.check(cfg, "sfx", "dict")
+    c.check(cfg, "sfx.enabled", "bool")
+    c.check(cfg, "sfx.max_sfx", "int", minimum=0)
+    c.check(cfg, "sfx.lift", "bool")
 
     # layout / facecam_box
     c.check(cfg, "layout", "dict")
@@ -365,6 +371,62 @@ def validate_config(cfg, source="config.yaml"):
         c.check(cfg, f"platform_accounts.{p}", "dict")
     c.check(cfg, "platform_accounts.instagram_reels.ig_user_id", "str")
     c.check(cfg, "platform_accounts.facebook_reels.page_id", "str")
+    # Validación final (2026-11-19, puerta dura de cara + plantilla):
+    # solo se valida si la sección está presente; si falta, es
+    # load_validator_config quien falla en voz alta en el gate (el
+    # resto de herramientas no necesitan el validador para arrancar).
+    # observe_only NUNCA cubre la cara ni la plantilla: eso lo
+    # impone el gate en código, no un valor de config.
+    c.check(cfg, "final_review", "dict")
+    c.check(cfg, "final_review.enabled", "bool")
+    c.check(cfg, "final_review.observe_only", "bool")
+    c.check(cfg, "validator", "dict")
+    c.check(cfg, "validator.face_sample_every_s", "num",
+            minimum=0.5, maximum=10)
+    c.check(cfg, "validator.face_min_frames", "int", minimum=1)
+    c.check(cfg, "validator.face_min_share", "num", minimum=0,
+            maximum=1)
+    c.check(cfg, "validator.face_min_width_frac", "num", minimum=0,
+            maximum=1)
+    c.check(cfg, "validator.min_score", "num", minimum=0, maximum=10)
+    c.check(cfg, "validator.max_rerenders", "int", minimum=0,
+            maximum=3)
+    c.check(cfg, "validator.gemini_hard", "bool")
+    _chain = c.check(cfg, "validator.chain", "list")
+    if _chain is not None:
+        for _i, _v in enumerate(_chain):
+            if _v not in ("facecrop", "edge", "yunet"):
+                c.err(f"validator.chain[{_i}]",
+                      f"debe ser facecrop, edge o yunet, es {_v!r}")
+    # Plantillas del validador (2026-11-19, TRES recetas): solo se
+    # validan si la sección está presente; si falta, es
+    # load_validator_config quien falla en voz alta en el gate.
+    c.check(cfg, "templates", "dict")
+    _default = c.check(cfg, "templates.default", "str")
+    if _default is not None and _default not in (
+            "rdjavi", "willyrex", "rubius"):
+        c.err("templates.default",
+              "debe ser rdjavi, willyrex o rubius, "
+              f"es {_default!r}")
+    for _name in ("rdjavi", "willyrex", "rubius"):
+        _t = c.check(cfg, f"templates.{_name}", "dict")
+        if _t is None:
+            continue
+        for _k in ("x", "y", "w", "h"):
+            c.check(cfg, f"templates.{_name}.cam.{_k}", "int",
+                    minimum=0)
+        for _k in ("y0", "y1"):
+            c.check(cfg, f"templates.{_name}.game.{_k}", "int",
+                    minimum=0)
+        _style = c.check(cfg, f"templates.{_name}.subs_style", "str")
+        if _style is not None and _style not in (
+                "karaoke", "fixed_yellow", "word_white"):
+            c.err(f"templates.{_name}.subs_style",
+                  "debe ser karaoke, fixed_yellow o word_white, "
+                  f"es {_style!r}")
+        c.check(cfg, f"templates.{_name}.subs_over_game", "bool")
+        c.check(cfg, f"templates.{_name}.cam_full_width", "bool")
+        c.check(cfg, f"templates.{_name}.blurred_bg", "bool")
 
     warnings = [f"clave desconocida de nivel superior: {k!r} "
                 f"(se ignora; revisa si es un error de tipeo)"

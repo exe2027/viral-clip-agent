@@ -14,7 +14,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pytest  # noqa: E402
 
 from clipagent.tiktok_browser import (  # noqa: E402
-    DEFAULT_ACCOUNT,
     MAX_ATTEMPTS,
     TikTokBrowserAgent,
     TikTokClip,
@@ -36,7 +35,7 @@ class FakeLocator:
         self.page.clicks.append(self.selector)
         # Clic en Publicar: TikTok redirige al vídeo y muestra el toast.
         if self.selector in ("text=Post", "text=Publicar"):
-            self.page.url = ("https://www.tiktok.com/@elclipdegta6/"
+            self.page.url = ("https://www.tiktok.com/@cuenta-test/"
                              "video/1234567890123456789")
             self.page.html = ("<div>Your video has been uploaded</div>"
                               "<a href=\"/video/1234567890123456789\">")
@@ -117,23 +116,23 @@ def _clip(tmp_path, name="clip_01.mp4"):
     return TikTokClip(mp4_path=str(mp4), title="GTA 6 clipazo",
                       description="El mejor momento",
                       hashtags=["gta6", "gta6clips"],
-                      account=DEFAULT_ACCOUNT, date="2026-11-17")
+                      account="@cuenta-test", date="2026-11-17")
 
 
 def test_idempotency_key_determinista_y_unica_por_dia_cuenta():
-    k1 = idempotency_key("clip_01", "@elclipdegta6", "2026-11-17")
-    k2 = idempotency_key("clip_01", "@elclipdegta6", "2026-11-17")
+    k1 = idempotency_key("clip_01", "@cuenta-a", "2026-11-17")
+    k2 = idempotency_key("clip_01", "@cuenta-a", "2026-11-17")
     assert k1 == k2 and len(k1) == 64
-    assert k1 != idempotency_key("clip_01", "@elclipdegta6", "2026-11-18")
-    assert k1 != idempotency_key("clip_01", "@otra", "2026-11-17")
-    assert k1 != idempotency_key("clip_02", "@elclipdegta6", "2026-11-17")
+    assert k1 != idempotency_key("clip_01", "@cuenta-a", "2026-11-18")
+    assert k1 != idempotency_key("clip_01", "@cuenta-b", "2026-11-17")
+    assert k1 != idempotency_key("clip_02", "@cuenta-a", "2026-11-17")
 
 
 def test_caption_lleva_titulo_descripcion_y_hashtags():
     clip = TikTokClip(mp4_path="/tmp/clip_01.mp4", title="GTA 6 clipazo",
                       description="El mejor momento",
                       hashtags=["gta6", "gta6clips"],
-                      account=DEFAULT_ACCOUNT, date="2026-11-17")
+                      account="@cuenta-test", date="2026-11-17")
     assert clip.caption.startswith("GTA 6 clipazo")
     assert "#gta6" in clip.caption and "#gta6clips" in clip.caption
 
@@ -334,7 +333,7 @@ def test_estado_persiste_en_disco(tmp_path, store):
 
 def test_mp4_inexistente_falla_sin_tocar_estado(tmp_path, agent, store):
     clip = TikTokClip(mp4_path=str(tmp_path / "noexiste.mp4"),
-                      title="x", account=DEFAULT_ACCOUNT,
+                      title="x", account="@cuenta-test",
                       date="2026-11-17")
     with pytest.raises(Exception):
         agent.run(clip, FakePage())
@@ -346,5 +345,6 @@ def test_cli_dry_run_no_necesita_navegador(tmp_path):
     mp4 = tmp_path / "clip_01.mp4"
     mp4.write_bytes(b"fake-mp4")
     rc = main(["upload", "--clip", str(mp4), "--title", "t",
+               "--account", "@cuenta-test",
                "--state-dir", str(tmp_path / "state"), "--dry-run"])
     assert rc == 0

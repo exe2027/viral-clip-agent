@@ -175,11 +175,14 @@ class TestReglasSubtitulos20261117(unittest.TestCase):
         # en la barra negra 1740-1920 (MarginV 12); el mínimo es 0
         # y el máximo lo da el tamaño de letra (ver
         # effective_subtitle_margin_v). Todos los estilos llevan
-        # MarginV 12.
+        # MarginV 12 SALVO rubius (default 2026-11-19, todos los
+        # clips a rubius): palabra por palabra blanca SOBRE el
+        # gameplay, MarginV 900.
         self.assertEqual(subtitle_min_margin_v(), 0)
         self.assertEqual(subtitle_min_margin_v(load_config()), 0)
         for name, style in load_config()["subtitle_styles"].items():
-            self.assertEqual(style["margin_v"], 12, name)
+            expected = 900 if name == "rubius" else 12
+            self.assertEqual(style["margin_v"], expected, name)
         ref = load_config()["subtitle_styles"]["ref"]
         self.assertEqual(ref["margin_v"], 12)
         self.assertEqual(ref["fontsize"], 32)
@@ -189,7 +192,7 @@ class TestReglasSubtitulos20261117(unittest.TestCase):
         self.assertEqual(rdjavi["margin_v"], 12)
         self.assertEqual(rdjavi["fontsize"], 64)
         self.assertEqual(load_config()["subtitles"]["default_style"],
-                         "rdjavi")
+                         "rubius")
 
     def test_margin_v_viejo_140_tapaba_la_webcam(self):
         # Con MarginV 140 y letra 32 px el texto queda justo en

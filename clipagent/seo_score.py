@@ -253,7 +253,8 @@ def description_component(description, keyword="GTA 6"):
     return round(value, 1), notes
 
 
-def tags_component(tags, hashtags, platform, lang="es", keyword="GTA 6"):
+def tags_component(tags, hashtags, platform, lang="es", keyword="GTA 6",
+                   channel_tag=None):
     """Tags/hashtags 0-100. Devuelve (valor, notas).
 
     YouTube usa tags (5-15: 40); el resto usa hashtags del caption
@@ -305,7 +306,14 @@ def tags_component(tags, hashtags, platform, lang="es", keyword="GTA 6"):
     else:
         notes.append("sin mezcla amplio/nicho (+0)")
     kw = (keyword or "").lower().replace(" ", "")
-    relevant = any(kw in p.replace(" ", "") or "elclipdegta6" in p
+    # Relevancia: tag del juego (keyword) o tag del canal del tenant
+    # (channel_tag, p. ej. el tag del canal del tenant: lo pasa
+    # quien conoce la identidad del tenant; sin él, el tag del
+    # juego sigue dando el +30). Nunca un literal de un tenant
+    # concreto en el código común (2026-11-19, cerebro genérico).
+    ct = (channel_tag or "").lower().replace(" ", "").lstrip("#")
+    relevant = any(kw in p.replace(" ", "")
+                   or (ct and ct in p.replace(" ", ""))
                    for p in pool)
     if relevant:
         value += 30
@@ -410,7 +418,8 @@ def coherence_component(title, game_verified, visible, keyword="GTA 6"):
 
 def score_platform(platform, title=None, description=None, tags=None,
                    thumbnail_text=None, hashtags=None, game_verified=True,
-                   visible=None, lang="es", keyword="GTA 6"):
+                   visible=None, lang="es", keyword="GTA 6",
+                   channel_tag=None):
     """Score SEO de un paquete en una plataforma.
 
     Devuelve {platform, score (entero, sin redondear hacia arriba),
@@ -423,7 +432,8 @@ def score_platform(platform, title=None, description=None, tags=None,
         raise ValueError(f"Plataforma desconocida: {platform!r}")
     t_val, t_notes = title_component(title, keyword, game_verified, visible)
     d_val, d_notes = description_component(description, keyword)
-    g_val, g_notes = tags_component(tags, hashtags, platform, lang, keyword)
+    g_val, g_notes = tags_component(tags, hashtags, platform, lang, keyword,
+                                    channel_tag)
     th_val, th_notes = thumbnail_component(thumbnail_text, title)
     c_val, c_notes, blocks = coherence_component(
         title, game_verified, visible, keyword)
@@ -457,8 +467,10 @@ def score_all_platforms(pkg):
     """Score SEO en las 4 plataformas de un paquete.
 
     pkg: {title, description, tags, thumbnail_text, hashtags,
-    game_verified, visible, lang, keyword}. Devuelve
-    {platform: resultado de score_platform}.
+    game_verified, visible, lang, keyword, channel_tag}. Devuelve
+    {platform: resultado de score_platform}. `channel_tag` es el
+    tag del canal del tenant (opcional; sin él, el tag del juego
+    sigue dando el +30 de relevancia).
     """
     pkg = pkg or {}
     out = {}
@@ -474,6 +486,7 @@ def score_all_platforms(pkg):
             visible=pkg.get("visible"),
             lang=pkg.get("lang", "es"),
             keyword=pkg.get("keyword", "GTA 6"),
+            channel_tag=pkg.get("channel_tag"),
         )
     return out
 
@@ -594,7 +607,7 @@ if __name__ == "__main__":
                  "clips gaming", "stream clips", "gameplay", "gta 6 funny",
                  "gta 6 español", "illojuan"],
         "thumbnail_text": "NO PUEDE SER",
-        "hashtags": ["#GTA6", "#GTA6Clips", "#ElClipDeGTA6", "#GTA", "#gaming"],
+        "hashtags": ["#GTA6", "#GTA6Clips", "#GTA", "#gaming"],
         "game_verified": True, "visible": "gameplay", "lang": "es",
     }
     print(json.dumps(score_all_platforms(good), ensure_ascii=False, indent=2))

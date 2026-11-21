@@ -78,7 +78,7 @@ Solo se cortan y se publican clips de streamers que están en esta lista. Estar 
 | ¿En qué idioma salen los subtítulos? | auto / es / en | auto | `config.yaml > subtitles.subtitle_lang` |
 | ¿Se traduce lo que no es español al inglés? | sí / no | sí (español nunca se traduce) | `config.yaml > subtitle_policy` |
 | ¿Qué palabras o nombres tiene que escribir bien Whisper? | Lista, ej: Lucia, Jason, Leonida, Vice City | Lista GTA 6 en `config.yaml` | `config.yaml > subtitles.gta6_terms / gta6_corrections` |
-| ¿Qué pasa si Whisper no encuentra voz? | Bloquear / publicar igual | **Bloquear**: el clip queda `needs_human_transcription` + `publish_blocked` hasta que el usuario lo transcriba de oído; nunca se inventa texto ni se publica sin subtítulos | `config.yaml > subtitles.required / complete / block_without_subtitles` |
+| ¿Qué pasa si Whisper no encuentra voz? | Bloquear / publicar igual | **Publicar igual si pasa las puertas (45/80)**: el clip se publica sin subtítulos (muchas veces es un grito, no silencio); sin voz + bajo las puertas queda fuera; nunca se inventa texto | `config.yaml > subtitles.required / complete / publish_no_speech_if_passes_gates` |
 
 Estilos exactos (`clipagent/config.py > subtitle_styles`):
 
@@ -381,7 +381,7 @@ SUBTÍTULOS
 - Idioma de salida: auto
 - Traducir lo que no sea español: sí (español nunca se traduce)
 - Palabras: Lucia, Jason, Leonida, Vice City, GTA 6
-- Regla: subtítulos siempre y completos, quemados, todo lo que dice el influencer; sin voz verificable el clip queda bloqueado, nunca se inventa texto
+- Regla: subtítulos siempre y completos, quemados, todo lo que dice el influencer; sin voz verificable + pasa puertas (45/80) el clip se publica igual sin subtítulos, nunca se inventa texto
 
 TÍTULOS Y HASHTAGS
 - Hashtags ES: #GTA6 #GTA6Clips #TuCanal #GTA #RockstarGames #gaming

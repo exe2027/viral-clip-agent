@@ -310,7 +310,7 @@ class TestLiveCutterEvents(unittest.TestCase):
             mock.patch("clipagent.priority.publish_status",
                        side_effect=_pub_status),
             mock.patch(
-                "clipagent.final_review.maybe_review_final_clip",
+                "clipagent.final_review.validate_final_clip",
                 side_effect=_final),
         ]
         for p in patches:
@@ -326,7 +326,11 @@ class TestLiveCutterEvents(unittest.TestCase):
     def _aprobado(self):
         return {"decision": "aprobado", "pasa": True, "motivo": "",
                 "fallos": [], "resumen": "", "scores": {},
-                "frames_n": 3}
+                "frames_n": 3, "hard_pasa": True,
+                "needs_rerender": False, "rerender_reason": "",
+                "hard_failures": [], "observe_only": True,
+                "face": {"pasa": True}, "template": {"pasa": True},
+                "gemini": {"decision": "aprobado"}}
 
     def _kinds(self, bridge):
         return [k for k, _m in bridge.events]
@@ -395,19 +399,78 @@ class TestLiveCutterEvents(unittest.TestCase):
         _kind, msg = rec.events[1]
         self.assertIn("viralidad 44 < 50", msg)
 
-    def test_sin_voz_un_solo_descarte_y_se_encola_bloqueado(self):
+    def test_puerta_dura_sin_cara_no_encola_ni_en_observacion(self):
+        # 2026-11-19: la puerta dura de cara frena el encolado
+        # aunque el modo observación esté ON. El re-render no es
+        # posible aquí (ventana falsa, sin cara en la fuente): el
+        # clip queda para revisión humana con motivo visible,
+        # nunca bloqueado en silencio.
+        rec = _RecordingBridge()
+        session = self._session(rec)
+        hard_fail = {"decision": "rechazado", "pasa": False,
+                     "hard_pasa": False, "needs_rerender": True,
+                     "rerender_reason": "sin cara verificada",
+                     "hard_failures": ["cara"],
+                     "needs_human_review": True,
+                     "motivo": "sin cara verificada en el vídeo final",
+                     "resumen": "sin cara", "fallos": ["cara"],
+                     "scores": {}, "frames_n": 10, "model": "",
+                     "transcript_words": 0, "observe_only": True,
+                     "face": {"pasa": False, "duda": False},
+                     "template": {"pasa": True},
+                     "gemini": {"decision": "aprobado"}}
+        record = self._run_peak(
+            session, self._direct_peak(), hard_fail,
+            ("publicable", "SEO 92 >= 90"))
+        self.assertIsNotNone(record)
+        self.assertEqual(len(rec.created), 0)
+        self.assertEqual(self._kinds(rec),
+                         ["clip_cortado", "clip_descartado"])
+        _kind, msg = rec.events[1]
+        self.assertIn("revisión humana", msg)
+        self.assertTrue(record["final_review"]["needs_human_review"])
+
+    def test_sin_voz_con_puertas_se_encola_sin_bloquear(self):
+        # Regla 2026-11-19 18:41: sin voz + puertas (viral 56,7,
+        # publicable) -> se encola PUBLICABLE sin subtítulos: sin
+        # descarte, subtitles_complete=0 honesto, y el payload no
+        # pide transcripción humana.
         rec = _RecordingBridge()
         session = self._session(rec)
         record = self._run_peak(
             session, self._direct_peak(), self._aprobado(),
             ("publicable", "ok"), subtitle_blocked=True)
         self.assertIsNotNone(record)
+        self.assertFalse(record["publish_blocked"])
+        self.assertFalse(record["subtitles_complete"])
+        self.assertTrue(record["no_speech"])
+        self.assertEqual(self._kinds(rec),
+                         ["clip_cortado", "clip_encolado"])
+        self.assertEqual(len(rec.created), 1)
+        self.assertEqual(
+            rec.created[0]["needs_human_transcription"], 0)
+        self.assertEqual(rec.created[0]["subtitles_complete"], 0)
+
+    def test_sin_voz_bajo_puertas_se_encola_bloqueado(self):
+        # Sin voz + ninguna plataforma publicable -> BLOQUEADO,
+        # como antes: un solo descarte con "sin voz", y el clip
+        # sigue entrando a la Cola bloqueado (sin jobs).
+        rec = _RecordingBridge()
+        session = self._session(rec)
+        record = self._run_peak(
+            session, self._direct_peak(), self._aprobado(),
+            ("bloqueado_seo", "SEO < 80"), subtitle_blocked=True)
+        self.assertIsNotNone(record)
         self.assertTrue(record["publish_blocked"])
+        self.assertFalse(record["subtitles_complete"])
         self.assertEqual(self._kinds(rec),
                          ["clip_cortado", "clip_descartado",
                           "clip_encolado"])
         _kind, msg = rec.events[1]
         self.assertIn("sin voz", msg)
+        self.assertEqual(len(rec.created), 1)
+        self.assertEqual(
+            rec.created[0]["needs_human_transcription"], 1)
 
     def test_validacion_final_rechazada_no_encola(self):
         rec = _RecordingBridge()
@@ -611,7 +674,11 @@ class TestFallbackEvents(unittest.TestCase):
         self.assertIn("53.8", msg)
         self.assertIn("YT 94", msg)
 
-    def test_fallo_de_quemado_sin_voz_emite_descarte(self):
+    def test_sin_voz_con_puertas_se_encola(self):
+        # Regla 2026-11-19 18:41: sin voz + viral 53,8 / SEO 94
+        # (pasa 45/80) -> el VOD se encola publicable sin
+        # subtítulos. El mock trae publish_blocked=True viejo:
+        # burn_and_enqueue ya no se fía de ese flag.
         rec = _RecordingBridge()
         out_dir = os.path.join(self.out, "2932415021", "clips")
         os.makedirs(out_dir, exist_ok=True)
@@ -619,17 +686,33 @@ class TestFallbackEvents(unittest.TestCase):
             f.write(b"fake-mp4")
         good = _manifest_clip(
             viral_score={"total": 53.8, "chat_multiple": 1.9})
+        # El vídeo es falso (sin duración medible): la puerta dura
+        # real lo rechazaría; el test cubre el encolado sin voz,
+        # no el gate (ver _patch_review en test_vod_fallback.py).
+        verdict = {"decision": "aprobado", "pasa": True,
+                   "hard_pasa": True, "needs_rerender": False,
+                   "rerender_reason": "", "hard_failures": [],
+                   "motivo": "", "resumen": "aprobado",
+                   "fallos": [], "scores": {}, "frames_n": 0,
+                   "model": "", "transcript_words": 0,
+                   "observe_only": True,
+                   "face": {"pasa": True}, "template": {"pasa": True},
+                   "gemini": {"decision": "aprobado"}}
         with mock.patch(
                 "clipagent.workers.subtitle_clip",
                 return_value={"publish_blocked": True,
                               "no_speech": True, "srt": None,
-                              "transcript": None}):
+                              "transcript": None}), mock.patch(
+                "clipagent.final_review.validate_final_clip",
+                return_value=verdict):
             n, _ = self._run({"clips": [good]}, bridge=rec)
-        self.assertEqual(n, 0)
-        self.assertEqual(len(rec.events), 1)
-        kind, msg = rec.events[0]
-        self.assertEqual(kind, "clip_descartado")
-        self.assertIn("sin voz", msg)
+        self.assertEqual(n, 1)
+        self.assertEqual(len(rec.created), 1)
+        self.assertEqual(rec.created[0]["subtitles_complete"], 0)
+        self.assertEqual(
+            rec.created[0]["needs_human_transcription"], 0)
+        self.assertEqual([k for k, _m in rec.events],
+                         ["clip_encolado"])
 
     def test_ya_en_cola_no_reporta_nada(self):
         rec = _RecordingBridge(

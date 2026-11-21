@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Regla del usuario 2026-11-17 22:10: SIEMPRE subtítulos, COMPLETOS.
+"""Regla del usuario 2026-11-17 22:10, matizada 2026-11-19 18:41.
 
 * Todo clip lleva subtítulos quemados de TODO lo que dice el
-  influencer, no solo del pico.
-* Sin subtítulos no se publica: un clip sin voz detectada queda
-  BLOQUEADO (needs_human_transcription + publish_blocked) hasta
-  que el usuario lo transcriba de oído. Nunca se inventa texto.
+  influencer, no solo del pico, cuando hay voz.
+* Sin voz verificable el clip ya NO se bloquea siempre: si pasa
+  las puertas (viralidad >=45, SEO >=80) se publica igual SIN
+  subtítulos (muchas veces es un grito, no silencio). Nunca se
+  inventa texto: el SRT queda vacío.
 * La transcripción completa (tiny -> base) cubre el clip entero.
 
 Uso: python3 test_subtitles_always.py
@@ -24,19 +25,19 @@ def main() -> int:
     subs = cfg.get("subtitles") or {}
     assert subs.get("required") is True, subs
     assert subs.get("complete") is True, subs
-    assert subs.get("block_without_subtitles") is True, subs
-    assert subs.get("needs_human_transcription_on_no_speech") is True, subs
+    assert subs.get("publish_no_speech_if_passes_gates") is True, subs
     rules = cfg.get("rules") or {}
     assert rules.get("subtitles_always") is True, rules
     assert rules.get("subtitles_complete") is True, rules
-    assert rules.get("block_without_subtitles") is True, rules
-    print("OK config: required/complete/block_without_subtitles=true")
+    assert rules.get("publish_no_speech_if_passes_gates") is True, rules
+    print("OK config: required/complete/"
+          "publish_no_speech_if_passes_gates=true")
 
     errors = validate_config(cfg)
     assert not errors, errors
     print("OK validate_config sin errores")
 
-    # Sin voz -> paso OK pero clip BLOQUEADO, no publicable.
+    # Sin voz -> paso OK, SIN bloquear, SRT vacío (nada inventado).
     import clipagent.workers as workers
 
     orig = workers._do_transcribe
@@ -50,12 +51,15 @@ def main() -> int:
             open(video, "wb").write(b"fake")
             res = subtitle_clip(video, cfg=cfg)
             assert res["no_speech"] is True, res
-            assert res["needs_human_transcription"] is True, res
-            assert res["publish_blocked"] is True, res
+            assert res["needs_human_transcription"] is False, res
+            assert res["publish_blocked"] is False, res
             assert "burned" not in res, res
+            # SRT vacío: ni una palabra inventada.
+            with open(res["srt"], encoding="utf-8") as f:
+                assert f.read().strip() == "", res
     finally:
         workers._do_transcribe = orig
-    print("OK no_speech -> needs_human_transcription + publish_blocked, sin quemar")
+    print("OK no_speech -> sin bloqueo, SRT vacío, sin quemar subtítulos")
     print("3/3 casos OK")
     return 0
 

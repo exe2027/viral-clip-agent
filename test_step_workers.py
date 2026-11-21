@@ -234,6 +234,24 @@ def test_pipeline_empaquetar_autoencola_tiktok(store, tmp_path,
     # validar y el clip queda pendiente: se auto-encola publicar
     # en modo draft para revisión humana, nunca en api. El resto
     # de puertas las aplica publish_one al ejecutar ese job.
+    # El gate se mockea con el veredicto que produce sin Gemini
+    # (pendiente): este test cubre el ENRUTADO del pipeline
+    # (pendiente -> draft), no el gate. El clip es falso (10
+    # bytes, sin fotogramas): el gate real lo rechazaría por "sin
+    # fotogramas" y nunca llegaría a pendiente (el gate sobre
+    # vídeos reales se cubre en test_final_gate.py).
+    import clipagent.final_review as _fr
+    monkeypatch.setattr(
+        _fr, "validate_final_clip",
+        lambda *a, **k: {"decision": "pendiente_revision",
+                         "pasa": False, "motivo": "sin GEMINI_API_KEY",
+                         "resumen": "sin GEMINI_API_KEY", "fallos": [],
+                         "scores": {}, "frames_n": 0, "model": "",
+                         "transcript_words": 0, "observe_only": True,
+                         "hard_pasa": None, "needs_rerender": False,
+                         "rerender_reason": "", "hard_failures": [],
+                         "face": None, "template": None,
+                         "gemini": None})
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"v" * 10)

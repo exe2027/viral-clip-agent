@@ -1,5 +1,12 @@
 # Encolar + PUBLICAR el clip IlloJuan borra GTA 6 en las 4 cuentas ES.
 #
+# EXCEPCIÓN DOCUMENTADA (decisión del dueño 2026-11-18,
+# MEJORAS-PENDIENTES.md 3.2): este workflow rompe a propósito el tope
+# de 1 publicación al día en cuentas nuevas y la regla de 40-60 s.
+# Se mantiene como excepción para este clip concreto, no como regla
+# general: no cambia limits.yaml y ningún otro workflow puede
+# apoyarse en ella para bajar topes.
+#
 # Por que existe un workflow propio: el enqueue-clip.yml de Rubius
 # aborta con duracion fuera de 40-60 s y con el influencer fijo en
 # Rubius; este clip dura 19 s, es de IlloJuan y no tiene medicion de
@@ -29,6 +36,7 @@ jobs:
     env:
       PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
       PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+      PANEL_TENANT: sebastian
       PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
       PANEL_URL: https://avc.vikingosfoodspa.workers.dev
     steps:

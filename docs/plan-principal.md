@@ -1,5 +1,15 @@
 # Plan principal: Cloudflare + GitHub Actions — "Todo automático"
 
+> **NOTA 2026-11-19 — §1 actualizada.** La arquitectura ya NO es
+> "una instalación por persona": es **UNA sola instalación** con
+> `tenant_id` (Pages `avc`, Worker `avc`, D1 `clips-avc`, R2
+> `clips-avc`) y el cerebro GENÉRICO (`cerebro.yml` diario +
+> `cerebro-live.yml` en vivo, sin workflows, environments ni
+> secretos por tenant en GitHub: las credenciales salen del panel
+> con un token de un solo uso emitido por el Worker). El tenant
+> "colega" se eliminó el 2026-11-19. El resto del documento (la
+> cadena completa, §2 en adelante) sigue vigente.
+
 Fecha: 17 nov 2026. **Decisión del usuario: "Todo automático".**
 No acepta cortar manual en el teléfono con CapCut. Quiere corte,
 subtítulos, detección y publicación 100% automáticos tras pulsar
@@ -20,22 +30,21 @@ manuales después, salvo lo imposible de automatizar (resolver un
 captcha de TikTok, que se avisa). El usuario no toca GitHub Actions,
 ni terminal, ni instala nada después de Iniciar.
 
-## 1. Arquitectura $0 (una instalación por persona)
+## 1. Arquitectura $0 (UNA sola instalación, multi-tenant)
 
 | Pieza | Recurso | Qué hace |
 |---|---|---|
-| Panel web | Cloudflare Pages `panel-sebastian` / `panel-colega` | Login, cuentas, subtítulos, ajustes, botón Iniciar, Cola, Tracking |
-| API + cola + estados | Cloudflare Worker (TypeScript) por panel | Endpoints del panel, máquina de estados, cola |
-| Datos | D1 por panel | Clips, estados, cuentas, `started`, registro de atascos |
-| Videos | R2 por panel (10 GB gratis) | MP4 9:16 ya cortados, listos para publicar |
-| Scheduler panel | Cron Triggers del Worker | Cola del panel, avisos |
-| **Compute principal** | **GitHub Actions, un workflow por panel** (`.github/workflows/cerebro-sebastian.yml`, `cerebro-colega.yml`) | **Detección, corte, subtítulos, empaquetado y publicación** |
-| Scheduler cerebro | Cron del workflow (09:00 America/Santiago) | Revisión diaria + cadena completa |
+| Panel web | Cloudflare Pages `avc` → https://avc-em9.pages.dev | Login por usuario, cuentas, subtítulos, ajustes, botón Iniciar, Cola, Tracking |
+| API + cola + estados | Cloudflare Worker `avc` (TypeScript), un ciclo por tenant | Endpoints del panel, máquina de estados, cola |
+| Datos | D1 `clips-avc` con `tenant_id` en cada fila | Clips, estados, cuentas, `started`, registro de atascos |
+| Videos | R2 `clips-avc` con prefijo por tenant | MP4 9:16 ya cortados, listos para publicar |
+| Scheduler panel | Cron Triggers del Worker (cada minuto) | Cola del panel, avisos, dispatch al cerebro |
+| **Compute principal** | **GitHub Actions, workflows genéricos** (`.github/workflows/cerebro.yml`, `cerebro-live.yml`) | **Detección, corte, subtítulos, empaquetado y publicación** |
+| Scheduler cerebro | Dispatch `panel-daily` del Worker (09:00 America/Santiago) + `panel-live` cada 15 min | Revisión diaria + cadena completa + monitoreo en vivo |
 | TikTok por navegador | Runner autoalojado en la PC propia (solo esa pieza) | Sesión persistente, misma IP, captcha atendido por humano |
 
-Compartido: código, esquema SQL, fórmula de prioridad, reglas.
-Duplicado por persona: Pages, Worker, D1, R2, secretos, cron,
-GitHub Environment + workflow.
+Compartido: código, esquema SQL, fórmula de prioridad, reglas, workflows.
+Por tenant: solo credenciales, cuentas, colas y sesiones (en el panel, nunca en GitHub).
 
 ## 2. La cadena completa (qué corre dónde)
 

@@ -75,7 +75,8 @@ def main(argv=None) -> int:
         print(json.dumps(result, ensure_ascii=False))
     elif result.get("no_speech"):
         print(f"Sin voz: {args.video} (clip solo gameplay/música, "
-              "sin SRT ni quemado).")
+              "sin SRT ni subtítulos quemados; el título sí se "
+              "quema si se pidió --burn).")
     else:
         print(f"Subtítulos: {result['srt']}"
               + (f" quemados en {result['burned']}"

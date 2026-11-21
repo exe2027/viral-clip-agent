@@ -388,6 +388,22 @@ class TestProcessPeakReview(unittest.TestCase):
                        return_value="Título test"),
             mock.patch("clipagent.priority.publish_status",
                        return_value=("publicable", "ok")),
+            # La puerta final se mockea como aprobada: estos tests
+            # cubren el flujo revisión -> paquete, no el gate (el
+            # gate sobre vídeos reales se cubre en
+            # test_final_gate.py; con el gate real el vídeo falso
+            # fallaría y dispararía un re-corte).
+            mock.patch("clipagent.final_review.validate_final_clip",
+                       return_value={
+                           "decision": "aprobado", "pasa": True,
+                           "motivo": "", "fallos": [], "resumen": "",
+                           "scores": {}, "frames_n": 3,
+                           "hard_pasa": True, "needs_rerender": False,
+                           "rerender_reason": "", "hard_failures": [],
+                           "observe_only": True,
+                           "face": {"pasa": True},
+                           "template": {"pasa": True},
+                           "gemini": {"decision": "aprobado"}}),
         ]
         for p in patches:
             p.start()
@@ -413,8 +429,10 @@ class TestProcessPeakReview(unittest.TestCase):
     def test_paso7_usa_el_paquete_de_la_revision(self):
         # 2026-11-19, calibración: el SEO post-corte se mide sobre
         # el paquete Gemini de la revisión (título + descripción +
-        # tags + miniatura), NO sobre el título de reglas quemado en
-        # la franja (antes el SEO colapsaba 92 -> 49).
+        # tags + miniatura). 2026-11-19 (título Gemini): el paquete
+        # se construye ANTES del quemado, así que la franja lleva
+        # el título Gemini y no el de reglas: quemado y publicación
+        # usan el MISMO título.
         review_ok = {"pasa": True, "motivo": "revisión ok",
                      "viral_revisado": 53.8, "human": {"hook": 8},
                      "audio": {"stats": {}, "words": 40},
@@ -439,10 +457,13 @@ class TestProcessPeakReview(unittest.TestCase):
         self.assertEqual(kwargs["tags"], ["gta 6", "cinema"])
         self.assertEqual(kwargs["thumbnail_text"], "CINEMA")
         self.assertEqual(kwargs["lang"], "es")
-        # El registro lleva el título de publicación; el quemado
-        # queda aparte (la validación final sigue viendo el vídeo).
+        # El registro lleva el título de publicación, y el quemado
+        # es EL MISMO (el paquete se construyó antes del quemado).
         self.assertEqual(record["title"], 'GTA 6: El chat: "Cinema"')
-        self.assertEqual(record["burned_title"], "Título test")
+        self.assertEqual(record["burned_title"],
+                         'GTA 6: El chat: "Cinema"')
+        self.assertEqual(record["pkg_source"], "gemini")
+        self.assertEqual(record["thumbnail_text"], "CINEMA")
 
     def test_paso7_directo_construye_paquete_con_visible(self):
         # Sin revisión (viral auto >= 50): el paso 7 construye el
