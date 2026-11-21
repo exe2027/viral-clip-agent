@@ -40,6 +40,12 @@ KNOWN_TOP_KEYS = {
     # Vigilante de publicación (2026-11-21); se valida en
     # clipagent/publish_watchdog.py (load_publish_watchdog_config).
     "publish_watchdog",
+    # Vigilante de tenant atascado (2026-11-21); se valida en
+    # clipagent/tenant_watchdog.py (load_tenant_watchdog_config).
+    "tenant_watchdog",
+    # Fuente viral (2026-11-21); se valida en
+    # clipagent/viral_source.py (load_viral_config).
+    "viral_source",
     # Señales de Uri (2026-11-17): solo diagnóstico, no puntaje.
     "signals",
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):

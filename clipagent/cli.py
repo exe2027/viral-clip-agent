@@ -117,6 +117,9 @@ def build_parser():
                          help="Reprocesa VODs intentados hace <6 h (para "
                               "reintentos tras un arreglo; el cron normal "
                               "nunca lo usa)")
+    p_vodfb.add_argument("--youtube", action="store_true",
+                         help="Activa la fuente YouTube (yt-dlp "
+                              "--flat-playlist, sin API key, $0)")
     p_replay = sub.add_parser(
         "live-replay",
         help="Replay de un VOD como si fuera en vivo (mismo cutter)")
@@ -135,6 +138,9 @@ def build_parser():
     p_watch.add_argument("--dry-run", action="store_true")
     p_watch.add_argument("--streamer", default=None)
     p_watch.add_argument("--interval-minutes", type=int, default=None)
+    p_watch.add_argument("--youtube", action="store_true",
+                         help="Activa la fuente YouTube (yt-dlp "
+                              "--flat-playlist, sin API key, $0)")
 
     p_pub = sub.add_parser("publish", help="Publicación de clips")
     p_pub.add_argument("args", nargs=argparse.REMAINDER,
@@ -308,6 +314,8 @@ def main(argv=None):
             argv += ["--streamer", args.streamer]
         if args.interval_minutes is not None:
             argv += ["--interval-minutes", str(args.interval_minutes)]
+        if args.youtube:
+            argv.append("--youtube")
         return _watcher.main(argv)
     if args.command == "panel":
         from .panel import run_panel
@@ -405,6 +413,7 @@ def main(argv=None):
                     or None,
             "dry_run": args.dry_run,
             "ignore_cooldown": args.ignore_cooldown,
+            "youtube_enabled": args.youtube,
         }
         if args.state:
             kwargs["state_path"] = args.state

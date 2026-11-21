@@ -61,6 +61,12 @@ def _cfg_dict(**over):
             "face_min_share": 0.5, "face_min_width_frac": 0.08,
             "min_score": 5, "max_rerenders": 1,
             "gemini_hard": False,
+            # Umbrales rubius (config.yaml validator.*): mismos
+            # valores calibrados que la config de disco.
+            "rubius_banner_t0": 0.5, "rubius_banner_t1": 3.5,
+            "rubius_banner_yellow_frac": 0.30,
+            "rubius_subs_edge_w": 150, "rubius_subs_edge_cov": 0.10,
+            "sfx_min_ncc": 0.5,
             "chain": ["facecrop", "edge", "yunet"],
         },
         "final_review": {"enabled": True, "observe_only": True},
@@ -146,10 +152,17 @@ def _drawboxes(template, variant):
             boxes.append(_box(550, 640, 300, 30, "white"))
         boxes.append(_box(0, 1786, 1080, 134, "black"))
     elif template == "rubius":
-        if variant != "sin_banner":
+        if variant == "sin_banner":
+            en = None
+        elif variant == "banner_tarde":
+            # Banner fuera de su ventana (t=5-6 s, la receta lo
+            # pide en t=0.5-3.5 s): el gate tiene que fallarlo.
+            en = "between(t,5,6)"
+        else:
             # Banner amarillo transitorio (2-4 s) con borde blanco
             # y dos líneas (negra + roja).
             en = "between(t,2,4)"
+        if en:
             boxes.append(
                 "drawbox=x=103:y=811:w=864:h=288:color=white:t=6:"
                 f"enable='{en}'")
@@ -182,7 +195,7 @@ def _make_video(template, variant="buena"):
         return _VIDEO_CACHE[key]
     out = os.path.join(
         tempfile.gettempdir(),
-        f"gate_{template}_{variant}.mp4")
+        f"gate_v2_{template}_{variant}.mp4")
     if os.path.isfile(out) and os.path.getsize(out) > 0:
         # Reutiliza solo si es un vídeo completo (una corrida
         # muerta a mitad de codificación deja un archivo corto).
@@ -196,16 +209,36 @@ def _make_video(template, variant="buena"):
     x_expr, y = _patch_xy(template)
     vf = ("color=c=0x404040:s=1080x1920:d=6,"
           + _drawboxes(template, variant))
-    subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
-         "-i", vf, "-f", "lavfi",
-         "-i", "color=c=white:s=200x120:d=6",
-         "-filter_complex",
-         f"[0:v][1:v]overlay=x='{x_expr}':y={y}[v]",
-         "-map", "[v]", "-r", "12", "-c:v", "libx264",
-         "-preset", "ultrafast", "-crf", "30",
-         "-pix_fmt", "yuv420p", out],
-        check=True, timeout=120)
+    cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+           "-i", vf, "-f", "lavfi",
+           "-i", "color=c=white:s=200x120:d=6"]
+    if template == "rubius":
+        # Audio con SFX real (vine_boom a t=3 s sobre un tono):
+        # el gate rubius verifica SFX, así que el vídeo bueno
+        # tiene que llevarlo; sin audio, el chequeo falla.
+        sfx = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "clipagent", "sfx", "vine_boom.wav")
+        cmd += ["-f", "lavfi",
+                "-i", "sine=frequency=440:duration=6",
+                "-i", sfx,
+                "-filter_complex",
+                f"[0:v][1:v]overlay=x='{x_expr}':y={y}[v];"
+                "[2:a]volume=0.1[base];"
+                "[3:a]adelay=3000:all=1[boom];"
+                "[base][boom]amix=inputs=2:normalize=0[aout]",
+                "-map", "[v]", "-map", "[aout]",
+                "-r", "12", "-c:v", "libx264",
+                "-preset", "ultrafast", "-crf", "30",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                out]
+    else:
+        cmd += ["-filter_complex",
+                f"[0:v][1:v]overlay=x='{x_expr}':y={y}[v]",
+                "-map", "[v]", "-r", "12", "-c:v", "libx264",
+                "-preset", "ultrafast", "-crf", "30",
+                "-pix_fmt", "yuv420p", out]
+    subprocess.run(cmd, check=True, timeout=120)
     _VIDEO_CACHE[key] = out
     return out
 
@@ -394,6 +427,15 @@ class TestTemplateGate(_SrtCase):
     def test_rubius_sin_banner_falla(self):
         res = fr.template_gate(
             _make_video("rubius", "sin_banner"), _vcfg(),
+            _recipe("rubius"), srt_path=self.srt)
+        self.assertFalse(res["pasa"])
+        self.assertIn("titulo_banner", res["fallos"])
+
+    def test_rubius_banner_tarde_falla(self):
+        # El banner existe pero fuera de su ventana (t=5-6 s, la
+        # receta lo pide en t=0.5-3.5 s): no cuenta.
+        res = fr.template_gate(
+            _make_video("rubius", "banner_tarde"), _vcfg(),
             _recipe("rubius"), srt_path=self.srt)
         self.assertFalse(res["pasa"])
         self.assertIn("titulo_banner", res["fallos"])

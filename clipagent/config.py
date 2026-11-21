@@ -651,6 +651,12 @@ def load_validator_config(cfg=None):
         "face_sample_every_s", "face_min_frames", "face_min_share",
         "face_min_width_frac", "min_score", "max_rerenders",
         "gemini_hard", "chain",
+        # Receta rubius (2026-11-21, caso scooter): sin estos
+        # umbrales el gate no puede rechazar un render sin banner,
+        # con subtítulos de línea completa o sin SFX.
+        "rubius_banner_t0", "rubius_banner_t1",
+        "rubius_banner_yellow_frac", "rubius_subs_edge_w",
+        "rubius_subs_edge_cov", "sfx_min_ncc",
     )
     missing = [k for k in required if k not in section]
     if missing:
@@ -725,6 +731,13 @@ def load_validator_config(cfg=None):
         "max_rerenders": int(section["max_rerenders"]),
         "gemini_hard": bool(section["gemini_hard"]),
         "chain": chain,
+        "rubius_banner_t0": float(section["rubius_banner_t0"]),
+        "rubius_banner_t1": float(section["rubius_banner_t1"]),
+        "rubius_banner_yellow_frac": float(
+            section["rubius_banner_yellow_frac"]),
+        "rubius_subs_edge_w": int(section["rubius_subs_edge_w"]),
+        "rubius_subs_edge_cov": float(section["rubius_subs_edge_cov"]),
+        "sfx_min_ncc": float(section["sfx_min_ncc"]),
         "enabled": bool(review["enabled"]),
         "observe_only": bool(review["observe_only"]),
         "templates": recipes,

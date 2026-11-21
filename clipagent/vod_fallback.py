@@ -38,6 +38,15 @@ Reglas duras (las del usuario, no se tocan salvo orden suya):
     SIN publicar: este módulo no tiene ninguna llamada a publicar
     (ni publish_clip del puente ni publish loop). La publicación la
     decide el panel después, con sus topes.
+  * YouTube (2026-11-21, flag ``--youtube``, apagado por
+    defecto): ``latest_vod_for`` lista los VODs del canal con
+    ``clipagent.youtube.youtube_check`` (yt-dlp --flat-playlist,
+    sin API key, $0). Sin el flag, un streamer de YouTube se
+    salta como antes. OJO: ``auto_clips.py`` sigue siendo
+    Twitch/Kick (chat + TwitchDownloaderCLI), así que un VOD de
+    YouTube listado llega a ``run_auto_clips`` y falla sin
+    clips; el corte automático desde YouTube (segmento +
+    heatmap) es trabajo posterior, no este flag.
   * Dedup contra el panel: un (VOD, inicio) ya encolado no se
     vuelve a encolar, aunque el estado local se pierda.
   * Coste acotado: máx. 2 VODs y 2 clips por corrida, y cada VOD
@@ -331,11 +340,15 @@ def mark_vod_attempted(state, vod_id, enqueued_starts=None):
 # VODs y auto_clips (reutiliza el pipeline aprobado del worker)
 # ---------------------------------------------------------------------------
 
-def latest_vod_for(streamer_entry):
-    """El VOD archivado más reciente de un streamer (Twitch/Kick).
+def latest_vod_for(streamer_entry, youtube_enabled=False):
+    """El VOD archivado más reciente de un streamer (Twitch/Kick/
+    YouTube).
 
     Devuelve el dict del watcher (vod_id, url, title, category,
-    live, ...) o None si no hay VODs. No baja nada.
+    live, ...) o None si no hay VODs. No baja nada. YouTube solo
+    con ``youtube_enabled=True`` (flag ``--youtube``; apagado por
+    defecto hasta que se active): sin él, un streamer de YouTube
+    se salta como antes, con motivo visible.
     """
     import watcher as _watcher
     name = streamer_entry["name"]
@@ -349,6 +362,18 @@ def latest_vod_for(streamer_entry):
                    _os.environ.get("TWITCH_CLIENT_SECRET", "")}
         twitch, _mode = _watcher.twitch_client(cfg)
         _live, vods = twitch.check(name)
+    elif platform == "youtube":
+        if not youtube_enabled:
+            _log(f"{name}: YouTube desactivado por flag (usa "
+                 "--youtube para activar); sin VODs en el fallback.")
+            return None
+        from .youtube import youtube_check
+        channel_url = (streamer_entry.get("channel_url") or "").strip()
+        if not channel_url:
+            _log(f"{name}: sin channel_url de YouTube; sin VODs en "
+                 "el fallback.")
+            return None
+        _live, vods = youtube_check(channel_url)
     else:
         _log(f"{name}: plataforma {platform!r} sin VODs en el fallback.")
         return None
@@ -757,10 +782,12 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         top_n=TOP_N_PER_VOD, only=None, state_path=DEFAULT_STATE_PATH,
         out_root=DEFAULT_OUT_DIR, dry_run=False, bridge=None,
         scan_fn=None, latest_vod_fn=None, auto_clips_fn=None,
-        enqueue_fn=None, ignore_cooldown=False):
+        enqueue_fn=None, ignore_cooldown=False, youtube_enabled=False):
     """Una corrida del fallback. Devuelve (n_enqueued, resumen).
 
     Las funciones *_fn existen para los tests (sin red ni panel).
+    ``youtube_enabled`` (CLI ``--youtube``) activa la fuente
+    YouTube en ``latest_vod_for``; apagado por defecto.
     """
     from .live_scan import scan_live
     from .streamers import load_streamers
@@ -810,7 +837,11 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             break
         name = entry["name"]
         try:
-            vod = (latest_vod_fn or latest_vod_for)(entry)
+            if latest_vod_fn is not None:
+                vod = latest_vod_fn(entry)
+            else:
+                vod = latest_vod_for(entry,
+                                     youtube_enabled=youtube_enabled)
         except Exception as e:  # noqa: BLE001 - un streamer no tumba
             _log(f"{name}: no se pudo listar sus VODs ({e}); se sigue.")
             continue
@@ -948,6 +979,11 @@ def main(argv=None):
                    help="Reprocesa VODs intentados hace <6 h (para "
                         "reintentos tras un arreglo; el cron normal "
                         "nunca lo usa)")
+    p.add_argument("--youtube", action="store_true",
+                   help="Activa la fuente YouTube (yt-dlp "
+                        "--flat-playlist, sin API key, $0): sin este "
+                        "flag los streamers de YouTube se saltan "
+                        "como antes")
     args = p.parse_args(argv)
     only = [s for s in args.streamers.split(",") if s.strip()] \
         or None
@@ -955,7 +991,8 @@ def main(argv=None):
         max_vods=args.max_vods, max_clips=args.max_clips,
         top_n=args.top_n, only=only, state_path=args.state,
         out_root=args.out_dir, dry_run=args.dry_run,
-        ignore_cooldown=args.ignore_cooldown)
+        ignore_cooldown=args.ignore_cooldown,
+        youtube_enabled=args.youtube)
     return 0
 
 

@@ -1,0 +1,176 @@
+# Cerebro — Fuente viral (Shorts ya virales -> rubius -> cola)
+#
+# 2026-11-21, orden del usuario: los vídeos que YA fueron virales
+# son una fuente permanente, no una tanda manual. Este workflow
+# descubre Shorts virales de GTA 6 en los canales de YouTube de
+# los streamers de la lista (clipagent/viral_source.py), los
+# re-hace a rubius real, los valida fotograma a fotograma con el
+# mismo gate del resto del pipeline y los encola vía PanelBridge.
+#
+# Disparadores:
+# - schedule (PRINCIPAL): diario 10:00 hora Chile (13:00 UTC),
+#   antes de la franja 12:00-14:00, para que los clips estén en
+#   la cola a tiempo. Como mucho 2 re-makes por corrida
+#   (config viral_source.max_per_run; las cuentas son nuevas:
+#   1/día por plataforma).
+# - workflow_dispatch manual (inputs: video_url para un Short
+#   concreto, live para actuar de verdad, force para saltar las
+#   puertas de viralidad/SEO solo en ese vídeo).
+#
+# APAGADO HASTA 2026-11-21 21:00 (reseteo de la cuota D1): el
+# env VIRAL_SOURCE_ENABLED está en 'false' y las corridas
+# programadas corren en dry-run (descubren, re-hacen y validan;
+# no escriben en D1, no encolan). Para encenderlo: poner
+# VIRAL_SOURCE_ENABLED en 'true' aquí y pushear. Sin
+# VIRAL_SOURCE_ENABLED en 'true', --live solo sale del dispatch
+# manual con live=true (para probar una vez). ANTES de las 21:00
+# ni siquiera el dispatch live puede encolar: la cuota D1 está
+# agotada y el POST /api/clips sería rechazado (el fallo queda
+# en el informe, sin estado parcial).
+#
+# Tenant: solo sebastian (mismo patrón que el vigilante: el login
+# del panel vive en los secretos del entorno "sebastian").
+# El módulo ya soporta tenant=kaez y los claims son globales por
+# vídeo (un vídeo, UNA sola cuenta: nunca el mismo en la cola de
+# sebastian y en la de kaez), pero el dispatch para kaez necesita
+# su login de servicio en un entorno "kaez" (hoy no existe) o un
+# dispatch del Worker con token, como cerebro-live. Cuando exista,
+# cambiar `environment:` por `${{ inputs.tenant || 'sebastian' }}`
+# y añadir el input tenant al dispatch.
+#
+# Estado (claims vídeo -> tenant): artefacto `viral-source-claims`
+# (retención 90 días; el cooldown es de 7, sobra). Solo se sube
+# en modo live: un dry-run no marca vídeos como procesados.
+# El informe queda como artefacto (retención 7 días) y en el log.
+#
+# Concurrencia: una corrida a la vez (cancel-in-progress: false,
+# encolan). Timeout 60 min (Whisper + render + validación por
+# Short).
+name: Cerebro — Fuente viral
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Un Short concreto (vacío = descubrimiento automático)"
+        required: false
+        default: ""
+        type: string
+      live:
+        description: "Actuar de verdad (si no, dry-run)"
+        required: false
+        default: false
+        type: boolean
+      force:
+        description: "Saltar las puertas de viralidad/SEO (solo para un vídeo concreto)"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "0 13 * * *" # 10:00 Chile, antes de la franja 12:00-14:00
+
+env:
+  # APAGADO hasta 2026-11-21 21:00: 'false' = dry-run siempre en
+  # las corridas programadas. Para encenderlo, poner 'true'.
+  VIRAL_SOURCE_ENABLED: "false"
+
+concurrency:
+  group: viral-source
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  viral-source:
+    name: Shorts virales -> rubius -> cola
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # El login del panel vive en los secretos del entorno
+    # "sebastian" (no a nivel de repo): sin esta línea,
+    # PANEL_USERNAME/PANEL_PASSWORD llegan vacíos y el módulo no
+    # puede encolar. CLOUDFLARE_API_TOKEN no hace falta: la fuente
+    # viral no toca D1 directo, solo el panel.
+    environment: sebastian
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache de pip (sin caché, torch/whisper tarda hasta ~28 min)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
+      - name: Instalar ffmpeg, yt-dlp y whisper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install -q -e ".[whisper]" yt-dlp
+          # Arial Black GENUINA (plantilla rubius): el banner y los
+          # subtítulos usan SUBS_FONT = "Arial Black". Sin ella
+          # libass cae a otra fuente (mismo bloque que cerebro-live).
+          if ! fc-list | grep -qi "Arial Black"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/ariblk.woff \
+              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+            test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+            python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+            test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
+      # Claims de la corrida anterior (qué vídeos ya son de qué
+      # tenant): la primera corrida no tiene artefacto y el paso
+      # sigue (continue-on-error).
+      - name: Descargar claims anteriores
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: viral-source-claims
+          path: runs/viral-source/
+      # La URL es la DIRECTA del Worker, NO el front de Pages:
+      # Pages corta las llamadas API desde Actions (medido
+      # 2026-11-18).
+      - name: Buscar, re-hacer y encolar
+        env:
+          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          PANEL_TENANT: sebastian
+          PANEL_BASE_URL: https://avc.vikingosfoodspa.workers.dev
+        run: |
+          FLAGS="--tenant sebastian --out-dir runs/viral-source"
+          if [ -n "${{ inputs.video_url }}" ]; then
+            FLAGS="$FLAGS --video-url ${{ inputs.video_url }}"
+          fi
+          if [ "${{ inputs.force }}" = "true" ]; then
+            FLAGS="$FLAGS --force"
+          fi
+          if [ "$VIRAL_SOURCE_ENABLED" = "true" ] || [ "${{ inputs.live }}" = "true" ]; then
+            echo "[viral-source] modo LIVE (VIRAL_SOURCE_ENABLED=$VIRAL_SOURCE_ENABLED, live=${{ inputs.live }})"
+            python -m clipagent.viral_source $FLAGS
+          else
+            echo "[viral-source] modo dry-run (VIRAL_SOURCE_ENABLED=$VIRAL_SOURCE_ENABLED)"
+            python -m clipagent.viral_source $FLAGS --dry-run
+          fi
+      - name: Guardar informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: viral-source-${{ github.run_id }}
+          path: runs/viral-source/
+          if-no-files-found: ignore
+          retention-days: 7
+      # Solo en modo live: el estado de claims (qué vídeo es de
+      # qué tenant) lo necesita la próxima corrida para no poner
+      # el mismo vídeo en dos colas.
+      - name: Guardar claims
+        if: env.VIRAL_SOURCE_ENABLED == 'true' || inputs.live == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: viral-source-claims
+          path: runs/viral-source/viral-source-claims.json
+          if-no-files-found: ignore
+          retention-days: 90

@@ -424,6 +424,29 @@ _WHITE = ((200, 255), (200, 255), (200, 255))
 _BLACK = ((0, 60), (0, 60), (0, 60))  # texto negro del banner rubius
 _RED = ((180, 255), (0, 90), (0, 90))  # línea 2 roja del banner rubius
 
+# Receta rubius: el banner es TRANSITORIO (t=0.5-3.5 s del render,
+# rubius.py: enable=between(t,0.5,3.5)) y el amarillo DOMINA su
+# zona. Un conteo bajo de píxeles amarillos lo pasa cualquier
+# escena de juego con amarillo (caso scooter 2026-11-21: 890 px
+# amarillos de la calle en la zona del banner, sin banner).
+# FUENTE ÚNICA de estos valores: config.yaml (validator.*), leída
+# por load_validator_config y pasada por template_gate. Las
+# constantes de abajo solo son el fallback de las llamadas
+# directas a los helpers (tests); valen lo mismo que config.yaml
+# y hay que mantenerlas sincronizadas si cambia la calibración.
+_RUBIUS_BANNER_T0 = 0.5
+_RUBIUS_BANNER_T1 = 3.5
+_RUBIUS_BANNER_YELLOW_FRAC = 0.30  # scooter 0.004, 52h 0.79
+# Subtítulos palabra por palabra: el subtítulo centrado nunca toca
+# los dos bordes de su zona a la vez; una línea completa sí (caso
+# scooter: 4/7 fotogramas con texto en ambos bordes; 52h: 0/5).
+# Cobertura mínima de blanco en cada banda para darla por tocada.
+_RUBIUS_SUBS_EDGE_W = 150
+_RUBIUS_SUBS_EDGE_COV = 0.10
+# SFX: correlación mínima con un efecto del pack (scooter ≤0.22,
+# 52h ≥0.98: boom 0.994, riser 0.979).
+_SFX_MIN_NCC = 0.5
+
 
 def _frame_array(path):
     """Fotograma JPG -> array numpy RGB (H, W, 3)."""
@@ -454,6 +477,152 @@ def _count_color(arr, ranges):
     for ch, (lo, hi) in enumerate(ranges):
         mask &= (arr[:, :, ch] >= lo) & (arr[:, :, ch] <= hi)
     return int(mask.sum())
+
+
+def _banner_yellow_frac(zone):
+    """Fracción de píxeles amarillos en la zona del banner."""
+    total = int(zone.shape[0]) * int(zone.shape[1])
+    if total == 0:
+        return 0.0
+    return _count_color(zone, _YELLOW) / total
+
+
+def _subs_edge_coverages(arr, zy0, zy1, edge_w=None):
+    """Cobertura blanca en los bordes izquierdo/derecho de la zona
+    de subtítulos (fracción de columnas con texto).
+
+    El subtítulo rubius es UNA palabra centrada: nunca toca los dos
+    bordes a la vez. Una línea completa sí (caso scooter 2026-11-21).
+    ``edge_w`` sale de config.yaml (validator.rubius_subs_edge_w)
+    vía template_gate; sin él, la constante calibrada.
+    """
+    zone = arr[zy0:zy1]
+    white = ((zone[:, :, 0] >= 200) & (zone[:, :, 1] >= 200)
+             & (zone[:, :, 2] >= 200))
+    colcount = white.sum(axis=0)
+    has = colcount >= 5
+    w = int(arr.shape[1])
+    edge = min(edge_w if edge_w is not None else _RUBIUS_SUBS_EDGE_W,
+               w // 2)
+    if edge <= 0:
+        return 0.0, 0.0
+    return float(has[:edge].mean()), float(has[-edge:].mean())
+
+
+def _ncc_best(x, y, sr):
+    """Mejor correlación cruzada normalizada de la plantilla y en x.
+
+    Devuelve (mejor_corr, lag_s). FFT con numpy, sin scipy:
+    corr[j] = irfft(X * rfft(y[::-1]))[j + M - 1]. Una NCC es
+    ≤ 1.0 por construcción (autocomprobado con un asset contra
+    sí mismo: 1.000).
+    """
+    import numpy as np
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    m = len(y)
+    if m == 0 or len(x) < m:
+        return 0.0, 0.0
+    n = len(x) + m
+    nfft = 1 << int(np.ceil(np.log2(n)))
+    X = np.fft.rfft(x, nfft)
+    Y = np.fft.rfft(y[::-1], nfft)
+    full = np.fft.irfft(X * Y, nfft)
+    corr = full[m - 1:m - 1 + (len(x) - m + 1)]
+    x2 = np.concatenate([[0.0], np.cumsum(x ** 2)])
+    win = x2[m:] - x2[:-m]
+    y_e = float(np.sum(y ** 2))
+    denom = np.sqrt(np.maximum(win * y_e, 1e-12))
+    ncc = corr / denom
+    i = int(np.argmax(ncc))
+    return float(ncc[i]), i / sr
+
+
+_SFX_TEMPLATE_CACHE = {}
+
+
+def _sfx_template(effect, sr=16000):
+    """Ventana audible de un efecto del pack, decodificada (16 kHz).
+
+    Cacheada por proceso: el gate la usa una vez por clip.
+    """
+    from .audio import decode_audio
+    from .sfx_mix import EFFECTS, sfx_path
+
+    if effect in _SFX_TEMPLATE_CACHE:
+        return _SFX_TEMPLATE_CACHE[effect]
+    info = EFFECTS[effect]
+    tpl, _ = decode_audio(sfx_path(effect))
+    a = int(round(info["loud_offset"] * sr))
+    b = int(round((info["loud_offset"] + info["loud_duration"]) * sr))
+    out = (tpl[a:b], sr)
+    _SFX_TEMPLATE_CACHE[effect] = out
+    return out
+
+
+def detect_sfx_in_clip(clip_path, min_ncc=None):
+    """¿Se oye algún SFX del pack en el audio del clip?
+
+    Correlación cruzada normalizada de cada efecto del pack (su
+    ventana audible) contra el audio del clip: el SFX mezclado es
+    el propio archivo con ganancia, así que la correlación en su
+    segundo es ~1 (52h: boom 0.994, riser 0.979); sin SFX, el
+    mejor asset queda ≤ 0.22 (scooter). ``min_ncc`` sale de
+    config.yaml (validator.sfx_min_ncc) vía template_gate; sin él,
+    la constante calibrada. Nunca levanta: sin audio o sin
+    decodificar, no encontrado con el motivo.
+    """
+    import subprocess
+
+    threshold = (_SFX_MIN_NCC if min_ncc is None else float(min_ncc))
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_type",
+             "-of", "csv=p=0", str(clip_path)],
+            capture_output=True, text=True, timeout=30)
+        has_audio = "audio" in (probe.stdout or "")
+    except Exception:  # noqa: BLE001 - sin ffprobe no hay audio
+        has_audio = False
+    if not has_audio:
+        return {"found": False, "effect": None, "corr": 0.0,
+                "lag_s": None,
+                "motivo": "sin pista de audio: SFX no verificable"}
+    try:
+        from .audio import decode_audio
+        audio, sr = decode_audio(str(clip_path))
+    except Exception as exc:  # noqa: BLE001 - el audio no tumba
+        return {"found": False, "effect": None, "corr": 0.0,
+                "lag_s": None,
+                "motivo": f"audio no decodificable: {exc}"}
+    if len(audio) == 0:
+        return {"found": False, "effect": None, "corr": 0.0,
+                "lag_s": None, "motivo": "audio vacío"}
+    try:
+        from .sfx_mix import EFFECTS
+    except Exception as exc:  # noqa: BLE001
+        return {"found": False, "effect": None, "corr": 0.0,
+                "lag_s": None,
+                "motivo": f"pack SFX no disponible: {exc}"}
+    best = {"effect": None, "corr": 0.0, "lag_s": None}
+    for effect in EFFECTS:
+        try:
+            template, _sr = _sfx_template(effect, sr)
+        except Exception:  # noqa: BLE001 - un asset roto no tumba
+            continue
+        if len(template) == 0 or len(audio) < len(template):
+            continue
+        corr, lag = _ncc_best(audio, template, sr)
+        if corr > best["corr"]:
+            best = {"effect": effect, "corr": corr, "lag_s": lag}
+    found = best["corr"] >= threshold
+    best["found"] = found
+    best["motivo"] = "" if found else (
+        "sin SFX del pack en el audio "
+        f"(mejor NCC {best['corr']:.2f}"
+        + (f" con {best['effect']}" if best.get("effect") else "")
+        + f", mínimo {threshold:.2f})")
+    return best
 
 
 def _srt_active_times(srt_path):
@@ -866,7 +1035,19 @@ def template_gate(clip_path, vcfg, recipe, frames=None, srt_path=None,
         _template_karaoke(_check, arrays, spans, recipe, face_result)
     elif style == "word_white":
         _template_word_white(
-            _check, arrays, spans, recipe, face_result)
+            _check, arrays, spans, recipe, face_result, vcfg=vcfg)
+        # SFX del pack en el audio (solo rubius: la receta lleva
+        # SFX por defecto; un render sin SFX no es rubius).
+        sfx = detect_sfx_in_clip(
+            clip_path, min_ncc=float(vcfg["sfx_min_ncc"]))
+        if sfx["found"]:
+            _check("sfx_presente", True,
+                   f"{sfx['effect']} (NCC {sfx['corr']:.2f} en "
+                   f"t={sfx['lag_s']:.1f}s)", "")
+        else:
+            _check("sfx_presente", False,
+                   f"mejor NCC {sfx['corr']:.2f}",
+                   sfx.get("motivo") or "sin SFX del pack en el audio")
     else:
         return {"pasa": False, "checks": checks,
                 "fallos": ["subs_style"],
@@ -1098,10 +1279,16 @@ def _template_karaoke(check, arrays, spans, recipe, face_result):
     _check_cam_live(check, arrays, cam)
 
 
-def _template_word_white(check, arrays, spans, recipe, face_result):
+def _template_word_white(check, arrays, spans, recipe, face_result,
+                         vcfg=None):
     """Receta rubius: cámara a ancho completo, gameplay
     sin bandas, título en banner amarillo transitorio, subtítulos
-    blancos palabra por palabra SOBRE el gameplay (arriba)."""
+    blancos palabra por palabra SOBRE el gameplay (arriba).
+
+    Los umbrales (ventana y fracción del banner, ancho y
+    cobertura de los bordes de subtítulos) salen de config.yaml
+    (validator.*) vía ``vcfg``; sin él, las constantes calibradas.
+    """
     cam = recipe["cam"]
     gy0, gy1 = (int(recipe["game"]["y0"]),
                 int(recipe["game"]["y1"]))
@@ -1136,19 +1323,37 @@ def _template_word_white(check, arrays, spans, recipe, face_result):
           f"arriba {top_ok:.0%}, abajo {bottom_ok:.0%} sin banda "
           "negra",
           "hay banda negra (no es el corte limpio rubius)")
-    # Título en banner amarillo transitorio: basta con que aparezca
-    # en UN fotograma muestreado (solo sale en el momento clave).
+    # Título en banner amarillo TRANSITORIO (t=0.5-3.5 s de la
+    # receta): tiene que aparecer en esa ventana, con el amarillo
+    # DOMINANDO su zona. Un conteo bajo de píxeles amarillos lo
+    # pasa cualquier escena de juego con amarillo (caso scooter
+    # 2026-11-21: 890 px amarillos de la calle en la zona del
+    # banner, sin banner).
+    t0 = float(vcfg["rubius_banner_t0"]) if vcfg else _RUBIUS_BANNER_T0
+    t1 = float(vcfg["rubius_banner_t1"]) if vcfg else _RUBIUS_BANNER_T1
+    yellow_frac = (float(vcfg["rubius_banner_yellow_frac"]) if vcfg
+                   else _RUBIUS_BANNER_YELLOW_FRAC)
+    edge_w = int(vcfg["rubius_subs_edge_w"]) if vcfg else None
+    edge_cov = (float(vcfg["rubius_subs_edge_cov"]) if vcfg
+                else _RUBIUS_SUBS_EDGE_COV)
+    window = [(ts, a) for ts, a in arrays
+              if t0 <= ts <= t1]
+    pool = window if window else arrays
     banner_frames = 0
-    for _ts, a in arrays:
+    best_frac = 0.0
+    for _ts, a in pool:
         zone = a[by0:by1, bx0:bx1]
-        if (_count_color(zone, _YELLOW) > _GATE_SUB_PX
+        frac = _banner_yellow_frac(zone)
+        best_frac = max(best_frac, frac)
+        if (frac >= yellow_frac
                 and _count_color(zone, _WHITE) > 100
                 and (_count_color(zone, _BLACK) > 50
                      or _count_color(zone, _RED) > 50)):
             banner_frames += 1
     check("titulo_banner", banner_frames >= 1,
-          f"banner en {banner_frames}/{len(arrays)} fotogramas",
-          "sin banner amarillo de título (transitorio)")
+          f"banner en {banner_frames}/{len(pool)} fotogramas de "
+          f"la ventana (amarillo máx. {best_frac:.0%})",
+          f"sin banner amarillo de título en t={t0}-{t1} s")
     # Subtítulos blancos palabra por palabra sobre el gameplay
     # (zona central de la franja 900-1020; solo con SRT).
     if spans and active:
@@ -1162,6 +1367,24 @@ def _template_word_white(check, arrays, spans, recipe, face_result):
               "sin subtítulos blancos sobre el gameplay")
     else:
         check("subtitulos_blancos", True,
+              "sin SRT: presencia no verificada (débil)", "")
+    # Una palabra a la vez: el subtítulo centrado nunca toca los
+    # dos bordes de su zona a la vez; una línea completa sí (caso
+    # scooter 2026-11-21: 4/7 fotogramas con texto en ambos
+    # bordes; 52h: 0/5). Solo con SRT: sin SRT la presencia no se
+    # puede verificar y queda débil, como subtitulos_blancos.
+    if spans and active:
+        both = 0
+        for _ts, a in active:
+            left, right = _subs_edge_coverages(a, zy0, zy1, edge_w=edge_w)
+            if (left >= edge_cov
+                    and right >= edge_cov):
+                both += 1
+        check("subtitulos_una_palabra", both == 0,
+              f"{both} fotogramas con texto en ambos bordes",
+              "subtítulos de línea completa (no palabra por palabra)")
+    else:
+        check("subtitulos_una_palabra", True,
               "sin SRT: presencia no verificada (débil)", "")
     _check_cam_live(check, arrays, cam)
 

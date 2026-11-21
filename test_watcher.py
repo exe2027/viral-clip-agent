@@ -552,6 +552,9 @@ class TestRunOnceC7(unittest.TestCase):
     def test_youtube_es_aviso_no_error_fatal(self):
         # C7: ishowspeed [youtube] se salta con motivo visible y no
         # suma a errores: la pasada no tumba el paso watch.
+        # 2026-11-21: sin el flag --youtube (apagado por defecto)
+        # sigue así; con el flag, ver
+        # test_youtube_con_flag_no_se_salta.
         inf = {"usuario": "ishowspeed", "plataforma": "youtube",
                "idioma": "en", "juego": "GTA VI", "estado": "concedido",
                "canal_original": ""}
@@ -561,6 +564,130 @@ class TestRunOnceC7(unittest.TestCase):
         self.assertEqual(summary["warnings"], 1)
         self.assertTrue(any("ishowspeed" in w and "youtube" in w
                             for w in summary["skipped_influencers"]))
+
+    def test_youtube_con_flag_no_se_salta(self):
+        # 2026-11-21: con --youtube, el streamer de YouTube YA NO
+        # se salta: su VOD terminado de GTA VI (título, sin
+        # categoría Helix) pasa la puerta y encolaría.
+        from datetime import datetime, timezone
+        vod = {"platform": "youtube", "vod_id": "OIeLbmyraRQ",
+               "url": "https://www.youtube.com/watch?v=OIeLbmyraRQ",
+               "title": "🔴 BEATING GTA 6 RIGHT NOW 100% "
+                        "(FINAL MISSION)",
+               "category": "", "category_source": "",
+               "start_time": datetime(2026, 11, 20, tzinfo=timezone.utc),
+               "duration_s": 22061, "views": 20934651, "live": False}
+        inf = {"usuario": "ishowspeed", "plataforma": "youtube",
+               "idioma": "en", "juego": "GTA VI", "estado": "concedido",
+               "canal_original": "https://www.youtube.com/@IShowSpeed"}
+        with mock.patch("clipagent.youtube.youtube_check",
+                        return_value=(None, [vod])):
+            summary, errors = run_once(
+                [inf], self.cfg, self.state_path, self.db_path,
+                dry_run=True, verbose=False, youtube_enabled=True)
+        self.assertEqual(errors, 0)
+        self.assertEqual(summary["warnings"], 0)
+        self.assertEqual(summary["would_enqueue"], 1)
+        self.assertEqual(summary["skipped_influencers"], [])
+
+    def test_youtube_con_flag_en_vivo_se_registra_y_al_terminar_encola(self):
+        # 2026-11-21: el directo en curso de YouTube se registra
+        # en state["live"] como en kick/twitch (nada se encola
+        # mientras dura); cuando termina, el VOD se encola.
+        import json
+        from datetime import datetime, timezone
+        live = {"id": "LIVE12345678",
+                "title": "🔴 BEATING GTA 6 RIGHT NOW",
+                "game": "gta6", "viewers": 400000, "started_at": ""}
+        live_vod = {"platform": "youtube", "vod_id": "LIVE12345678",
+                    "url": "https://www.youtube.com/watch?v=LIVE12345678",
+                    "title": "🔴 BEATING GTA 6 RIGHT NOW",
+                    "category": "", "category_source": "",
+                    "start_time": None, "duration_s": 0,
+                    "views": 400000, "live": True}
+        inf = {"usuario": "ishowspeed", "plataforma": "youtube",
+               "idioma": "en", "juego": "GTA VI", "estado": "concedido",
+               "canal_original": "https://www.youtube.com/@IShowSpeed"}
+        with mock.patch("clipagent.youtube.youtube_check",
+                        return_value=(live, [live_vod])):
+            summary, errors = run_once(
+                [inf], self.cfg, self.state_path, self.db_path,
+                dry_run=True, verbose=False, youtube_enabled=True)
+        self.assertEqual(errors, 0)
+        self.assertEqual(summary["live"], 1)
+        self.assertEqual(summary["would_enqueue"], 0)
+        self.assertEqual(summary["enqueued"], 0)
+        with open(self.state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        self.assertEqual(state["live"]["ishowspeed"]["stream_id"],
+                         "LIVE12345678")
+        self.assertEqual(state["vods"]["LIVE12345678"]["outcome"],
+                         "skipped:vod_en_curso")
+        # Segunda pasada: el directo terminó y el VOD está
+        # terminado -> se encolaría (dry-run).
+        done_vod = dict(live_vod, live=False, duration_s=3600,
+                        start_time=datetime(2026, 11, 21,
+                                            tzinfo=timezone.utc))
+        with mock.patch("clipagent.youtube.youtube_check",
+                        return_value=(None, [done_vod])):
+            summary2, errors2 = run_once(
+                [inf], self.cfg, self.state_path, self.db_path,
+                dry_run=True, verbose=False, youtube_enabled=True)
+        self.assertEqual(errors2, 0)
+        self.assertEqual(summary2["live"], 0)
+        self.assertEqual(summary2["would_enqueue"], 1)
+        with open(self.state_path, encoding="utf-8") as f:
+            state2 = json.load(f)
+        self.assertNotIn("ishowspeed", state2["live"])
+        self.assertEqual(state2["vods"]["LIVE12345678"]["outcome"],
+                         "would_enqueue")
+
+    def test_youtube_con_flag_sin_canal_es_aviso(self):
+        # 2026-11-21: con el flag pero sin channel_url no hay
+        # listado posible: aviso visible, no error fatal.
+        inf = {"usuario": "ishowspeed", "plataforma": "youtube",
+               "idioma": "en", "juego": "GTA VI", "estado": "concedido",
+               "canal_original": ""}
+        summary, errors = run_once(
+            [inf], self.cfg, self.state_path, self.db_path,
+            dry_run=True, verbose=False, youtube_enabled=True)
+        self.assertEqual(errors, 0)
+        self.assertEqual(summary["warnings"], 1)
+        self.assertTrue(any("ishowspeed" in w
+                            for w in summary["skipped_influencers"]))
+
+    def test_main_youtube_con_flag_encolaria(self):
+        # 2026-11-21: el flag --youtube llega del CLI a run_once:
+        # el VOD queda registrado como would_enqueue en el estado.
+        import json
+        from datetime import datetime, timezone
+        vod = {"platform": "youtube", "vod_id": "OIeLbmyraRQ",
+               "url": "https://www.youtube.com/watch?v=OIeLbmyraRQ",
+               "title": "🔴 BEATING GTA 6 RIGHT NOW 100% "
+                        "(FINAL MISSION)",
+               "category": "", "category_source": "",
+               "start_time": datetime(2026, 11, 20, tzinfo=timezone.utc),
+               "duration_s": 22061, "views": 20934651, "live": False}
+        inf_path = os.path.join(self.tmp, "streamers.yaml")
+        with open(inf_path, "w", encoding="utf-8") as f:
+            f.write("streamers:\n"
+                    "  - name: ishowspeed\n"
+                    "    platform: youtube\n"
+                    "    language: en\n"
+                    "    estado: concedido\n"
+                    "    channel_url: "
+                    "\"https://www.youtube.com/@IShowSpeed\"\n")
+        with mock.patch("clipagent.youtube.youtube_check",
+                        return_value=(None, [vod])):
+            rc = watcher.main(["--once", "--dry-run", "--youtube",
+                               "--influencers", inf_path,
+                               "--state", self.state_path,
+                               "--db", self.db_path])
+        self.assertEqual(rc, 0)
+        with open(self.state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        self.assertEqual(state["vods"]["OIeLbmyraRQ"]["outcome"],
+                         "would_enqueue")
 
     def test_main_youtube_solo_sale_0(self):
         # C7: una pasada con solo ishowspeed (youtube) sale con

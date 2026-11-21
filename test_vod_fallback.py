@@ -40,6 +40,7 @@ from clipagent.vod_fallback import (  # noqa: E402
     clip_passes_gates,
     es_live_gta6,
     fallback_order,
+    latest_vod_for,
     live_gta6,
     load_state,
     panel_score,
@@ -427,6 +428,50 @@ class TestBurnAndEnqueue(unittest.TestCase):
         self.assertEqual(res["style"], "rubius")
 
 
+class TestLatestVodYoutube(unittest.TestCase):
+    """latest_vod_for con plataforma youtube (2026-11-21)."""
+
+    def setUp(self):
+        self.entry = {"name": "ishowspeed", "platform": "youtube",
+                      "channel_url": "https://www.youtube.com/@IShowSpeed",
+                      "language": "en", "enabled": True,
+                      "estado": "concedido"}
+        self.vod = {"vod_id": "OIeLbmyraRQ",
+                    "url": "https://www.youtube.com/watch?v=OIeLbmyraRQ",
+                    "title": "🔴 BEATING GTA 6 RIGHT NOW 100% "
+                             "(FINAL MISSION)",
+                    "category": "", "live": False}
+        self.live_vod = dict(self.vod, vod_id="LIVE12345678",
+                             title="🔴 BEATING GTA 6 RIGHT NOW",
+                             live=True)
+
+    def test_con_flag_devuelve_el_mas_reciente_terminado(self):
+        # El directo en curso se filtra (no es VOD terminado).
+        with mock.patch("clipagent.youtube.youtube_check",
+                        return_value=(None, [self.live_vod, self.vod])):
+            got = latest_vod_for(self.entry, youtube_enabled=True)
+        self.assertEqual(got, self.vod)
+
+    def test_sin_flag_no_lista_youtube(self):
+        with mock.patch("clipagent.youtube.youtube_check") as check:
+            got = latest_vod_for(self.entry, youtube_enabled=False)
+        self.assertIsNone(got)
+        check.assert_not_called()
+
+    def test_sin_channel_url_no_lista(self):
+        entry = dict(self.entry, channel_url="")
+        with mock.patch("clipagent.youtube.youtube_check") as check:
+            got = latest_vod_for(entry, youtube_enabled=True)
+        self.assertIsNone(got)
+        check.assert_not_called()
+
+    def test_sin_vods_none(self):
+        with mock.patch("clipagent.youtube.youtube_check",
+                        return_value=(None, [])):
+            got = latest_vod_for(self.entry, youtube_enabled=True)
+        self.assertIsNone(got)
+
+
 class TestRun(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -505,6 +550,78 @@ class TestRun(unittest.TestCase):
         self.assertEqual(seen["lang"], "en")
         self.assertEqual(seen["enqueue_lang"], "en")
         self.assertEqual(seen["streamer"], "kaicenat")
+
+    def test_run_youtube_con_flag_encola(self):
+        # 2026-11-21: con --youtube, el VOD de YouTube se lista
+        # con el latest_vod_for real (sin latest_vod_fn inyectado)
+        # y se encola con lang en.
+        vod = {"vod_id": "OIeLbmyraRQ",
+               "url": "https://www.youtube.com/watch?v=OIeLbmyraRQ",
+               "title": "🔴 BEATING GTA 6 RIGHT NOW 100% "
+                        "(FINAL MISSION)",
+               "category": "", "live": False}
+        manifest = {"vod_id": "OIeLbmyraRQ", "clips": [_clip()]}
+        seen = {}
+
+        def _auto(url, out_dir, top_n=2, lang="es"):
+            seen["lang"] = lang
+            seen["url"] = url
+            return manifest
+
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
+            seen["enqueue_lang"] = lang
+            seen["streamer"] = streamer
+            return 102, ""
+
+        streamers = [
+            {"name": "ishowspeed", "platform": "youtube",
+             "channel_url": "https://www.youtube.com/@IShowSpeed",
+             "language": "en", "enabled": True,
+             "estado": "concedido"},
+        ]
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=streamers), \
+                mock.patch("clipagent.youtube.youtube_check",
+                           return_value=(None, [vod])) as check:
+            n, _ = run(
+                max_vods=1, max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=FakeBridge(),
+                scan_fn=self._scan([]),
+                auto_clips_fn=_auto,
+                enqueue_fn=_enqueue,
+                youtube_enabled=True)
+        check.assert_called_once()
+        self.assertEqual(n, 1)
+        self.assertEqual(seen["lang"], "en")
+        self.assertEqual(seen["enqueue_lang"], "en")
+        self.assertEqual(seen["streamer"], "ishowspeed")
+        self.assertEqual(seen["url"], vod["url"])
+
+    def test_run_youtube_sin_flag_no_lista(self):
+        # 2026-11-21: sin el flag, el streamer de YouTube no se
+        # lista (youtube_check ni se llama) y no se encola nada.
+        streamers = [
+            {"name": "ishowspeed", "platform": "youtube",
+             "channel_url": "https://www.youtube.com/@IShowSpeed",
+             "language": "en", "enabled": True,
+             "estado": "concedido"},
+        ]
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=streamers), \
+                mock.patch("clipagent.youtube.youtube_check") as check:
+            n, _ = run(
+                max_vods=1, max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=FakeBridge(),
+                scan_fn=self._scan([]),
+                auto_clips_fn=lambda *a, **k: (_ for _ in ()).throw(
+                    AssertionError("no debe cortar sin flag")),
+                enqueue_fn=lambda *a, **k: (_ for _ in ()).throw(
+                    AssertionError("no debe encolar sin flag")))
+        check.assert_not_called()
+        self.assertEqual(n, 0)
 
     def test_dry_run_no_corta_ni_encola(self):
         vod = {"vod_id": "2932415021",

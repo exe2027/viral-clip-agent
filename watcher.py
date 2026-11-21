@@ -632,6 +632,25 @@ def kick_check(slug):
 # Decisión por VOD (frenos)
 # ---------------------------------------------------------------------------
 
+def _detect_game_for_vod(vod, games=None):
+    """ID del juego de un VOD (para decide() y record_vod()).
+
+    La categoría manda, como siempre. Pero YouTube no trae
+    categoría Helix: sin este fallback, ``detect_game`` devuelve
+    None para TODO VOD de YouTube y ``decide()`` lo salta como
+    juego_no_permitido aunque el título sea "BEATING GTA 6".
+    Solo para plataforma youtube se resuelve el juego desde el
+    título (regex GTA VI en ``clipagent.youtube``); en
+    twitch/kick la categoría sigue mandando. Sin mención en el
+    título, None (se salta igual que antes).
+    """
+    game = detect_game(vod.get("category"), vod.get("title"), games)
+    if game is None and (vod.get("platform") or "") == "youtube":
+        from clipagent.youtube import youtube_game_from_title
+        game = youtube_game_from_title(vod.get("title"), games)
+    return game
+
+
 def decide(vod, influencer, state, queue, cfg, kill_switch, dry_run):
     """Devuelve (accion, motivo) para un VOD terminado.
 
@@ -689,7 +708,7 @@ def decide(vod, influencer, state, queue, cfg, kill_switch, dry_run):
         return "skip", f"fuera_de_lista (estado: {influencer['estado']})"
     games, _, _ = load_games_config()
     allowed_ids = {(g.get("id") or g.get("name")) for g in games}
-    game = detect_game(vod.get("category"), vod.get("title"), games)
+    game = _detect_game_for_vod(vod, games)
     if game not in allowed_ids:
         return "skip", (f"juego_no_permitido (categoría: "
                         f"{vod.get('category') or 'sin categoría'})")
@@ -719,7 +738,7 @@ def record_vod(state, vod, influencer, outcome, job_id=None):
         "category": vod.get("category") or "",
         "category_source": vod.get("category_source") or "",
         "stream_id": vod.get("stream_id") or "",
-        "game": detect_game(vod.get("category"), vod.get("title")),
+        "game": _detect_game_for_vod(vod),
         "start_time": vod["start_time"].isoformat() if vod.get("start_time") else "",
         "duration_s": vod.get("duration_s") or 0,
         "url": vod.get("url") or "",
@@ -738,8 +757,14 @@ def record_vod(state, vod, influencer, outcome, job_id=None):
 # ---------------------------------------------------------------------------
 
 def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
-             verbose=True):
-    """Una pasada del monitor. Devuelve (resumen_dict, n_errores)."""
+             verbose=True, youtube_enabled=False):
+    """Una pasada del monitor. Devuelve (resumen_dict, n_errores).
+
+    ``youtube_enabled`` (CLI ``--youtube``) activa la fuente
+    YouTube (``clipagent.youtube.youtube_check``); apagado por
+    defecto, en cuyo caso un streamer de YouTube se salta con
+    aviso visible, como antes.
+    """
     state = load_state(state_path)
     kill_switch = kill_switch_active()
     queue = None if dry_run else Queue(db_path)
@@ -799,6 +824,36 @@ def run_once(influencers, cfg, state_path, db_path, dry_run, only=None,
                     tw_client, tw_mode = twitch_client(cfg)
                 live, vods = tw_client.check(slug)
                 mode = f"twitch-{tw_mode}"
+            elif platform == "youtube":
+                # 2026-11-21: fuente YouTube (yt-dlp --flat-playlist,
+                # sin API key, $0), solo con el flag --youtube. Sin
+                # él, aviso visible y se salta, como antes (C7).
+                # youtube_check devuelve (live, vods) con la misma
+                # forma que kick/twitch: el directo en curso se
+                # registra en state["live"] y el VOD se encola
+                # cuando termina, igual que en las demás
+                # plataformas (el bloque de "en vivo" de abajo es
+                # genérico y no distingue plataforma).
+                if not youtube_enabled:
+                    msg = ("youtube desactivado por flag (usa "
+                           "--youtube para activarlo; sin él, solo "
+                           "kick/twitch en el monitoreo en vivo)")
+                    log(f"  AVISO: {msg} — se salta este influencer.")
+                    summary["warnings"] += 1
+                    summary["skipped_influencers"].append(
+                        f"{slug} [{platform}]: {msg}")
+                    continue
+                channel_url = (inf.get("canal_original") or "").strip()
+                if not channel_url:
+                    msg = "sin channel_url de YouTube"
+                    log(f"  AVISO: {msg} — se salta este influencer.")
+                    summary["warnings"] += 1
+                    summary["skipped_influencers"].append(
+                        f"{slug} [{platform}]: {msg}")
+                    continue
+                from clipagent.youtube import youtube_check
+                live, vods = youtube_check(channel_url)
+                mode = "youtube-yt-dlp"
             else:
                 # C7 (2026-11-19): plataforma no soportada (hoy: youtube,
                 # ej. ishowspeed) es un AVISO por influencer, no un error
@@ -945,6 +1000,10 @@ def main(argv=None) -> int:
     p.add_argument("--db", help="Ruta de queue.db")
     p.add_argument("--interval-minutes", type=int,
                    help="Minutos entre pasadas en --loop (defecto: config)")
+    p.add_argument("--youtube", action="store_true",
+                   help="Activa la fuente YouTube (yt-dlp "
+                        "--flat-playlist, sin API key, $0): sin este "
+                        "flag los streamers de YouTube se saltan")
     args = p.parse_args(argv)
 
     dry_run = not args.live
@@ -979,7 +1038,8 @@ def main(argv=None) -> int:
         while True:
             try:
                 _, errors = run_once(influencers, cfg, state_path, db_path,
-                                     dry_run, only=only)
+                                     dry_run, only=only,
+                                     youtube_enabled=args.youtube)
             except KeyboardInterrupt:
                 print("\nWatcher parado por el usuario.")
                 return 0
@@ -992,7 +1052,7 @@ def main(argv=None) -> int:
                 print("\nWatcher parado por el usuario.")
                 return 0
     _, errors = run_once(influencers, cfg, state_path, db_path, dry_run,
-                         only=only)
+                         only=only, youtube_enabled=args.youtube)
     return 2 if errors else 0
 
 

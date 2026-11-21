@@ -366,8 +366,12 @@ jobs:
         env:
           PANEL_URL: https://avc.vikingosfoodspa.workers.dev
         run: |
+          # 2026-11-21: --youtube activado por decisión del usuario
+          # (detección de VODs de YouTube, sin API key; el corte
+          # automático desde YouTube sigue pendiente, solo detecta).
           python -m clipagent vod-fallback \
             --max-vods 2 --max-clips 2 --top-n 2 \
+            --youtube \
             --streamers "${{ inputs.streamers || '' }}" \
             ${{ inputs.force == 'true' && '--ignore-cooldown' || '' }}
       - name: Guardar estado del fallback

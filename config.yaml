@@ -467,6 +467,16 @@ validator:
                            # observación (registrados, no frenan); true =
                            # cualquier rechazo de Gemini dispara re-render
   chain: ["facecrop", "edge", "yunet"]  # orden de los fallbacks de cara
+  # Receta rubius (2026-11-21, caso scooter: un clip sin banner,
+  # con subtítulos de línea completa y sin SFX llegó a publicarse
+  # porque el validador solo miraba el montaje). Umbrales
+  # calibrados en fotogramas/audio reales (scooter vs 52h).
+  rubius_banner_t0: 0.5      # el banner es transitorio: visible desde t=0.5 s
+  rubius_banner_t1: 3.5      # ...hasta t=3.5 s (receta rubius.py)
+  rubius_banner_yellow_frac: 0.30  # el amarillo debe dominar >=30% de la zona del banner (scooter 0.004, 52h 0.79)
+  rubius_subs_edge_w: 150    # ancho (px) de cada banda lateral de la zona de subtítulos
+  rubius_subs_edge_cov: 0.10 # cobertura blanca mínima en cada banda para darla por tocada
+  sfx_min_ncc: 0.5           # correlación mínima con un efecto del pack SFX (scooter <=0.22, 52h >=0.98)
 
 # Plantillas del validador final (2026-11-19). TRES recetas
 # (1080x1920), ÚNICA fuente: config.yaml. El validador valida el
@@ -684,3 +694,26 @@ publish_watchdog:
   stuck_processing_min: 30 # processing más de 30 min = atascado (lo mismo que el Worker)
   verify_timeout_s: 20     # timeout por verificación de URL en vivo
   telegram_enabled: true   # avisar por Telegram solo si algo no se pudo arreglar
+
+# Fuente viral (2026-11-21, orden del usuario: los vídeos que YA
+# fueron virales son una fuente permanente, no una tanda manual).
+# El workflow .github/workflows/viral-source.yml la corre a diario
+# (cron + dispatch manual): descubre Shorts virales de GTA 6 en los
+# canales de YouTube de los streamers de la lista, los re-hace a
+# rubius real, los valida fotograma a fotograma y los encola vía
+# PanelBridge. Única fuente de estos valores:
+# clipagent/viral_source.py (load_viral_config) falla fuerte si
+# falta uno.
+viral_source:
+  enabled: true
+  min_views: 100000      # un Short tiene que tener >=100k vistas para ser candidato
+  min_likes: 5000        # ...y >=5k likes (se verifica con la metadata completa)
+  max_age_days: 30       # solo vídeos de los últimos 30 días
+  max_candidates: 5      # candidatos a enriquecer por corrida
+  max_per_run: 2         # re-makes como mucho por corrida (cuentas nuevas: 1/día por plataforma)
+  shorts_only: true      # solo Shorts (el vídeo YA es el momento: no hay que buscarlo en un VOD)
+  min_duration_s: 15     # un Short viral dura entre 15 s...
+  max_duration_s: 60     # ...y 60 s (tope del clip)
+  cooldown_days: 7       # no reprocesar el mismo vídeo antes de 7 días
+  youtube_channels: []   # vacío = canales de YouTube de streamers.yaml; si se llena, solo estos
+  state_file: viral-source-claims.json  # claims vídeo -> tenant (un vídeo, UNA sola cuenta)
