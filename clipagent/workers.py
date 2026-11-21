@@ -512,6 +512,66 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
     return result
 
 
+def apply_sfx(video, transcript_path=None, srt_path=None, payoff_s=20.0,
+              cfg=None, out_path=None, extra_events=None):
+    """Mezcla SFX sobre el MP4 ya renderizado (2026-11-19: SFX por
+    defecto en el render, vivo y VOD).
+
+    ``cfg["sfx"]``: enabled (default True), max_sfx (default 2),
+    lift (default True). La decisión de qué efectos y dónde la
+    toma ``decide_sfx`` (payoff + dip de silencio -> vine boom;
+    riser antes; fail visual si se conoce). Sin eventos, solo se
+    aplica el lift de volumen. Si la mezcla falla por lo que sea,
+    devuelve el vídeo original sin tocar (nunca tumba el clip).
+    Devuelve (ruta_final, info).
+
+    ``extra_events``: eventos explícitos [{effect, start, duration,
+    reason}] que se suman a los decididos (p. ej. el whoosh del
+    punch-in en el render rubius). Van en la MISMA mezcla, no en
+    un segundo pase. El tope max_sfx solo limita lo que decide
+    decide_sfx; los extra los pide explícitamente quien renderiza.
+    """
+    sfx_cfg = ((cfg or {}).get("sfx") or {})
+    if not sfx_cfg.get("enabled", True):
+        return video, {"enabled": False, "events": []}
+    if out_path is None:
+        base, ext = os.path.splitext(video)
+        out_path = f"{base}_sfx{ext}"
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        return out_path, {"enabled": True, "events": [], "reused": True}
+    transcript = None
+    if transcript_path and os.path.isfile(transcript_path):
+        try:
+            with open(transcript_path, encoding="utf-8") as f:
+                transcript = json.load(f)
+        except Exception:
+            transcript = None
+    if transcript is None and srt_path:
+        tpath = os.path.splitext(srt_path)[0] + ".transcript.json"
+        if os.path.isfile(tpath):
+            try:
+                with open(tpath, encoding="utf-8") as f:
+                    transcript = json.load(f)
+            except Exception:
+                transcript = None
+    try:
+        from .sfx_mix import decide_sfx, mix_sfx
+        events = decide_sfx(
+            video, transcript=transcript, payoff_s=float(payoff_s),
+            max_sfx=int(sfx_cfg.get("max_sfx", 2)))
+        for ev in extra_events or []:
+            events.append(dict(ev))
+        out, info = mix_sfx(
+            video, events, out_path,
+            lift=bool(sfx_cfg.get("lift", True)))
+        info = dict(info or {})
+        info["enabled"] = True
+        return out, info
+    except Exception as e:  # noqa: BLE001 - el clip sigue sin SFX
+        return video, {"enabled": True, "events": [],
+                       "error": f"mezcla SFX falló: {e}"}
+
+
 def package_clip_step(clip, title, description="", tags=None,
                       hashtags=None, thumbnail_text=None,
                       game_verified=True, visible=None, lang="es",

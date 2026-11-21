@@ -192,6 +192,7 @@ SUBS_COLOR = "#FFFF00"  # amarillo fijo (todo el texto, no solo la activa)
 # 90/96 (= px * 1,4102, ver ass_font_size).
 TITLE_FONT_SIZE = 64
 TITLE_FONT_SIZES = (68, 64)
+TITLE_LINE_GAP = 8  # separacion entre las dos lineas del titulo (banner rubius)
 TITLE_BAND_Y0 = 702
 TITLE_BAND_Y1 = 800
 TITLE_BAND_H = TITLE_BAND_Y1 - TITLE_BAND_Y0  # 98
@@ -423,6 +424,89 @@ def _text_width_px(text, size):
     except Exception:
         pass
     return len(text) * size * 0.60
+
+
+def _split_title_lines(words, n_lines, size, max_w):
+    """Reparte ``words`` en ``n_lines`` líneas equilibradas por ancho.
+
+    Devuelve [línea, ...] si todas caben en ``max_w`` a ``size`` px
+    (medido con la fuente real), o None si no hay reparto posible
+    (p. ej. una sola palabra más ancha que max_w). Con 1 línea es
+    el título entero; con 2, el reparto que minimiza el ancho de
+    la línea más ancha; con 3+, empaquetado voraz por palabras.
+    """
+    if not words:
+        return []
+    if n_lines <= 1:
+        line = " ".join(words)
+        if _text_width_px(line, size) <= max_w:
+            return [line]
+        return None
+    if n_lines == 2:
+        best = None
+        for i in range(1, len(words)):
+            line1 = " ".join(words[:i])
+            line2 = " ".join(words[i:])
+            worst = max(_text_width_px(line1, size),
+                        _text_width_px(line2, size))
+            if best is None or worst < best[0]:
+                best = (worst, [line1, line2])
+        if best is not None and best[0] <= max_w:
+            return best[1]
+        return None
+    lines, cur = [], []
+    for w in words:
+        cand = " ".join(cur + [w])
+        if cur and _text_width_px(cand, size) > max_w:
+            lines.append(" ".join(cur))
+            cur = [w]
+        else:
+            cur = cur + [w]
+    if cur:
+        lines.append(" ".join(cur))
+    if len(lines) > n_lines:
+        return None
+    if any(_text_width_px(ln, size) > max_w for ln in lines):
+        return None
+    return lines
+
+
+def fit_title_lines(title, max_w=TITLE_MAX_W, sizes=TITLE_FONT_SIZES,
+                    max_lines=2, max_h=None, line_gap=TITLE_LINE_GAP):
+    """Ajuste AUTOMÁTICO del título (corrección del usuario 2026-11-19).
+
+    El título aparece SIEMPRE COMPLETO, nunca cortado ni con puntos
+    suspensivos: mide el texto con la fuente real (Arial Black) y
+    reduce el tamaño hasta que quepa en el ancho disponible; si ni
+    con el mínimo cabe en una línea, parte en dos líneas dentro del
+    espacio disponible. Busca de mayor a menor tamaño; para cada
+    tamaño prueba 1 línea, luego 2, ... hasta ``max_lines`` (con
+    ``max_h``, el total de líneas tiene que caber en alto).
+    Devuelve (líneas, tamaño) o ([], None) si no hay título. Si ni
+    con el mínimo cabe en ``max_lines`` líneas, devuelve el título
+    entero con el tamaño mínimo y el máximo de líneas (en la práctica
+    no ocurre con títulos reales: a 32 px dos líneas aguantan ~60
+    caracteres en la banda). Es la ÚNICA fuente del ajuste: la usan
+    la banda willyrex (title_ass_lines) y el banner rubius
+    (clipagent/rubius.py).
+    """
+    words = clean_title_prefix(title).split()
+    if not words:
+        return [], None
+    for size in sizes:
+        line_h = int(size * 1.15)
+        for n in range(1, max_lines + 1):
+            if (max_h is not None
+                    and n * line_h + (n - 1) * line_gap > max_h):
+                continue
+            lines = _split_title_lines(words, n, size, max_w)
+            if lines:
+                return lines, size
+    size = sizes[-1]
+    lines = (_split_title_lines(words, max_lines, size, max_w)
+             or [" ".join(words)])
+    return lines, size
+
 
 
 def fit_title(title, sizes=TITLE_FONT_SIZES, max_w=TITLE_MAX_W):

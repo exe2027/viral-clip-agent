@@ -267,6 +267,23 @@ DEFAULT_CONFIG = {
 }
 
 
+# Claves obligatorias de cada receta de plantilla en config.yaml
+# (``templates.<nombre>``). Portado de main para la plantilla
+# rubius: load_rubius_recipe() falla fuerte si falta alguna
+# (ConfigError con el nombre), nunca default silencioso.
+TEMPLATE_REQUIRED_KEYS = {
+    "rdjavi": ("cam", "karaoke_band", "game", "subs_band",
+               "subs_style", "subs_over_game", "cam_full_width",
+               "blurred_bg"),
+    "willyrex": ("cam", "title_band", "game", "subs_band",
+                 "subs_style", "subs_over_game", "cam_full_width",
+                 "blurred_bg"),
+    "rubius": ("cam", "game", "title_banner", "subs_zone",
+               "subs_style", "subs_over_game", "cam_full_width",
+               "blurred_bg"),
+}
+
+
 # REGLAS OBVIAS DEL PROYECTO (decisiones del usuario 2026-11-16/17).
 # Canónicas en config.yaml `rules:`; estos valores son el espejo en
 # código cuando no hay config.yaml. Si una regla cambia, cambia en

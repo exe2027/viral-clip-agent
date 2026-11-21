@@ -1,5 +1,79 @@
 version: 2.1
 
+# Parámetros de pipeline del job `render` (disparo MANUAL por API/UI).
+# En un push normal van vacíos y el workflow `render` no corre (ver
+# `when` abajo). Los flotantes van como string y los parsea el driver
+# (CircleCI no tiene tipo float para parámetros).
+parameters:
+  source_url:
+    type: string
+    default: ""
+    description: "URL del vídeo fuente (YouTube/Instagram/Twitch o MP4 directo)"
+  streamer:
+    type: string
+    default: ""
+    description: "Nombre del streamer (p. ej. Rubius)"
+  title:
+    type: string
+    default: ""
+    description: "Título del banner amarillo (p. ej. 'GTA 6: Rubius descubre...')"
+  start_sec:
+    type: string
+    default: "0"
+    description: "Inicio del tramo en segundos (puede ser decimal)"
+  end_sec:
+    type: string
+    default: "0"
+    description: "Fin del tramo en segundos (máximo 60 s de tramo)"
+  lang:
+    type: string
+    default: "es"
+    description: "Idioma de los subtítulos: es | en"
+  punch_zoom:
+    type: string
+    default: "1.3"
+    description: "Zoom del punch-in de la webcam (1,18 receta, 1,30 marcado)"
+  shake:
+    type: boolean
+    default: true
+    description: "Shake de cámara en el payoff"
+  shake_amp:
+    type: string
+    default: "5"
+    description: "Amplitud del shake en px"
+  impact:
+    type: boolean
+    default: true
+    description: "Destello de brillo en el payoff"
+  banner_slide:
+    type: boolean
+    default: true
+    description: "El banner entra deslizándose"
+  fade_in:
+    type: boolean
+    default: true
+    description: "Fundido desde negro al inicio"
+  whoosh:
+    type: boolean
+    default: true
+    description: "Whoosh de sonido al arrancar el punch-in"
+  payoff:
+    type: string
+    default: "0"
+    description: "Segundo del momento fuerte (0 = auto: 20 o duración-4)"
+  cam_box:
+    type: string
+    default: ""
+    description: "Caja de la webcam 'w:h:x:y' en px del original (vacío = auto-detectar)"
+  cam_square:
+    type: string
+    default: ""
+    description: "Cuadrado de la cara 'w:h:x:y' (vacío = se deriva de cam_box)"
+  model:
+    type: string
+    default: "tiny"
+    description: "Modelo faster-whisper para transcribir (tiny = rápido y barato)"
+
 # Starter config (CircleCI) para viral-clip-agent.
 # Un solo proyecto: Python en la raiz (pyproject.toml, requires-python >=3.10;
 # CI existente usa Python 3.12). Sin lockfile, sin segundo proyecto: el
@@ -9,6 +83,45 @@ version: 2.1
 # env vars ni servicios (sin DB externa; SQLite local de cada test).
 functions:
   setup-python: github.com/circleci-functions/setup-python@v0.5.0
+
+commands:
+  # Setup compartido del job `render` (mismo entorno que `tests` +
+  # lo que el render necesita: faster-whisper para transcribir y
+  # yt-dlp para descargar la fuente). El job `tests` NO usa este
+  # comando: queda byte-idéntico para no romperlo.
+  setup-render-env:
+    steps:
+      - checkout
+      - setup-python:
+          with:
+            python-version: "3.12"
+      # ffmpeg por apt, como GitHub Actions (Ubuntu 24.04, ffmpeg
+      # 6.1.1): ver el comentario del job `tests` (el apt 4.2.7 de
+      # Ubuntu 20.04 rechaza el if() anidado del zoom y el static
+      # 7.0.2 no ve las fuentes para libass).
+      - run:
+          name: Instalar ffmpeg
+          command: sudo apt-get update -qq && sudo apt-get install -y ffmpeg fontconfig
+      - run:
+          name: Instalar dependencias
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -e .[dev,vision,whisper]
+            python -m pip install yt-dlp
+      # Arial Black (plantilla rubius): igual que en el job `tests`.
+      - run:
+          name: Instalar Arial Black
+          command: |
+            if ! fc-list | grep -qi "Arial Black"; then
+              mkdir -p ~/.fonts
+              curl -fsSL -o ~/.fonts/ariblk.woff \
+                "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+              test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+              python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+              test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
+              fc-cache -f >/dev/null 2>&1 || true
+            fi
+            fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
 
 jobs:
   tests:
@@ -63,7 +176,63 @@ jobs:
           # Debe coincidir con outputs.junit de .circleci/test-suites.yml
           path: test-reports
 
+  # Render rubius de un clip (2026-11-21, pedido del usuario).
+  # Disparo MANUAL por API/UI con parámetros (sin cron, sin
+  # auto-disparo): el workflow `render` solo corre cuando
+  # source_url viene con valor. Descarga la fuente, corta el
+  # tramo, transcribe, renderiza a rubius (banner, subs palabra
+  # por palabra, punch-in, shake, impacto, fundido, slide, SFX
+  # boom/riser/whoosh) y valida el MP4 cuadro por cuadro con
+  # render_gate. Si el gate NO pasa, el job falla y NO se guarda
+  # el artefacto. NO publica, NO escribe en D1, NO toca el panel,
+  # NO re-renderiza en bucle: un render por disparo.
+  # Coste ($0, plan Free 30.000 créditos/mes): executor small
+  # (1 vCPU, 5 créditos/min). Un render de ~60 s: setup ~4-6 min
+  # en frío (~1-2 min con caché de pip caliente) + descarga/corte
+  # ~1 min + transcripción tiny ~1-2 min + render ~1-2 min + gate
+  # ~1 min ≈ 8-13 min ≈ 40-65 créditos por clip.
+  render:
+    docker:
+      - image: cimg/base:current-24.04
+    resource_class: small
+    steps:
+      - setup-render-env
+      - run:
+          name: Render rubius
+          command: |
+            set -euo pipefail
+            test -n "<< parameters.source_url >>" || { echo "ERROR: falta el parámetro source_url" >&2; exit 1; }
+            test -n "<< parameters.streamer >>" || { echo "ERROR: falta el parámetro streamer" >&2; exit 1; }
+            test -n "<< parameters.title >>" || { echo "ERROR: falta el parámetro title" >&2; exit 1; }
+            test "<< parameters.end_sec >>" != "0" || { echo "ERROR: falta el parámetro end_sec" >&2; exit 1; }
+            ARGS="--source-url '<< parameters.source_url >>' --streamer '<< parameters.streamer >>' --title '<< parameters.title >>' --start '<< parameters.start_sec >>' --end '<< parameters.end_sec >>' --lang '<< parameters.lang >>' --out-dir render-out --punch-zoom '<< parameters.punch_zoom >>' --shake-amp '<< parameters.shake_amp >>' --model '<< parameters.model >>'"
+            if [ "<< parameters.shake >>" = "false" ]; then ARGS="$ARGS --no-shake"; fi
+            if [ "<< parameters.impact >>" = "false" ]; then ARGS="$ARGS --no-impact"; fi
+            if [ "<< parameters.banner_slide >>" = "false" ]; then ARGS="$ARGS --no-banner-slide"; fi
+            if [ "<< parameters.fade_in >>" = "false" ]; then ARGS="$ARGS --no-fade-in"; fi
+            if [ "<< parameters.whoosh >>" = "false" ]; then ARGS="$ARGS --no-whoosh"; fi
+            if [ "<< parameters.payoff >>" != "0" ]; then ARGS="$ARGS --payoff '<< parameters.payoff >>'"; fi
+            if [ -n "<< parameters.cam_box >>" ]; then ARGS="$ARGS --cam-box '<< parameters.cam_box >>'"; fi
+            if [ -n "<< parameters.cam_square >>" ]; then ARGS="$ARGS --cam-square '<< parameters.cam_square >>'"; fi
+            echo "render: $ARGS"
+            # shellcheck disable=SC2086
+            python -m clipagent.circle_render $ARGS
+      - run:
+          name: Limpiar intermedios pesados
+          command: rm -f render-out/work/segment.mp4 render-out/work/source.mp4
+      - store_artifacts:
+          path: render-out
+          destination: rubius-render
+
 workflows:
   main:
     jobs:
       - tests
+  # Solo corre cuando se dispara a mano con source_url (API/UI).
+  # En un push normal source_url va vacío y este workflow se salta.
+  render:
+    when:
+      not:
+        equal: ["", << pipeline.parameters.source_url >>]
+    jobs:
+      - render

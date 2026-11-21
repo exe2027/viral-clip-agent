@@ -26,6 +26,12 @@ dependencies = [
     # la dejaba en el python del sistema, invisible para ese
     # intérprete.
     "fontTools>=4.0",
+    # Render rubius + gate: el banner amarillo es un PNG
+    # pre-renderizado con PIL (rubius.make_banner_png) y el gate
+    # cuadro por cuadro lee los fotogramas con PIL (render_gate).
+    # Sin ella, el render no puede hacer el banner: dependencia
+    # real, no opcional (2026-11-21, job de render en CircleCI).
+    "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]
