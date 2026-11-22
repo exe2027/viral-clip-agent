@@ -519,6 +519,28 @@ describe("tryEnqueueClipPublish + auto-enqueue B4 (D1 falso)", () => {
     expect(db.rows("jobs")).toEqual([]);
   });
 
+  test("forceNow fuera de franja → encola (salta SOLO la franja); sin forceNow → frena", async () => {
+    // Orden del usuario 2026-11-22 01:07 ("sube vídeos ahora"):
+    // forceNow salta solo la puerta de franja; el resto de
+    // puertas anti-baneo sigue frenando igual.
+    const FUERA_MS = Date.UTC(2026, 10, 20, 18, 30, 0); // 15:30 Santiago, fuera de franja
+    const db = new FakeD1();
+    seedSettings(db);
+    seedAccount(db, FUERA_MS);
+    seedClip(db, clip({ id: 13, viral: approvedGate() }));
+    const restore = patchNow(FUERA_MS);
+    try {
+      const sinForce = await tryEnqueueClipPublish(makeEnv(db), TENANT, db.rows("clips")[0] as unknown as ClipRow, { manual: true });
+      expect(sinForce.jobs).toEqual([]);
+      expect(sinForce.blocked.join(" ")).toMatch(/fuera de franja/);
+      const conForce = await tryEnqueueClipPublish(makeEnv(db), TENANT, db.rows("clips")[0] as unknown as ClipRow, { manual: true, forceNow: true });
+      expect(conForce.jobs.length).toBeGreaterThan(0);
+      expect(conForce.blocked.join(" ")).not.toMatch(/fuera de franja/);
+    } finally {
+      restore();
+    }
+  });
+
   test("auto-enqueue: validado → job; sin validar y defectuoso → 0 jobs", async () => {
     const db = new FakeD1();
     seedSettings(db);

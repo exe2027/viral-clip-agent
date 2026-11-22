@@ -40,6 +40,7 @@ import {
   logClipEvent,
   logWorkerEvent,
   maturityOut,
+  nextPlatformHourMs,
   parsePlatforms,
   queueClipCompare,
   recordEventCounter,
@@ -699,6 +700,16 @@ export async function tryEnqueueClipPublish(
      *  "mismo clip hoy"; el resto sigue frenando igual y el job
      *  nuevo lleva la key con sufijo |repubN. */
     republish?: boolean;
+    /** Publicar AHORA fuera de franja (orden del usuario
+     *  2026-11-22 01:07, "sube vídeos ahora"): salta SOLO la
+     *  puerta de franja horaria. Todo lo demás sigue frenando
+     *  igual (tope diario, calentamiento, espaciamiento, rolling
+     *  24 h, 1 por plataforma y franja, veredicto de calidad,
+     *  SEO): es una decisión humana explícita de adelantar la
+     *  hora, no de saltarse las reglas anti-baneo. Solo lo pone
+     *  el endpoint /publish con force_now=true; el ciclo y el
+     *  auto-enqueue nunca lo usan. */
+    forceNow?: boolean;
   } = {},
 ): Promise<EnqueuePublishResult> {
   const db = env.DB;
@@ -882,8 +893,10 @@ export async function tryEnqueueClipPublish(
       // de franja queda frenado, no encola. Al programar a
       // futuro, la franja que se comprueba es la del instante
       // programado (nowMs = refMs): no se está publicando ahora,
-      // solo agendando.
-      checkSlot: true,
+      // solo agendando. EXCEPCIÓN (orden del usuario 2026-11-22
+      // 01:07, forceNow): publicar AHORA fuera de franja salta
+      // SOLO esta puerta; el resto sigue frenando igual.
+      checkSlot: !opts.forceNow,
       nowMs: refMs,
       accountLanguage: accountLanguageByPlatform[platform],
       accountReady: accountReadyByPlatform[platform],
@@ -913,18 +926,23 @@ export async function tryEnqueueClipPublish(
           .prepare("SELECT r2_key FROM jobs WHERE clip_id = ? AND tenant_id = ? AND r2_key IS NOT NULL LIMIT 1")
           .bind(clip.id, tenant)
           .first<{ r2_key: string }>();
-    // next_run_at (reglas 2026-11-19 + programación 2026-11-21):
-    // el job automático nace con next_run_at = ahora, que está
-    // dentro de una franja (el gate con checkSlot ya lo comprobó);
-    // el manual inmediato, sin fecha (corre en cuanto el ciclo lo
-    // toma); el manual PROGRAMADO, con next_run_at = el instante
-    // pedido (el ciclo lo toma cuando llegue la hora, y el
-    // re-chequeo vuelve a aplicar todo al ejecutar).
+    // next_run_at (reglas 2026-11-19 + programación 2026-11-21 +
+    // HORARIO POR PLATAFORMA 2026-11-22 01:11): el job automático
+    // nace con next_run_at = la próxima hora de SU plataforma
+    // (YouTube/IG 12:00, 18:00, 21:00; TikTok/FB 13:00, 19:00,
+    // 22:00, hora Chile), no "ahora": así cada plataforma sube
+    // a su hora aunque el ciclo corra cada 5 min. El gate con
+    // checkSlot ya comprobó la franja (las horas están dentro
+    // de franja). El manual inmediato, sin fecha (corre en
+    // cuanto el ciclo lo toma); el manual PROGRAMADO, con
+    // next_run_at = el instante pedido (el ciclo lo toma cuando
+    // llegue la hora, y el re-chequeo vuelve a aplicar todo al
+    // ejecutar).
     // Solo se encola ESTA plataforma (la que pasó el gate):
     // enqueuePublishJobs ya no re-encola todas las del clip.
     const nextRunAt = scheduledForMs !== null && scheduledForMs > now
       ? scheduledForMs
-      : manual ? null : now;
+      : manual ? null : nextPlatformHourMs(platform, now);
     jobs.push(...(await enqueuePublishJobs(db, clip, accountIdByPlatform, title, caption, r2Key?.r2_key ?? null, manual, nextRunAt, [platform], opts.republish === true, refDayKey)));
   }
   // Cada plataforma que pasó el gate encoló solo su job (ya no hay

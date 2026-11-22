@@ -1021,7 +1021,11 @@ async function publishSelected() {
   setLoading(btn, true, "Publicando…");
   up.disabled = true;
   try {
-    const r = await api("/api/clips/" + selectedClipId + "/publish", { method: "POST" });
+    // "Publicar ahora" = AHORA (force_now, orden 2026-11-22 01:07):
+    // salta SOLO la franja; topes, calentamiento, espaciamiento,
+    // rolling y calidad siguen frenando. El ciclo automático
+    // respeta las franjas y el horario por plataforma.
+    const r = await api("/api/clips/" + selectedClipId + "/publish", { method: "POST", body: JSON.stringify({ force_now: true }) });
     currentBlocked = r.blocked || [];
     const warnings = r.warnings || [];
     showMsg("Encolado: " + (r.jobs || []).map((j) => j.platform + " (" + j.state + ")").join(", ") + (currentBlocked.length ? " · Frenado: " + currentBlocked.join(" · ") : "") + (warnings.length ? " · Publicado a mano pese al freno: " + warnings.join(" · ") : ""), "info");
@@ -2020,7 +2024,9 @@ async function publishFromEditor() {
   const btn = $("edPublish");
   setLoading(btn, true, "Publicando…");
   try {
-    const r = await api("/api/clips/" + selectedClipId + "/publish", { method: "POST" });
+    // "Publicar ahora" = AHORA (force_now, orden 2026-11-22 01:07):
+    // salta SOLO la franja; el resto de frenos sigue.
+    const r = await api("/api/clips/" + selectedClipId + "/publish", { method: "POST", body: JSON.stringify({ force_now: true }) });
     const blocked = r.blocked || [];
     const warnings = r.warnings || [];
     showMsg("Encolado: " + (r.jobs || []).map((j) => j.platform + " (" + j.state + ")").join(", ") + (blocked.length ? " · Frenado: " + blocked.join(" · ") : "") + (warnings.length ? " · Publicado a mano pese al freno: " + warnings.join(" · ") : ""), "info");

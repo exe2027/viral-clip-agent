@@ -1102,6 +1102,46 @@ export function nextSlotStartMs(nowMs: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// HORARIO POR PLATAFORMA (orden usuario 2026-11-22 01:11):
+// a qué hora (Chile) sube cada plataforma, vídeos diferentes
+// para kaez y seba (cada uno su cola; nunca el mismo vídeo en
+// ambas cuentas). 3 al día por plataforma (mínimo, orden
+// 2026-11-21 20:52). YouTube e Instagram al inicio de franja,
+// TikTok y Facebook una hora después, para que no salgan todas
+// a la vez. El auto-enqueue programa next_run_at a la próxima
+// hora de SU plataforma (ver nextPlatformHourMs); la manual
+// ("Publicar ahora", force_now) sigue inmediata. Fuente única:
+// este mapa (no hay copia en settings; si el usuario cambia
+// las horas, se cambia aquí y se redespliega).
+// ---------------------------------------------------------------------------
+export const PLATFORM_SCHEDULE: Record<string, string[]> = {
+  youtube_shorts: ["12:00", "18:00", "21:00"],
+  tiktok: ["13:00", "19:00", "22:00"],
+  instagram_reels: ["12:00", "18:00", "21:00"],
+  facebook_reels: ["13:00", "19:00", "22:00"],
+};
+
+/** Próxima hora de una plataforma (hora Chile): si estamos
+ *  dentro de una hora programada (60 min desde su inicio),
+ *  vence AHORA; si no, la próxima hora de hoy; si no queda
+ *  ninguna hoy, mañana a la primera. Para programar next_run_at
+ *  del auto-enqueue a la hora de SU plataforma. */
+export function nextPlatformHourMs(platform: string, nowMs: number): number {
+  const hours = PLATFORM_SCHEDULE[platform] ?? PLATFORM_SCHEDULE.youtube_shorts!;
+  const day = santiagoDayKeyMs(nowMs);
+  for (const hhmm of hours) {
+    const start = santiagoWallToUtcMs(day, hhmm);
+    if (nowMs >= start && nowMs < start + 60 * 60 * 1000) return nowMs;
+    if (start > nowMs) return start;
+  }
+  // Mañana: +24 h (no +36 h: a partir del mediodía, +36 h cae
+  // en pasado mañana). nowMs+24 h siempre tiene el dayKey de
+  // mañana.
+  const tomorrow = santiagoDayKeyMs(nowMs + 24 * 3600 * 1000);
+  return santiagoWallToUtcMs(tomorrow, hours[0]!);
+}
+
+// ---------------------------------------------------------------------------
 // DÍA LIBRE SEMANAL (regla 7): 1 día libre por semana por cuenta,
 // rotando entre cuentas. Determinista (hash cuenta+semana ISO),
 // SIN columna nueva: no se guarda nada, se calcula. Semana ISO

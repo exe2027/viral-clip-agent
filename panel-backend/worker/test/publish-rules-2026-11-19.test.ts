@@ -16,6 +16,8 @@ import {
   isRestDayEffective,
   isWithinPublishSlot,
   jitterMinutes,
+  nextPlatformHourMs,
+  PLATFORM_SCHEDULE,
   restWeekday,
   restWeekdayEffective,
   santiagoDayKeyMs,
@@ -187,6 +189,37 @@ describe("franjas horarias Chile (revoca 'sin franja' 2026-11-18)", () => {
     expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: inSlot }))).toBeNull();
     expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: outSlot, manual: true }))).toContain("fuera de franja");
     expect(publishGate("tiktok", gateCtx({ nowMs: outSlot }))).toBeNull(); // sin checkSlot no se comprueba
+  });
+});
+
+describe("horario por plataforma (orden usuario 2026-11-22 01:11)", () => {
+  const day = "2026-11-19";
+  test("cada plataforma tiene 3 horas al día y todas caen dentro de franja", () => {
+    for (const [platform, hours] of Object.entries(PLATFORM_SCHEDULE)) {
+      expect(hours).toHaveLength(3);
+      for (const hhmm of hours) {
+        expect(isWithinPublishSlot(santiagoWallToUtcMs(day, hhmm))).toBe(true);
+      }
+      void platform;
+    }
+  });
+  test("YouTube/IG 12:00, 18:00, 21:00; TikTok/FB 13:00, 19:00, 22:00", () => {
+    expect(PLATFORM_SCHEDULE.youtube_shorts).toEqual(["12:00", "18:00", "21:00"]);
+    expect(PLATFORM_SCHEDULE.instagram_reels).toEqual(["12:00", "18:00", "21:00"]);
+    expect(PLATFORM_SCHEDULE.tiktok).toEqual(["13:00", "19:00", "22:00"]);
+    expect(PLATFORM_SCHEDULE.facebook_reels).toEqual(["13:00", "19:00", "22:00"]);
+  });
+  test("nextPlatformHourMs: antes de la hora → esa hora; dentro de la hora → ahora; pasada la última → mañana a la primera", () => {
+    // 11:00 → YT 12:00 hoy; TT 13:00 hoy.
+    expect(nextPlatformHourMs("youtube_shorts", santiagoWallToUtcMs(day, "11:00"))).toBe(santiagoWallToUtcMs(day, "12:00"));
+    expect(nextPlatformHourMs("tiktok", santiagoWallToUtcMs(day, "11:00"))).toBe(santiagoWallToUtcMs(day, "13:00"));
+    // 12:05, dentro de la hora YT 12:00 → ahora (vence inmediato).
+    const dentro = santiagoWallToUtcMs(day, "12:05");
+    expect(nextPlatformHourMs("youtube_shorts", dentro)).toBe(dentro);
+    // 12:05 para TikTok (su hora es 13:00) → 13:00 hoy.
+    expect(nextPlatformHourMs("tiktok", dentro)).toBe(santiagoWallToUtcMs(day, "13:00"));
+    // 22:30, pasada la última hora YT (21:00, vence 22:00) → mañana 12:00.
+    expect(nextPlatformHourMs("youtube_shorts", santiagoWallToUtcMs(day, "22:30"))).toBe(santiagoWallToUtcMs("2026-11-20", "12:00"));
   });
 });
 

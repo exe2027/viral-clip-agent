@@ -3106,7 +3106,13 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       // |repubN. Sin este flag, un clip ya publicado hoy en esa
       // plataforma se devuelve tal cual (dedup).
       const republish = pubBody.republish === true;
-      const { jobs, blocked, warnings } = await tryEnqueueClipPublish(env, tenant, clip, { actor: session.sub, manual: true, platforms, scheduledForMs, republish });
+      // Publicar AHORA fuera de franja (orden del usuario
+      // 2026-11-22 01:07, "sube vídeos ahora"): force_now=true
+      // salta SOLO la puerta de franja; el resto de puertas
+      // anti-baneo (tope, calentamiento, espaciamiento, rolling,
+      // 1 por plataforma, calidad, SEO) sigue frenando igual.
+      const forceNow = pubBody.force_now === true;
+      const { jobs, blocked, warnings } = await tryEnqueueClipPublish(env, tenant, clip, { actor: session.sub, manual: true, platforms, scheduledForMs, republish, forceNow });
       if (jobs.length === 0) {
         return err(`Ninguna plataforma pudo encolarse: ${blocked.join(" · ")}`, 400);
       }
