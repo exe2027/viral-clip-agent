@@ -55,7 +55,7 @@ on:
 env:
   # APAGADO hasta 2026-11-21 21:00: 'false' = dry-run siempre en
   # las corridas programadas. Para encenderlo, poner 'true'.
-  WATCHDOG_ENABLED: "false"
+  WATCHDOG_ENABLED: "true"
 
 concurrency:
   group: cerebro-publish-watchdog

@@ -72,7 +72,7 @@ on:
 env:
   # APAGADO hasta 2026-11-21 21:00: 'false' = dry-run siempre en
   # las corridas programadas. Para encenderlo, poner 'true'.
-  VIRAL_SOURCE_ENABLED: "false"
+  VIRAL_SOURCE_ENABLED: "true"
 
 concurrency:
   group: viral-source
