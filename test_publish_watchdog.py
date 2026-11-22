@@ -437,12 +437,17 @@ def test_load_publish_watchdog_config_real():
         load_publish_watchdog_config({"publish_watchdog": {}})
 
 
-def test_workflow_is_off_until_2100():
+def test_workflow_is_on():
+    # El vigilante se prendió el 2026-11-21 21:00 (commit ff8334a,
+    # "v5.0: prender WATCHDOG_ENABLED y VIRAL_SOURCE_ENABLED"): el
+    # workflow lleva WATCHDOG_ENABLED: "true". El test viejo exigía
+    # "false" ("is_off_until_2100") y tumbó los builds #15 y #16 de
+    # CircleCI; se actualiza al estado real.
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         ".github", "workflows",
                         "cerebro-publish-watchdog.yml")
     text = open(path, encoding="utf-8").read()
-    assert 'WATCHDOG_ENABLED: "false"' in text
+    assert 'WATCHDOG_ENABLED: "true"' in text
     assert '"30 17 * * *"' in text  # 14:30 Chile
     assert '"30 23 * * *"' in text  # 20:30 Chile
     assert '"30 2 * * *"' in text  # 23:30 Chile

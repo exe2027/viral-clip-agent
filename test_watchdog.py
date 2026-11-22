@@ -11,6 +11,8 @@ import os
 import sys
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from clipagent.validate import ConfigError  # noqa: E402
@@ -29,6 +31,16 @@ WCFG = {
 }
 NOW = int(time.time() * 1000)
 MIN = 60000
+
+
+@pytest.fixture(autouse=True)
+def _fresh_now():
+    # NOW se capturaba una sola vez al importar el módulo; en una suite
+    # lenta (~20 min) quedaba obsoleto y los tests de cooldown/tope
+    # fallaban (el dispatch "hace 10 min" en realidad tenía ~30 min y
+    # cruzaba el cooldown). Se refresca antes de cada test; los helpers
+    # (_logs/_state/_runs) y los tests leen el global al correr.
+    globals()["NOW"] = int(time.time() * 1000)
 
 # --- Fixtures reales de D1 (worker_events, 2026-11-19) -------------------
 MSG_DISPATCH_OK = ("Dispatch panel-live enviado a GitHub "
