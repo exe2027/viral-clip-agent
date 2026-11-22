@@ -1,0 +1,16 @@
+-- Migración 0024 (2026-11-18): orden manual de la Cola desde
+-- Telegram (v3, idea 49).
+--
+-- La Cola se ordena HOY por segmento (LIVE primero) y luego por
+-- score (la prioridad del cerebro, fórmula INTOCABLE que vive
+-- fuera del Worker). Esta columna NO toca el score ni la fórmula:
+-- es solo un ajuste manual de orden por clip y tenant.
+--
+-- manual_rank NULL = orden automático (por score). Con valor, el
+-- clip sube dentro de SU segmento (un VOD manual nunca pasa por
+-- encima de un LIVE: el segmento sigue mandando) y antes que los
+-- automáticos de ese segmento; a igual manual_rank desempata el
+-- score. /primero pone el menor valor del segmento, /subir y
+-- /bajar intercambian valores con el vecino, /auto lo deja en NULL
+-- (vuelve al orden automático). Ver moveQueueClip en db.ts.
+ALTER TABLE clips ADD COLUMN manual_rank INTEGER;

@@ -1,0 +1,65 @@
+# wrangler.backup.sebastian.toml — Publicador de respaldo B5 (2026-11-20).
+#
+# Worker APARTE del principal (avc-sebastian): cron cada 15 min que
+# rescata lo que el principal no publicó (ver
+# worker/src/backup-publisher.ts). NO DESPLEGADO: este archivo es
+# solo la configuración para el despliegue futuro (después del
+# cutover 21:00, nunca antes). Un Worker = un tenant, como el
+# principal: este sirve EXACTAMENTE a "sebastian" (var TENANT).
+# El gemelo para kaez (wrangler.backup.kaez.toml) se crea en el
+# despliegue con su D1 (clips-avc-kaez) y TENANT="kaez".
+#
+# Recursos (cuenta de Cloudflare de Sebastián):
+#   D1     clips-avc-sebastian (SOLO LECTURAS: el respaldo nunca
+#          escribe en D1; los adaptadores reciben una D1 de solo
+#          lectura que lanza ante cualquier INSERT/UPDATE/DELETE)
+#   R2     clips-avc (compartido; lee el diario wal/<tenant>/... y
+#          escribe resultados + su estado de resume propio)
+#   Worker avc-backup-sebastian (este archivo)
+#   Cron   cada 15 minutos (*/15 * * * *): la ventana del principal
+#          es de 15 min, así que el respaldo nunca corre dos veces
+#          dentro de una misma ventana.
+#
+# SIN secretos aquí: los secretos van con `wrangler secret put
+# --config wrangler.backup.sebastian.toml`. El respaldo necesita
+# SOLO 2 (no los 8 del principal):
+#   CREDENTIAL_ENCRYPTION_KEY (descifrar credenciales de D1)
+#   SESSION_SECRET            (firmar la URL del vídeo para Instagram)
+# No necesita BRIDGE_TOKEN, GITHUB_TOKEN, TELEGRAM_* ni OAuth de
+# Google/Meta: no dispara workflows, no avisa por Telegram y no
+# hace login.
+#
+# Despliegue (NO ahora; procedimiento completo en
+# runs/anti-recaida-2026-11-20/B5.md):
+#   wrangler deploy --config wrangler.backup.sebastian.toml
+#   wrangler secret put CREDENTIAL_ENCRYPTION_KEY --config wrangler.backup.sebastian.toml
+#   wrangler secret put SESSION_SECRET --config wrangler.backup.sebastian.toml
+
+name = "avc-backup-sebastian"
+main = "worker/src/backup-publisher.ts"
+compatibility_date = "2026-11-17"
+workers_dev = true
+
+# Cron del respaldo: cada 15 min. Una corrida avanza como mucho 5
+# jobs, un paso por job; un rescate típico tarda 2-4 corridas.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "clips-avc-sebastian"
+database_id = "ee97f58d-0b56-4617-9976-fcf0022edb54"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "CLIPS_BUCKET"
+bucket_name = "clips-avc"
+
+[vars]
+# Tenant ÚNICO de este Worker. Si falta o no es "sebastian", el
+# Worker falla en voz alta (requireTenant, auth.ts): nunca un
+# default silencioso.
+TENANT = "sebastian"
+ALLOWED_EMAIL = ""
+GITHUB_REPO = "exe2027/viral-clip-agent"
+CLIP_PUBLIC_BASE_URL = "https://pub-5f09f432fcae41dcb9e4d114ce8ff987.r2.dev"

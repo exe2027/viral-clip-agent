@@ -1,0 +1,57 @@
+# wrangler.toml — instalación ÚNICA multi-tenant (avc.pages.dev)
+# Decisión del usuario 17 nov 2026, 15:05 y 15:33: UNA sola página,
+# https://avc.pages.dev, con login al entrar. Cada persona entra con
+# su login y ve solo su panel, sus cuentas, su cola y sus
+# credenciales. NO un avc-colega.pages.dev separado. AVC = Agent
+# Viral Clip.
+#
+# Recursos (UNA sola cuenta de Cloudflare, la de Sebastián):
+#   D1     clips-avc        (una base, tenant_id por fila)
+#   R2     clips-avc        (keys clips/<tenant>/<clip_id>/...)
+#   Worker avc              (este archivo; avc.<cuenta>.workers.dev)
+#   Pages  avc              (el front; https://avc.pages.dev)
+#   Cron   cada 5 min (un ciclo por tenant)
+#
+# SIN secretos aquí: los secretos van con `wrangler secret put`
+# (ver DEPLOY-avc.md). Los IDs de D1 se rellenan tras crearlos.
+# Los wrangler.toml viejos por tenant (tenants/*/wrangler.toml)
+# quedan como LEGADO: no usar.
+
+name = "avc"
+main = "worker/src/index.ts"
+compatibility_date = "2026-11-17"
+workers_dev = true
+
+# Cron del Worker: SOLO en franjas de publicación (2026-11-21, ahorro
+# D1: fuera de franja el Worker ni despierta, así que no gasta
+# escrituras). Franjas hora Chile 12:00-14:00, 18:00-20:00, 21:00-23:00;
+# en UTC con 1 h de margen por el cambio DST (-03/-04): 15-18 y 21-23,0-3.
+# La puerta (gate.ts) sigue filtrando la franja exacta en hora Chile.
+# Avanza la cola SOLO si el tenant inició su Worker (botón Iniciar).
+# Un tenant parado no frena al otro.
+[triggers]
+crons = ["*/5 15-18 * * *", "*/5 21-23,0-3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "clips-avc"
+database_id = "5cf19675-f905-4e49-b8f2-96ae0810fafd"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "CLIPS_BUCKET"
+bucket_name = "clips-avc"
+
+[vars]
+# (2026-11-18, hallazgo M2) Sin PUBLIC_BASE_URL: el bucket R2 es
+# privado y no hay dominio público r2.dev. Instagram recibe una URL
+# firmada del Worker (/api/public-video, 15 min) solo al publicar.
+ALLOWED_EMAIL = ""
+# Repo del cerebro (vía principal): el botón Iniciar dispara su
+# workflow con repository_dispatch (panel-start). El token
+# va como secreto GITHUB_TOKEN (wrangler secret put), nunca aquí.
+GITHUB_REPO = "exe2027/viral-clip-agent"
+# URL pública de R2 para que el cerebro (y las plataformas) puedan
+# descargar los clips: valor PÚBLICO, no secreto (2026-11-19,
+# cerebro genérico: el cerebro la recibe en /api/bridge/credentials).
+CLIP_PUBLIC_BASE_URL = "https://pub-5f09f432fcae41dcb9e4d114ce8ff987.r2.dev"

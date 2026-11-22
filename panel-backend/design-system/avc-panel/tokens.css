@@ -1,0 +1,131 @@
+/* Design Tokens — AVC Panel (dark OLED mode) */
+/* Derived from tokens.json (source of truth). CORRECTED 2026-11-17: */
+/* the auto-generated light-mode values were replaced per OVERRIDES.md. */
+/* All text pairs verified >= 4.5:1 WCAG AA (see OVERRIDES.md §2). */
+/* Do not edit the color values here — edit tokens.json, then mirror here. */
+
+:root {
+  color-scheme: dark;
+
+  /* === Surfaces === */
+  --color-background: #0b0d12;
+  --color-surface: #1e222c;
+  --color-surface-input: #0f1115;
+  --color-border: #475569;
+
+  /* === Text === */
+  --color-text: #e8eaf0;
+  --color-text-dim: #9aa3b2;
+  --color-link: #93c5fd;
+
+  /* === Primary action (audit #2: #3b82f6 failed 3.68:1) === */
+  --color-primary: #1d4ed8;
+  --color-primary-hover: #2563eb;
+  --color-on-primary: #ffffff;
+
+  /* === Focus (audit #1) === */
+  --color-focus: #93c5fd;
+  --size-focus-ring: 3px;
+  --size-focus-offset: 2px;
+
+  /* === Semantic states === */
+  --color-ok: #22c55e;
+  --color-ok-bg: #14532d;
+  --color-ok-fg: #bbf7d0;
+  --color-bad: #f87171;
+  --color-bad-bg: #7f1d1d;
+  --color-bad-fg: #fecaca;
+  --color-warn: #f59e0b;
+  --color-warn-bg: #451a03;
+  --color-warn-fg: #fde68a;
+  --color-danger-bg: #7f1d1d;
+  --color-info-bg: #1e3a5f;
+  --color-badge-bg: #dc2626;
+
+  /* === Platform neons (text-safe variants only; raw brand hex is decorative) === */
+  --color-platform-youtube: #ff4e45;
+  --color-platform-tiktok: #25f4ee;
+  --color-platform-instagram: #f77737;
+  --color-platform-instagram-pink: #f472b6;
+  --color-platform-facebook: #60a5fa;
+
+  /* === Typography (audit: base 16px, inputs 16px, line-height 1.5) === */
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-base: 16px;
+  --font-size-h1: 20px;
+  --font-size-h2: 16px;
+  --font-size-h3: 14px;
+  --font-size-input: 16px;
+  --font-size-small: 13px;
+  --font-size-caption: 12px;
+  --font-line-height-body: 1.5;
+  --font-line-height-heading: 1.25;
+
+  /* === Spacing (density 8/10 dashboard scale, audit §24) === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* === Radii (kept from current front: 8 / 12 / 999) === */
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-pill: 999px;
+
+  /* === Touch (audit #6: 44px minimum) === */
+  --size-touch-target: 44px;
+
+  /* === Motion (150–250 ms, ease-out; see OVERRIDES.md §5) === */
+  --motion-duration-fast: 150ms;
+  --motion-duration-base: 200ms;
+  --motion-duration-slow: 250ms;
+  --motion-easing: ease-out;
+
+  /* === Shadows (dark surfaces: border + shadow, not color alone) === */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* === Interaction rules every implementer must include (audit #1, #5, #15, #27) === */
+:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus);
+  outline-offset: var(--size-focus-offset);
+}
+
+button,
+nav button,
+input,
+textarea,
+select {
+  min-height: var(--size-touch-target);
+}
+
+input,
+textarea,
+select {
+  font-size: var(--font-size-input);
+}
+
+button {
+  touch-action: manipulation;
+  transition: filter var(--motion-duration-base) var(--motion-easing),
+    transform var(--motion-duration-fast) var(--motion-easing);
+}
+
+button:hover { filter: brightness(1.12); }
+button:active { transform: scale(0.98); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,19 @@
+-- Migración 0031 (2026-11-19): marcar vídeos borrados en la plataforma.
+--
+-- CAUSA RAÍZ (ANALÍTICAS 2026-11-19): /resumen y /api/analytics contaban
+-- como "publicados" TODOS los jobs posted, también los vídeos que ya no
+-- existen en la plataforma. Caso: clip 83, Short TuGUDv75_NQ borrado por
+-- API el 2026-11-19 18:52 y seguido contando como publicado en YouTube ES
+-- (7 en vez de 6).
+--
+-- La medición es la que puede probarlo: si la API devuelve 200 y el id
+-- pedido NO viene en la respuesta (YouTube videos.list, TikTok
+-- video/query), el vídeo ya no existe (borrado o privado) y el job se
+-- marca con deleted_at (worker/src/publish/stats.ts, markJobDeleted).
+-- Instagram/Facebook NO se marcan nunca por un 400: su "does not exist"
+-- es ambiguo (también sale cuando el token actual no puede ver el medio;
+-- caso del media 18484769662119306 del clip 7, publicado antes de
+-- re-conectar Meta, que existe en público). Los jobs marcados no se
+-- cuentan como publicados (listPostedJobs) ni se vuelven a medir
+-- (collectAnalytics). Genérico por tenant: sin literales de ningún tenant.
+ALTER TABLE jobs ADD COLUMN deleted_at INTEGER;

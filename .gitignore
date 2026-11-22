@@ -28,3 +28,7 @@ worker.lock
 drafts/
 
 accounts.yaml
+
+# panel-backend (Worker + panel): dependencias y estado local de wrangler
+node_modules/
+.wrangler/

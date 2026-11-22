@@ -1,0 +1,58 @@
+-- 0036_drop_unused_indexes.sql — quitar índices que ninguna consulta
+-- usa (A2, 2026-11-20, cuota D1: 100.000 escrituras/día por cuenta).
+--
+-- Cada índice cuesta 1 escritura extra por cada INSERT en su tabla
+-- (y por cada UPDATE que toque una columna indexada): una fila
+-- escrita paga 1 (tabla) + N (índices). Los índices de abajo se
+-- comprobaron contra TODAS las consultas de worker/src (grep de
+-- SELECT/UPDATE/DELETE por tabla, ver informe A2 en
+-- runs/anti-recaida-2026-11-20/A2.md §5): ninguna los usa. Quitarlos
+-- no cambia ningún plan de consulta: cada predicado que podrían
+-- servir lo sirve otro índice que se conserva.
+--
+-- NO se tocan los índices de unicidad (idempotency_key, usernames,
+-- settings/worker_state por tenant) ni los de dedupe/throttle de la
+-- 0033. Tampoco se quita clip_events_tenant: es el único índice
+-- con tenant_id en primera posición en clip_events y lo usa la
+-- caducidad (pruneOldEvents) y la estimación de escrituras del día.
+--
+-- Coste que se ahorra cada índice (1 escritura extra por fila):
+--   jobs_posted_day ......... 1 por cada INSERT/UPDATE en jobs
+--   notifications_unread .... 1 por cada INSERT en notifications
+--                             (+1 por cada UPDATE de read_at/created_at)
+--   worker_events_tenant .... 1 por cada INSERT en worker_events
+--   clips_publish_blocked ... 1 por cada INSERT en clips
+--                             (+1 por cada UPDATE de publish_blocked)
+--   clip_previews_tenant .... 1 por cada INSERT en clip_previews
+-- Con los volúmenes medidos el 2026-11-20 (10.975 worker_events/día
+-- antes de la dedupe, ~50/día después) el ahorro directo es pequeño
+-- (~60 escrituras/día/tenant tras la dedupe), pero es permanente y
+-- sin coste: estos índices nunca aceleraron nada.
+--
+-- 0011 jobs_posted_day (platform, state, posted_day): subsumido por
+-- jobs_posted_day_lang (0019: platform, language, state, posted_day),
+-- que sirve los mismos predicados (las 4 consultas de topes filtran
+-- por platform+language+state+posted_day). La única consulta sin
+-- idioma (COUNT de TikTok en publish/zernio-tiktok.ts) la sirve
+-- jobs_posted_day_lang por skip-scan.
+DROP INDEX IF EXISTS jobs_posted_day;
+-- 0011 notifications_unread (read_at, created_at): ninguna consulta
+-- filtra ni ordena por read_at; el listado del panel es
+-- WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 50, servido
+-- por notifications_tenant. Marcar leída es por id (clave primaria).
+DROP INDEX IF EXISTS notifications_unread;
+-- 0012 worker_events_tenant (tenant_id): el filtrado por tenant lo
+-- sirve idx_worker_events_dedupe (0033: tenant_id, kind, message,
+-- at, con tenant_id en primera posición); ORDER BY at DESC no lo
+-- sirve ningún índice (tampoco este).
+DROP INDEX IF EXISTS worker_events_tenant;
+-- 0014 clips_publish_blocked (publish_blocked): ningún WHERE lo usa;
+-- el gate lee publish_blocked de la fila ya cargada (gate.ts) y el
+-- PATCH lo escribe por id. Ninguna consulta lista clips por bloqueo.
+DROP INDEX IF EXISTS clips_publish_blocked;
+-- 0012 clip_previews_tenant (tenant_id): cero consultas a
+-- clip_previews en worker/src (la tabla no tiene ruta de lectura;
+-- ver redesign-fase2/inventario.md). Quitar el índice no afecta a
+-- ninguna lectura; si la tabla vuelve a tener lecturas por tenant,
+-- el índice se recrea.
+DROP INDEX IF EXISTS clip_previews_tenant;

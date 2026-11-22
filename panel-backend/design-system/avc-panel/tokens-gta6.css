@@ -1,0 +1,216 @@
+/* Design Tokens — AVC Panel · Variante "GTA 6 / Vice City" (atardecer neón) */
+/* Variante sobre el sistema premium corregido (OVERRIDES.md §§1–7). */
+/* Activación: <html data-theme="gta6"> + cargar este archivo DESPUÉS de tokens.css. */
+/* Solo CSS: degradados, sombras neón, bordes. Sin imágenes, sin logos, sin assets externos. */
+/* Todos los pares de TEXTO verificados >= 4.5:1 WCAG AA (ver OVERRIDES.md §8). */
+/* Los neones saturados (#ff2e88, #ff5e00, #ec4899, #db2777, #ea580c) son SOLO */
+/* decorativos (fondos, bordes, brillos, franja): NUNCA texto. */
+
+[data-theme="gta6"] {
+  color-scheme: dark;
+
+  /* === Superficies: noche violeta (no negro frío) === */
+  --color-background: #100a1a;
+  --color-surface: #261a38;
+  --color-surface-input: #150d24;
+  --color-border: #7c6aa0;
+
+  /* === Texto === */
+  --color-text: #e8eaf0;
+  --color-text-dim: #b8b3c9;
+  --color-link: #f9a8d4;
+
+  /* === Primario: degradado atardecer (paradas verificadas con texto blanco) === */
+  /* Paradas: violeta #6d28d9 (blanco 7.10:1) -> rosa oscuro #9d174d (7.88:1) */
+  /* -> naranja quemado #c2410c (5.18:1). Hover: #7c3aed (5.70:1) -> #a21caf (6.32:1) */
+  /* -> #c2410c (5.18:1). Fallback sólido sin degradado: #9d174d (blanco 7.88:1). */
+  --color-primary: #9d174d;
+  --color-primary-hover: #a21caf;
+  --color-on-primary: #ffffff;
+  --gradient-sunset: linear-gradient(135deg, #6d28d9 0%, #9d174d 52%, #c2410c 100%);
+  --gradient-sunset-hover: linear-gradient(135deg, #7c3aed 0%, #a21caf 52%, #c2410c 100%);
+  --gradient-header: linear-gradient(180deg, #2a0a3d 0%, #100a1a 100%);
+  --gradient-sunset-text: linear-gradient(90deg, #f9a8d4 0%, #fdba74 100%);
+  --gradient-sunset-strip: linear-gradient(90deg, #7c3aed 0%, #ec4899 45%, #ff5e00 100%);
+
+  /* === Neones de texto SEGUROS (claros, >= 4.5:1 sobre tarjeta) === */
+  --color-neon-pink-text: #f9a8d4;
+  --color-neon-pink: #f472b6;
+  --color-neon-violet-text: #c4b5fd;
+  --color-neon-violet: #a78bfa;
+  --color-neon-orange-text: #fdba74;
+  --color-neon-orange: #fb923c;
+  --color-neon-amber: #fbbf24;
+
+  /* === Neones DECORATIVOS (nunca texto: fallan AA) === */
+  --color-neon-pink-raw: #ff2e88;
+  --color-neon-orange-raw: #ff5e00;
+  --color-neon-magenta-raw: #ec4899;
+  --color-neon-violet-raw: #a855f7;
+
+  /* === Foco: ámbar neón, visible sobre violeta y sobre rosa === */
+  --color-focus: #fbbf24;
+  --size-focus-ring: 3px;
+  --size-focus-offset: 2px;
+
+  /* === Semántica (sin cambio de valores; re-verificada sobre tarjeta #261a38) === */
+  --color-ok: #22c55e;
+  --color-ok-bg: #14532d;
+  --color-ok-fg: #bbf7d0;
+  --color-bad: #f87171;
+  --color-bad-bg: #7f1d1d;
+  --color-bad-fg: #fecaca;
+  --color-warn: #f59e0b;
+  --color-warn-bg: #451a03;
+  --color-warn-fg: #fde68a;
+  --color-danger-bg: #7f1d1d;
+  --color-info-bg: #1e3a5f;
+  --color-badge-bg: #be185d;
+
+  /* === Pills atardecer (nuevas; fg/bg verificados) === */
+  --color-pill-sunset-bg: #500724;
+  --color-pill-sunset-fg: #fbcfe8;
+  --color-pill-violet-bg: #4c1d95;
+  --color-pill-violet-fg: #ede9fe;
+  --color-pill-ember-bg: #7c2d12;
+  --color-pill-ember-fg: #ffedd5;
+
+  /* === Plataforma (sin cambio; re-verificado sobre tarjeta #261a38) === */
+  --color-platform-youtube: #ff4e45;
+  --color-platform-tiktok: #25f4ee;
+  --color-platform-instagram: #f77737;
+  --color-platform-instagram-pink: #f472b6;
+  --color-platform-facebook: #60a5fa;
+
+  /* === Tipografía: carácter condensado (skill ui-ux-pro-max, "Sports/Fitness") === */
+  /* Display: 'Barlow Condensed' (Google Fonts, gratuita). Si no hay webfont, */
+  /* el fallback 'Arial Narrow' / system-ui mantiene el carácter condensado, $0. */
+  /* Cuerpo: 'Barlow' con fallback system-ui (sin cambio de legibilidad). */
+  --font-display: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue Condensed', system-ui, sans-serif;
+  --font-body: 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue Condensed', system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-base: 16px;
+  --font-size-h1: 24px;
+  --font-size-h2: 18px;
+  --font-size-h3: 14px;
+  --font-size-input: 16px;
+  --font-size-small: 13px;
+  --font-size-caption: 12px;
+  --font-line-height-body: 1.5;
+  --font-line-height-heading: 1.1;
+
+  /* === Espaciado (sin cambio) === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* === Radios: un punto más redondeados (póster, no dashboard frío) === */
+  --radius-control: 10px;
+  --radius-card: 16px;
+  --radius-pill: 999px;
+
+  /* === Táctil / motion (sin cambio) === */
+  --size-touch-target: 44px;
+  --motion-duration-fast: 150ms;
+  --motion-duration-base: 200ms;
+  --motion-duration-slow: 250ms;
+  --motion-easing: ease-out;
+
+  /* === Sombras: tarjeta + brillo neón (decorativo, nunca único indicador) === */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(124, 58, 237, 0.08);
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 32px rgba(236, 72, 153, 0.18);
+  --shadow-neon-pink: 0 0 12px rgba(255, 46, 136, 0.45), 0 0 32px rgba(236, 72, 153, 0.25);
+  --shadow-neon-sunset: 0 0 16px rgba(236, 72, 153, 0.35), 0 0 40px rgba(124, 58, 237, 0.25);
+  --shadow-neon-violet: 0 0 12px rgba(168, 85, 247, 0.45);
+}
+
+/* === Reglas de componente de la variante (alcance [data-theme="gta6"]) === */
+
+/* Títulos con carácter: display condensado, mayúsculas, gradiente SOLO con */
+/* paradas claras (#f9a8d4 9.00:1 / #fdba74 9.67:1 sobre tarjeta). */
+[data-theme="gta6"] h1,
+[data-theme="gta6"] .logo-avc {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: var(--font-line-height-heading);
+}
+[data-theme="gta6"] .logo-avc {
+  background: var(--gradient-sunset-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Franja atardecer bajo el header (decorativa, 4 px, sin texto encima). */
+[data-theme="gta6"] header::after {
+  content: "";
+  display: block;
+  height: 4px;
+  background: var(--gradient-sunset-strip);
+}
+
+/* Botón primario: degradado atardecer, texto blanco (peor parada 5.18:1). */
+[data-theme="gta6"] .btn-primary {
+  background: var(--gradient-sunset);
+  color: var(--color-on-primary);
+  box-shadow: var(--shadow-neon-sunset);
+}
+[data-theme="gta6"] .btn-primary:hover { background: var(--gradient-sunset-hover); }
+
+/* Pestaña activa: degradado atardecer + negrita + barra ámbar 3 px + aria-selected. */
+[data-theme="gta6"] nav button.active {
+  background: var(--gradient-sunset);
+  color: #ffffff;
+  font-weight: 700;
+  border-bottom: 3px solid var(--color-neon-amber);
+}
+
+/* Foco ámbar neón (9.77:1 sobre tarjeta, 11.64:1 sobre fondo). */
+[data-theme="gta6"] :focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus);
+  outline-offset: var(--size-focus-offset);
+}
+
+/* Login GTA 6: tarjeta centrada con borde degradado (truco de fondo doble), */
+/* logo AVC con gradiente de texto, botón primario atardecer. */
+[data-theme="gta6"] #loginBox {
+  background:
+    linear-gradient(var(--color-surface), var(--color-surface)) padding-box,
+    var(--gradient-sunset-strip) border-box;
+  border: 2px solid transparent;
+  box-shadow: var(--shadow-elevated);
+}
+
+/* Barra de prioridad: tramos atardecer (rojo <50, ámbar→naranja 50–89, */
+/* rosa→violeta ≥90) + número en --color-text con tabular-nums. */
+[data-theme="gta6"] .priority-bar .fill-low { background: var(--color-bad); }
+[data-theme="gta6"] .priority-bar .fill-mid {
+  background: linear-gradient(90deg, #fbbf24, #fb923c);
+}
+[data-theme="gta6"] .priority-bar .fill-high {
+  background: linear-gradient(90deg, #f472b6, #a78bfa);
+  box-shadow: var(--shadow-neon-pink);
+}
+
+/* Semáforo del Worker: mismo semántico + anillo de brillo neón por estado. */
+[data-theme="gta6"] .worker-dot.ok { box-shadow: 0 0 10px rgba(34, 197, 94, 0.8); }
+[data-theme="gta6"] .worker-dot.warn { box-shadow: 0 0 10px rgba(245, 158, 11, 0.8); }
+[data-theme="gta6"] .worker-dot.bad { box-shadow: 0 0 10px rgba(248, 113, 113, 0.8); }
+
+/* Tarjeta de clip 9:16: placeholder con degradado violeta→rosa oscuro (sin imagen). */
+[data-theme="gta6"] .clip-thumb-placeholder {
+  background: linear-gradient(180deg, #3b0764 0%, #500724 70%, #150d24 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="gta6"] * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

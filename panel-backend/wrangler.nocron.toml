@@ -1,0 +1,59 @@
+# wrangler.toml — instalación ÚNICA multi-tenant (avc.pages.dev)
+# Decisión del usuario 17 nov 2026, 15:05 y 15:33: UNA sola página,
+# https://avc.pages.dev, con login al entrar. Cada persona entra con
+# su login y ve solo su panel, sus cuentas, su cola y sus
+# credenciales. NO un avc-colega.pages.dev separado. AVC = Agent
+# Viral Clip.
+#
+# Recursos (UNA sola cuenta de Cloudflare, la de Sebastián):
+#   D1     clips-avc        (una base, tenant_id por fila)
+#   R2     clips-avc        (keys clips/<tenant>/<clip_id>/...)
+#   Worker avc              (este archivo; avc.<cuenta>.workers.dev)
+#   Pages  avc              (el front; https://avc.pages.dev)
+#   Cron   cada 5 min (un ciclo por tenant)
+#
+# SIN secretos aquí: los secretos van con `wrangler secret put`
+# (ver DEPLOY-avc.md). Los IDs de D1 se rellenan tras crearlos.
+# Los wrangler.toml viejos por tenant (tenants/*/wrangler.toml)
+# quedan como LEGADO: no usar.
+
+name = "avc"
+main = "worker/src/index.ts"
+compatibility_date = "2026-11-17"
+workers_dev = true
+
+# Cron DESACTIVADO temporalmente (2026-11-20, lecturas D1 al limite):
+# Worker viejo desplegado SIN cron, MISMO codigo (index.ts) y MISMA
+# D1/R2, para parar el ciclo de cada minuto sin dejar de servir el
+# panel. NO es el router: el retiro del Worker viejo (router) es
+# el cutover de las 21:00, no ahora.
+# Lección 2026-11-21 09:56: un config SIN sección [triggers] NO
+# quita los crons al desplegar; hace falta la lista vacía explícita.
+[triggers]
+crons = []
+
+[[d1_databases]]
+binding = "DB"
+database_name = "clips-avc"
+database_id = "5cf19675-f905-4e49-b8f2-96ae0810fafd"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "CLIPS_BUCKET"
+bucket_name = "clips-avc"
+
+[vars]
+# Contador de cuota D1 (budget.ts): el Worker lee las escrituras de hoy en la API de analíticas; necesita este account ID (var, no secreto) + CLOUDFLARE_API_TOKEN (secreto, `wrangler secret put`). Sin ambos, el contador cae al fallback por eventos y el freno del 70% no tiene el dato real.
+CLOUDFLARE_ACCOUNT_ID = "27afc37225a02fd92557f901c05dabee"
+# (2026-11-18, hallazgo M2) Sin PUBLIC_BASE_URL: el bucket R2 es
+# privado y no hay dominio público r2.dev. Instagram recibe una URL
+# firmada del Worker (/api/public-video, 15 min) solo al publicar.
+ALLOWED_EMAIL = ""
+# Repo del cerebro (vía principal): el botón Iniciar dispara su
+# workflow con repository_dispatch (panel-start). El token
+# va como secreto GITHUB_TOKEN (wrangler secret put), nunca aquí.
+GITHUB_REPO = "exe2027/viral-clip-agent"
+# URL pública de R2 para que el cerebro (y las plataformas) puedan
+# descargar los clips: valor PÚBLICO, no secreto (2026-11-19,
+# cerebro genérico: el cerebro la recibe en /api/bridge/credentials).
+CLIP_PUBLIC_BASE_URL = "https://pub-5f09f432fcae41dcb9e4d114ce8ff987.r2.dev"

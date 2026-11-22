@@ -1,0 +1,16 @@
+-- Migración 0020 (2026-11-18): throttle del dispatch en vivo.
+--
+-- Causa real del fallo 2026-11-18: el cron */5 del Worker solo
+-- corría runWorkerCycle por tenant y NUNCA disparaba nada a GitHub,
+-- así que el cerebro no barría los directos en vivo mientras el
+-- panel estaba en marcha. Desde aquí scheduled() dispara
+-- panel-live-<tenant> a GitHub por cada tenant con worker_running=1.
+--
+-- worker_state.last_live_dispatch_at: último dispatch en vivo
+-- enviado (ms epoch, como started_at/updated_at). Throttle: como
+-- mucho 1 dispatch cada 15 min por tenant (corregido de 10 a 15 el
+-- 2026-11-18 19:46: una corrida dura ~11-13 min y con 10 min +
+-- cancel-in-progress ninguna terminaba; además antes de disparar se
+-- consulta si ya hay una corrida en curso o en cola). NULL = nunca
+-- disparado: el primer ciclo con el Worker en marcha dispara.
+ALTER TABLE worker_state ADD COLUMN last_live_dispatch_at INTEGER;

@@ -1,0 +1,66 @@
+# wrangler.kaez.toml — Worker por usuario: UN SOLO TENANT (kaez).
+# Generado por migrar-kaez-a-su-cuenta.sh desde wrangler.sebastian.toml
+# (migración 2026-11-21: kaez a SU PROPIA cuenta de Cloudflare).
+# Decisión del usuario 2026-11-19: cada cuenta/tenant tiene su propio
+# Worker desplegado (código igual para todos, solo cambia
+# configuración/APIs/cuentas por usuario). Este Worker sirve
+# EXACTAMENTE al tenant "kaez" (var TENANT).
+#
+# Recursos (cuenta de Cloudflare DE KAEZ):
+#   D1     clips-avc-kaez (una base SOLO con filas de kaez)
+#   R2     clips-avc (bucket PROPIO en la cuenta de kaez; keys
+#          clips/<tenant>/<clip_id>/...; URL pública https://pub-63c9c5ad17e147d2b2c20a3665a78c98.r2.dev)
+#   Worker avc-kaez         (este archivo; avc-kaez.<su-subdominio>.workers.dev)
+#   Cron   APAGADO (A5, 2026-11-20): el Worker nuevo se despliega SIN
+#          [triggers] y con worker_running=false. Se enciende solo con
+#          scripts/provision-tenant.sh kaez --enable-cron, tras
+#          verificar salud (/api/health), la D1 y los 6 secretos.
+#
+# SIN secretos aquí: los secretos van con `wrangler secret put
+# --config wrangler.kaez.toml` (BRIDGE_TOKEN,
+# CREDENTIAL_ENCRYPTION_KEY, GITHUB_TOKEN, GOOGLE_CLIENT_ID,
+# GOOGLE_CLIENT_SECRET, SESSION_SECRET, TELEGRAM_BOT_TOKEN,
+# TELEGRAM_WEBHOOK_SECRET). SESSION_SECRET y CREDENTIAL_ENCRYPTION_KEY
+# son FRESCOS por tenant (los genera este script); GOOGLE_* los crea el
+# usuario en sus consolas y el panel lo guía.
+#
+# Despliegue: python3 scripts/deploy_with_token.py deploy-worker-kaez
+#
+name = "avc-kaez"
+main = "worker/src/index.ts"
+compatibility_date = "2026-11-17"
+workers_dev = true
+
+# Cron APAGADO (A5, 2026-11-20): el Worker nuevo se despliega
+# sin cron y con worker_running=false. Se enciende solo con
+# scripts/provision-tenant.sh kaez --enable-cron, tras verificar
+# salud (/api/health), la D1 y los 6 secretos.
+
+
+[[d1_databases]]
+binding = "DB"
+database_name = "clips-avc-kaez"
+database_id = "e3c4b231-cc5a-4ccd-b5ee-54f7b9b4a3a8"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "CLIPS_BUCKET"
+bucket_name = "clips-avc"
+
+[vars]
+# Tenant ÚNICO de este Worker. Si falta o no es "sebastian", el
+# Worker falla en voz alta (requireTenant, auth.ts): nunca un
+# default silencioso.
+TENANT = "kaez"
+# (2026-11-18, hallazgo M2) Sin PUBLIC_BASE_URL: el bucket R2 es
+# privado y no hay dominio público r2.dev. Instagram recibe una URL
+# firmada del Worker (/api/public-video, 15 min) solo al publicar.
+ALLOWED_EMAIL = ""
+# Repo del cerebro (vía principal): el botón Iniciar dispara su
+# workflow con repository_dispatch (panel-start). El token
+# va como secreto GITHUB_TOKEN (wrangler secret put), nunca aquí.
+GITHUB_REPO = "exe2027/viral-clip-agent"
+# URL pública de R2 para que el cerebro (y las plataformas) puedan
+# descargar los clips: valor PÚBLICO, no secreto (2026-11-19,
+# cerebro genérico: el cerebro la recibe en /api/bridge/credentials).
+CLIP_PUBLIC_BASE_URL = "https://pub-63c9c5ad17e147d2b2c20a3665a78c98.r2.dev"

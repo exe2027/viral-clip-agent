@@ -1,0 +1,34 @@
+# wrangler.router.toml — Router SIN ESTADO del Worker viejo `avc`
+# (decisión "un Worker por usuario", 2026-11-19).
+#
+# Este Worker SOLO reenvía el tráfico del cerebro al Worker propio de
+# cada tenant. Su cron se apaga al desplegar esta configuración: NO hay
+# [triggers] crons, NO hay bindings D1 ni R2, NO hay secretos.
+#
+# Despliegue (SOLO cuando avc-sebastian y avc-kaez estén en vivo):
+#   wrangler deploy --config wrangler.router.toml
+# Desplegar esto REEMPLAZA el Worker `avc` actual (mismo name): el
+# Worker viejo deja de servir el panel y de correr su cron, y pasa a
+# ser solo el proxy del cerebro, cuya PANEL_URL hardcodeada
+# (https://avc.vikingosfoodspa.workers.dev) no se puede cambiar.
+#
+# Las URLs destino son vars (NO hardcodeadas en el código):
+#   WORKER_SEBASTIAN_URL / WORKER_KAEZ_URL
+# Y el mapa usuario->tenant del login es la var LOGIN_USER_MAP (JSON):
+# debe ser el mismo mapa que frontend/dist/workers.json cuando ese
+# archivo exista. Hoy: sebastian->sebastian, kaez->kaez (usuario ==
+# tenant; verificado en worker/src/auth.ts y scripts/seed-users.sql).
+
+name = "avc"
+main = "worker/src/router.ts"
+compatibility_date = "2026-11-17"
+workers_dev = true
+
+# SIN [triggers] crons: el cron del Worker viejo muere aquí.
+# SIN [[d1_databases]] ni [[r2_buckets]]: el router es sin estado.
+# SIN secretos: no verifica firmas (eso lo hace el destino).
+
+[vars]
+WORKER_SEBASTIAN_URL = "https://avc-sebastian.vikingosfoodspa.workers.dev"
+WORKER_KAEZ_URL = "https://avc-kaez.clipsultravirales768.workers.dev"
+LOGIN_USER_MAP = "{\"kaez\":\"kaez\",\"muse-cerebro\":\"sebastian\",\"muse-servicio\":\"sebastian\",\"muse-servicio2\":\"sebastian\",\"seba\":\"sebastian\"}"

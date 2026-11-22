@@ -1,0 +1,13 @@
+-- 0034_cycle_review_at.sql — hora de la última revisión del ciclo (A3, 2026-11-20).
+--
+-- El ciclo del publicador pasa de cada minuto a "cuando toca": entre
+-- publicaciones solo despierta cada 10-15 min (revisión periódica).
+-- La hora de la última revisión vive en worker_state (una lectura por
+-- ciclo, cero escrituras cuando no toca nada) y se actualiza con una
+-- sola escritura cuando el ciclo completo corre de verdad
+-- (markCycleReview, worker/src/cycle-gate.ts).
+-- NULL = nunca revisado: la primera pasada tras la migración revisa.
+-- Sin esta columna, lastCycleReviewAt devuelve 0 y la revisión toca
+-- siempre (fail-open: el ciclo corre como antes, sin ahorro pero sin
+-- rotura), así que el código y la migración deben entrar juntos.
+ALTER TABLE worker_state ADD COLUMN last_cycle_review_at INTEGER;

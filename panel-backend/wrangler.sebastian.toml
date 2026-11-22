@@ -1,0 +1,71 @@
+# wrangler.sebastian.toml — Worker por usuario: UN SOLO TENANT (sebastian).
+# Decisión del usuario 2026-11-19: cada cuenta/tenant tiene su propio
+# Worker desplegado (código igual para todos, solo cambia
+# configuración/APIs/cuentas por usuario). Este Worker sirve
+# EXACTAMENTE al tenant "sebastian" (var TENANT): sesiones, tokens
+# del cerebro, OAuth, login y cron de otro tenant dan 401 / no se
+# ejecutan aquí.
+#
+# Recursos (cuenta de Cloudflare de Sebastián):
+#   D1     clips-avc-sebastian (una base SOLO con filas de sebastian)
+#   R2     clips-avc            (compartido; keys clips/<tenant>/<clip_id>/...)
+#   Worker avc-sebastian        (este archivo; avc-sebastian.<cuenta>.workers.dev)
+#   Cron   cada minuto (un ciclo para sebastian)
+#
+# SIN secretos aquí: los secretos van con `wrangler secret put
+# --config wrangler.sebastian.toml` (los mismos 8 que el Worker `avc`:
+# BRIDGE_TOKEN, CREDENTIAL_ENCRYPTION_KEY, GITHUB_TOKEN,
+# GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SESSION_SECRET,
+# TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET).
+# OJO CREDENTIAL_ENCRYPTION_KEY (2026-11-20): el valor maestro viejo
+# NO es recuperable (nunca quedó registrado); NO se puede copiar.
+# El Worker nuevo lleva una clave FRESCA y las credenciales migradas
+# (credential_enc) hay que RE-CIFRARLAS desde el Worker viejo — que
+# sí tiene la clave vieja en runtime — antes del cutover, o no
+# descifrarán. Ver el plan de re-cifrado del coordinador.
+# database_id: D1 clips-avc-sebastian (creada por la migración 2026-11-19).
+#
+# Despliegue: python3 scripts/deploy_with_token.py deploy-worker-sebastian
+
+name = "avc-sebastian"
+main = "worker/src/index.ts"
+compatibility_date = "2026-11-17"
+workers_dev = true
+
+# Cron del Worker: SOLO en franjas de publicación (2026-11-21, ahorro
+# D1: fuera de franja el Worker ni despierta, así que no gasta
+# escrituras). Franjas hora Chile 12:00-14:00, 18:00-20:00, 21:00-23:00;
+# en UTC con 1 h de margen por el cambio DST (-03/-04): 15-18 y 21-23,0-3.
+# La puerta (gate.ts) sigue filtrando la franja exacta en hora Chile.
+# Avanza la cola de sebastian SOLO si sebastian inició su Worker
+# (botón Iniciar en la pestaña Worker).
+[triggers]
+crons = ["*/5 15-18 * * *", "*/5 21-23,0-3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "clips-avc-sebastian"
+database_id = "ee97f58d-0b56-4617-9976-fcf0022edb54"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "CLIPS_BUCKET"
+bucket_name = "clips-avc"
+
+[vars]
+# Tenant ÚNICO de este Worker. Si falta o no es "sebastian", el
+# Worker falla en voz alta (requireTenant, auth.ts): nunca un
+# default silencioso.
+TENANT = "sebastian"
+# (2026-11-18, hallazgo M2) Sin PUBLIC_BASE_URL: el bucket R2 es
+# privado y no hay dominio público r2.dev. Instagram recibe una URL
+# firmada del Worker (/api/public-video, 15 min) solo al publicar.
+ALLOWED_EMAIL = ""
+# Repo del cerebro (vía principal): el botón Iniciar dispara su
+# workflow con repository_dispatch (panel-start). El token
+# va como secreto GITHUB_TOKEN (wrangler secret put), nunca aquí.
+GITHUB_REPO = "exe2027/viral-clip-agent"
+# URL pública de R2 para que el cerebro (y las plataformas) puedan
+# descargar los clips: valor PÚBLICO, no secreto (2026-11-19,
+# cerebro genérico: el cerebro la recibe en /api/bridge/credentials).
+CLIP_PUBLIC_BASE_URL = "https://pub-5f09f432fcae41dcb9e4d114ce8ff987.r2.dev"

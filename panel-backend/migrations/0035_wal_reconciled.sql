@@ -1,0 +1,15 @@
+-- Migración 0035 — reconciliación del diario WAL en jobs (B1, 2026-11-20).
+--
+-- La idempotency_key NO se crea aquí: ya existe desde la migración
+-- 0011 (columna idempotency_key + UNIQUE INDEX jobs_idempotency_key,
+-- sha256(clip|plataforma|cuenta|día), la usa jobs.idempotencyKey).
+-- Volver a añadirla reventaría el apply en bases ya migradas.
+--
+-- Lo que añade 0035 es la marca que usa el volcado del diario
+-- (worker/src/wal.ts flushWalDay): cuando un job se marca posted
+-- desde el diario R2 (porque D1 estaba caída con 7500 cuando se
+-- subió el clip), wal_reconciled=1 deja constancia de que ese
+-- posted llegó por el diario y no por el camino normal del ciclo.
+-- Sin aplicar: entra con el deploy del cutover (es una escritura
+-- D1 y la cuota está agotada hasta las 21:00 -03 del 2026-11-20).
+ALTER TABLE jobs ADD COLUMN wal_reconciled INTEGER NOT NULL DEFAULT 0;

@@ -1,0 +1,12 @@
+-- Migración 0016: guardar en el clip la key R2 de su MP4.
+--
+-- Hueco encontrado 2026-11-18 (clip 02): PUT /api/clips/:id/video
+-- subía el MP4 a R2 pero no guardaba la key en ningún sitio. La tabla
+-- clips no tenía columna para ella y POST /api/clips/:id/publish solo
+-- buscaba r2_key en jobs (vacío en la primera publicación), así que el
+-- job nacía con r2_key NULL y el Worker lo dejaba en draft ("el clip
+-- no tiene MP4 en R2: súbelo desde el Editor antes de publicar.").
+-- Con esta columna el PUT guarda la key en clips.video_r2_key y
+-- publish / GET /video la leen de ahí (con fallback a jobs para los
+-- clips subidos antes de esta migración).
+ALTER TABLE clips ADD COLUMN video_r2_key TEXT NOT NULL DEFAULT '';

@@ -1,0 +1,45 @@
+# tenants-team.example.csv — Lista de tenants para scripts/onboard-team.sh
+#
+# COPIA este archivo a tenants-team.csv (FUERA del repo si es posible, o
+# al menos NUNCA lo commitees con tokens) y edita una fila por persona.
+# Este archivo de ejemplo trae 2 tenants FICTICIOS, solo para probar
+# --dry-run. Las cuentas, subdominios y URLs de aquí NO existen.
+#
+# Formato: CSV sin comillas, 7 columnas, sin espacios, una fila por tenant:
+#   tenant,login,cloudflare_account_id,workers_subdomain,clip_public_base_url,token_env,token_file
+#
+#   tenant                 Nombre corto del tenant: [a-z0-9-], máx 31.
+#                          Worker: avc-<tenant> · D1: clips-avc-<tenant>.
+#                          NO uses sebastian ni kaez (ya existen en la
+#                          cuenta de Sebastián; migrarlos es otro trabajo).
+#   login                  Usuario de login del panel (puede ser = tenant).
+#   cloudflare_account_id  ID de 32 caracteres hex de LA CUENTA DE ESA
+#                          PERSONA (Dashboard → Account ID). Cada persona
+#                          tiene el suyo; no se comparte.
+#   workers_subdomain      Subdominio workers.dev DE ESA CUENTA (el que
+#                          sale en sus Workers, p. ej. si su Worker es
+#                          avc-luis.<sub>.workers.dev, el sub es <sub>).
+#   clip_public_base_url   URL pública r2.dev DEL BUCKET DE ESA CUENTA,
+#                          p. ej. https://pub-<hash>.r2.dev (sin barra
+#                          final). Se obtiene en el dashboard de esa
+#                          cuenta: R2 → bucket clips-avc → Settings →
+#                          Public access / r2.dev subdomain → Enable, y
+#                          se copia la URL que muestra. OBLIGATORIA: el
+#                          script falla si falta o si es la URL de
+#                          Sebastián (copiarla sería apuntar al bucket
+#                          de otro). NUNCA se inventa una URL.
+#   token_env              Nombre de la variable de entorno DONDE ESTÁ el
+#                          token API de Cloudflare de esa persona (solo
+#                          el NOMBRE, nunca el valor). Exactamente UNA
+#                          de token_env / token_file debe tener valor.
+#   token_file             Ruta a un archivo FUERA del repo con el token
+#                          (una línea, sin salto extra; permisos 600).
+#                          Alternativa a token_env. Deja vacío si usas
+#                          token_env.
+#
+# Los tokens NUNCA van en este archivo y NUNCA se imprimen en logs.
+# Cada token necesita en SU cuenta: Workers Edit, D1 Edit, R2 Edit.
+#
+tenant,login,cloudflare_account_id,workers_subdomain,clip_public_base_url,token_env,token_file
+luis,luis,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,luis-subdomain,https://pub-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.r2.dev,CF_TOKEN_LUIS,
+marta,marta,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,marta-subdomain,https://pub-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.r2.dev,CF_TOKEN_MARTA,
