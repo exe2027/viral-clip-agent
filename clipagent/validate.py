@@ -211,6 +211,9 @@ def validate_config(cfg, source="config.yaml"):
             c.err("clips.max_duration_s",
                   "no puede pasar de 60 s (tope duro)")
     c.check(cfg, "clips.precise_cut", "bool")
+    # Animaciones del render (2026-11-22, opcionales por el usuario):
+    # interruptor maestro de slide/fade/shake/impacto/whoosh.
+    c.check(cfg, "clips.animations", "bool")
     for k in ("pre_roll", "window", "min_separation"):
         c.check(cfg, f"clips.{k}", "int", minimum=0)
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-18):

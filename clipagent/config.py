@@ -70,6 +70,15 @@ DEFAULT_CONFIG = {
         "pre_roll": 20,
         "window": 10,
         "min_separation": 60,
+        # Animaciones del render rubius (2026-11-22, pedido del
+        # usuario: OPCIONALES): banner deslizante, fundido de
+        # entrada, shake en el payoff, destello de impacto y whoosh.
+        # true = como hasta ahora (animadas); false = clip estatico
+        # (sin slide, sin fade, sin shake, sin impacto, sin whoosh).
+        # Es el interruptor maestro: los flags --no-shake,
+        # --no-impact, --no-banner-slide, --no-fade-in y --no-whoosh
+        # del CLI siguen apagando cada efecto por separado.
+        "animations": True,
         # Layout split vertical RDJavi: streamer arriba, gameplay abajo
         # 600 px (1080x1920). Los subtítulos viven en la zona de
         # juego, nunca sobre la cámara (ver subtitle_styles).

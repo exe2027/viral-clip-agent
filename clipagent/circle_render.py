@@ -203,6 +203,13 @@ def circle_render(source_url, streamer, title, start, end, lang,
 
     cfg = load_config(config_path) if config_path else load_config()
     duration = end - start
+    # Animaciones OPCIONALES (2026-11-22, pedido del usuario):
+    # clips.animations=false en config.yaml apaga de golpe el banner
+    # deslizante, el fundido, el shake, el impacto y el whoosh. Los
+    # flags --no-* del CLI siguen apagando cada efecto por separado.
+    _anims = (cfg.get("clips") or {}).get("animations", True)
+    if not _anims:
+        shake = impact = banner_slide = fade_in = whoosh = False
 
     segment = download_source(source_url, start, end, workdir)
     sw, sh = _probe_size(segment)
