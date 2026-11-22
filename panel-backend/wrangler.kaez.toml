@@ -64,3 +64,9 @@ GITHUB_REPO = "exe2027/viral-clip-agent"
 # descargar los clips: valor PÚBLICO, no secreto (2026-11-19,
 # cerebro genérico: el cerebro la recibe en /api/bridge/credentials).
 CLIP_PUBLIC_BASE_URL = "https://pub-63c9c5ad17e147d2b2c20a3665a78c98.r2.dev"
+# URL pública de ESTE Worker (2026-11-22, fix Instagram kaez):
+# signVideoUrl firma /api/public-video con SESSION_SECRET propio;
+# la URL debe apuntar a este Worker, no al hardcodeado de r2.ts
+# (avc/sebastian). Sin esta var, Instagram de kaez fallaba siempre
+# con "video no procesable" (3 contenedores, 2026-11-22).
+WORKER_PUBLIC_URL = "https://avc-kaez.clipsultravirales768.workers.dev"

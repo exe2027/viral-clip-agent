@@ -71,7 +71,15 @@ async function signObjectUrl(env: Env, path: string, key: string, ttlS: number, 
     const exp = Math.floor(Date.now() / 1000) + ttlS;
     const data = `v1:${key}:${exp}`;
     const sig = await crypto.subtle.sign("HMAC", await videoHmacKey(env.SESSION_SECRET), new TextEncoder().encode(data));
-    return `${WORKER_VIDEO_BASE}${path}?key=${encodeURIComponent(key)}&exp=${exp}&sig=${b64urlEncode(new Uint8Array(sig))}`;
+    // La URL firmada DEBE apuntar al Worker que la firmó: la
+    // verificación HMAC usa env.SESSION_SECRET, distinto por
+    // tenant. WORKER_VIDEO_BASE hardcodeado a avc (sebastian)
+    // rompía Instagram en cualquier otro tenant (kaez): Meta
+    // pedía el vídeo a avc, que lo rechazaba por firma inválida
+    // → contenedor ERROR "video no procesable" (3 intentos,
+    // 2026-11-22). WORKER_PUBLIC_URL es var por despliegue.
+    const base = (env.WORKER_PUBLIC_URL ?? "").trim() || WORKER_VIDEO_BASE;
+    return `${base}${path}?key=${encodeURIComponent(key)}&exp=${exp}&sig=${b64urlEncode(new Uint8Array(sig))}`;
   } catch {
     return null;
   }

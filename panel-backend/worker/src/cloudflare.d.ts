@@ -107,4 +107,11 @@ export interface Env {
   ALLOWED_EMAIL: string; // vacío = login por contraseña; con valor = allowlist Google (futuro)
   GITHUB_REPO: string; // var: "exe2027/viral-clip-agent"
   CLIP_PUBLIC_BASE_URL?: string; // var pública: dominio r2.dev de clips-avc (2026-11-19, cerebro genérico)
+  /** URL pública de ESTE Worker (var por despliegue): la usa
+   *  signVideoUrl para firmar /api/public-video. DEBE ser la del
+   *  Worker que firma (su SESSION_SECRET es distinto por tenant);
+   *  si falta, r2.ts cae a WORKER_VIDEO_BASE (avc/sebastian).
+   *  Sin ella, Instagram falla en cualquier tenant que no sea
+   *  sebastian (kaez, 2026-11-22). */
+  WORKER_PUBLIC_URL?: string;
 }

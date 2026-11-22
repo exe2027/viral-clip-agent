@@ -57,3 +57,7 @@ GITHUB_REPO = "exe2027/viral-clip-agent"
 # descargar los clips: valor PÚBLICO, no secreto (2026-11-19,
 # cerebro genérico: el cerebro la recibe en /api/bridge/credentials).
 CLIP_PUBLIC_BASE_URL = "https://pub-5f09f432fcae41dcb9e4d114ce8ff987.r2.dev"
+# URL pública de ESTE Worker (2026-11-22, fix Instagram kaez):
+# signVideoUrl firma /api/public-video con SESSION_SECRET propio;
+# la URL debe apuntar a este Worker, no al hardcodeado de r2.ts.
+WORKER_PUBLIC_URL = "https://avc.vikingosfoodspa.workers.dev"
