@@ -1,0 +1,6 @@
+---
+name: ci tests
+discover: find . -type f -name 'test_*.py' -not -path './runs/*' -not -path './.venv/*' -not -path './.git/*' -not -name 'test_subtitle_policy.py' -not -name 'test_subtitles_always.py' | sed 's|^\./||' | sort
+run: python -m pytest --disable-pytest-warnings --no-header --quiet --tb=short --junit-xml="<< outputs.junit >>" << test.atoms >>; rc=$?; python3 .circleci/add_junit_file_attr.py "<< outputs.junit >>"; exit $rc
+outputs:
+  junit: test-reports/tests.xml

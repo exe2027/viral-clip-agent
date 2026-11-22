@@ -32,6 +32,8 @@ dependencies = [
     # + borde blanco + dos líneas Arial Black). Sin Pillow el
     # render rubius no puede componer el banner: es dependencia
     # real del pipeline, no opcional (mismo caso que fontTools).
+    # El gate cuadro por cuadro también lee los fotogramas con PIL
+    # (render_gate, job de render en CircleCI).
     "Pillow>=10.0",
     # Fuente YouTube (youtube.py, 2026-11-21): detección de VODs y
     # directos + descarga de segmentos con yt-dlp (--flat-playlist,

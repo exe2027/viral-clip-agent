@@ -38,7 +38,15 @@ solo t=1-2 s del reel, ~2 s al inicio):
     con un piso de legibilidad (ver split_block_words).
   * Punch-in 1,18x en la reaccion (16-26 s del clip por
     defecto), centrado en la cara, con doble rama de camara +
-    overlay enable (opcion C, como rdjavi).
+    overlay enable (opcion C, como rdjavi). Con --punch-zoom
+    1.30 es el marcado que usa el job de CircleCI.
+  * Efectos extra (2026-11-21, pedido del usuario): shake de
+    camara +-5 px a 9 Hz en el payoff, destello de brillo en
+    el payoff, banner que entra deslizandose, fundido desde
+    negro al inicio y whoosh de sonido al arrancar el punch-in
+    (en la misma mezcla SFX que el boom/riser). Todos van por
+    defecto; se apagan con --no-shake, --no-impact,
+    --no-banner-slide, --no-fade-in, --no-whoosh.
 
 Config de una sola fuente (regla del proyecto): la geometria
 vive en config.yaml (seccion ``templates.rubius`` + estilo
@@ -103,6 +111,26 @@ BANNER_LINE_GAP = 20
 # (menos marcado que el 1,30x de willyrex), centrado en la cara.
 PUNCH_ZOOM = 1.18
 PUNCH_WINDOW = (16, 26)
+# Punch-in MARCADO (2026-11-21, pedido del usuario: mas efectos):
+# el job de CircleCI pasa 1.30 por defecto.
+PUNCH_ZOOM_STRONG = 1.30
+# Shake de camara en el momento fuerte (payoff): vaiven de +-5 px
+# a 9 Hz durante 1,2 s desde el payoff, con caida lineal.
+SHAKE_AMP_PX = 5
+SHAKE_FREQ_HZ = 9
+SHAKE_DUR_S = 1.2
+# Impacto: destello de brillo en el payoff (0,15 s).
+IMPACT_BRIGHTNESS = 0.35
+IMPACT_DUR_S = 0.15
+# Transiciones: el banner entra deslizandose 60 px en 0,2 s y el
+# clip arranca con fundido desde negro de 0,3 s.
+BANNER_SLIDE_PX = 60
+BANNER_SLIDE_S = 0.2
+FADE_IN_S = 0.3
+# Whoosh de sonido al arrancar el punch-in (efecto "whoosh" del
+# pack SFX, barrido que pega en su ultimo 0,5 s). Se mezcla en el
+# MISMO pase SFX que el boom/riser (ver apply_sfx extra_events).
+WHOOSH_AT_PUNCH = True
 # Zoom SUAVE del gameplay en el payoff: 1,15x con rampa de 2 s
 # (sube 18->20, aguanta 20->22, baja 22->24), anclado abajo.
 GAME_ZOOM_FACTOR = 1.15
@@ -442,15 +470,27 @@ def build_filter(
     fps,
     game_crop=GAME_CROP,
     game_zoom=GAME_ZOOM_WINDOW,
+    punch_zoom=PUNCH_ZOOM,
+    shake=True,
+    shake_amp=SHAKE_AMP_PX,
+    impact=True,
+    payoff_s=20.0,
+    banner_slide=True,
+    fade_in=True,
 ):
     """Grafo de un solo pase, plantilla rubius (opcion C).
 
     [0:v] se parte en camara y gameplay; la camara es COVER a
     1080x840 (doble rama + overlay enable para el punch-in
-    1,18x); el gameplay es el recorte cuadrado con zoom suave
+    ``punch_zoom``); el gameplay es el recorte cuadrado con zoom suave
     y se padea a 1080x1920 en y=840; el banner PNG (entrada
-    [1:v]) se compone a caballo del corte solo en BANNER_SHOW;
-    el ASS palabra por palabra se quema al final. Sin banner
+    [1:v]) se compone a caballo del corte solo en BANNER_SHOW
+    (con ``banner_slide`` entra deslizandose 60 px en 0,2 s);
+    el ASS palabra por palabra se quema al final. Despues del
+    quemado, si se piden: fundido desde negro al inicio
+    (``fade_in``, 0,3 s), shake de +-``shake_amp`` px a 9 Hz
+    durante 1,2 s desde el payoff (``shake``) y destello de
+    brillo de 0,15 s en el payoff (``impact``). Sin banner
     no hay entrada [1:v] ni overlay. Sin ASS no hay quemado.
     Devuelve (filtro, etiqueta_de_salida).
     """
@@ -458,7 +498,7 @@ def build_filter(
     p0, p1 = punch_in if punch_in else (None, None)
     if p0 is not None:
         cx, cy = face_center(cam_square)
-        zc = punch_cover_crop(cover, cx, cy, zoom=PUNCH_ZOOM)
+        zc = punch_cover_crop(cover, cx, cy, zoom=punch_zoom)
         head = (
             f"[0:v]fps={fps},split=2[cam_src][game_src];"
             f"[cam_src]split=2[cam_n][cam_z];"
@@ -487,14 +527,69 @@ def build_filter(
     vlabel = "[step2]"
     if banner_png:
         b0, b1 = BANNER_SHOW
+        if banner_slide:
+            # Desliza hacia abajo 60 px en los primeros 0,2 s de
+            # la ventana y queda fijo: y pasa de 751 a 811.
+            y_expr = (
+                f"'if(between(t,{b0:g},{b0 + BANNER_SLIDE_S:g}),"
+                f"{BANNER_Y0}-{BANNER_SLIDE_PX}"
+                f"*({b0 + BANNER_SLIDE_S:g}-t)"
+                f"/{BANNER_SLIDE_S:g},{BANNER_Y0})'"
+            )
+        else:
+            y_expr = str(BANNER_Y0)
         parts.append(
-            f"[step2][1:v]overlay={BANNER_X0}:{BANNER_Y0}:"
+            f"[step2][1:v]overlay={BANNER_X0}:{y_expr}:"
             f"enable='between(t,{b0:g},{b1:g})'[step3];"
         )
         vlabel = "[step3]"
     if ass_path:
         parts.append(f"{vlabel}ass={ass_path}[vsub]")
         vlabel = "[vsub]"
+    # Efectos de salida (2026-11-21): cada uno es una cadena de
+    # filtros que consume la etiqueta anterior; se unen con ";"
+    # (sin el separador, ffmpeg lee "[vfade][vfade]scale" como
+    # basura tras el filtro).
+    post = []
+    if fade_in:
+        post.append(f"{vlabel}fade=t=in:st=0:d={FADE_IN_S:g}[vfade]")
+        vlabel = "[vfade]"
+    if shake:
+        # Shake: se escala el cuadro +5 px por lado y se recorta
+        # con una ventana que va y viene (sin/cos a 9 Hz) solo en
+        # [payoff-0,2, payoff+1,0] con caida lineal: fuera de esa
+        # ventana el recorte es el centro exacto (sin movimiento).
+        a = float(payoff_s) - 0.2
+        b = a + SHAKE_DUR_S
+        gate = (
+            f"max(0,1-(t-{a:g})/{SHAKE_DUR_S:g})"
+            f"*between(t,{a:g},{b:g})"
+        )
+        post.append(
+            f"{vlabel}scale={W + 2 * SHAKE_AMP_PX}:"
+            f"{H + 2 * SHAKE_AMP_PX}[vbig];"
+            f"[vbig]crop={W}:{H}:"
+            f"'{SHAKE_AMP_PX}+{shake_amp:g}*sin(2*PI*{SHAKE_FREQ_HZ}*t)"
+            f"*({gate})':"
+            f"'{SHAKE_AMP_PX}+{shake_amp:g}*cos(2*PI*{SHAKE_FREQ_HZ}*t)"
+            f"*({gate})'[vshake]"
+        )
+        vlabel = "[vshake]"
+    if impact:
+        # Destello de brillo en el payoff: +0,35 durante 0,15 s.
+        p = float(payoff_s)
+        post.append(
+            f"{vlabel}eq=brightness='"
+            f"{IMPACT_BRIGHTNESS:g}*between(t,{p:g},{p + IMPACT_DUR_S:g})"
+            f"'[vimp]"
+        )
+        vlabel = "[vimp]"
+    if post:
+        # El ASS no lleva ";" final (era el último); la cadena de
+        # efectos sí necesita el separador antes de su primera
+        # etiqueta de entrada. El resto de partes ya terminan en ";".
+        sep = "" if parts[-1].endswith(";") else ";"
+        parts.append(sep + ";".join(post))
     return "".join(parts), vlabel
 
 
@@ -513,6 +608,13 @@ def build_render_cmd(
     crf=23,
     game_crop=GAME_CROP,
     game_zoom=GAME_ZOOM_WINDOW,
+    punch_zoom=PUNCH_ZOOM,
+    shake=True,
+    shake_amp=SHAKE_AMP_PX,
+    impact=True,
+    payoff_s=20.0,
+    banner_slide=True,
+    fade_in=True,
 ):
     """Comando ffmpeg del render Rubius en un solo pase.
 
@@ -531,6 +633,13 @@ def build_render_cmd(
         fps,
         game_crop,
         game_zoom,
+        punch_zoom=punch_zoom,
+        shake=shake,
+        shake_amp=shake_amp,
+        impact=impact,
+        payoff_s=payoff_s,
+        banner_slide=banner_slide,
+        fade_in=fade_in,
     )
     cmd = [
         "ffmpeg",
@@ -592,6 +701,13 @@ def render(
     sfx_transcript=None,
     sfx_srt=None,
     payoff_s=20.0,
+    punch_zoom=PUNCH_ZOOM,
+    shake=True,
+    shake_amp=SHAKE_AMP_PX,
+    impact=True,
+    banner_slide=True,
+    fade_in=True,
+    whoosh=WHOOSH_AT_PUNCH,
 ):
     """Render Rubius en un solo pase. Devuelve (segundos, ruta_final).
 
@@ -603,6 +719,15 @@ def render(
     workers.apply_sfx (mismo paso 6a del camino automatico:
     boom/riser en el payoff + lift de volumen); si la mezcla
     falla, el clip sigue sin SFX. Sin cfg no hay SFX.
+
+    Efectos extra (2026-11-21): ``punch_zoom`` (zoom del punch-in,
+    1,30 marcado), ``shake`` (vaiven en el payoff), ``impact``
+    (destello en el payoff), ``banner_slide`` (el banner entra
+    deslizandose), ``fade_in`` (fundido desde negro) y ``whoosh``
+    (barrido de sonido al arrancar el punch-in, en la MISMA mezcla
+    SFX que el boom/riser). Todos van por defecto; se apagan con
+    False (CLI: --no-shake, --no-impact, --no-banner-slide,
+    --no-fade-in, --no-whoosh, --punch-zoom).
     """
     cmd = build_render_cmd(
         segment,
@@ -619,6 +744,13 @@ def render(
         crf=crf,
         game_crop=game_crop,
         game_zoom=game_zoom,
+        punch_zoom=punch_zoom,
+        shake=shake,
+        shake_amp=shake_amp,
+        impact=impact,
+        payoff_s=payoff_s,
+        banner_slide=banner_slide,
+        fade_in=fade_in,
     )
     dt = _run(cmd, "render Rubius")
     if watermark:
@@ -634,12 +766,24 @@ def render(
     if cfg is not None:
         from .workers import apply_sfx
 
+        extra = []
+        if whoosh and punch_in:
+            # Whoosh al arrancar el punch-in: solo si cabe entero
+            # antes de los ultimos 2 s (cola del loop) y fuera del
+            # hook (0-3 s). Va en la misma mezcla que boom/riser.
+            p0 = float(punch_in[0])
+            if p0 >= 3.0 and p0 + 2.0 <= float(duration) - 2.0:
+                extra.append(
+                    {"effect": "whoosh", "start": p0, "duration": 2.0,
+                     "reason": f"whoosh al arrancar el punch-in s={p0:g}"}
+                )
         final, _sfx_info = apply_sfx(
             out_path,
             transcript_path=sfx_transcript,
             srt_path=sfx_srt,
             payoff_s=float(payoff_s),
             cfg=cfg,
+            extra_events=extra,
         )
     return dt, final
 
@@ -697,6 +841,51 @@ def main(argv=None):
     )
     p.add_argument("--punch-in", type=float, nargs=2, default=[16, 26])
     p.add_argument("--no-punch-in", action="store_true")
+    p.add_argument(
+        "--punch-zoom",
+        type=float,
+        default=PUNCH_ZOOM,
+        help="Zoom del punch-in de la webcam (default 1,18; 1,30 "
+        "es el marcado que usa el job de CircleCI)",
+    )
+    p.add_argument(
+        "--no-shake",
+        action="store_true",
+        help="Sin shake de camara en el payoff",
+    )
+    p.add_argument(
+        "--shake-amp",
+        type=float,
+        default=SHAKE_AMP_PX,
+        help="Amplitud del shake en px (default 5)",
+    )
+    p.add_argument(
+        "--no-impact",
+        action="store_true",
+        help="Sin destello de brillo en el payoff",
+    )
+    p.add_argument(
+        "--no-banner-slide",
+        action="store_true",
+        help="El banner aparece fijo, sin deslizarse",
+    )
+    p.add_argument(
+        "--no-fade-in",
+        action="store_true",
+        help="Sin fundido desde negro al inicio",
+    )
+    p.add_argument(
+        "--no-whoosh",
+        action="store_true",
+        help="Sin whoosh de sonido al arrancar el punch-in",
+    )
+    p.add_argument(
+        "--payoff",
+        type=float,
+        default=20.0,
+        help="Segundo del momento fuerte (boom/shake/impacto, "
+        "default 20)",
+    )
     p.add_argument(
         "--game-zoom",
         type=float,
@@ -848,6 +1037,13 @@ def main(argv=None):
         crf=args.crf,
         game_crop=args.game_crop,
         game_zoom=game_zoom,
+        punch_zoom=args.punch_zoom,
+        shake=not args.no_shake,
+        shake_amp=args.shake_amp,
+        impact=not args.no_impact,
+        payoff_s=args.payoff,
+        banner_slide=not args.no_banner_slide,
+        fade_in=not args.no_fade_in,
     )
     if args.dry_run:
         print(" ".join(cmd))
@@ -872,6 +1068,14 @@ def main(argv=None):
         cfg=sfx_cfg,
         sfx_transcript=args.transcript,
         sfx_srt=args.srt,
+        payoff_s=args.payoff,
+        punch_zoom=args.punch_zoom,
+        shake=not args.no_shake,
+        shake_amp=args.shake_amp,
+        impact=not args.no_impact,
+        banner_slide=not args.no_banner_slide,
+        fade_in=not args.no_fade_in,
+        whoosh=not args.no_whoosh,
     )
     print(
         f"render Rubius: {dt:.1f} s ({args.duration:.1f} s de clip, "

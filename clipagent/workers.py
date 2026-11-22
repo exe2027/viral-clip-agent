@@ -556,7 +556,7 @@ def subtitle_clip(video, srt=None, burn=None, style=None, cfg=None,
 
 
 def apply_sfx(video, transcript_path=None, srt_path=None, payoff_s=20.0,
-              cfg=None, out_path=None):
+              cfg=None, out_path=None, extra_events=None):
     """Mezcla SFX sobre el MP4 ya renderizado (2026-11-19: SFX por
     defecto en el render, vivo y VOD).
 
@@ -567,6 +567,12 @@ def apply_sfx(video, transcript_path=None, srt_path=None, payoff_s=20.0,
     aplica el lift de volumen. Si la mezcla falla por lo que sea,
     devuelve el vídeo original sin tocar (nunca tumba el clip).
     Devuelve (ruta_final, info).
+
+    ``extra_events``: eventos explícitos [{effect, start, duration,
+    reason}] que se suman a los decididos (p. ej. el whoosh del
+    punch-in en el render rubius). Van en la MISMA mezcla, no en
+    un segundo pase. El tope max_sfx solo limita lo que decide
+    decide_sfx; los extra los pide explícitamente quien renderiza.
     """
     sfx_cfg = ((cfg or {}).get("sfx") or {})
     if not sfx_cfg.get("enabled", True):
@@ -592,11 +598,15 @@ def apply_sfx(video, transcript_path=None, srt_path=None, payoff_s=20.0,
             except Exception:
                 transcript = None
     try:
-        from .sfx_mix import mix_clip_with_sfx
-        out, info = mix_clip_with_sfx(
+        from .sfx_mix import decide_sfx, mix_sfx
+        events = decide_sfx(
             video, transcript=transcript, payoff_s=float(payoff_s),
-            out_path=out_path, lift=bool(sfx_cfg.get("lift", True)),
             max_sfx=int(sfx_cfg.get("max_sfx", 2)))
+        for ev in extra_events or []:
+            events.append(dict(ev))
+        out, info = mix_sfx(
+            video, events, out_path,
+            lift=bool(sfx_cfg.get("lift", True)))
         info = dict(info or {})
         info["enabled"] = True
         return out, info

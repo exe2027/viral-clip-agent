@@ -304,6 +304,11 @@ sfx:
 #     arriba (nunca abajo: minimapa y HUD de GTA).
 #   * solo gameplay -> recorte vertical centrado normal.
 #   * si el layout cambia dentro del clip, se adapta por tramos.
+sfx:
+  enabled: true   # SFX por defecto en todo clip renderizado
+  max_sfx: 2      # tope de efectos por clip en el camino automático
+  lift: true      # lift general de volumen (compand ascendente)
+
 layout:
   mode: "auto"          # auto | stack | split | pip | center
   # auto decide por fotogramas: dos cams -> stack (apiladas); una cam
@@ -543,6 +548,87 @@ templates:
 # componentes), ni la de prioridad, ni los filtros duros, ni el
 # ritmo anti-ban. Sin yt-dlp o sin heatmap, el heatmap queda
 # "available: false" y el pipeline sigue solo con el chat.
+validator:
+  face_sample_every_s: 2   # un fotograma cada N s, en TODO el clip
+  face_min_frames: 8       # mínimo de fotogramas muestreados
+  face_min_share: 0.5      # cara visible en >= 50% de las muestras
+  face_min_width_frac: 0.08  # ancho mínimo de la cara vs ancho de banda
+  min_score: 5             # nota mínima por criterio Gemini (0-10)
+  max_rerenders: 1         # re-renders automáticos por clip y fallo
+  gemini_hard: false       # false = criterios subjetivos de Gemini en
+                           # observación (registrados, no frenan); true =
+                           # cualquier rechazo de Gemini dispara re-render
+  chain: ["facecrop", "edge", "yunet"]  # orden de los fallbacks de cara
+  # Receta rubius (2026-11-21, caso scooter: un clip sin banner,
+  # con subtítulos de línea completa y sin SFX llegó a publicarse
+  # porque el validador solo miraba el montaje). Umbrales
+  # calibrados en fotogramas/audio reales (scooter vs 52h).
+  rubius_banner_t0: 0.5      # el banner es transitorio: visible desde t=0.5 s
+  rubius_banner_t1: 3.5      # ...hasta t=3.5 s (receta rubius.py)
+  rubius_banner_yellow_frac: 0.30  # el amarillo debe dominar >=30% de la zona del banner (scooter 0.004, 52h 0.79)
+  rubius_subs_edge_w: 150    # ancho (px) de cada banda lateral de la zona de subtítulos
+  rubius_subs_edge_cov: 0.10 # cobertura blanca mínima en cada banda para darla por tocada
+  sfx_min_ncc: 0.5           # correlación mínima con un efecto del pack SFX (scooter <=0.22, 52h >=0.98)
+
+# Plantillas del validador final (2026-11-19). TRES recetas
+# (1080x1920), ÚNICA fuente: config.yaml. El validador valida el
+# vídeo final contra LA PLANTILLA DEL CLIP (campo plantilla); un
+# clip sin plantilla se valida contra `default` (rubius, decisión
+# del usuario 2026-11-19 19:09). Un clip que no coincida con
+# ninguna de las tres no pasa y se vuelve a hacer.
+#   rdjavi (v1, commit d21cca5): streamer centrado casi 1:1
+#     583x595 (x=248, y=0) sobre fondo desenfocado morado/magenta
+#     + gradiente atardecer; subtítulos KARAOKE palabra por palabra
+#     (activa amarilla, resto blanco, 56 px negrita, contorno negro)
+#     AL PIE DE LA CÁMARA (banda 595-749), nunca sobre el gameplay;
+#     gameplay y 749-1786; barra negra abajo y 1786-1920.
+#   willyrex (v2, commits e7d47c7 + 4b7110a, código rdjavi.py):
+#     webcam ancho completo y 0-702; banda negra del medio y
+#     702-800 = TÍTULO en una línea, blanco Arial Black; gameplay
+#     y 800-1740; banda negra abajo y 1740-1920 = subtítulos FIJOS
+#     amarillos Arial Black 64 px.
+#   rubius (medido por píxeles): cámara ancho completo y 0-840; gameplay
+#     y 840-1920, corte limpio SIN bandas; TÍTULO = banner amarillo
+#     redondeado con borde blanco (x 103-967, y 811-1099), dos
+#     líneas centradas (línea 1 NEGRA, línea 2 ROJA, Arial Black
+#     gruesa), transitorio (solo en el momento clave); SUBTÍTULOS
+#     palabra por palabra, una palabra a la vez, BLANCO con borde
+#     negro grueso, centrados, y 900-1020 (parte superior del
+#     gameplay), ~120 px alto.
+# Regla de subtítulos sobre el gameplay POR PLANTILLA: en rubius
+# VAN sobre el gameplay (arriba, palabra por palabra en blanco) y
+# eso es correcto; en rdjavi/willyrex siguen prohibidos (van al pie
+# de la cámara / banda de abajo).
+templates:
+  default: rubius
+  rdjavi:
+    cam: {x: 248, y: 0, w: 583, h: 595}
+    karaoke_band: {y0: 595, y1: 749}
+    game: {y0: 749, y1: 1786}
+    subs_band: {y0: 1786, y1: 1920}
+    subs_style: karaoke
+    subs_over_game: false
+    cam_full_width: false
+    blurred_bg: true
+  willyrex:
+    cam: {x: 0, y: 0, w: 1080, h: 702}
+    title_band: {y0: 702, y1: 800}
+    game: {y0: 800, y1: 1740}
+    subs_band: {y0: 1740, y1: 1920}
+    subs_style: fixed_yellow
+    subs_over_game: false
+    cam_full_width: true
+    blurred_bg: false
+  rubius:
+    cam: {x: 0, y: 0, w: 1080, h: 840}
+    game: {y0: 840, y1: 1920}
+    title_banner: {x0: 103, x1: 967, y0: 811, y1: 1099}
+    subs_zone: {y0: 900, y1: 1020}
+    subs_style: word_white
+    subs_over_game: true
+    cam_full_width: true
+    blurred_bg: false
+
 signals:
   heatmap:
     enabled: true         # leer el heatmap si el VOD es de YouTube

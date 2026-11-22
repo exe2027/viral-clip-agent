@@ -51,6 +51,10 @@ KNOWN_TOP_KEYS = {
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
     # lista canónica en config.yaml; se valida en validate_config.
     "rules",
+    # Render rubius en CircleCI (2026-11-21, commit 59a455a):
+    # secciones nuevas de config.yaml; sin ellas validate_config
+    # avisa "clave desconocida" y rompe el job tests de CircleCI.
+    "sfx", "validator", "templates",
 }
 
 
