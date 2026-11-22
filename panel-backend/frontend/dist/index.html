@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="gta6">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#100a1a">
+<title>AVC — Panel de Clips GTA 6</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="styles.css?v=gta6-20261118">
+<link rel="stylesheet" href="tokens-gta6.css?v=gta6-20261118">
+</head>
+<body>
+<a class="skip-link" href="#main">Saltar al contenido</a>
+<header>
+  <h1>AVC — Panel de Clips GTA 6</h1>
+  <span class="sub">Agent Viral Clip · <span id="whoLine">sin sesión</span></span>
+  <span class="spacer"></span>
+  <button type="button" class="worker-light hidden" id="workerLight" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="workerLightText">Comprobando…</span></button>
+  <span class="dim" id="healthLine">Comprobando API…</span>
+  <button class="ghost hidden" id="logoutBtn" type="button">Salir</button>
+</header>
+
+<div id="loginBox" class="card">
+  <div class="login-sunset" aria-hidden="true"></div>
+  <p class="login-eyebrow">Vice City · Atardecer neón</p>
+  <p class="brand-mark" aria-hidden="true">AVC</p>
+  <p class="brand-sub">Panel de Clips GTA 6</p>
+  <h2>Iniciar sesión</h2>
+  <p class="dim">Entra con tu usuario del panel.</p>
+  <form id="loginForm" novalidate>
+    <div id="loginMsg" role="alert"></div>
+    <label for="username">Usuario</label>
+    <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="tu usuario" required aria-describedby="username-error">
+    <p class="field-error" id="username-error" role="alert" hidden></p>
+    <label for="password">Contraseña</label>
+    <div class="password-wrap" id="passwordWrap">
+      <input id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required aria-describedby="password-error">
+      <button type="button" id="passwordToggle" class="ghost" aria-controls="password" aria-pressed="false">Mostrar</button>
+    </div>
+    <p class="field-error" id="password-error" role="alert" hidden></p>
+    <button id="loginBtn" type="submit" class="btn-block">Entrar</button>
+  </form>
+  <p class="dim" id="loginHint"></p>
+</div>
+
+<div id="app" class="hidden">
+  <nav id="tabs" role="tablist" aria-label="Secciones del panel">
+    <button type="button" data-tab="worker" class="active" role="tab" aria-selected="true" aria-controls="tab-worker" id="tabbtn-worker">Worker</button>
+    <button type="button" data-tab="onboarding" role="tab" aria-selected="false" aria-controls="tab-onboarding" id="tabbtn-onboarding">Onboarding</button>
+    <button type="button" data-tab="cola" role="tab" aria-selected="false" aria-controls="tab-cola" id="tabbtn-cola">Cola</button>
+    <button type="button" data-tab="subidos" role="tab" aria-selected="false" aria-controls="tab-subidos" id="tabbtn-subidos">Subidos</button>
+    <button type="button" data-tab="cuentas" role="tab" aria-selected="false" aria-controls="tab-cuentas" id="tabbtn-cuentas">Cuentas</button>
+    <button type="button" data-tab="editor" role="tab" aria-selected="false" aria-controls="tab-editor" id="tabbtn-editor">Editor</button>
+    <button type="button" data-tab="canales" role="tab" aria-selected="false" aria-controls="tab-canales" id="tabbtn-canales">Canales</button>
+    <button type="button" data-tab="tracking" role="tab" aria-selected="false" aria-controls="tab-tracking" id="tabbtn-tracking">Tracking</button>
+    <button type="button" data-tab="analiticas" role="tab" aria-selected="false" aria-controls="tab-analiticas" id="tabbtn-analiticas">Analíticas</button>
+    <button type="button" data-tab="usuarios" role="tab" aria-selected="false" aria-controls="tab-usuarios" id="tabbtn-usuarios">Usuarios</button>
+    <button type="button" data-tab="influencers" role="tab" aria-selected="false" aria-controls="tab-influencers" id="tabbtn-influencers">Influencers</button>
+    <button type="button" data-tab="fuentes" role="tab" aria-selected="false" aria-controls="tab-fuentes" id="tabbtn-fuentes">Fuentes</button>
+    <button type="button" data-tab="avisos" role="tab" aria-selected="false" aria-controls="tab-avisos" id="tabbtn-avisos">Avisos <span id="unreadBadge" class="badge" role="status" aria-live="polite" hidden></span></button>
+    <button type="button" data-tab="ajustes" role="tab" aria-selected="false" aria-controls="tab-ajustes" id="tabbtn-ajustes">Ajustes</button>
+  </nav>
+  <main id="main">
+    <div id="msg" aria-live="polite"></div>
+
+    <section id="tab-worker" role="tabpanel" aria-labelledby="tabbtn-worker">
+      <div class="card">
+        <h2>Worker</h2>
+        <div class="worker-status" aria-live="polite">
+          <div class="worker-status-line"><span class="dot lg" id="wDot" aria-hidden="true"></span><span id="wRunning">Comprobando…</span></div>
+          <span class="dim" id="wStarted"></span>
+        </div>
+        <p class="dim" id="wPhase">Cargando…</p>
+        <p class="dim" id="wTimes"></p>
+        <p class="dim" id="wLastClip"></p>
+        <p class="dim" id="wNote"></p>
+        <div class="row row-fill">
+          <button id="btnStart" type="button"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg>Iniciar</button>
+          <button id="btnStop" type="button" class="danger"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>Parar</button>
+          <button id="btnRunOnce" type="button" class="ghost">Ejecutar un ciclo ahora</button>
+          <button id="btnRefreshW" type="button" class="ghost">Actualizar</button>
+        </div>
+        <p class="dim">Al iniciar, el Worker dispara el cerebro en GitHub Actions y el cron cada 5 min avanza la cola solo. Parado, la cola queda en pausa y nada se pierde. El loop sigue aunque cierres sesión, cierres el navegador o apagues el teléfono: Iniciar guarda el estado en el Worker y el cron trabaja solo desde ahí.</p>
+        <div id="onboardingBanner" class="hidden" role="status">
+          <p><b>Te falta completar el asistente de onboarding.</b> Copia la configuración base y conecta tus cuentas antes de iniciar el Worker.</p>
+          <button type="button" id="btnGoOnboarding" class="ghost">Ir al asistente</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Actividad reciente</h2>
+        <ul class="activity timeline" id="wActivity" aria-busy="true"></ul>
+      </div>
+      <div class="card">
+        <h2>Jobs recientes</h2>
+        <ul class="activity timeline" id="jobList" aria-busy="true"></ul>
+      </div>
+    </section>
+
+    <section id="tab-onboarding" class="hidden" role="tabpanel" aria-labelledby="tabbtn-onboarding">
+      <div class="card">
+        <h2>Onboarding — primeros pasos</h2>
+        <p class="dim">Asistente para un usuario nuevo: copia la configuración base, conecta tus propias cuentas y verifica cada una de verdad. Nada se publica aquí. El Worker queda parado hasta que tú pulses Iniciar.</p>
+        <p id="onbStatus" role="status">Cargando estado…</p>
+        <div id="onbChecklist"></div>
+      </div>
+
+      <div class="card">
+        <h2>1 · Configuración base</h2>
+        <p class="dim">Copia las reglas de sebastian como base (layout, duración 40–60 s, topes, viralidad/SEO mínimos…). Solo se copian reglas: nunca credenciales ni secretos.</p>
+        <div class="row"><button type="button" id="btnCopyBase">Copiar configuración base</button></div>
+        <p class="dim" id="copyBaseStatus" role="status"></p>
+      </div>
+
+      <div class="card">
+        <h2>2 · Conecta tus cuentas (por botón)</h2>
+        <p class="dim">Cada cuenta es tuya: se conecta con tu Google / tu Meta / tu Zernio. Si falta crear el cliente OAuth, el botón dice exactamente qué falta en vez de fingir que conecta.</p>
+        <h3>YouTube (Google)</h3>
+        <div class="row"><button type="button" id="btnOAuthGoogle">Conectar con Google</button></div>
+        <p class="dim" id="oauthGoogleStatus" role="status"></p>
+        <h3>Meta (Instagram + Facebook)</h3>
+        <div class="row"><button type="button" id="btnOAuthMeta">Conectar con Meta</button></div>
+        <p class="dim" id="oauthMetaStatus" role="status"></p>
+        <h3>TikTok (Zernio)</h3>
+        <p class="dim">Zernio no admite conectar desde aquí: se conecta en su panel y luego se pegan aquí la API key y el id de la cuenta.</p>
+        <div class="row"><button type="button" id="btnZernioConnect" class="ghost">Abrir Zernio (conectar TikTok)</button></div>
+        <label for="onbZernioKey">API key de Zernio</label>
+        <input id="onbZernioKey" type="password" autocomplete="off" spellcheck="false" placeholder="zk_…">
+        <label for="onbZernioAccount">ID de la cuenta TikTok en Zernio</label>
+        <input id="onbZernioAccount" type="text" spellcheck="false" placeholder="acc_…">
+        <p class="field-error" id="onbZernio-error" role="alert" hidden></p>
+        <div class="row"><button type="button" id="btnZernioSave">Guardar y verificar TikTok</button></div>
+        <p class="dim" id="zernioStatus" role="status"></p>
+      </div>
+
+      <div class="card">
+        <h2>3 · Twitch y Gemini (pegado)</h2>
+        <p class="dim">Solo estas dos van pegadas a mano, con su enlace exacto y qué pegar en cada campo.</p>
+        <h3>Twitch</h3>
+        <p class="dim">1. Entra en <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">dev.twitch.tv/console/apps</a> y crea una aplicación (o abre la que ya tengas). 2. Copia su <b>Client ID</b> y su <b>Client Secret</b> (botón “New Secret” si no lo ves). 3. Pégalos aquí.</p>
+        <label for="onbTwitchClientId">Client ID de Twitch</label>
+        <input id="onbTwitchClientId" type="text" spellcheck="false">
+        <label for="onbTwitchSecret">Client Secret de Twitch</label>
+        <input id="onbTwitchSecret" type="password" autocomplete="off" spellcheck="false">
+        <p class="field-error" id="onbTwitch-error" role="alert" hidden></p>
+        <div class="row"><button type="button" id="btnTwitchSave">Guardar Twitch</button></div>
+        <p class="dim" id="twitchStatus" role="status"></p>
+        <h3>Gemini</h3>
+        <p class="dim">1. Entra en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> y pulsa “Create API key”. 2. Copia la clave (empieza por AIza). 3. Pégala aquí.</p>
+        <label for="onbGeminiKey">API key de Gemini</label>
+        <input id="onbGeminiKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…">
+        <p class="field-error" id="onbGemini-error" role="alert" hidden></p>
+        <div class="row"><button type="button" id="btnGeminiSave">Guardar Gemini</button></div>
+        <p class="dim" id="geminiStatus" role="status"></p>
+      </div>
+
+      <div class="card">
+        <h2>4 · Verificar todo</h2>
+        <p class="dim">Comprueba cada cuenta de verdad contra su plataforma. Solo un éxito real marca “Conectada”. Cuando todo esté en verde, ve a la pestaña Worker y pulsa Iniciar cuando quieras: hasta entonces el Worker está parado.</p>
+        <div class="row"><button type="button" id="btnVerifyAll">Verificar todas las cuentas</button></div>
+        <div id="verifyAllResults" role="status"></div>
+        <div class="row"><button type="button" id="btnGoWorker" class="ghost">Ir a la pestaña Worker</button></div>
+      </div>
+    </section>
+
+    <section id="tab-cola" class="hidden" role="tabpanel" aria-labelledby="tabbtn-cola">
+      <div class="card">
+        <h2>Cola de clips</h2>
+        <p class="dim">Clips en carpeta, aprobados o programados. Arriba los de streams en vivo (LIVE) y abajo los de VODs; dentro de cada segmento, por puntos. Pulsa un clip para ver su seguimiento, subir su MP4 o publicarlo.</p>
+        <div id="clipList" aria-busy="true"></div>
+      </div>
+      <details class="card settings-advanced" id="createClipDetails">
+        <summary>Crear clip a mano</summary>
+        <p class="dim">Crea un clip en la Cola sin esperar al cerebro. Después sube su MP4 y publícalo con “Publicar ahora” en el detalle del clip. Los trabajos se crean al publicar, con sus puertas (SEO, MP4, calentamiento, topes).</p>
+        <form id="createClipForm" novalidate>
+          <label for="cc-title">Título del clip</label>
+          <input id="cc-title" type="text" placeholder="Ej.: GTA 6: Rubius salta en paracaídas por un helicóptero" required maxlength="200" aria-describedby="cc-title-error">
+          <p class="field-error" id="cc-title-error" role="alert" hidden></p>
+          <label for="cc-influencer">Streamer</label>
+          <select id="cc-influencer">
+            <option value="">— Sin streamer —</option>
+          </select>
+          <label for="cc-language">Idioma</label>
+          <select id="cc-language">
+            <option value="es" selected>Español</option>
+            <option value="en">Inglés</option>
+          </select>
+          <p class="dim">La cola en inglés solo publica en TikTok y YouTube en inglés (no hay cuentas Meta en inglés).</p>
+          <label>Plataformas</label>
+          <label class="check-label" for="cc-plat-youtube_shorts"><input id="cc-plat-youtube_shorts" type="checkbox" value="youtube_shorts" checked> YouTube Shorts</label>
+          <label class="check-label" for="cc-plat-tiktok"><input id="cc-plat-tiktok" type="checkbox" value="tiktok" checked> TikTok</label>
+          <label class="check-label" for="cc-plat-instagram_reels"><input id="cc-plat-instagram_reels" type="checkbox" value="instagram_reels" checked> Instagram</label>
+          <label class="check-label" for="cc-plat-facebook_reels"><input id="cc-plat-facebook_reels" type="checkbox" value="facebook_reels" checked> Facebook</label>
+          <p class="dim" id="cc-plat-hint">Las plataformas sin cuenta conectada en este idioma aparecen desactivadas.</p>
+          <p class="field-error" id="cc-platforms-error" role="alert" hidden></p>
+          <label for="cc-start-sec">Inicio (segundo del VOD)</label>
+          <input id="cc-start-sec" type="number" min="0" step="1" value="0">
+          <label for="cc-end-sec">Fin (segundo del VOD)</label>
+          <input id="cc-end-sec" type="number" min="1" step="1" placeholder="Ej.: 25" required aria-describedby="cc-duration-error">
+          <p class="dim">Duración 1–60 s (mínimo y máximo de Ajustes). Para un reel sin segundo exacto, usa 0 y la duración del vídeo.</p>
+          <p class="field-error" id="cc-duration-error" role="alert" hidden></p>
+          <label for="cc-score">Viralidad (0–100)</label>
+          <input id="cc-score" type="number" min="0" max="100" step="1" placeholder="Ej.: 55" required aria-describedby="cc-score-error">
+          <p class="dim">Mínimo 45 para entrar en la Cola.</p>
+          <p class="field-error" id="cc-score-error" role="alert" hidden></p>
+          <label for="cc-source-id">ID numérico de la fuente (opcional)</label>
+          <input id="cc-source-id" type="number" min="0" step="1" placeholder="0 si no tiene (p. ej. reel de Instagram)">
+          <label for="cc-source-url">URL de origen (opcional)</label>
+          <input id="cc-source-url" type="url" placeholder="https://…">
+          <label class="check-label" for="cc-subs"><input id="cc-subs" type="checkbox" checked> Subtítulos completos (quemados en el vídeo)</label>
+          <p class="dim">Si no están completos, el clip nace bloqueado hasta que los revises.</p>
+          <label for="cc-video">MP4 del clip (opcional, se sube al crear)</label>
+          <input type="file" id="cc-video" accept="video/mp4,video/*" aria-describedby="cc-video-error cc-video-info">
+          <p class="dim" id="cc-video-help">Solo MP4 vertical 9:16, hasta 128 MB. Si no lo tienes ahora, súbelo después desde el detalle del clip.</p>
+          <p class="field-error" id="cc-video-error" role="alert" hidden></p>
+          <p class="dim" id="cc-video-info" hidden></p>
+          <div class="upload-progress hidden" id="cc-uploadProgress"><div class="upload-progress-fill" id="cc-uploadProgressFill"></div></div>
+          <p class="dim" id="cc-uploadStatus" role="status" hidden></p>
+          <details class="settings-advanced" id="cc-seo-details">
+            <summary>SEO y miniatura (opcional)</summary>
+            <label for="cc-seo-title">Título SEO</label>
+            <input id="cc-seo-title" type="text" maxlength="200" placeholder="Ej.: GTA 6: Rubius salta en paracaídas por un helicóptero">
+            <label for="cc-seo-description">Descripción</label>
+            <textarea id="cc-seo-description" maxlength="5000" placeholder="Qué pasa en el clip + pregunta al chat"></textarea>
+            <label for="cc-seo-tags">Tags (separados por coma)</label>
+            <input id="cc-seo-tags" type="text" placeholder="GTA 6, GTA VI, clips GTA 6">
+            <label for="cc-thumb-text">Texto de miniatura</label>
+            <input id="cc-thumb-text" type="text" maxlength="200" placeholder="Ej.: ¡Lo cazan en BAYSIDE!">
+          </details>
+          <button type="submit" id="cc-submit">Crear clip</button>
+          <p class="field-error" id="cc-error" role="alert" hidden></p>
+          <p class="dim" id="cc-result" role="status" hidden></p>
+          <p class="note-warn">El clip se crea en la Cola con el Worker. La publicación la haces después con “Publicar ahora”, que crea los trabajos con sus puertas.</p>
+        </form>
+      </details>
+      <div class="card" id="dailyPlanCard">
+        <h2>Plan de hoy</h2>
+        <p class="dim">Qué se publica hoy, en qué cuenta y a qué hora (hora de Chile), según las reglas 2026-11-19: topes por plataforma, calentamiento, espaciamiento y franjas 12:00–14:00, 18:00–20:00 y 21:00–23:00. Lo que no cabe queda en cola.</p>
+        <div class="row">
+          <label for="dailyPlanDate">Fecha</label>
+          <input id="dailyPlanDate" type="date">
+          <button id="btnDailyPlan" type="button">Ver plan de hoy</button>
+        </div>
+        <div id="dailyPlan" aria-live="polite"><p class="dim">Pulsa “Ver plan de hoy” para calcular el plan.</p></div>
+      </div>
+      <div class="card hidden" id="clipDetailCard" aria-busy="false">
+        <div class="clip-detail-head">
+          <h2 id="clipTitle" tabindex="-1">Clip</h2>
+          <span class="score-ring lg" id="clipScoreRing" aria-hidden="true">—</span>
+        </div>
+        <div id="clipDetail"></div>
+        <div id="clipBrakes" class="hidden">
+          <h3>Frenos</h3>
+          <div id="brakeList"></div>
+          <p class="dim" id="brakeNote" hidden>Sin frenos en esta publicación.</p>
+        </div>
+        <h3>Seguimiento</h3>
+        <ol class="timeline" id="clipTracking" aria-busy="false"></ol>
+        <div class="row">
+          <div class="detail-col">
+            <label for="videoFile">Subir MP4 9:16 (máx. 128 MB)</label>
+            <input type="file" id="videoFile" accept="video/mp4,video/*" aria-describedby="uploadHelp uploadError uploadInfo">
+            <p class="dim" id="uploadHelp">Solo MP4 vertical 9:16, hasta 128 MB.</p>
+            <p class="field-error" id="uploadError" role="alert" hidden></p>
+            <p class="dim" id="uploadInfo" hidden></p>
+            <div class="upload-progress hidden" id="uploadProgress"><div class="upload-progress-fill" id="uploadProgressFill"></div></div>
+            <p class="dim" id="uploadStatus" role="status" hidden></p>
+            <div id="uploadResult" hidden></div>
+            <div class="row">
+              <button id="btnUpload" type="button">Subir MP4 a R2</button>
+              <button id="btnCancelUpload" type="button" class="ghost hidden">Cancelar</button>
+            </div>
+          </div>
+          <div class="detail-col">
+            <label id="publishLabel">Publicar</label>
+            <p class="dim">Encola la publicación en las plataformas del clip. “Publicar ahora” salta SOLO el tope diario y el espaciamiento: el calentamiento de la cuenta, la pausa por spam (48 h), el rolling de 24 h y el resto de frenos (SEO, falta de MP4, mismo clip hoy) siguen frenando igual. Los frenos saltados quedan registrados como aviso.</p>
+            <button id="btnPublish" type="button" aria-labelledby="publishLabel btnPublish">Publicar ahora</button>
+          </div>
+        </div>
+        <div class="row mt-4">
+          <button id="btnOpenEditor" type="button" class="ghost">Abrir en el Editor</button>
+          <button id="btnCloseDetail" type="button" class="ghost">Cerrar detalle</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-subidos" class="hidden" role="tabpanel" aria-labelledby="tabbtn-subidos">
+      <div class="card">
+        <h2>Subidos</h2>
+        <p class="dim">Clips ya publicados en todas sus plataformas, con su MP4 en R2 (retención 24 h) o ya borrado. Pulsa un clip para ver su seguimiento.</p>
+        <div id="publishedList" aria-busy="true"></div>
+      </div>
+    </section>
+
+    <section id="tab-cuentas" class="hidden" role="tabpanel" aria-labelledby="tabbtn-cuentas">
+      <div class="card">
+        <h2>Cuentas</h2>
+        <div class="subtabs" id="cuentasSubtabs" role="tablist" aria-label="Cuentas sociales o APIs">
+          <button type="button" class="subtab-btn" role="tab" aria-selected="false" aria-controls="subtab-social" id="subtabbtn-social">Cuentas sociales</button>
+          <button type="button" class="subtab-btn active" role="tab" aria-selected="true" aria-controls="subtab-apis" id="subtabbtn-apis">APIs</button>
+        </div>
+        <div id="subtab-social" role="tabpanel" aria-labelledby="subtabbtn-social" tabindex="-1" hidden>
+          <p class="dim">Tus canales de YouTube, TikTok, Instagram y Facebook. Todavía no se pueden conectar desde este panel.</p>
+          <div id="socialList" class="social-grid"></div>
+          <p class="dim" id="socialPendingNote">Las cuentas sociales se leen del Worker. Todavía no hay forma de conectar una cuenta nueva desde este panel, y la verificación no está disponible: las cuentas sociales no guardan credencial en el Worker. La verificación real vive en Cuentas API.</p>
+        </div>
+        <div id="subtab-apis" role="tabpanel" aria-labelledby="subtabbtn-apis" tabindex="-1">
+          <p class="dim">Las claves que usa el Worker para publicar. Si dice Conectada, está lista. Las credenciales nunca se muestran: solo se pegan y se cifran en el Worker.</p>
+          <form id="apiAddForm" class="api-add-form" novalidate>
+            <label for="newApiPlatform">Plataforma</label>
+            <select id="newApiPlatform">
+              <!-- Opciones derivadas de API_PROVIDERS en app.js (única fuente; 2026-11-21, bug kaez: Twitch no estaba en la lista). -->
+            </select>
+            <label for="newApiLanguage">Idioma</label>
+            <select id="newApiLanguage">
+              <option value="es">Español</option>
+              <option value="en">English</option>
+            </select>
+            <label for="newApiLabel">Etiqueta (opcional)</label>
+            <input id="newApiLabel" type="text" maxlength="100" placeholder="Ej.: YouTube ES">
+            <p class="field-error" id="newApiLabel-error" role="alert" hidden></p>
+            <div class="row api-add-row">
+              <button type="submit" id="btnAddApiAccount">Añadir cuenta</button>
+              <p class="dim" id="apiAddPendingNote">La cuenta nace sin credencial: después pega su token y pulsa Verificar.</p>
+            </div>
+          </form>
+          <div id="apiGroups">
+            <div id="accountList" aria-busy="true"></div>
+          </div>
+          <p class="dim" id="apiDeletePendingNote">Pendiente: sin endpoint para eliminar cuentas. Para quitar una cuenta hay que borrarla en la base de datos.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-influencers" class="hidden" role="tabpanel" aria-labelledby="tabbtn-influencers">
+      <div class="card card-accent" id="influencerRule">
+        <h2 class="gradient-text">Regla de lanzamiento</h2>
+        <p>10 influencers activos con permiso para GTA VI: Rubius, IlloJuan, AuronPlay, Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi y Westcol. Rubius es el prioritario.</p>
+        <p class="dim">Esta regla manda sobre cualquier otro influencer que se añada después.</p>
+      </div>
+      <div id="influencerList"></div>
+      <div class="empty-state" id="influencerEmpty">
+        <h3>Sin más influencers</h3>
+        <p class="dim">No hay más streamers en la lista. Añade uno con el formulario de abajo.</p>
+      </div>
+      <details class="card settings-advanced" id="influencerFormDetails">
+        <summary>Añadir influencer</summary>
+        <form id="influencerForm" novalidate>
+          <label for="inf-name">Nombre o handle</label>
+          <input id="inf-name" type="text" placeholder="Ej.: IlloJuan" required aria-describedby="inf-name-error" disabled>
+          <p class="field-error" id="inf-name-error" role="alert" hidden></p>
+          <label for="inf-platform">Plataforma</label>
+          <select id="inf-platform" required disabled>
+            <option>Twitch</option>
+            <option>YouTube</option>
+            <option>Kick</option>
+          </select>
+          <label for="inf-profile-url">URL del perfil</label>
+          <input id="inf-profile-url" type="url" placeholder="https://…" disabled>
+          <label for="inf-language">Idioma</label>
+          <select id="inf-language" disabled>
+            <option selected>Español</option>
+            <option>Inglés</option>
+          </select>
+          <label class="check-label" for="inf-permission"><input id="inf-permission" type="checkbox" disabled> Tiene permiso para clipear</label>
+          <label class="check-label" for="inf-active"><input id="inf-active" type="checkbox" checked disabled> Activo en la cola</label>
+          <label for="inf-notes">Notas</label>
+          <textarea id="inf-notes" placeholder="Opcional" disabled></textarea>
+          <button type="submit" id="infSubmit" disabled>Añadir influencer</button>
+          <p class="note-warn" id="infFormNote">Los cambios se guardan en el Worker al pulsar Añadir influencer.</p>
+        </form>
+      </details>
+      <p class="dim">La lista se lee y se guarda en el Worker. La regla de lanzamiento manda sobre cualquier influencer que se añada.</p>
+    </section>
+
+    <section id="tab-fuentes" class="hidden" role="tabpanel" aria-labelledby="tabbtn-fuentes">
+      <div class="card">
+        <h2>Revisar VODs nuevos</h2>
+        <p class="dim">Busca VODs nuevos de IlloJuan en YouTube, Twitch y Kick.</p>
+        <button type="button" id="btnCheckVods" disabled>Revisar VODs nuevos</button>
+        <p class="note-warn" id="vodCheckNote">Pendiente: endpoint del Worker. La revisión de VODs nuevos hoy la hace GitHub Actions (cerebro, 09:00), no este panel.</p>
+      </div>
+      <div class="card" id="vodCheckCard">
+        <h2>Última revisión</h2>
+        <p id="vodCheckEmpty">Sin revisiones todavía.</p>
+        <p class="dim">La detección de VODs nuevos hoy la hace GitHub Actions (cerebro, 09:00). La última revisión registrada por el cerebro aparece arriba, con su fecha, resumen y VODs encontrados.</p>
+      </div>
+      <div class="card">
+        <h2>Fuentes</h2>
+        <div id="sourceList">
+          <div class="empty-state" id="sourceEmpty">
+            <h3>Sin fuentes todavía</h3>
+            <p class="dim">Aún no hay fuentes procesadas. Cuando el Worker tenga endpoint, aquí verás cada VOD con su estado del pipeline.</p>
+          </div>
+        </div>
+      </div>
+      <p class="dim" id="fuentesPendingNote">Las fuentes y la última revisión se leen del Worker. La revisión de VODs nuevos sigue haciéndola GitHub Actions (cerebro, 09:00).</p>
+    </section>
+
+    <section id="tab-editor" class="hidden" role="tabpanel" aria-labelledby="tabbtn-editor">
+      <div class="card" id="edEmpty">
+        <h2>Editor de clip</h2>
+        <p class="dim">Elige un clip en la Cola para editarlo. El Editor se abre desde el detalle de un clip.</p>
+        <div class="row">
+          <button id="edGoCola" type="button">Ir a la Cola</button>
+          <button id="edRetry" type="button" class="ghost hidden">Reintentar</button>
+        </div>
+      </div>
+      <div id="edMain" class="hidden">
+        <div class="ed-layout">
+          <div class="card">
+            <div class="clip-detail-head">
+              <h2 id="edTitle" tabindex="-1">Clip</h2>
+              <span class="pill warn" id="edPreviewPill">Preview no vista</span>
+            </div>
+            <div class="ed-stage" id="edStage">
+              <div class="ed-game">
+                <video id="edVideo" class="ed-video" playsinline preload="metadata" hidden></video>
+                <div class="ed-no-video clip-thumb-placeholder" id="edNoVideo">
+                  <p><b>Sin MP4 todavía</b></p>
+                  <p class="dim">Sube el MP4 desde la Cola para ver el preview aquí.</p>
+                  <button type="button" class="ghost" data-goto-cola>Ir a la Cola</button>
+                </div>
+                <div class="ed-subtitle-band" id="edSubtitleBand">Sin subtítulos guardados</div>
+                <div class="ed-safe-guides hidden" id="edSafeGuides" aria-hidden="true"><span>Zona segura</span></div>
+              </div>
+              <div class="ed-camera"><span class="pill neutral">Cámara</span></div>
+            </div>
+            <div class="row ed-controls">
+              <button id="edPlayPause" type="button" disabled>Reproducir</button>
+              <span class="dim ed-time" id="edTime">— / —</span>
+              <button id="edMute" type="button" class="ghost" disabled>Silencio</button>
+              <button id="edSafeToggle" type="button" class="ghost" aria-pressed="false">Ver zonas seguras</button>
+            </div>
+          </div>
+          <div class="ed-side">
+            <div class="card">
+              <h2>Duración del clip</h2>
+              <p><span class="ed-duration-value" id="edDurationValue">—</span> <span class="pill neutral" id="edDurationPill">Sin duración</span></p>
+              <p class="dim" id="edDurationNote">Sin duración guardada en el clip.</p>
+              <label for="edDurationInput">Nueva duración (segundos)</label>
+              <input id="edDurationInput" type="number" inputmode="numeric" min="1" max="90" step="1" aria-describedby="edDuration-error">
+              <p class="field-error" id="edDuration-error" role="alert" hidden></p>
+              <div class="row">
+                <button id="edSaveDuration" type="button">Guardar duración</button>
+              </div>
+              <p class="dim">Mínimo 40 s, objetivo 40 s, tope 60 s. El rango 25–35 s está prohibido (regla de oro). Si cambia la duración, hay que volver a ver el preview.</p>
+              <div class="ed-scale" id="edDurationScale" aria-hidden="true">
+                <div class="ed-scale-track">
+                  <span class="ed-seg base" style="flex-grow:15"></span>
+                  <span class="ed-seg base" style="flex-grow:10"></span>
+                  <span class="ed-seg bad" style="flex-grow:10"></span>
+                  <span class="ed-seg base" style="flex-grow:1"></span>
+                  <span class="ed-seg ok" style="flex-grow:24"></span>
+                  <span class="ed-seg base" style="flex-grow:30"></span>
+                </div>
+                <div class="ed-scale-marks"><span>15</span><span>25</span><span>30 — prohibido</span><span>35</span><span>40</span><span>60</span><span>90</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <h2>Categoría</h2>
+              <p><span id="edCategoryValue"><span class="pill bad">Sin categoría</span></span></p>
+              <label for="edCategoryInput">Categoría del clip (solo GTA VI)</label>
+              <input id="edCategoryInput" type="text" maxlength="100" placeholder="Grand Theft Auto VI">
+              <div class="row">
+                <button id="edSaveCategory" type="button">Guardar categoría</button>
+              </div>
+              <p class="dim">Este panel es solo GTA VI: el gate de publicación exige la categoría GTA VI. Un clip de Just Chatting u otro juego no se publica.</p>
+            </div>
+            <div class="card">
+              <h2>Subtítulos</h2>
+              <div id="edSubtitleStyle"></div>
+              <p class="dim">Los subtítulos van quemados encima de la cámara, sin tapar la cara.</p>
+              <div class="row ed-style-options" id="edStyleOptions" role="group" aria-label="Estilo de subtítulos">
+                <button type="button" class="ghost" data-ed-style="tiktok" disabled>TikTok</button>
+                <button type="button" class="ghost" data-ed-style="highlight" disabled>Highlight</button>
+                <button type="button" class="ghost" data-ed-style="karaoke" disabled>Karaoke</button>
+              </div>
+              <p class="dim">Pulsa un estilo para guardarlo en el clip.</p>
+            </div>
+            <div class="card" id="edSeoCard">
+              <h2>SEO y puntuación (IA)</h2>
+              <p id="edAiBadge"><span class="pill neutral">Sin datos de IA todavía</span></p>
+              <div id="edScoreBreakdown"></div>
+              <p>Prioridad: <b id="edPriorityValue">sin medir</b></p>
+              <div id="edSeoList"></div>
+              <label for="edSeoTitle">Título SEO</label>
+              <input id="edSeoTitle" type="text" maxlength="200">
+              <label for="edSeoDescription">Descripción</label>
+              <textarea id="edSeoDescription" maxlength="5000"></textarea>
+              <label for="edSeoTags">Tags</label>
+              <input id="edSeoTags" type="text">
+              <label for="edThumbText">Texto de miniatura</label>
+              <input id="edThumbText" type="text" maxlength="200" placeholder="Ej.: LA REACCIÓN">
+              <div class="row">
+                <button id="edSaveSeo" type="button">Guardar título y SEO</button>
+              </div>
+              <p class="dim">Los cambios se guardan en el clip al pulsar Guardar título y SEO.</p>
+            </div>
+            <div class="card">
+              <h2>Vista previa antes de publicar</h2>
+              <p class="dim">Tienes que ver el preview en este Editor antes de publicar. Sin preview vista, el Worker frena la publicación.</p>
+              <div class="row">
+                <button id="edMarkPreview" type="button" disabled>Marcar preview vista</button>
+              </div>
+              <p class="dim" id="edMarkPreviewNote" role="status">Pulsa el botón cuando hayas visto el preview en este Editor.</p>
+              <div class="row">
+                <button id="edPublish" type="button" disabled>Publicar ahora</button>
+              </div>
+              <p class="dim" id="edPublishNote" role="status">Publicar está bloqueado: falta ver el preview en el Editor.</p>
+              <div class="row">
+                <button id="edUnblockRescue" type="button" class="ghost hidden">Revisado: desbloquear este rescatado</button>
+              </div>
+              <div id="edBrakes"></div>
+              <p><a href="#cola" id="edBackToCola">Volver a la Cola</a></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-canales" class="hidden" role="tabpanel" aria-labelledby="tabbtn-canales">
+      <div class="card">
+        <h2>Canales y salud</h2>
+        <p class="dim">Salud del panel y de cada plataforma. Lo que aún no mide el Worker se muestra como «sin datos», nunca como «todo bien».</p>
+        <div id="channelSummary" aria-busy="true"></div>
+        <p class="dim" id="channelUpdatedAt" role="status"></p>
+        <button id="btnRefreshChannels" type="button" class="ghost">Actualizar</button>
+      </div>
+      <div id="channelList" aria-busy="true"></div>
+    </section>
+
+    <section id="tab-tracking" class="hidden" role="tabpanel" aria-labelledby="tabbtn-tracking">
+      <div class="card">
+        <h2>Seguimiento</h2>
+        <p class="dim">El recorrido de cada clip, desde que se detecta hasta que se publica. Solo se muestra lo que el Worker registró, con su hora y su motivo.</p>
+        <label for="trackingClipSelect">Clip</label>
+        <select id="trackingClipSelect"></select>
+        <div class="row tracking-filters" id="trackingFilters" role="group" aria-label="Filtrar por origen">
+          <button type="button" class="ghost tracking-filter-btn active" data-tracking-filter="all" aria-pressed="true">Todos</button>
+          <button type="button" class="ghost tracking-filter-btn" data-tracking-filter="live" aria-pressed="false">LIVE</button>
+          <button type="button" class="ghost tracking-filter-btn" data-tracking-filter="vod" aria-pressed="false">VOD</button>
+        </div>
+        <div class="row"><button id="btnRefreshTracking" type="button" class="ghost">Actualizar</button></div>
+      </div>
+      <div class="card" id="trackingDetailCard">
+        <div class="tracking-clip-head">
+          <h3 id="trackingClipTitle" tabindex="-1">Clip</h3>
+          <span id="trackingClipOrigin"></span>
+          <span id="trackingClipStatus"></span>
+        </div>
+        <p class="dim" id="trackingProgress" role="status">Elige un clip para ver su seguimiento.</p>
+        <ol class="timeline" id="trackingTimeline" aria-busy="false"></ol>
+        <div id="trackingOtherEvents" class="hidden">
+          <h3>Otros eventos</h3>
+          <p class="dim">Eventos registrados que no corresponden a un paso del pipeline. Se muestran tal cual los devuelve el Worker.</p>
+          <ol class="timeline" id="trackingOtherList"></ol>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-analiticas" class="hidden" role="tabpanel" aria-labelledby="tabbtn-analiticas">
+      <div class="card">
+        <h2>Analíticas</h2>
+        <p class="dim">Vistas y retención reales por plataforma y clip. Solo lo medido: nada inventado.</p>
+      </div>
+      <div class="card" id="anEmpty">
+        <h3>Sin mediciones todavía</h3>
+        <p class="dim">Aún no hay vistas ni retención guardadas para ningún clip. Cuando la medición automática traiga los primeros datos, aparecerá aquí el ranking por plataforma.</p>
+        <button type="button" class="ghost" id="anGoPaste">Registrar una medición</button>
+      </div>
+      <div class="an-grid" id="anSummary">
+        <article class="card an-summary-card" id="anSummary-youtube">
+          <div class="channel-head"><span class="dot youtube" aria-hidden="true"></span><h3>YouTube</h3></div>
+          <p class="dim">Sin mediciones todavía</p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de vistas</span></p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de retención</span></p>
+          <p class="dim">Sin clips medidos</p>
+        </article>
+        <article class="card an-summary-card" id="anSummary-tiktok">
+          <div class="channel-head"><span class="dot tiktok" aria-hidden="true"></span><h3>TikTok</h3></div>
+          <p class="dim">Sin mediciones todavía</p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de vistas</span></p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de retención</span></p>
+          <p class="dim">Sin clips medidos</p>
+        </article>
+        <article class="card an-summary-card" id="anSummary-instagram">
+          <div class="channel-head"><span class="dot instagram" aria-hidden="true"></span><h3>Instagram</h3></div>
+          <p class="dim">Sin mediciones todavía</p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de vistas</span></p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de retención</span></p>
+          <p class="dim">Sin clips medidos</p>
+        </article>
+        <article class="card an-summary-card" id="anSummary-facebook">
+          <div class="channel-head"><span class="dot facebook" aria-hidden="true"></span><h3>Facebook</h3></div>
+          <p class="dim">Sin mediciones todavía</p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de vistas</span></p>
+          <p><span class="an-big">—</span> <span class="dim">Mediana de retención</span></p>
+          <p class="dim">Sin clips medidos</p>
+        </article>
+      </div>
+      <div id="anRanking">
+        <div class="card an-rank-block" id="anRanking-youtube">
+          <h3>Ranking — YouTube</h3>
+          <p class="dim">Sin mediciones todavía en YouTube.</p>
+        </div>
+        <div class="card an-rank-block" id="anRanking-tiktok">
+          <h3>Ranking — TikTok</h3>
+          <p class="dim">Sin mediciones todavía en TikTok.</p>
+        </div>
+        <div class="card an-rank-block" id="anRanking-instagram">
+          <h3>Ranking — Instagram</h3>
+          <p class="dim">Sin mediciones todavía en Instagram.</p>
+        </div>
+        <div class="card an-rank-block" id="anRanking-facebook">
+          <h3>Ranking — Facebook</h3>
+          <p class="dim">Sin mediciones todavía en Facebook.</p>
+        </div>
+      </div>
+      <div class="card" id="anUnmeasured">
+        <h3>Sin medición</h3>
+        <p class="dim">Estos clips ya están publicados pero la medición automática aún no trae sus vistas ni su retención. Si la automática falla en una plataforma, registra la cifra abajo como respaldo.</p>
+        <p class="dim">Sin clips publicados todavía.</p>
+      </div>
+      <div class="card">
+        <h2>Registrar una medición (respaldo)</h2>
+        <p class="dim">La medición automática mide sola cada 6 h. Esto es solo el respaldo: si falla en una plataforma, pega aquí las cifras que ves en ella (YouTube Studio, TikTok Studio, Meta Business Suite). Solo se guarda lo que pegues: nada se estima ni se inventa.</p>
+        <form id="anPasteForm" novalidate>
+          <label for="anPasteClip">Clip</label>
+          <select id="anPasteClip" aria-describedby="anPasteClip-error"></select>
+          <p class="field-error" id="anPasteClip-error" role="alert" hidden></p>
+          <label for="anPastePlatform">Plataforma</label>
+          <select id="anPastePlatform">
+            <option value="youtube">YouTube</option>
+            <option value="tiktok">TikTok</option>
+            <option value="instagram">Instagram</option>
+            <option value="facebook">Facebook</option>
+          </select>
+          <label for="anPasteViews">Vistas</label>
+          <input id="anPasteViews" type="number" inputmode="numeric" min="0" step="1" aria-describedby="anPasteViews-error">
+          <p class="field-error" id="anPasteViews-error" role="alert" hidden></p>
+          <label for="anPasteRetention">Retención %</label>
+          <input id="anPasteRetention" type="number" inputmode="decimal" min="0" max="100" step="0.1" aria-describedby="anPasteRetention-error">
+          <p class="field-error" id="anPasteRetention-error" role="alert" hidden></p>
+          <label for="anPasteShares">Compartidos</label>
+          <input id="anPasteShares" type="number" inputmode="numeric" min="0" step="1">
+          <label for="anPasteSaves">Guardados</label>
+          <input id="anPasteSaves" type="number" inputmode="numeric" min="0" step="1">
+          <label for="anPasteComments">Comentarios</label>
+          <input id="anPasteComments" type="number" inputmode="numeric" min="0" step="1">
+          <label for="anPasteSubs">Nuevos seguidores</label>
+          <input id="anPasteSubs" type="number" inputmode="numeric" min="0" step="1">
+          <label for="anPasteWindow">Ventana</label>
+          <select id="anPasteWindow">
+            <option value="24h">24h</option>
+            <option value="48h">48h</option>
+            <option value="7d" selected>7d</option>
+          </select>
+          <label for="anPasteDate">Fecha de la medición</label>
+          <input id="anPasteDate" type="date">
+          <button type="submit" id="anPasteSave" disabled>Guardar medición</button>
+          <p class="dim" id="anPasteNote" role="status">Respaldo manual: la medición se guarda en el Worker al pulsar Guardar medición. Solo se guarda lo que pegues: nada se estima ni se inventa.</p>
+        </form>
+      </div>
+    </section>
+
+    <section id="tab-usuarios" class="hidden" role="tabpanel" aria-labelledby="tabbtn-usuarios">
+      <div class="card">
+        <h2>Usuarios del panel</h2>
+        <p class="dim">Quién puede entrar a este panel. Cada usuario ve solo su propio contenido.</p>
+        <div id="panelUserList" aria-busy="false"></div>
+        <p class="dim" id="panelUserNote">Los usuarios se crean fuera del panel. Si necesitas un usuario nuevo o desactivar uno, pide que lo hagan en el Worker.</p>
+      </div>
+    </section>
+
+    <section id="tab-avisos" class="hidden" role="tabpanel" aria-labelledby="tabbtn-avisos">
+      <div class="card">
+        <h2 id="notifHeading">Avisos</h2>
+        <p class="dim" id="notifCount" role="status" aria-live="polite"></p>
+        <div id="notifList" aria-busy="true"></div>
+      </div>
+    </section>
+
+    <section id="tab-ajustes" class="hidden" role="tabpanel" aria-labelledby="tabbtn-ajustes">
+      <div class="card">
+        <h2>Ajustes</h2>
+        <p class="dim">Configuración del panel (subtítulos, límites diarios, Telegram). Los cambios se guardan al pulsar Guardar ajustes.</p>
+        <form id="settingsForm" novalidate>
+          <p class="dim" id="settingsDirty" role="status" aria-live="polite" hidden>Hay cambios sin guardar.</p>
+
+          <fieldset class="settings-section">
+            <legend>Subtítulos</legend>
+            <p class="dim">Cómo se queman los subtítulos en los clips. El estilo se aplica como estilo por defecto de los clips nuevos.</p>
+            <label for="set-subtitles-enabled">Subtítulos quemados</label>
+            <select id="set-subtitles-enabled">
+              <option value="">Sin cambiar</option>
+              <option value="true">Sí</option>
+              <option value="false">No</option>
+            </select>
+            <label for="set-subtitle-style">Estilo de subtítulos</label>
+            <select id="set-subtitle-style">
+              <option value="">Sin cambiar</option>
+              <option value="ref">Simple RDJavi (una línea blanca con contorno negro)</option>
+              <option value="karaoke">Karaoke</option>
+              <option value="tiktok">TikTok</option>
+              <option value="highlight">Highlight</option>
+            </select>
+            <p class="dim">Estilo por defecto para los clips nuevos.</p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Layout del clip</legend>
+            <p class="dim">Cómo se compone el vídeo 9:16. Lo aplica el cerebro al renderizar.</p>
+            <label for="set-layout">Layout</label>
+            <select id="set-layout">
+              <option value="">Sin cambiar</option>
+              <option value="rdjavi">RDJavi GTA 6 / Vice City (webcam centrada arriba, fondo morado desenfocado, gameplay abajo, neón rosa-violeta-naranja)</option>
+              <option value="plain">Split simple (juego arriba, cámara abajo)</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Duración de los clips</legend>
+            <p class="dim">Entre qué segundos debe durar un clip para entrar en la Cola y publicarse. El rango 25–35 s está prohibido siempre (nunca 30 s), lo pongas como lo pongas.</p>
+            <label for="set-min-duration">Mínimo (segundos)</label>
+            <input id="set-min-duration" type="number" inputmode="numeric" min="1" max="300" step="1">
+            <label for="set-max-duration">Máximo (segundos)</label>
+            <input id="set-max-duration" type="number" inputmode="numeric" min="1" max="300" step="1">
+            <p class="field-error" id="set-duration-error" role="alert" hidden></p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Umbrales para publicar</legend>
+            <p class="dim">Un clip por debajo de estos números no entra en la Cola ni se publica.</p>
+            <label for="set-min-virality">Viralidad mínima (0–100)</label>
+            <input id="set-min-virality" type="number" inputmode="numeric" min="0" max="100" step="1">
+            <label for="set-min-seo">SEO mínimo (0–100)</label>
+            <input id="set-min-seo" type="number" inputmode="numeric" min="0" max="100" step="1">
+            <p class="field-error" id="set-threshold-error" role="alert" hidden></p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Categoría</legend>
+            <p class="dim">Este panel es solo GTA VI (decisión del usuario 2026-11-18). No se puede cambiar a otro juego: cualquier otro valor se rechaza.</p>
+            <label for="set-game">Juego</label>
+            <select id="set-game" disabled>
+              <option value="GTA VI">GTA VI</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Miniatura</legend>
+            <p class="dim">Estilo de miniatura por defecto de los clips nuevos.</p>
+            <label for="set-thumbnail-style">Estilo de miniatura</label>
+            <select id="set-thumbnail-style">
+              <option value="">Sin cambiar</option>
+              <option value="gta6">GTA 6 neón (por defecto)</option>
+              <option value="gameplay">Gameplay</option>
+              <option value="webcam">Webcam</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Marca de agua</legend>
+            <p class="dim">Logo semitransparente quemado en los clips al renderizar. Lo aplica el cerebro; cada cuenta usa solo sus logos. Por defecto va centrada, con unos 320 px de diámetro y 20% de opacidad.</p>
+            <label for="set-watermark-enabled">Marca de agua</label>
+            <select id="set-watermark-enabled">
+              <option value="">Sin cambiar</option>
+              <option value="true">Sí</option>
+              <option value="false">No (por defecto)</option>
+            </select>
+            <label for="set-watermark-opacity">Opacidad (%)</label>
+            <input id="set-watermark-opacity" type="number" inputmode="numeric" min="0" max="100" step="1">
+            <label for="set-watermark-size">Tamaño (px de diámetro)</label>
+            <input id="set-watermark-size" type="number" inputmode="numeric" min="50" max="1000" step="1">
+            <label for="set-watermark-position">Posición</label>
+            <select id="set-watermark-position">
+              <option value="">Sin cambiar</option>
+              <option value="center">Centrada (por defecto)</option>
+              <option value="top-left">Arriba a la izquierda</option>
+              <option value="top-right">Arriba a la derecha</option>
+              <option value="bottom-left">Abajo a la izquierda</option>
+              <option value="bottom-right">Abajo a la derecha</option>
+            </select>
+            <p class="field-error" id="set-watermark-error" role="alert" hidden></p>
+            <p class="dim">Logos subidos (PNG o JPG, hasta 5 MB cada uno; puedes subir varios). Elige cuál es el activo: solo ese se quema en los clips.</p>
+            <div id="watermarkList" aria-live="polite"><p class="dim">Cargando logos…</p></div>
+            <div class="row">
+              <input type="file" id="watermarkUpload" accept="image/png,image/jpeg" multiple>
+              <button type="button" id="btnWatermarkUpload" class="ghost">Subir logos</button>
+            </div>
+            <p class="field-error" id="watermark-upload-error" role="alert" hidden></p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Límites diarios por plataforma</legend>
+            <p class="dim">Máximo duro de publicaciones al día por plataforma (reglas 2026-11-19: TikTok 3, Instagram 2, YouTube 2, Facebook 2). 0 = no publicar en esa plataforma. El Worker lo aplica como techo diario; al máximo duro solo se llega si la cuenta tiene más de 30 días sin restricciones y la Cola trae viral alto.</p>
+            <label for="set-limit-youtube">YouTube Shorts — al día</label>
+            <input id="set-limit-youtube" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-limit-tiktok">TikTok — al día</label>
+            <input id="set-limit-tiktok" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-limit-instagram">Instagram — al día</label>
+            <input id="set-limit-instagram" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-limit-facebook">Facebook — al día</label>
+            <input id="set-limit-facebook" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <p class="field-error" id="set-limit-error" role="alert" hidden></p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Plan diario y cuentas nuevas</legend>
+            <p class="dim">El plan es lo que se intenta publicar cada día (reglas 2026-11-19: TikTok 2, Instagram 1, YouTube 1, Facebook 1); el techo de arriba es el máximo. El plan nunca supera el techo. Una cuenta nueva publica 1/día en TODAS las plataformas hasta ser establecida (14 días o más Y 20 publicaciones o más, sin sanciones): semana 1 y 2, 1/día; semana 3, ritmo normal sin acceso al máximo. Ver “Escalado automático por cuenta” más abajo.</p>
+            <p class="dim">Topes por canal e idioma (desde 2026-11-18): el plan y el techo se aplican por separado a cada idioma. YouTube en español 1/día es independiente de YouTube en inglés 1/día (y lo mismo en TikTok y Meta): publicar en inglés no gasta la cuota de español. El espaciamiento entre subidas también es por canal e idioma. Nunca más de 3 publicaciones por cuenta en 24 horas móviles.</p>
+            <label for="set-plan-youtube">YouTube — plan al día</label>
+            <input id="set-plan-youtube" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-plan-tiktok">TikTok — plan al día</label>
+            <input id="set-plan-tiktok" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-plan-instagram">Instagram — plan al día</label>
+            <input id="set-plan-instagram" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-plan-facebook">Facebook — plan al día</label>
+            <input id="set-plan-facebook" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-plan-resto">Resto de plataformas — plan al día (legacy: solo se usa si no hay valor por plataforma)</label>
+            <input id="set-plan-resto" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-new-account">Cuentas nuevas — al día (todas las plataformas)</label>
+            <input id="set-new-account" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-new-account-youtube">Cuentas nuevas de YouTube — al día</label>
+            <input id="set-new-account-youtube" type="number" inputmode="numeric" min="0" max="10" step="1">
+            <label for="set-spacing">Horas entre publicaciones (misma cuenta; TikTok, Instagram, Facebook)</label>
+            <input id="set-spacing" type="number" inputmode="numeric" min="0" max="24" step="1">
+            <label for="set-spacing-youtube">Horas entre publicaciones en YouTube</label>
+            <input id="set-spacing-youtube" type="number" inputmode="numeric" min="0" max="24" step="1">
+            <p class="field-error" id="set-plan-error" role="alert" hidden></p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>TikTok vía Zernio</legend>
+            <p class="dim">Topes de la cuenta Zernio (distintos del tope diario de TikTok del panel). Al llegar al tope, la publicación queda en borrador con el motivo.</p>
+            <label for="set-zernio-daily">Publicaciones Zernio al día</label>
+            <input id="set-zernio-daily" type="number" inputmode="numeric" min="0" max="100" step="1">
+            <label for="set-zernio-drafts">Borradores Zernio pendientes (máx.)</label>
+            <input id="set-zernio-drafts" type="number" inputmode="numeric" min="0" max="100" step="1">
+            <p class="field-error" id="set-zernio-error" role="alert" hidden></p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Hype por ráfaga</legend>
+            <p class="dim">Medir el hype por la velocidad del chat (mensajes por 10 s / minuto y su pico contra el baseline), no solo por el total de comentarios. Una ráfaga repentina pesa más. Lo usa el cerebro al detectar picos.</p>
+            <label for="set-hype-burst">Hype por ráfaga</label>
+            <select id="set-hype-burst">
+              <option value="">Sin cambiar</option>
+              <option value="true">Sí (por defecto)</option>
+              <option value="false">No</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Preview en el Editor</legend>
+            <p class="dim">Por defecto el preview NO es obligatorio: puedes publicar sin haberlo visto. Si activas la exigencia, el botón Publicar queda bloqueado hasta marcar el preview como visto.</p>
+            <label for="set-require-preview">Exigir ver el preview antes de publicar</label>
+            <select id="set-require-preview">
+              <option value="">Sin cambiar</option>
+              <option value="true">Sí</option>
+              <option value="false">No (por defecto)</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Auto-publicación de tops medidos</legend>
+            <p class="dim">Apagada por defecto: el Worker solo publica lo que tú encolas con el botón Publicar. Si la enciendes, cada ciclo encola solos los primeros clips de la Cola (ordenada con el boost por tops medidos) que no tengan job vigente, pasando exactamente el mismo gate que el botón (topes, espaciamiento, SEO, preview...). Cada freno queda en Tracking con su motivo.</p>
+            <label for="set-auto-publish-top">Publicar solos los tops de la Cola</label>
+            <select id="set-auto-publish-top">
+              <option value="">Sin cambiar</option>
+              <option value="true">Sí</option>
+              <option value="false">No (por defecto)</option>
+            </select>
+          </fieldset>
+
+
+          <fieldset class="settings-section">
+            <legend>Franja horaria</legend>
+            <p class="dim">Reglas 2026-11-19 (hora de Chile): la publicación automática solo sale en estas franjas — mañana 12:00–14:00, tarde 18:00–20:00, noche 21:00–23:00. Con 1 vídeo al día se usa la tarde o la noche; con 2 o más, mediodía + noche. La hora exacta varía ±10 minutos cada día. “Publicar ahora” sigue publicando a cualquier hora, pero no salta el calentamiento ni la pausa por spam. La decisión 2026-11-18 de publicar a cualquier hora queda revocada.</p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Telegram</legend>
+            <p class="dim">Resumen diario de analíticas a las 09:00 (Santiago) en Telegram, y comandos cuando quieras: /resumen, /cola, /top, /estado y /ayuda. También avisa si algo falla (publicación, cuenta desconectada o trabajo atascado) y ordena la Cola con /primero, /subir, /bajar y /auto. Cada cuenta vincula su propio chat: otro usuario con el mismo bot solo recibe sus analíticas.</p>
+            <p id="telegramLinkStatus" role="status">Comprobando…</p>
+            <div id="telegramLinkCodeBox" hidden>
+              <p>Tu código (vale 10 minutos, un solo uso):</p>
+              <p><strong id="telegramLinkCode" style="font-size:1.6em;letter-spacing:.25em"></strong></p>
+              <p class="dim">En Telegram, abre el bot y escribe <code>/link 123456</code> con tu código. El bot nunca te pedirá tu contraseña.</p>
+            </div>
+            <div class="row">
+              <button type="button" id="btnTelegramLink" class="ghost">Generar código para vincular</button>
+              <button type="button" id="btnTelegramTest" class="ghost">Enviar prueba</button>
+              <button type="button" id="btnTelegramUnlink" class="ghost danger" hidden>Desvincular</button>
+            </div>
+            <p class="field-error" id="set-telegram-error" role="alert" hidden></p>
+          </fieldset>
+
+          <details class="settings-advanced" id="settingsAdvanced">
+            <summary>Vista avanzada (JSON)</summary>
+            <p class="dim">El JSON completo tal como se guarda en el Worker, incluidas las claves que este formulario no muestra.</p>
+            <label for="settingsJson">Ajustes (JSON)</label>
+            <textarea id="settingsJson" rows="14" spellcheck="false" aria-describedby="settingsJson-error">{}</textarea>
+            <p class="field-error" id="settingsJson-error" role="alert" hidden></p>
+            <p class="dim">Editar el JSON y guardar actualiza también el formulario. Si el JSON no es válido, no se guarda nada.</p>
+            <button type="button" id="btnCopyJson" class="ghost">Copiar JSON</button>
+          </details>
+
+          <button type="submit" id="btnSaveSettings" class="btn-block">Guardar ajustes</button>
+          <p class="dim" id="settingsSavedAt" role="status"></p>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Escalado automático por cuenta</h2>
+        <p class="dim">Una cuenta es <b>nueva</b> (1 publicación/día) hasta tener más de 30 días desde su primera publicación y al menos 10 publicaciones sin sanciones. Al cumplirlo pasa sola a <b>establecida</b> (YouTube 3/día, resto 2/día). Si hay una sanción (strike), vuelve a nueva hasta que se quite el strike y se vuelva a cumplir el criterio. El Worker lo recalcula solo, una vez al día; nadie lo cambia a mano.</p>
+        <div id="maturityList" aria-busy="true"><p class="dim">Cargando cuentas…</p></div>
+      </div>
+      <div class="card">
+        <h2>Worker automático</h2>
+        <p class="dim">Si pulsas Iniciar, todo se hace automático y puedes hasta desloguearte: el trabajo sigue solo en el Worker (cada 5 minutos) y en GitHub Actions. Nada depende de tu sesión, navegador ni teléfono. El loop sigue aunque cierres sesión, cierres el navegador o apagues el teléfono: el estado (Corriendo/Parado) vive en el Worker, no en tu sesión.</p>
+        <p id="cfgWorkerState" role="status">Worker: …</p>
+        <button type="button" id="btnStartCfg">Iniciar</button>
+        <button type="button" id="btnStopCfg" class="ghost">Parar</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
