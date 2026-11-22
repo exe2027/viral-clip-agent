@@ -181,7 +181,9 @@ PLATFORMS = {
     "instagram_reels": {
         "label": "Instagram Reels",
         "title_max": None, "title_mobile_max": None,
-        "caption_max": 2200, "hashtags": 10,
+        # Instagram capó los hashtags a 5 por post (18-dic-2025);
+        # el 10 era el límite viejo (2026-11-21, ig-caption).
+        "caption_max": 2200, "hashtags": 5,
         "tags_max": 0,
         "thumbnail": "SÍ admite portada (cover_url) — usar el texto de miniatura",
         "subtitles": "QUEMADOS obligatorios (no acepta SRT por API)",
@@ -1209,6 +1211,93 @@ def viral_multiple(score: int, all_scores, median_score=None) -> float:
     return round(score / median, 2)
 
 
+def dedupe_hashtags(hashtags, limit=5):
+    """Hashtags únicos y capados (2026-11-21, ig-caption).
+
+    Instagram capó los hashtags a 5 por post (18-dic-2025) y el
+    resto de plataformas también va a 5 como techo
+    (``publish.hashtag_limit``). Sin duplicados (sin distinguir
+    mayúsculas: ``#GTA6`` y ``#gta6`` son el mismo) y sin vacíos.
+    El total final nunca pasa de ``limit``.
+    """
+    seen = set()
+    out = []
+    for tag in hashtags or []:
+        tag = str(tag or "").strip()
+        if not tag:
+            continue
+        if not tag.startswith("#"):
+            tag = "#" + tag
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tag)
+        if len(out) >= max(int(limit), 0):
+            break
+    return out
+
+
+# Saludos/preámbulos que nunca abren un caption (la primera línea
+# es lo único visible en el feed antes de "...more").
+_GREETING_OPENERS = (
+    "hola", "hey", "buenas", "qué tal", "que tal", "bienvenidos",
+    "bienvenidas", "chicos", "chicas", "gente",
+)
+
+
+def caption_first_line(desc, title, game, lang="es"):
+    """Primera línea del caption: frase buscable + gancho, <=125 car.
+
+    Instagram muestra solo los primeros ~125 caracteres en el
+    feed; el resto queda tras "...more" (2026-11-21, ig-caption).
+    La primera línea lleva la frase buscable como texto natural
+    (el juego, p. ej. "GTA 6", el streamer, el momento) y el
+    gancho/pregunta, sin saludo ni hashtag como primer carácter.
+    Si la primera línea de ``desc`` ya trae la frase buscable se
+    queda (recortada a 125); si no, manda el título, que es el
+    gancho y trae juego + streamer + momento. Nunca inventa cifras.
+    """
+    line = (str(desc or "").split("\n")[0] or "").strip()
+    # La frase buscable es el juego; "GTA VI" y "GTA 6" son el
+    # mismo (GAME_ALIASES): vale cualquiera de las dos formas.
+    # El juego puede venir como "GTA VI" (canónico en el panel)
+    # o como "GTA 6" (clave de GAME_ALIASES): se resuelve el
+    # alias en ambos sentidos.
+    game_key = (game or "").strip()
+    searchable_forms = {game_key.lower()} if game_key else set()
+    for canonical, aliases in GAME_ALIASES.items():
+        alias_lows = {a.lower() for a in aliases}
+        if (game_key.lower() == canonical.lower()
+                or game_key.lower() in alias_lows):
+            searchable_forms |= {canonical.lower()} | alias_lows
+            break
+    searchable_forms.discard("")
+    low = line.lower()
+    bad_start = (
+        not line
+        or line[:1] == "#"
+        or any(low.startswith(g + " ") or low == g
+               for g in _GREETING_OPENERS)
+    )
+    missing_search = bool(
+        searchable_forms
+        and not any(form in low for form in searchable_forms))
+    if bad_start or missing_search:
+        candidate = (str(title or "").strip()
+                     or line)
+        # El título solo sirve si trae la frase buscable; si no,
+        # se queda la línea original (mejor que inventar texto).
+        if (not searchable_forms
+                or any(form in candidate.lower()
+                       for form in searchable_forms)):
+            line = candidate
+    if len(line) > 125:
+        cut = line[:125].rsplit(" ", 1)[0].strip()
+        line = (cut + "…") if cut else line[:124] + "…"
+    return line
+
+
 def package_for_platforms(best_title, desc, tags, thumb, lang="both",
                           hashtags=None, game=None):
     """Un paquete por plataforma a partir del paquete base.
@@ -1219,10 +1308,13 @@ def package_for_platforms(best_title, desc, tags, thumb, lang="both",
     """
     if hashtags is None:
         hashtags, _ = game_hashtags_tags(game)
+    # Total final <=5 y sin duplicados en las 4 plataformas
+    # (Instagram capó a 5 en dic-2025; techo 5 en el resto).
+    hashtags = dedupe_hashtags(hashtags, limit=5)
     hashtags_es = hashtags
     hashtags_en = hashtags
     hashtags = hashtags_en if lang == "en" else hashtags_es
-    first_line = desc.split("\n")[0]
+    first_line = caption_first_line(desc, best_title, game, lang)
     out = {}
     for key, rules in PLATFORMS.items():
         if key == "youtube_shorts":
@@ -1255,7 +1347,7 @@ def package_for_platforms(best_title, desc, tags, thumb, lang="both",
                 "metric": rules["metric"],
             }
         elif key == "instagram_reels":
-            caption = f"{first_line}\n\n{' '.join(hashtags[:10])}"
+            caption = f"{first_line}\n\n{' '.join(hashtags[:5])}"
             out[key] = {
                 "platform": rules["label"], "title": None,
                 "caption": caption, "hashtags": hashtags[:10],

@@ -47,6 +47,7 @@ import argparse
 import json
 import math
 import os
+import statistics
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -54,7 +55,8 @@ from datetime import datetime, timezone
 from .config import load_config
 from .final_review import find_facecam_box_in_source, validate_final_clip
 from .jobs import PLATFORMS
-from .metadata import game_hashtags_tags
+from .hookscore import WEAK_BELOW, score_hook
+from .metadata import caption_first_line, game_hashtags_tags
 from .rubius import (
     make_banner_png,
     make_word_ass_from_transcript,
@@ -85,8 +87,8 @@ MAX_TITLE_CHARS = 100
 PAYOFF_S = 20.0
 
 _VIRAL_REQUIRED = (
-    "enabled", "min_views", "min_likes", "max_age_days",
-    "max_candidates", "max_per_run", "shorts_only",
+    "enabled", "min_views", "min_likes", "min_outlier_multiple",
+    "max_age_days", "max_candidates", "max_per_run", "shorts_only",
     "min_duration_s", "max_duration_s", "cooldown_days",
     "youtube_channels", "state_file",
 )
@@ -127,6 +129,7 @@ def load_viral_config(cfg=None):
         "enabled": bool(section["enabled"]),
         "min_views": int(section["min_views"]),
         "min_likes": int(section["min_likes"]),
+        "min_outlier_multiple": float(section["min_outlier_multiple"]),
         "max_age_days": int(section["max_age_days"]),
         "max_candidates": int(section["max_candidates"]),
         "max_per_run": int(section["max_per_run"]),
@@ -144,6 +147,8 @@ def load_viral_config(cfg=None):
         problems.append("min_views debe ser > 0")
     if out["min_likes"] < 0:
         problems.append("min_likes debe ser >= 0")
+    if out["min_outlier_multiple"] <= 0:
+        problems.append("min_outlier_multiple debe ser > 0")
     if out["max_age_days"] <= 0:
         problems.append("max_age_days debe ser > 0")
     if out["max_candidates"] < 1:
@@ -206,21 +211,70 @@ def _handle_from_channel_url(url):
     return ""
 
 
-def discover_candidates(yt_streamers, vcfg, runner=None):
+def channel_shorts_median(vods, max_n=12, min_n=3):
+    """Mediana de vistas de los últimos Shorts del canal.
+
+    De las entradas de la pestaña /shorts (``from_shorts_tab``),
+    en orden reciente-primero, las primeras ``max_n`` con vistas
+    > 0. Sin al menos ``min_n`` no hay mediana (no se inventa:
+    el candidato queda sin-mediana y pasa por el fallback de
+    vistas+likes). La mediana es la del CANAL (todos sus Shorts),
+    no solo los de GTA 6: es su día normal, y es lo que el
+    outlier multiple mide (2026-11-21, ig-viral).
+    """
+    views = []
+    for vod in vods or []:
+        if not vod.get("from_shorts_tab"):
+            continue
+        try:
+            v = int(vod.get("views") or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            views.append(v)
+        if len(views) >= max_n:
+            break
+    if len(views) < min_n:
+        return None
+    return int(statistics.median(views))
+
+
+def outlier_multiple(views, median):
+    """Outlier multiple = vistas / mediana del canal (o None).
+
+    >3x es señal; <1,5x es el día normal de esa cuenta. None si
+    no hay mediana (sin-mediana: el fallback lo decide).
+    """
+    try:
+        views = int(views or 0)
+        median = int(median or 0)
+    except (TypeError, ValueError):
+        return None
+    if views <= 0 or median <= 0:
+        return None
+    return round(views / median, 2)
+
+
+def discover_candidates(yt_streamers, vcfg, runner=None, rejected=None):
     """Shorts virales de GTA 6, rankeados por vistas (desc).
 
     Por cada streamer: ``youtube_check`` (sus /streams + /videos
     + /shorts, sin duplicar) -> solo GTA VI
     (``youtube_vod_is_gta6``) -> solo Shorts en rango de duración
-    -> solo >= min_views. La pestaña /shorts no trae duración:
-    sus entradas (``from_shorts_tab``) son Shorts por
-    construcción y saltan el filtro de duración aquí; la duración
-    real se verifica en ``enrich_candidate`` con la metadata
-    completa. Sin fecha en las entradas del --flat-playlist no se
-    filtra por edad aquí (el orden del listado es
-    reciente-primero); la edad se verifica en
+    -> solo >= min_views -> solo outlier >= min_outlier_multiple
+    (vistas / mediana de ESA cuenta; sin mediana no se inventa:
+    el candidato pasa por el fallback de vistas+likes, con
+    ``outlier_status`` = "sin-mediana"). La pestaña /shorts no
+    trae duración: sus entradas (``from_shorts_tab``) son Shorts
+    por construcción y saltan el filtro de duración aquí; la
+    duración real se verifica en ``enrich_candidate`` con la
+    metadata completa. Sin fecha en las entradas del
+    --flat-playlist no se filtra por edad aquí (el orden del
+    listado es reciente-primero); la edad se verifica en
     ``enrich_candidate`` con la metadata completa.
-    Devuelve la lista rankeada, capada a max_candidates.
+    Devuelve la lista rankeada, capada a max_candidates. Si se
+    pasa ``rejected`` (lista), los descartados por outlier se
+    añaden ahí con su motivo (para el informe).
     """
     found = []
     for st in yt_streamers or []:
@@ -233,6 +287,9 @@ def discover_candidates(yt_streamers, vcfg, runner=None):
             print(f"[viral-source] {st['name']}: sin listado ({exc})",
                   file=sys.stderr)
             continue
+        # Mediana del canal (sus últimos Shorts, todos, no solo
+        # los de GTA 6): es el baseline del outlier multiple.
+        median = channel_shorts_median(vods)
         for vod in vods or []:
             if vod.get("live"):
                 continue
@@ -249,6 +306,27 @@ def discover_candidates(yt_streamers, vcfg, runner=None):
             views = int(vod.get("views") or 0)
             if views < vcfg["min_views"]:
                 continue
+            outlier = outlier_multiple(views, median)
+            if outlier is None:
+                # Sin mediana no se inventa: pasa por el fallback
+                # (vistas ya >= min_views; likes se verifican en
+                # enrich_candidate). Queda marcado para el informe.
+                outlier_status = "sin-mediana"
+            elif outlier < vcfg["min_outlier_multiple"]:
+                motivo = (
+                    f"outlier {outlier}x < "
+                    f"{vcfg['min_outlier_multiple']}x "
+                    f"(mediana del canal {median})")
+                print(f"[viral-source] {st['name']}: "
+                      f"{vod.get('vod_id')} fuera: {motivo}",
+                      file=sys.stderr)
+                if rejected is not None:
+                    rejected.append({
+                        "video_id": str(vod.get("vod_id") or ""),
+                        "motivo": motivo})
+                continue
+            else:
+                outlier_status = "ok"
             found.append({
                 "video_id": str(vod.get("vod_id") or ""),
                 "url": str(vod.get("url") or ""),
@@ -261,6 +339,9 @@ def discover_candidates(yt_streamers, vcfg, runner=None):
                 "streamer": st["name"],
                 "language": st["language"],
                 "start_time": vod.get("start_time"),
+                "outlier": outlier,
+                "channel_median": median,
+                "outlier_status": outlier_status,
             })
     found.sort(key=lambda c: (-c["views"], c["video_id"]))
     return found[:vcfg["max_candidates"]]
@@ -470,6 +551,23 @@ def _description_first_lines(description, max_chars=500):
     return text[:max_chars]
 
 
+def _viral_description(title, original_desc, lang="es"):
+    """Descripción para el panel: primera línea = el título.
+
+    El título ES el gancho y trae la frase buscable (GTA 6 +
+    streamer + momento); la descripción original del vídeo viral
+    va después. La primera línea queda <=125 caracteres (lo
+    visible en el feed antes de "...more", 2026-11-21,
+    ig-caption). Si el título no trae la frase buscable se usa
+    la primera línea original (nunca se inventa texto).
+    """
+    first = caption_first_line(original_desc, title, "GTA VI", lang)
+    rest = [ln.strip() for ln in str(original_desc or "").splitlines()
+            if ln.strip() and ln.strip() != first]
+    lines = ([first] if first else []) + rest[:2]
+    return "\n".join(lines)[:500]
+
+
 def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
                       force=False, dry_run=False):
     """Re-hace UN candidato a rubius real y lo encola.
@@ -496,11 +594,23 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
     except (TypeError, ValueError):
         duration = 0
     title = _clean_title(candidate.get("title") or "")
+    # Hook score del título (2026-11-21, ig-reel): SOLO descarta
+    # débiles (< 50 -> hook_weak, a revisión humana). NUNCA bloquea
+    # el clip ni elige "el mejor" (el propio repo mide que no elige
+    # ganadores, AUC 0.56); el score queda en el manifiesto.
+    hook_score, hook_weakest, hook_dealbreaker = score_hook(title)
     report = {
         "video_id": video_id, "streamer": streamer,
         "language": lang, "url": candidate.get("url"),
         "views": candidate.get("views"),
         "likes": candidate.get("likes"),
+        "outlier": candidate.get("outlier"),
+        "channel_median": candidate.get("channel_median"),
+        "outlier_status": candidate.get("outlier_status"),
+        "hook_score": hook_score,
+        "hook_weakest": hook_weakest,
+        "hook_dealbreaker": hook_dealbreaker,
+        "hook_weak": bool(hook_score < WEAK_BELOW),
         "duration_s": duration, "title": title,
     }
     if not video_id or not title or duration <= 0:
@@ -561,8 +671,8 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
     # viral, juego verificado: youtube_vod_is_gta6 ya pasó).
     line1, _line2 = split_banner_title(title)
     thumb_text = line1 or ""
-    description = _description_first_lines(
-        candidate.get("description") or "")
+    description = _viral_description(
+        title, candidate.get("description") or "", lang)
     tags = list(candidate.get("tags") or [])
     pkg = {
         "title": title,
@@ -758,9 +868,14 @@ def run_viral_source(bridge, cfg, out_dir, tenant, video_url=None,
         candidates = [enriched]
         report["enriquecidos"] = 1
     else:
+        rejected_by_outlier = []
         discovered = discover_candidates(yt_streamers, vcfg,
-                                         runner=runner)
+                                         runner=runner,
+                                         rejected=rejected_by_outlier)
         report["descubiertos"] = len(discovered)
+        # Los descartados por outlier van al informe como saltados
+        # (con su motivo), igual que los que no pasan el enrich.
+        report["saltados"].extend(rejected_by_outlier)
         for cand in discovered:
             enriched = enrich_candidate(cand, vcfg, runner=runner)
             if enriched is None:

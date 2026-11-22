@@ -56,7 +56,6 @@ hashtags:
     - "#GTA"
     - "#RockstarGames"
     - "#gaming"
-    - "#clips"
 
 clips:
   crop: "center"          # center | left | right
@@ -807,6 +806,12 @@ viral_source:
   enabled: true
   min_views: 100000      # un Short tiene que tener >=100k vistas para ser candidato
   min_likes: 5000        # ...y >=5k likes (se verifica con la metadata completa)
+  # Outlier multiple (2026-11-21, ig-viral): vistas / mediana de
+  # ESA cuenta. >3x es señal; <1,5x es su día normal y no enseña
+  # nada. Los likes crudos no son evidencia: un clip de 400k
+  # vistas en una cuenta de 2M fue un martes flojo; el mismo en
+  # una de 4k encontró algo.
+  min_outlier_multiple: 3.0  # un candidato tiene que superar 3x la mediana de su canal
   max_age_days: 30       # solo vídeos de los últimos 30 días
   max_candidates: 5      # candidatos a enriquecer por corrida
   max_per_run: 2         # re-makes como mucho por corrida (cuentas nuevas: 1/día por plataforma)

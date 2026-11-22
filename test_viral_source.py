@@ -32,6 +32,7 @@ def _cfg(**over):
             "enabled": True,
             "min_views": 100000,
             "min_likes": 5000,
+            "min_outlier_multiple": 3.0,
             "max_age_days": 30,
             "max_candidates": 5,
             "max_per_run": 2,
@@ -206,6 +207,113 @@ class TestDiscover(unittest.TestCase):
         with mock.patch.object(vs, "youtube_check", fake_check):
             out = vs.discover_candidates(_yt_streamers(), vcfg)
         self.assertEqual(out, [])
+
+
+class TestOutlier(unittest.TestCase):
+    """Outlier multiple (2026-11-21, ig-viral): vistas / mediana
+    de ESA cuenta. >3x es señal; los likes crudos no son
+    evidencia."""
+
+    def _shorts_listing(self, median_views, n=12):
+        """Listado fake de /shorts: n Shorts con ~median_views."""
+        return [_vod(f"s{i}", f"Short {i}", median_views, 0,
+                     from_shorts_tab=True)
+                for i in range(n)]
+
+    def test_mediana_de_los_ultimos_shorts(self):
+        vods = self._shorts_listing(10000)
+        # La mediana de 12 Shorts de 10k es 10k.
+        self.assertEqual(vs.channel_shorts_median(vods), 10000)
+
+    def test_sin_suficientes_shorts_no_hay_mediana(self):
+        # Con 2 Shorts no se inventa mediana (mínimo 3).
+        vods = self._shorts_listing(10000, n=2)
+        self.assertIsNone(vs.channel_shorts_median(vods))
+        self.assertIsNone(vs.channel_shorts_median([]))
+
+    def test_outlier_multiple(self):
+        self.assertEqual(vs.outlier_multiple(400000, 10000), 40.0)
+        self.assertEqual(vs.outlier_multiple(400000, 300000), 1.33)
+        self.assertIsNone(vs.outlier_multiple(400000, None))
+        self.assertIsNone(vs.outlier_multiple(0, 10000))
+
+    def test_400k_con_mediana_10k_pasa_40x(self):
+        # 400k vistas con mediana 10k = 40x: señal, pasa.
+        vods = (self._shorts_listing(10000)
+                + [_vod("big", "GTA 6: gran momento", 400000, 40,
+                        from_shorts_tab=True)])
+        vcfg = vs.load_viral_config(_cfg(max_candidates=5))
+
+        def fake_check(url, runner=None, **kwargs):
+            return None, list(vods)
+
+        with mock.patch.object(vs, "youtube_check", fake_check):
+            out = vs.discover_candidates(
+                [{"name": "speed", "language": "en",
+                  "channel_url": "https://www.youtube.com/@IShowSpeed"}],
+                vcfg)
+        hit = [c for c in out if c["video_id"] == "big"]
+        self.assertEqual(len(hit), 1)
+        self.assertEqual(hit[0]["outlier"], 40.0)
+        self.assertEqual(hit[0]["channel_median"], 10000)
+        self.assertEqual(hit[0]["outlier_status"], "ok")
+
+    def test_400k_con_mediana_300k_se_rechaza_1_3x(self):
+        # 400k vistas con mediana 300k = 1,33x: su día normal,
+        # no enseña nada -> fuera, con motivo. (Los 12 Shorts
+        # de 300k también superan min_views y también se
+        # rechazan por outlier 1,0x: es el comportamiento
+        # correcto, no un fallo del test.)
+        vods = (self._shorts_listing(300000)
+                + [_vod("big", "GTA 6: gran momento", 400000, 40,
+                        from_shorts_tab=True)])
+        vcfg = vs.load_viral_config(_cfg(max_candidates=5))
+        rejected = []
+
+        def fake_check(url, runner=None, **kwargs):
+            return None, list(vods)
+
+        with mock.patch.object(vs, "youtube_check", fake_check):
+            out = vs.discover_candidates(
+                [{"name": "speed", "language": "en",
+                  "channel_url": "https://www.youtube.com/@IShowSpeed"}],
+                vcfg, rejected=rejected)
+        self.assertEqual(out, [])
+        self.assertIn("big", [r["video_id"] for r in rejected])
+        big = [r for r in rejected if r["video_id"] == "big"][0]
+        self.assertIn("1.33x", big["motivo"])
+        self.assertIn("3.0x", big["motivo"])
+
+    def test_sin_mediana_pasa_por_fallback_vistas(self):
+        # Sin Shorts suficientes no hay mediana: el candidato
+        # pasa por el fallback (vistas >= min_views; los likes
+        # se verifican en enrich) y queda marcado sin-mediana.
+        vods = [_vod("big", "GTA 6: gran momento", 400000, 40,
+                     from_shorts_tab=True)]
+        vcfg = vs.load_viral_config(_cfg(max_candidates=5))
+
+        def fake_check(url, runner=None, **kwargs):
+            return None, list(vods)
+
+        with mock.patch.object(vs, "youtube_check", fake_check):
+            out = vs.discover_candidates(
+                [{"name": "speed", "language": "en",
+                  "channel_url": "https://www.youtube.com/@IShowSpeed"}],
+                vcfg)
+        self.assertEqual(len(out), 1)
+        self.assertIsNone(out[0]["outlier"])
+        self.assertIsNone(out[0]["channel_median"])
+        self.assertEqual(out[0]["outlier_status"], "sin-mediana")
+
+    def test_min_outlier_multiple_faltante_falla_fuerte(self):
+        cfg = _cfg()
+        del cfg["viral_source"]["min_outlier_multiple"]
+        with self.assertRaises(ConfigError):
+            vs.load_viral_config(cfg)
+
+    def test_min_outlier_multiple_invalido_falla_fuerte(self):
+        with self.assertRaises(ConfigError):
+            vs.load_viral_config(_cfg(min_outlier_multiple=0))
 
 
 class TestEnrich(unittest.TestCase):

@@ -162,3 +162,59 @@
   en clips-avc y clips-avc-sebastian (los 9 valores, YT ya estaba
   en 6/6). Desplegado a kaez (94665dbc, cron OFF). A Sebastián NO
   se le desplegó (lo hace el principal en el paquete 21:00).
+- 2026-11-21 21:57: VIRALIDAD POR OUTLIER MULTIPLE (orden del
+  usuario, del repo instagram-agent-skill, MIT): la fuente viral
+  rankea por vistas / mediana de ESA cuenta, no por likes crudos.
+  `viral_source.min_outlier_multiple: 3.0` en config.yaml (clave
+  obligatoria, falla fuerte si falta). La mediana sale de los
+  últimos 12 Shorts del canal (del mismo listado de yt-dlp, sin
+  re-llamar); sin al menos 3 Shorts no hay mediana y el candidato
+  pasa por fallback (vistas >= min_views y likes >= min_likes)
+  marcado `outlier_status: sin-mediana`. Outlier < 3x se rechaza
+  con motivo en el informe. El outlier queda en el manifiesto
+  del candidato. `clipagent/viral_source.py`
+  (channel_shorts_median, outlier_multiple, discover_candidates)
+  | `test_viral_source.py::TestOutlier` (40x pasa, 1,33x se
+  rechaza, sin-mediana por fallback, clave faltante falla fuerte).
+- 2026-11-21 21:57: HASHTAGS A 5 + CAPTION CON FRASE BUSCABLE
+  (orden del usuario, instagram-agent-skill): Instagram capó los
+  hashtags a 5 por post (18-dic-2025). `metadata.py` PLATFORMS
+  instagram_reels 10→5 y `package_for_platforms` IG `[:10]`→`[:5]`;
+  `dedupe_hashtags` (únicos, sin duplicar, techo 5) en los 4
+  paquetes; `config.yaml` hashtags en 6→5 (sale #clips, el más
+  genérico). La primera línea del caption lleva la frase buscable
+  como texto natural (GTA 6, streamer, momento) y el gancho, en
+  <=125 caracteres (lo visible en el feed antes de "...more"),
+  sin saludo ni hashtag como primer carácter
+  (`caption_first_line`; "GTA VI" y "GTA 6" son el mismo juego).
+  La fuente viral usa el título como primera línea de la
+  descripción (`_viral_description`). `clipagent/metadata.py`,
+  `clipagent/viral_source.py`, `config.yaml` |
+  `test_metadata_caption.py` (14 tests).
+- 2026-11-21 21:57: HOOK SCORE PARA MATAR TÍTULOS DÉBILES
+  (orden del usuario, instagram-agent-skill): port a español de
+  hookscore.py (5 checks + dealbreakers). USO HONESTO: caza malos
+  (AUC 0.83) pero NO elige ganadores (AUC 0.56 del propio repo):
+  score < 50 = débil y el título queda marcado `hook_weak` en el
+  manifiesto para revisión humana; NUNCA bloquea el clip y NUNCA
+  se usa para elegir "el mejor" entre dos títulos decentes.
+  Integrado en la fuente viral (`process_candidate`: el score
+  queda en el report). `clipagent/hookscore.py` (score_hook,
+  WEAK_BELOW=50, CLI `python -m clipagent.hookscore --hook ...`)
+  | `test_hookscore.py` (10 tests, títulos reales).
+- 2026-11-21 21:57: AUDITORÍA DE NUESTROS CLIPS PUBLICADOS
+  (orden del usuario, instagram-agent-skill): rankea NUESTROS
+  reels por outlier multiple (vistas / mediana de NUESTRA cuenta)
+  y envíos por alcance, no por views crudos. v1 solo YouTube
+  Shorts (vistas públicas vía yt-dlp, sin login). TikTok/IG/FB
+  sin métricas (sin scraping: lo prohíbe el repo y nos puede
+  banear; pendientes de sus APIs oficiales). Alcance de
+  no-seguidores, hold a 3s, envíos y follows por alcance tampoco
+  están en v1 (vienen de YouTube Studio / Meta Insights; el
+  informe dice qué falta). Solo LECTURA (D1 jobs posted o CSV de
+  evidence_url; cero escrituras). Distingue problema de hook
+  (pocas views) de problema de perfil (views sin follows, si hay
+  dato de follows). `clipagent/audit_published.py`
+  (`python -m clipagent.audit_published --tenant sebastian`,
+  informe en texto + JSON en runs/audit-published-<fecha>/) |
+  `test_audit_published.py` (11 tests, datos simulados).
