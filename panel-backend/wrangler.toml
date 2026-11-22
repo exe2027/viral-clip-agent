@@ -43,6 +43,11 @@ binding = "CLIPS_BUCKET"
 bucket_name = "clips-avc"
 
 [vars]
+# Tenant ÚNICO que sirve este Worker (2026-11-22): SIN ESTA VAR el
+# Worker no sirve nada (requireTenant falla: "TENANT no configurado").
+# El deploy 04:37 la perdió porque wrangler.toml no la tenía y se
+# desplegó sin --var TENANT:sebastian. NUNCA desplegar avc sin ella.
+TENANT = "sebastian"
 # (2026-11-18, hallazgo M2) Sin PUBLIC_BASE_URL: el bucket R2 es
 # privado y no hay dominio público r2.dev. Instagram recibe una URL
 # firmada del Worker (/api/public-video, 15 min) solo al publicar.
