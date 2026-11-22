@@ -79,7 +79,6 @@ def publish_with_clipagent(job, clip_path):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from clipagent.publish import DirectPublisher, YouTubePublisher  # noqa: E402
     platform = job["platform"]
-    caption = job.get("caption") or job.get("title") or ""
     if platform == "youtube_shorts":
         res = YouTubePublisher().publish(clip_path, privacy="public", live=True)
         if res.get("ok"):

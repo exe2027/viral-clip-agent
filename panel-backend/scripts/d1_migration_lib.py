@@ -166,7 +166,6 @@ def estimate_statement(stmt: str, counter) -> tuple:
     if not s:
         return 0, "vacía"
     kw = _first_keyword(s)
-    upper = s.upper()
 
     if kw in ("BEGIN", "COMMIT", "ROLLBACK", "PRAGMA", "VACUUM", "ANALYZE"):
         return 0, f"{kw} (sin filas)"

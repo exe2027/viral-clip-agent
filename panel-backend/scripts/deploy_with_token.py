@@ -30,7 +30,13 @@ A5 (2026-11-20, despliegues y migraciones seguros):
     accidente: no está verificado que wrangler elimine triggers al
     desplegar sin ellos, así que no se usa ese camino).
 """
-import json, os, re, subprocess, sys, tempfile, urllib.request
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.request
 sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
 from dynamic_credentials import dynamic_credential_entry
 
