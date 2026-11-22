@@ -45,7 +45,7 @@ SEO_BAJO = {"youtube_shorts": 75, "tiktok": 74,
 # --- render_gate (pura) -----------------------------------------------
 
 def test_render_gate_p2010_falla_por_viralidad():
-    """p2010: viralidad 44,5 < 50 con SEO 92-94 -> no pasa."""
+    """p2010: viralidad 44,5 < 45 con SEO 92-94 -> no pasa."""
     g = render_gate(44.5, SEO_BUENO)
     assert g["pasa"] is False
     assert "44.5" in g["motivo"]

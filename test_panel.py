@@ -184,7 +184,7 @@ class TestPanelScores(unittest.TestCase):
             "scores": {"youtube_shorts": [{
                 "virality": 78, "seo": 95, "chat_multiple": 13,
                 "queue_position": 1, "status": "publicable",
-                "status_reason": "SEO 95 >= 90",
+                "status_reason": "SEO 95 >= 80",
                 "left_behind": None, "auto_archive": False,
                 "_item": {"clip": "runs/v1/clips/b.mp4"},
                 "priority": {"priority": 85.7, "virality": 78.0,
@@ -192,14 +192,14 @@ class TestPanelScores(unittest.TestCase):
                              "age_days": 0, "age_penalty": 0,
                              "weights": {"viral": 0.5, "seo": 0.3,
                                          "chat": 0.2}}},
-                {"virality": 51, "seo": 84, "chat_multiple": 6.44,
+                {"virality": 51, "seo": 79, "chat_multiple": 6.44,
                  "queue_position": 2, "status": "bloqueado_seo",
-                 "status_reason": "SEO 84 < 90 sin override",
-                 "left_behind": "SEO 84 < 90 sin override",
+                 "status_reason": "SEO 79 < 80 sin override",
+                 "left_behind": "SEO 79 < 80 sin override",
                  "auto_archive": False,
                  "_item": {"clip": "runs/v1/clips/a.mp4"},
-                 "priority": {"priority": 60.8, "virality": 51.0,
-                              "seo": 84.0, "chat_normalized": 58.1,
+                 "priority": {"priority": 59.7, "virality": 51.0,
+                              "seo": 79.0, "chat_normalized": 58.1,
                               "age_days": 0, "age_penalty": 0,
                               "weights": {"viral": 0.5, "seo": 0.3,
                                           "chat": 0.2}}}],
@@ -220,10 +220,10 @@ class TestPanelScores(unittest.TestCase):
         body = _render(data)
         self.assertIn("Cola de publicación", body)
         self.assertIn("85.7", body)
-        self.assertIn("60.8", body)
+        self.assertIn("59.7", body)
         self.assertIn("V78^0.5", body)
         self.assertIn("bloqueado_seo", body)
-        self.assertIn("SEO 84 &lt; 90 sin override", body)
+        self.assertIn("SEO 79 &lt; 80 sin override", body)
 
     def test_render_muestra_borradores_con_motivo(self):
         # Fan-out: un draft muestra plataforma, clip y motivo.

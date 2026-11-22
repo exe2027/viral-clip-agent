@@ -33,6 +33,14 @@ dependencies = [
     # render rubius no puede componer el banner: es dependencia
     # real del pipeline, no opcional (mismo caso que fontTools).
     "Pillow>=10.0",
+    # Fuente YouTube (youtube.py, 2026-11-21): detección de VODs y
+    # directos + descarga de segmentos con yt-dlp (--flat-playlist,
+    # --download-sections). Sin el módulo, youtube.py solo puede
+    # usar el binario si existe; en CI no hay binario y los tests
+    # de la fuente fallan con ModuleNotFoundError. Es dependencia
+    # real del pipeline, no opcional (mismo caso que fontTools /
+    # Pillow): el cerebro la usa para la fuente YouTube.
+    "yt-dlp>=2024.0",
 ]
 
 [project.optional-dependencies]

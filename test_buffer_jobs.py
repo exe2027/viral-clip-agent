@@ -299,14 +299,25 @@ class TestDryRunWritesNothing(unittest.TestCase):
     def test_execute_refuses_before_cutover(self):
         """--execute antes de las 21:00 se niega sin --force."""
         import os
+        from datetime import datetime as real_dt
         base = os.path.dirname(os.path.abspath(__file__))
         q = os.path.join(base, "..", "runs", "queue-audit-2026-11-20", "tabla.json")
         p = os.path.join(base, "..", "runs", "queue-audit-2026-11-20",
                          "plan_2100.json")
         if not (os.path.exists(q) and os.path.exists(p)):
             self.skipTest("snapshots de auditoría no presentes")
+        # Congela el reloj antes del cutover (2026-11-20 21:00 -03): el test
+        # verifica la lógica de rechazo, no la fecha real de hoy.
+        frozen = real_dt(2026, 11, 20, 20, 0, tzinfo=bj.STGO)
+
+        class FrozenDatetime(real_dt):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen
+
         with mock.patch.object(bj, "d1",
-                               side_effect=AssertionError("¡D1 llamado!")):
+                               side_effect=AssertionError("¡D1 llamado!")), \
+             mock.patch.object(bj, "datetime", FrozenDatetime):
             rc = bj.main(["--tabla", q, "--plan", p, "--execute"])
         self.assertEqual(rc, 2)
 

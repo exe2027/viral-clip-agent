@@ -370,18 +370,18 @@ class TestLiveCutterEvents(unittest.TestCase):
             session, self._revision_peak(), self._aprobado(),
             ("publicable", "ok"),
             review={"pasa": False, "viral_auto": 44.0,
-                    "viral_revisado": 48.0, "revision": "gemini",
-                    "motivo": "viralidad revisada 48 < 50"})
+                    "viral_revisado": 44.5, "revision": "gemini",
+                    "motivo": "viralidad revisada 44.5 < 45"})
         self.assertIsNone(record)
         self.assertEqual(self._kinds(rec), ["clip_descartado"])
         _kind, msg = rec.events[0]
         self.assertIn("revisión", msg)
-        self.assertIn("48", msg)
+        self.assertIn("44", msg)
 
     def test_puerta_viral_descartada_reporta_motivo(self):
         # Con REVIEW_VIRAL_MAX en 45 (commit del padre), un pico
         # auto 45-49,9 va directo; si la puerta de publicación lo
-        # descarta por viralidad (< 50), el evento lo dice con el
+        # descarta por viralidad (< 45), el evento lo dice con el
         # motivo exacto de la puerta (no se pierde en silencio).
         # El decide_render se mockea para no depender del valor
         # vigente de REVIEW_VIRAL_MAX.
@@ -391,13 +391,13 @@ class TestLiveCutterEvents(unittest.TestCase):
                         return_value=("directo", "a render")):
             record = self._run_peak(
                 session, self._revision_peak(), self._aprobado(),
-                ("descartado", "viralidad 44 < 50: descartado"))
+                ("descartado", "viralidad 44 < 45: descartado"))
         self.assertIsNotNone(record)
         self.assertEqual(self._kinds(rec),
                          ["clip_cortado", "clip_descartado",
                           "clip_encolado"])
         _kind, msg = rec.events[1]
-        self.assertIn("viralidad 44 < 50", msg)
+        self.assertIn("viralidad 44 < 45", msg)
 
     def test_puerta_dura_sin_cara_no_encola_ni_en_observacion(self):
         # 2026-11-19: la puerta dura de cara frena el encolado
@@ -494,7 +494,7 @@ class TestLiveCutterEvents(unittest.TestCase):
         session = self._session(rec)
         record = self._run_peak(
             session, self._direct_peak(), self._aprobado(),
-            ("bloqueado_seo", "SEO < 90"))
+            ("bloqueado_seo", "SEO < 80"))
         self.assertIsNotNone(record)
         self.assertEqual(self._kinds(rec),
                          ["clip_cortado", "clip_descartado",

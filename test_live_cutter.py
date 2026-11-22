@@ -312,7 +312,7 @@ class TestEnqueueDraftDefault(unittest.TestCase):
                                   "reason": "ok"},
                               "tiktok": {
                                   "status": "bloqueado_seo",
-                                  "reason": "SEO 80 < 90"}}}
+                                  "reason": "SEO 79 < 80"}}}
                 created = session._enqueue_publish(record)
                 self.assertEqual(created, [])
                 self.assertEqual(store.counts().get("pending", 0), 0)

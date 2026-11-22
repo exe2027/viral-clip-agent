@@ -513,8 +513,8 @@ class TestProcessPeakReview(unittest.TestCase):
         self.assertIn("PASA", out)
 
     def test_pico_44_revision_falla_no_renderiza(self):
-        review_no = {"pasa": False, "motivo": "viral 46 < 50",
-                     "viral_revisado": 46.0, "human": {"hook": 4},
+        review_no = {"pasa": False, "motivo": "viral 44 < 45",
+                     "viral_revisado": 44.0, "human": {"hook": 4},
                      "audio": None, "revision": "gemini", "seo": {}}
         self._patch_process(44.5, review_no)
         session = self._session(44.5)

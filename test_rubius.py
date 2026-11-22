@@ -117,9 +117,10 @@ def test_split_banner_title_largo_completo():
     assert size == 64
     assert " ".join(lines) == "RISA IMPARABLE POR UN ASESINATO"
     # Cada línea cabe en el ancho útil del banner (760 px).
-    from PIL import ImageFont
-
-    font = ImageFont.truetype("/home/hatch/.fonts/arial-black.ttf", size)
+    # La fuente se resuelve por la misma búsqueda que el render
+    # (_ARIAL_BLACK_PATHS: ~/.fonts, /usr/share/fonts); la ruta
+    # absoluta /home/hatch no existe en CI (OSError).
+    font = rubius._banner_font(size)
     for ln in lines:
         assert font.getlength(ln) <= rubius.BANNER_MAX_W
 

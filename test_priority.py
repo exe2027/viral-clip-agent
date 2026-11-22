@@ -71,16 +71,16 @@ def test_age_penalty():
 
 def test_publish_status():
     assert publish_status(78, 95)[0] == "publicable"
-    assert publish_status(49, 95)[0] == "descartado"
-    assert publish_status(50, 95)[0] == "publicable"  # borde incluido
-    assert publish_status(51, 84)[0] == "bloqueado_seo"
-    assert publish_status(51, 84, seo_override=True)[0] == "publicable_override"
-    assert publish_status(51, 90)[0] == "publicable"  # puerta incluida
+    assert publish_status(44, 95)[0] == "descartado"
+    assert publish_status(45, 95)[0] == "publicable"  # borde incluido
+    assert publish_status(51, 79)[0] == "bloqueado_seo"
+    assert publish_status(51, 79, seo_override=True)[0] == "publicable_override"
+    assert publish_status(51, 80)[0] == "publicable"  # puerta incluida
 
 
 def test_hard_filters_never_change():
-    assert VIRAL_MIN_PUBLISH == 50
-    assert SEO_GATE == 90
+    assert VIRAL_MIN_PUBLISH == 45
+    assert SEO_GATE == 80
 
 
 def test_should_auto_archive():
@@ -110,7 +110,7 @@ def _clip(**kw):
 
 def test_order_queue_by_priority_not_fifo():
     clips = [
-        _clip(id=1, title="IlloJuan", virality=51, seo=84,
+        _clip(id=1, title="IlloJuan", virality=51, seo=79,
               chat_multiple=6.44, start_sec=3940, vod_id="v-illo"),
         _clip(id=2, title="Coker", virality=78, seo=95,
               chat_multiple=13.0, start_sec=12000, vod_id="v-coker"),
@@ -120,21 +120,21 @@ def test_order_queue_by_priority_not_fifo():
     out = order_queue(clips, "youtube_shorts")
     assert [c["title"] for c in out] == ["Coker", "IlloJuan", "Locones"]
     assert out[0]["priority"]["priority"] == 85.7
-    assert out[1]["priority"]["priority"] == 60.8
+    assert out[1]["priority"]["priority"] == 59.7
     assert out[0]["queue_position"] == 1
-    # Locones descartado por viralidad < 50, queda atrás con motivo.
+    # Locones descartado por viralidad < 45, queda atrás con motivo.
     assert out[2]["status"] == "descartado"
     assert out[2]["left_behind"]
-    # IlloJuan bloqueado por SEO < 90 sin override, queda atrás.
+    # IlloJuan bloqueado por SEO < 80 sin override, queda atrás.
     assert out[1]["status"] == "bloqueado_seo"
     assert out[1]["left_behind"]
 
 
 def test_order_queue_seo_per_platform():
-    clip = _clip(seo={"youtube_shorts": 84, "tiktok": 96})
+    clip = _clip(seo={"youtube_shorts": 79, "tiktok": 96})
     yt = order_queue([clip], "youtube_shorts")[0]
     tt = order_queue([clip], "tiktok")[0]
-    assert yt["priority"]["seo"] == 84
+    assert yt["priority"]["seo"] == 79
     assert tt["priority"]["seo"] == 96
     assert tt["priority"]["priority"] > yt["priority"]["priority"]
     assert yt["status"] == "bloqueado_seo"

@@ -10,7 +10,7 @@ anteriores que siguen vigentes, con su punto de aplicación:
    fue ELIMINADA por el usuario el 2026-11-21 ("para siempre, en todo
    el canal"). Sin mínimo ni rango prohibido; solo queda el tope duro
    de 60 s. El clip p2010 de Rubius (38 s) ya pasa duración (sigue
-   descartado por viralidad 44,5 < 50).
+   descartado por viralidad 44,5 < 45).
 2. Hype por ráfaga v2 (hoy, ver test_hype_v2.py): velocidad por 10 s
    y 60 s contra baseline rodante (mediana 5 min); la ráfaga pesa
    más que el total.
@@ -18,7 +18,7 @@ anteriores que siguen vigentes, con su punto de aplicación:
    (hoy): 10 streamers activos (Rubius + IlloJuan + 8 nuevos), todos
    con categoría GTA VI. clip_02 sigue publish_blocked por
    subtítulos sin verificar (no publicar). Sin override de p2010
-   (viralidad 44,5 < 50).
+   (viralidad 44,5 < 45).
 4. Franja horaria: la decisión 2026-11-18 14:25 "sin franja" queda
    REVOCADA por las reglas de publicación 2026-11-19: vuelven las
    franjas Chile 12-14 / 18-20 / 21-23 (ver test_reglas_franja
@@ -36,7 +36,7 @@ anteriores que siguen vigentes, con su punto de aplicación:
    solo en la ventana alrededor del pico (±120 s).
 8. Prioridad LIVE sobre VOD, fórmula INTOCABLE
    (viralidad^0,5 × SEO^0,3 × chat_norm^0,2), filtros duros
-   (viralidad < 50 descarta, SEO < 90 no publica salvo override),
+   (viralidad < 45 descarta, SEO < 80 no publica salvo override),
    clip > 7 días -10 pts/día, no dos clips del mismo momento el
    mismo día en la misma plataforma.
 9. Publicación automática con red de seguridad, sin aprobación por
@@ -111,7 +111,7 @@ class TestReglas20261118Duracion(unittest.TestCase):
     def test_p2010_38s_pasa_duracion_pero_sigue_descartado_por_viralidad(self):
         ok, _ = clip_duration_ok(38.005)
         self.assertTrue(ok)
-        # Su viralidad 44,5 < 50 lo descarta sin override.
+        # Su viralidad 44,5 < 45 lo descarta sin override.
         status, _ = publish_status(44.5, 98, seo_override=True)
         self.assertEqual(status, "descartado")
         clip = _clip(duration=38.005, viral=44, seo=98)
@@ -174,15 +174,15 @@ class TestReglasPrioridadIntocable(unittest.TestCase):
     def test_formula_y_filtros(self):
         self.assertEqual(DEFAULT_WEIGHTS,
                          {"viral": 0.5, "seo": 0.3, "chat": 0.2})
-        self.assertEqual(VIRAL_MIN_PUBLISH, 50)
-        self.assertEqual(SEO_GATE, 90)
-        # viralidad < 50 descarta aunque el SEO sea 100 y con override.
-        self.assertEqual(publish_status(49, 100)[0], "descartado")
+        self.assertEqual(VIRAL_MIN_PUBLISH, 45)
+        self.assertEqual(SEO_GATE, 80)
+        # viralidad < 45 descarta aunque el SEO sea 100 y con override.
+        self.assertEqual(publish_status(44, 100)[0], "descartado")
         self.assertEqual(publish_status(44.5, 98, seo_override=True)[0],
                          "descartado")
-        # SEO < 90 sin override no publica; con override sí (70-89).
-        self.assertEqual(publish_status(80, 89)[0], "bloqueado_seo")
-        self.assertEqual(publish_status(80, 89, seo_override=True)[0],
+        # SEO < 80 sin override no publica; con override sí (70-79).
+        self.assertEqual(publish_status(80, 79)[0], "bloqueado_seo")
+        self.assertEqual(publish_status(80, 79, seo_override=True)[0],
                          "publicable_override")
         self.assertEqual(publish_status(80, 95)[0], "publicable")
 

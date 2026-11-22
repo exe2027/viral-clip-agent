@@ -124,3 +124,41 @@
 - 2026-11-21: render en CircleCI (rama circleci-project-setup): job
   `render` con efectos (zoom, shake, impacto, whoosh/riser); $0,
   plan Free; NO publica ni toca D1/panel.
+- 2026-11-21 20:45: CRON SOLO EN FRANJAS (ahorro D1, orden del
+  usuario: no quemar el límite). El Worker solo despierta en las
+  franjas hora Chile 12:00-14:00, 18:00-20:00, 21:00-23:00; fuera de
+  franja ni despierta, así que no gasta escrituras D1. En UTC con
+  1 h de margen por DST (-03/-04): `*/5 15-18 * * *` y
+  `*/5 21-23,0-3 * * *` (132 ticks/día vs 1.440). La puerta sigue
+  filtrando la franja exacta en hora Chile. El ciclo en vacío ya
+  costaba ~0 escrituras (puerta A3 de solo lectura + salida
+  silenciosa); el gasto real es publicar y el cerebro, no el cron.
+  Programado en wrangler.toml, wrangler.sebastian.toml,
+  scripts/deploy_with_token.py (SLOT_CRONS) y
+  scripts/provision-tenant.sh; los nocron siguen con crons [].
+- 2026-11-21 20:52: MÍNIMO 3 VÍDEOS POR PLATAFORMA AL DÍA (kaez y
+  sebastián, en las 3 franjas 12-14, 18-20, 21-23). Orden del usuario
+  sabiendo que choca con el calentamiento 1/día. Cambios: new_account_daily
+  1→3 (tope de calentamiento TT/IG/FB) y tiktok_plan 2→3, en
+  DEFAULT_PANEL_SETTINGS y en effectiveSettings (db.ts, los defaults
+  viven duplicados: el objeto y los clampInt/planFor de
+  effectiveSettings) y en la settings de la D1 de cada tenant.
+  new_account_daily_youtube y los máx sin tocar. NOTA: con solo estos
+  dos valores TikTok llega a 3/día, pero IG/FB (plan 1, máx 2) y
+  YouTube (plan 1, máx 2) siguen topados a 1-2/día; para que lleguen
+  a 3/día haría falta subir también instagram_plan/facebook_plan/
+  youtube_plan y sus máx. Desplegado a kaez (d427c831); Sebastián
+  pendiente al reseteo de las 21:00 (su D1 agotada).
+- 2026-11-21 21:09: COMPLETA el mínimo 3 POR PLATAFORMA al día —
+  el usuario ordena subir IG/FB a 3 y YouTube a 6 (YouTube "soporta
+  más"). Cambios en db.ts (ambos sitios): instagram_plan 1→3,
+  instagram_max 2→3, facebook_plan 1→3, facebook_max 2→3,
+  youtube_plan 1→6, youtube_max 2→6, new_account_daily_youtube
+  1→6 (+ daily_limit_* legacy a juego). Tests actualizados
+  (settings-maturity, publish-rules-2026-11-19, endpoints-nuevos-2,
+  manual-publish, clip-language 0019); tsc limpio, bun 740/749
+  (6 fallos preexistentes). Settings en D1: kaez (su cuenta)
+  IG 3/3, FB 3/3, YT 6/6, new_account_daily_youtube 6; Sebastián
+  en clips-avc y clips-avc-sebastian (los 9 valores, YT ya estaba
+  en 6/6). Desplegado a kaez (94665dbc, cron OFF). A Sebastián NO
+  se le desplegó (lo hace el principal en el paquete 21:00).
