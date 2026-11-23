@@ -28,7 +28,6 @@
 import type { Env } from "../cloudflare";
 import { effectiveSettings, getSettings } from "../db";
 import { errorMessage, httpJson, isRetryableStatus } from "./http";
-import { appendClipMarker } from "./idempotency";
 import type { PublishContext, PublishResult, ResumeData } from "./index";
 
 const API = "https://zernio.com/api/v1";
@@ -117,10 +116,9 @@ function findPlatformError(payload: Record<string, unknown>): string | undefined
 
 function postBody(ctx: PublishContext, accountId: string, publicUrl: string, extra: Record<string, unknown>): Record<string, unknown> {
   return {
-    // B2: la marca [clip:<id>] cabe en los 2200 caracteres (el
-    // caption del dispatch ya la trae; aquí solo se garantiza el
-    // límite para que no se corte).
-    content: ctx.job.clip_id ? appendClipMarker(ctx.job.caption, ctx.job.clip_id, 2200) : ctx.job.caption.slice(0, 2200),
+    // Sin marca [clip:<id>] en el caption (2026-11-23): era visible
+    // en público. Solo se garantiza el límite de 2200 caracteres.
+    content: ctx.job.caption.slice(0, 2200),
     platforms: [{ platform: "tiktok", accountId }],
     mediaItems: [{ type: "video", url: publicUrl }],
     tiktokSettings: {

@@ -30,7 +30,7 @@ import { instagramStep } from "./instagram";
 import { tiktokStep } from "./tiktok";
 import { youtubeStep, type YoutubeCreds } from "./youtube";
 import { zernioTiktokStep } from "./zernio-tiktok";
-import { appendClipMarker, checkDuplicateBeforeUpload } from "./idempotency";
+import { checkDuplicateBeforeUpload } from "./idempotency";
 import { appendWalEntry } from "../wal";
 import { santiagoDayKey } from "../gate";
 
@@ -247,12 +247,13 @@ export async function dispatchPublishStep(env: Env, job: JobRow): Promise<Publis
           .find((a) => a.platform === "tiktok" && a.language === lang)?.handle ?? null)
       : null;
   const ctx: PublishContext = {
-    // B2 — MARCA en la descripción: [clip:<id>] al final del
-    // caption que viaja a la plataforma, para que la comprobación
-    // previa lo encuentre aunque el título se repita. El caption
-    // guardado en el job no cambia: la marca se añade aquí, en
-    // cada dispatch, de forma determinista.
-    job: { ...job, resumeData: job.resume_data ? parseJson(job.resume_data) : null, caption: job.clip_id ? appendClipMarker(job.caption, job.clip_id) : job.caption },
+    // Sin marca [clip:<id>] en el caption que viaja a la plataforma
+    // (2026-11-23): era visible en público (reel del clip 168 en
+    // Instagram). El caption guardado en el job viaja tal cual a
+    // todas las plataformas; la protección contra duplicados es
+    // WAL + idempotency_key, y la marca solo se LEE para posts
+    // viejos que ya la llevan.
+    job: { ...job, resumeData: job.resume_data ? parseJson(job.resume_data) : null, caption: job.caption },
     creds,
     r2Size: head?.size ?? null,
     tiktokHandle,

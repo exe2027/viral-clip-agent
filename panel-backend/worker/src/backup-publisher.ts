@@ -77,7 +77,7 @@ import { clipLanguage, getClip, listSocialAccounts, type PanelPlatform } from ".
 import { santiagoDayKey } from "./gate";
 import type { JobRow } from "./jobs";
 import { appendWalEntry, readWalEntries, type WalEntry } from "./wal";
-import { appendClipMarker, checkDuplicateBeforeUpload, type FetchJson } from "./publish/idempotency";
+import { checkDuplicateBeforeUpload, type FetchJson } from "./publish/idempotency";
 import { resolveCreds, type PublishContext, type PublishResult, type ResumeData } from "./publish/index";
 import { youtubeStep } from "./publish/youtube";
 import { tiktokStep } from "./publish/tiktok";
@@ -495,9 +495,10 @@ export async function runBackupCycle(env: Env, opts: RunBackupOptions = {}): Pro
       job: {
         ...job,
         resumeData: state?.resume_data ? parseResumeData(state.resume_data) : parseResumeData(job.resume_data),
-        // Misma marca que el principal (appendClipMarker es
-        // idempotente): la comprobación B2 la encuentra después.
-        caption: appendClipMarker(job.caption, job.clip_id),
+        // Sin marca [clip:<id>] (2026-11-23): el caption viaja tal
+        // cual, igual que en el principal. La comprobación B2 solo
+        // LEE la marca en posts viejos que ya la llevan.
+        caption: job.caption,
       },
       creds,
       r2Size: head?.size ?? null,

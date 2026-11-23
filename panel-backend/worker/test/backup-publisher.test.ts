@@ -324,8 +324,10 @@ describe("B5 — rescate y resultado en el diario", () => {
     const results = walLines(bucket).filter((l) => l.type === "result");
     expect(results.length).toBe(1);
     expect(results[0]).toMatchObject({ outcome: "posted", job_id: 1, platform_id: "ig9", url: "https://www.instagram.com/p/ig9/" });
-    // El caption que viaja al adaptador lleva la marca [clip:91].
-    expect(step.calls[0]?.job.caption).toContain("[clip:91]");
+    // El caption que viaja al adaptador ya NO lleva la marca
+    // [clip:91] (2026-11-23: era visible en público). Viaja tal cual.
+    expect(step.calls[0]?.job.caption).toBe("GTA 6: reacción");
+    expect(step.calls[0]?.job.caption).not.toContain("[clip:91]");
   });
 
   test("resultado posted en el diario → no se vuelve a intentar (ni se consulta la plataforma)", async () => {
@@ -435,13 +437,23 @@ describe("B5 — re-comprobación B2 antes de subir", () => {
 });
 
 describe("B5 — caída a mitad de subida sin duplicado", () => {
-  test("el adaptador sube pero el proceso muere antes del resultado: la siguiente corrida lo encuentra en la plataforma y no duplica", async () => {
+  test("el adaptador sube pero el proceso muere antes del resultado: sin marca, la corrida siguiente NO lo encuentra en plataforma y vuelve a subir", async () => {
+    // 2026-11-23: la marca [clip:id] ya NO se añade a captions
+    // nuevos (era visible en público). La comprobación en plataforma
+    // solo LEE la marca en posts VIEJOS (los dos tests B2 de arriba
+    // la cubren). Para un post NUEVO subido y con el proceso muerto
+    // antes del resultado WAL, la corrida siguiente no lo encuentra
+    // y vuelve a subir: es el coste aceptado de quitar la marca, y
+    // la garantía para el camino normal sigue siendo WAL +
+    // idempotency_key. Si esto se quiere cubrir, hay que diseñar
+    // otra señal (no emparejar por título: se repite).
     const { env, raw, bucket } = await makeFixture();
     seedJob(raw);
     await seedWal(env, [
       { type: "intent", clip_id: 91, platform: "instagram_reels", account_id: 1, job_id: 1, idempotency_key: "k91ig", day: DAY },
     ]);
-    // La plataforma falsa: el vídeo aparece ahí cuando el mock "sube".
+    // La plataforma falsa: el vídeo aparece ahí cuando el mock "sube",
+    // con el caption que el adaptador envía de verdad (sin marca).
     const platformVideos: Array<{ id: string; caption: string }> = [];
     const fetchJson = async (): Promise<{ status: number; json: Record<string, unknown> }> => ({
       status: 200,
@@ -450,7 +462,7 @@ describe("B5 — caída a mitad de subida sin duplicado", () => {
     // Corrida 1: el mock registra el vídeo en la plataforma y LUEGO
     // lanza (muerte del proceso antes de escribir el resultado).
     const crash = mockStep(async () => {
-      platformVideos.push({ id: "ig1", caption: "GTA 6: reacción\n[clip:91]" });
+      platformVideos.push({ id: "ig1", caption: "GTA 6: reacción" });
       throw new Error("Worker muerto a mitad de subida (simulado)");
     });
     const r1 = await runBackupCycle(env, { now: NOW, uploadStep: crash.fn, fetchJson });
@@ -459,14 +471,33 @@ describe("B5 — caída a mitad de subida sin duplicado", () => {
     expect(platformVideos.length).toBe(1);
     // La corrida 1 dejó un error en el diario (auditoría), no un posted.
     expect(walLines(bucket).filter((l) => l.type === "result" && l.outcome === "posted").length).toBe(0);
-    // Corrida 2, 61 min después (pasado el enfriamiento de 60 min):
-    // B2 encuentra el vídeo en la plataforma y NO vuelve a subir.
+    // Corrida 2, 61 min después del error (pasado el enfriamiento
+    // de 60 min): sin marca en plataforma, B2 devuelve not_found
+    // y se vuelve a subir (el mock registra el segundo vídeo).
+    // El error del diario lleva `at` con el reloj del proceso en
+    // el momento de la corrida 1 (no con el NOW simulado del test,
+    // 2026-11-20, y en la suite completa otro archivo puede dejar
+    // Date.now congelado): la corrida 2 se programa 61 min
+    // después de ese `at` leído del diario, no de NOW.
+    const errAt = walLines(bucket).find((l) => l.type === "result" && l.outcome === "error")?.at as string | undefined;
+    expect(errAt).toBeTruthy();
+    const run2Now = Date.parse(errAt as string) + 61 * MIN;
     const step2 = mockStep({ mode: "posted", platformId: "ig2", evidenceUrl: "https://www.instagram.com/p/ig2/" });
-    const r2 = await runBackupCycle(env, { now: NOW + 61 * MIN, uploadStep: step2.fn, fetchJson });
-    expect(step2.calls.length).toBe(0);
-    expect(r2.alreadyPublished).toBe(1);
+    const r2 = await runBackupCycle(env, { now: run2Now, uploadStep: step2.fn, fetchJson });
+    expect(step2.calls.length).toBe(1);
+    expect(r2.posted).toBe(1);
+    expect(r2.alreadyPublished).toBe(0);
+    // El mock de la corrida 2 no añade vídeos a la lista (solo
+    // devuelve posted); queda el único vídeo de la corrida 1.
     expect(platformVideos.length).toBe(1);
-    expect(walLines(bucket).filter((l) => l.type === "result" && l.outcome === "already_published").length).toBe(1);
+    // El diario registra el posted de la corrida 2, no un
+    // already_published: la plataforma no permitió detectar el
+    // vídeo de la corrida 1 sin la marca. La corrida 2 corre en
+    // el día de run2Now, así que su resultado cae en ese archivo
+    // del diario (no en el del DAY simulado).
+    const run2Day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(run2Now));
+    expect(walLines(bucket, run2Day).filter((l) => l.type === "result" && l.outcome === "posted").length).toBe(1);
+    expect(walLines(bucket).filter((l) => l.type === "result" && l.outcome === "already_published").length).toBe(0);
   });
 
   test("error reciente en el diario → enfriamiento de 60 min (no se reintenta en la misma hora)", async () => {

@@ -7,10 +7,14 @@
 //   2. El diario WAL (wal.ts): antes de subir se lee; si ya hay un
 //      resultado posted para este clip+plataforma (o esta clave),
 //      no se sube.
-//   3. La plataforma misma: se listan los últimos vídeos de la
-//      cuenta y se busca la marca [clip:<id>] en la descripción.
-//      La marca se añade al subir (appendClipMarker) para que la
-//      comprobación la encuentre aunque el título se repita.
+//   3. La plataforma misma (SOLO LECTURA, legacy): se listan los
+//      últimos vídeos de la cuenta y se busca la marca [clip:<id>]
+//      en la descripción. Desde 2026-11-23 la marca YA NO se añade
+//      a captions nuevos (era visible en público, p. ej. el reel
+//      del clip 168 en Instagram): solo se lee para posts viejos
+//      que ya la llevan. Para captions nuevos la garantía es WAL +
+//      idempotency_key; sin marca en plataforma la comprobación
+//      devuelve not_found y NO frena la subida.
 //
 // La comprobación en plataforma es una LECTURA de la API de cada
 // plataforma (no escribe nada, no cuenta contra la cuota D1).
@@ -39,30 +43,19 @@ import { httpJson } from "./http";
 import { walFindPosted } from "../wal";
 import { santiagoDayKey } from "../gate";
 
-/** Marca que identifica un clip en la descripción de la plataforma. */
+/** Marca que identifica un clip en la descripción de la plataforma.
+ *  LEGACY / SOLO LECTURA (2026-11-23): ya no se añade a captions
+ *  nuevos (era visible en público). Se conserva para detectar
+ *  posts viejos que ya la llevan (p. ej. clip 168 en Instagram).
+ *  appendClipMarker se eliminó: ningún código debe volver a
+ *  añadir la marca a un caption. */
 export function clipMarker(clipId: number): string {
   return `[clip:${clipId}]`;
 }
 
-/** ¿Contiene el texto la marca de este clip? */
+/** ¿Contiene el texto la marca de este clip? Solo lectura. */
 export function containsClipMarker(text: string | null | undefined, clipId: number): boolean {
   return typeof text === "string" && text.includes(clipMarker(clipId));
-}
-
-/** Añade la marca al final de un texto (descripción/caption).
- *  Idempotente: si ya la tiene, la reubica al final sin duplicarla.
- *  Con maxLen, recorta el texto para que la marca quepa dentro del
- *  límite (TikTok: título de 150 caracteres; sin límite, la marca
- *  se cortaría y la comprobación en plataforma no la encontraría). */
-export function appendClipMarker(text: string, clipId: number, maxLen?: number): string {
-  const marker = clipMarker(clipId);
-  // Sin regex: la marca contiene [ ] y escaparla es frágil; se
-  // quitan todas sus ocurrencias por split y se recorta el final.
-  const base = text.split(marker).join("").trimEnd();
-  if (maxLen === undefined) return base ? `${base}\n${marker}` : marker;
-  const tail = ` ${marker}`;
-  if (base.length + tail.length <= maxLen) return `${base}${tail}`;
-  return `${base.slice(0, Math.max(0, maxLen - tail.length)).trimEnd()}${tail}`;
 }
 
 export type FetchJson = (

@@ -11,7 +11,6 @@
 import type { Env } from "../cloudflare";
 import { evidenceUrl } from "../db";
 import { errorMessage, httpJson, isRetryableStatus } from "./http";
-import { appendClipMarker } from "./idempotency";
 import type { PublishContext, PublishResult, ResumeData } from "./index";
 
 const API = "https://open.tiktokapis.com";
@@ -81,7 +80,7 @@ export async function tiktokStep(ctx: PublishContext, env: Env): Promise<Publish
       `${API}/v2/post/publish/video/init/`,
       auth,
       {
-        post_info: { title: ctx.job.clip_id ? appendClipMarker(ctx.job.caption, ctx.job.clip_id, 150) : ctx.job.caption.slice(0, 150), privacy_level: resume.privacyLevel ?? "SELF_ONLY", disable_duet: false, disable_comment: false, disable_stitch: false, video_cover_timestamp_ms: 1000 },
+        post_info: { title: ctx.job.caption.slice(0, 150), privacy_level: resume.privacyLevel ?? "SELF_ONLY", disable_duet: false, disable_comment: false, disable_stitch: false, video_cover_timestamp_ms: 1000 },
         source_info: { source: "FILE_UPLOAD", video_size: total, chunk_size: chunkSize, total_chunk_count: Math.ceil(total / chunkSize) },
       },
     );

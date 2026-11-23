@@ -17,7 +17,6 @@ import {
   type WalEntry,
 } from "../src/wal";
 import {
-  appendClipMarker,
   checkDuplicateBeforeUpload,
   checkFacebookAlreadyPublished,
   checkInstagramAlreadyPublished,
@@ -282,17 +281,15 @@ describe("B1 — volcado a D1 en un solo lote", () => {
   });
 });
 
-describe("B2 — marca [clip:id] en la descripción", () => {
-  test("se añade al final, es idempotente y cabe en el límite de TikTok (150)", () => {
+describe("B2 — marca [clip:id] legacy, solo lectura", () => {
+  test("la marca ya NO se añade a captions nuevos; solo se lee en posts viejos que la llevan", () => {
+    // appendClipMarker se eliminó el 2026-11-23 (era visible en
+    // público, p. ej. el reel del clip 168 en Instagram). Quedan
+    // clipMarker/containsClipMarker para detectar posts viejos.
     expect(clipMarker(91)).toBe("[clip:91]");
-    expect(appendClipMarker("GTA 6: reacción", 91)).toBe("GTA 6: reacción\n[clip:91]");
-    expect(appendClipMarker("GTA 6: reacción\n[clip:91]", 91)).toBe("GTA 6: reacción\n[clip:91]");
     expect(containsClipMarker("algo [clip:91] más", 91)).toBe(true);
     expect(containsClipMarker("algo [clip:92] más", 91)).toBe(false);
-    const largo = "x".repeat(200);
-    const fitted = appendClipMarker(largo, 91, 150);
-    expect(fitted.length).toBeLessThanOrEqual(150);
-    expect(fitted.endsWith("[clip:91]")).toBe(true);
+    expect(containsClipMarker("GTA 6: reacción", 91)).toBe(false);
   });
 });
 
