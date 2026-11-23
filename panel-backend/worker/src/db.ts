@@ -543,6 +543,15 @@ export const DEFAULT_PANEL_SETTINGS = {
   // pendientes que Zernio admite antes de frenar con draft.
   tiktok_zernio_daily: 15,
   tiktok_zernio_pending_drafts: 5,
+  // Engagement SOLO por Zernio (2026-11-23, v5.3.0): apagado por
+  // defecto. Sin follow (Zernio no lo expone para IG/FB/YT/TikTok),
+  // sin TikTok hacia afuera (Like post devuelve 400) y sin
+  // descubrir posts de terceros. Topes POR plataforma+idioma+día.
+  engagement_enabled: false,
+  engagement_reply_daily_max: 10,
+  engagement_like_daily_max: 10,
+  engagement_outward_like_daily_max: 5,
+  engagement_outward_comment_daily_max: 1,
   // Espaciamiento mínimo entre dos subidas en la misma cuenta:
   // 3 h en general, 2 h en YouTube (decisión del usuario
   // 2026-11-23: antes 4 h, pero con 4 h solo cabían 4 huecos al
@@ -688,6 +697,13 @@ export function effectiveSettings(raw: Record<string, unknown>): EffectiveSettin
     new_account_daily_youtube: clampInt(raw.new_account_daily_youtube, 6, 0, 10),
     tiktok_zernio_daily: clampInt(raw.tiktok_zernio_daily, 15, 0, 100),
     tiktok_zernio_pending_drafts: clampInt(raw.tiktok_zernio_pending_drafts, 5, 0, 100),
+    // Engagement solo-Zernio (2026-11-23, v5.3.0): kill-switch OFF
+    // por defecto; los topes son techo por plataforma+idioma+día.
+    engagement_enabled: raw.engagement_enabled === true,
+    engagement_reply_daily_max: clampInt(raw.engagement_reply_daily_max, 10, 0, 15),
+    engagement_like_daily_max: clampInt(raw.engagement_like_daily_max, 10, 0, 20),
+    engagement_outward_like_daily_max: clampInt(raw.engagement_outward_like_daily_max, 5, 0, 10),
+    engagement_outward_comment_daily_max: clampInt(raw.engagement_outward_comment_daily_max, 1, 0, 2),
     spacing_hours: clampInt(raw.spacing_hours, 3, 0, 24),
     youtube_spacing_hours: clampInt(raw.youtube_spacing_hours, 2, 0, 24),
     min_spacing_minutes: clampInt(raw.min_spacing_minutes, 5, 0, 60),
@@ -743,6 +759,8 @@ export function validateSettingsInput(body: Record<string, unknown>): string | n
     "resto_plan", "resto_max", "new_account_daily",
     "new_account_daily_youtube",
     "tiktok_zernio_daily", "tiktok_zernio_pending_drafts",
+    "engagement_reply_daily_max", "engagement_like_daily_max",
+    "engagement_outward_like_daily_max", "engagement_outward_comment_daily_max",
     "rolling_24h_max", "rolling_24h_max_youtube", "hashtag_max_instagram", "hashtag_max",
     "daily_limit_youtube_shorts", "daily_limit_tiktok", "daily_limit_instagram", "daily_limit_facebook"] as const) {
     if (body[k] !== undefined) {
@@ -785,6 +803,15 @@ export function validateSettingsInput(body: Record<string, unknown>): string | n
   if (body.require_preview !== undefined && typeof body.require_preview !== "boolean") return "require_preview debe ser true o false.";
   // Auto-publicación de tops (2026-11-19): solo true/false.
   if (body.auto_publish_top !== undefined && typeof body.auto_publish_top !== "boolean") return "auto_publish_top debe ser true o false.";
+  // Engagement solo-Zernio (2026-11-23, v5.3.0): solo true/false y
+  // topes enteros dentro de su rango.
+  if (body.engagement_enabled !== undefined && typeof body.engagement_enabled !== "boolean") return "engagement_enabled debe ser true o false.";
+  for (const [k, max] of [["engagement_reply_daily_max", 15], ["engagement_like_daily_max", 20], ["engagement_outward_like_daily_max", 10], ["engagement_outward_comment_daily_max", 2]] as const) {
+    if (body[k] !== undefined) {
+      const v = intIn(body[k]);
+      if (v === null || v < 0 || v > max) return `${k} debe ser un entero entre 0 y ${max}.`;
+    }
+  }
   // Marca de agua (2026-11-18).
   if (body.watermark_enabled !== undefined && typeof body.watermark_enabled !== "boolean") return "watermark_enabled debe ser true o false.";
   if (body.watermark_logo_id !== undefined && body.watermark_logo_id !== null) {
@@ -819,6 +846,8 @@ export const BASE_SETTINGS_KEYS = [
   "resto_plan", "resto_max",
   "daily_limit_youtube_shorts", "daily_limit_tiktok", "daily_limit_instagram", "daily_limit_facebook",
   "new_account_daily", "new_account_daily_youtube", "tiktok_zernio_daily", "tiktok_zernio_pending_drafts",
+  "engagement_enabled", "engagement_reply_daily_max", "engagement_like_daily_max",
+  "engagement_outward_like_daily_max", "engagement_outward_comment_daily_max",
   "spacing_hours", "youtube_spacing_hours", "min_spacing_minutes",
   "cross_platform_spacing_minutes", "rolling_24h_max", "rolling_24h_max_youtube",
   "tiktok_days_per_week", "instagram_days_per_week", "youtube_days_per_week", "facebook_days_per_week",

@@ -137,6 +137,14 @@ import {
   type JobRow,
 } from "./jobs";
 import { dispatchRetryAllowed, isD1QuotaError, isQuotaBreakerOpen, noteDispatchFailure, tripQuotaBreaker } from "./retry";
+import {
+  ENGAGEMENT_PLATFORMS,
+  extractNativePostId,
+  getEngagementStatus,
+  listTargets,
+  runZernioEngagement,
+  type ZernioPlatform,
+} from "./publish/zernio-engagement";
 import { clipPublishBreakdown, clipRetentionSummary } from "./r2-retention";
 // Intervalos del ciclo y los dispatches (A3, 2026-11-20): viven en
 // cycle-gate.ts (single-source); aquí solo se importan.
@@ -3572,6 +3580,54 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       }
       const plan = await buildDailyPlanForTenant(env.DB, tenant, fechaRaw);
       return json({ ok: true, ...plan });
+    }
+
+    // --- Engagement SOLO por Zernio (2026-11-23, v5.3.0) ---
+    // Sin follow (Zernio no lo expone para IG/FB/YT/TikTok), sin
+    // TikTok hacia afuera (Like post devuelve 400) y sin descubrir
+    // posts de terceros: los objetivos de afuera se aportan con su
+    // URL y el streamer tiene que estar en la lista de influencers
+    // activos con permiso. El kill-switch es engagement_enabled en
+    // Ajustes (default OFF).
+    if (path === "/api/engagement/status" && method === "GET") {
+      return json({ ok: true, ...(await getEngagementStatus(env, tenant)) });
+    }
+    if (path === "/api/engagement/targets" && method === "GET") {
+      return json({ ok: true, targets: await listTargets(env.DB, tenant) });
+    }
+    if (path === "/api/engagement/targets" && method === "POST") {
+      const body = await readJson(req);
+      const platform = typeof body.platform === "string" ? body.platform : "";
+      if (!(ENGAGEMENT_PLATFORMS as string[]).includes(platform)) return err("platform debe ser youtube, tiktok, instagram o facebook.", 400);
+      const language = body.language === undefined || body.language === "es" ? "es" : body.language === "en" ? "en" : "";
+      if (!language) return err("language debe ser es o en.", 400);
+      const streamer = typeof body.streamer === "string" ? body.streamer.trim().toLowerCase() : "";
+      if (!streamer) return err("streamer es obligatorio.", 400);
+      const allowed = (await listInfluencers(env.DB, tenant)).find(
+        (r) => r.name.trim().toLowerCase() === streamer && r.active === 1 && r.permission === 1,
+      );
+      if (!allowed) return err(`streamer "${streamer}" no está en la lista de influencers activos con permiso.`, 400);
+      const postUrl = typeof body.post_url === "string" ? body.post_url.trim() : "";
+      const postId = postUrl ? extractNativePostId(platform as ZernioPlatform, postUrl) : null;
+      if (!postId) return err("post_url no es una URL válida de un post en esa plataforma.", 400);
+      const kind = body.kind === "like" || body.kind === "comment" ? body.kind : "";
+      if (!kind) return err("kind debe ser like o comment (follow no lo expone Zernio).", 400);
+      if (platform === "tiktok" && kind === "like") return err("TikTok hacia afuera no lo cubre Zernio: Like post devuelve 400 en TikTok.", 400);
+      let commentText: string | null = null;
+      if (kind === "comment") {
+        commentText = typeof body.comment_text === "string" ? body.comment_text.trim() : "";
+        if (commentText.length < 10 || commentText.length > 280) return err("comment_text debe tener entre 10 y 280 caracteres y ser específico del clip.", 400);
+        if (/^(🔥+|👏+|❤️+|♥+|genial!?|buenísimo!?|qué bueno!?)$/i.test(commentText)) return err("comment_text no puede ser genérico (solo emojis o una palabra).", 400);
+      }
+      const now = Date.now();
+      const res = await env.DB.prepare(
+        "INSERT INTO engagement_targets (tenant_id, platform, language, streamer, post_url, post_id, kind, comment_text, status, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?)",
+      ).bind(tenant, platform, language, streamer, postUrl, postId, kind, commentText, now, now).run();
+      return json({ ok: true, id: Number(res.meta.last_row_id), post_id: postId });
+    }
+    if (path === "/api/engagement/run" && method === "POST") {
+      const summary = await runZernioEngagement(env, tenant, { force: true });
+      return json({ ok: true, ...summary });
     }
 
     // --- Ajustes (todo lo que el usuario toca: cuentas, subtítulos, límites) ---

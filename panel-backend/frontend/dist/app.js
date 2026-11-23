@@ -2837,6 +2837,8 @@ function fillSettingsForm(s) {
   $("set-require-preview").value = rp === true ? "true" : rp === false ? "false" : "";
   const apt = s.auto_publish_top;
   $("set-auto-publish-top").value = apt === true ? "true" : apt === false ? "false" : "";
+  const eng = s.engagement_enabled;
+  $("set-engagement-enabled").value = eng === true ? "true" : eng === false ? "false" : "";
   const wmEn = s.watermark_enabled;
   $("set-watermark-enabled").value = wmEn === true ? "true" : wmEn === false ? "false" : "";
   $("set-watermark-opacity").value = (typeof s.watermark_opacity === "number") ? String(s.watermark_opacity) : "";
@@ -2890,6 +2892,8 @@ function formToSettings() {
   if (rp !== "") out.require_preview = rp === "true";
   const apt = $("set-auto-publish-top").value;
   if (apt !== "") out.auto_publish_top = apt === "true";
+  const eng = $("set-engagement-enabled").value;
+  if (eng !== "") out.engagement_enabled = eng === "true";
   const wmEn = $("set-watermark-enabled").value;
   if (wmEn !== "") out.watermark_enabled = wmEn === "true";
   numField("set-watermark-opacity", "watermark_opacity");

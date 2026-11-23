@@ -965,6 +965,17 @@
             </select>
           </fieldset>
 
+          <fieldset class="settings-section">
+            <legend>Engagement automático (solo Zernio)</legend>
+            <p class="dim">Apagado por defecto. Responde y da like a los comentarios en tus propios vídeos (máx 10 respuestas al día por cuenta) y da like o comenta en posts de otros streamers solo con los objetivos que aportes con su URL. Solo usa la API oficial de Zernio: sin follow (Zernio no lo expone), sin TikTok hacia afuera (su like devuelve 400) y sin descubrir posts de terceros. El estado y los conteos del día están en GET /api/engagement/status.</p>
+            <label for="set-engagement-enabled">Engagement automático por Zernio</label>
+            <select id="set-engagement-enabled">
+              <option value="">Sin cambiar</option>
+              <option value="true">Sí</option>
+              <option value="false">No (por defecto)</option>
+            </select>
+          </fieldset>
+
 
           <fieldset class="settings-section">
             <legend>Franja horaria</legend>
