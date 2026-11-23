@@ -37,8 +37,6 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
-from dynamic_credentials import dynamic_credential_entry
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WRANGLER = os.path.join(ROOT, "worker", "node_modules", ".bin", "wrangler")
@@ -273,6 +271,13 @@ def enable_cron(tenant, env):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "all"
+    # Import perezoso: el surrogate solo hace falta al desplegar de
+    # verdad. Las funciones puras (strip_triggers, ...) y sus tests
+    # deben poder importar este módulo en CI, donde /opt/muse no
+    # existe (ModuleNotFoundError en GHA/CircleCI 2026-11-23).
+    sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
+    from dynamic_credentials import dynamic_credential_entry
+
     entry = dynamic_credential_entry("custom.cloudflare", "access_token")
     env = dict(os.environ)
     env["CLOUDFLARE_API_TOKEN"] = entry["surrogate"]

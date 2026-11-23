@@ -80,9 +80,17 @@ class TestEdgeFacecamSynthetic(unittest.TestCase):
         self.assertAlmostEqual(box["x"], 980, delta=15)
 
     def test_sin_webcam_no_encuentra_nada(self):
+        # Patrón determinista en movimiento (sin ruido aleatorio):
+        # cada píxel oscila con el fotograma, así que no hay ninguna
+        # región quieta que el detector pueda confundir con una webcam.
+        # El ruido lavfi (seed aleatorio por defecto) hacía el test
+        # flaky: en CI falló con un falso positivo (caja 267x413 en
+        # el borde izquierdo) que en local no se reproduce (0/8).
         plain = os.path.join(self.work, "plain.mp4")
         subprocess.run(["ffmpeg", "-y", "-v", "error",
-                        "-f", "lavfi", "-i", self.noise, "-frames:v", "100",
+                        "-f", "lavfi", "-i",
+                        "nullsrc=s=1280x720:r=25,geq=lum='128+127*sin((X+Y)/32+N*0.5)':cb=128:cr=128",
+                        "-frames:v", "100",
                         "-c:v", "libx264", "-preset", "ultrafast",
                         "-pix_fmt", "yuv420p", plain], check=True)
         self.assertIsNone(detect(plain))

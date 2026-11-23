@@ -402,7 +402,14 @@ if [ "$ENABLE_CRON" = 1 ]; then
     [ -n "$D1_ID_EC" ] || die "no se pudo leer database_id de $TENANT_TOML"
   fi
   if [ -z "$WORKERS_SUBDOMAIN" ]; then
-    WORKERS_SUBDOMAIN="$(python3 - "$WORKERS_JSON" <<'PY'
+    if [ "$DRY_RUN" = 1 ] && [ ! -f "$WORKERS_JSON" ]; then
+      # Dry-run en un checkout fresco: workers.json es un artefacto de
+      # build (gitignore) y no existe; la URL solo se imprime, así que
+      # se usa un ejemplo en vez de morir (fallo en CI 2026-11-23).
+      WORKERS_SUBDOMAIN="<subdominio>"
+      log "DRY-RUN: sin $WORKERS_JSON, el subdominio se muestra como <subdominio>"
+    else
+      WORKERS_SUBDOMAIN="$(python3 - "$WORKERS_JSON" <<'PY'
 import json, re, sys
 data = json.load(open(sys.argv[1]))
 for v in data.values():
@@ -411,7 +418,8 @@ for v in data.values():
         print(m.group(1)); break
 PY
 )" || die "no se pudo derivar el subdominio workers.dev de $WORKERS_JSON (pasa --workers-subdomain)"
-    [ -n "$WORKERS_SUBDOMAIN" ] || die "workers.json no contiene ninguna URL avc-*.workers.dev; pasa --workers-subdomain"
+      [ -n "$WORKERS_SUBDOMAIN" ] || die "workers.json no contiene ninguna URL avc-*.workers.dev; pasa --workers-subdomain"
+    fi
   fi
   WORKER_URL_EC="https://avc-${TENANT}.${WORKERS_SUBDOMAIN}.workers.dev"
   if [ "$DRY_RUN" = 1 ]; then
@@ -611,7 +619,16 @@ printf '%s' "$ROLE" | grep -Eq '^[a-z][a-z0-9_]{0,19}$' \
 [ "$PASSWORD_MODE" = "prompt" ] && [ ! -t 0 ] && [ ! -r /dev/tty ] \
   && die "--prompt-password necesita una TTY (usa --generate-password en no interactivo)"
 
-for c in python3 jq curl openssl node bun; do require_cmd "$c"; done
+# En dry-run solo se ejecuta python3 (heredocs: derivar el subdominio
+# de workers.json, generar SQL): jq/curl/openssl/node/bun solo se usan
+# en ejecución real (run/run_in solo imprimen en dry-run). Exigirlos
+# en dry-run rompía CI: ni GHA ni CircleCI tienen bun, y cimg/base
+# tampoco trae node (fallos 2026-11-23).
+if [ "$DRY_RUN" = 1 ]; then
+  for c in python3; do require_cmd "$c"; done
+else
+  for c in python3 jq curl openssl node bun; do require_cmd "$c"; done
+fi
 # En dry-run wrangler nunca se ejecuta (run/run_in solo imprimen y
 # los pasos con llamadas reales van tras [ "$DRY_RUN" = 0 ]), así que
 # el binario no se exige aquí: un checkout fresco o CI (sin
@@ -621,7 +638,10 @@ for c in python3 jq curl openssl node bun; do require_cmd "$c"; done
   || die "falta wrangler en $WRANGLER (ejecuta: (cd worker && npm ci --no-audit --no-fund))"
 [ -f "$TEMPLATE_TOML" ] || die "falta la plantilla $TEMPLATE_TOML"
 [ -f "$ROUTER_TOML" ] || die "falta $ROUTER_TOML"
-[ -f "$WORKERS_JSON" ] || die "falta $WORKERS_JSON"
+# workers.json es un artefacto de build (gitignore): en dry-run no se
+# lee (el subdominio usa un ejemplo si falta), así que no se exige
+# aquí. En ejecución real sí: el paso 7 lo parchea y lo verifica.
+[ "$DRY_RUN" = 1 ] || [ -f "$WORKERS_JSON" ] || die "falta $WORKERS_JSON"
 [ -f "$ROOT/worker/src/auth.ts" ] || die "falta worker/src/auth.ts"
 [ -f "$ROOT/worker/src/router.ts" ] || die "falta worker/src/router.ts"
 [ -f "$ROOT/worker/src/db.ts" ] || die "falta worker/src/db.ts"
@@ -661,7 +681,14 @@ log "R2: bucket $R2_BUCKET en la cuenta $ACCOUNT_ID, CLIP_PUBLIC_BASE_URL=$R2_PU
 
 # Subdominio workers.dev: se deriva de workers.json (primera URL avc-*.workers.dev).
 if [ -z "$WORKERS_SUBDOMAIN" ]; then
-  WORKERS_SUBDOMAIN="$(python3 - "$WORKERS_JSON" <<'PY'
+  if [ "$DRY_RUN" = 1 ] && [ ! -f "$WORKERS_JSON" ]; then
+    # Dry-run en un checkout fresco: workers.json es un artefacto de
+    # build (gitignore) y no existe; la URL solo se imprime, así que
+    # se usa un ejemplo en vez de morir (fallo en CI 2026-11-23).
+    WORKERS_SUBDOMAIN="<subdominio>"
+    log "DRY-RUN: sin $WORKERS_JSON, el subdominio se muestra como <subdominio>"
+  else
+    WORKERS_SUBDOMAIN="$(python3 - "$WORKERS_JSON" <<'PY'
 import json, re, sys
 try:
     data = json.load(open(sys.argv[1]))
@@ -673,7 +700,8 @@ for v in data.values():
         print(m.group(1)); break
 PY
 )" || die "no se pudo derivar el subdominio workers.dev de $WORKERS_JSON (pasa --workers-subdomain)"
-  [ -n "$WORKERS_SUBDOMAIN" ] || die "workers.json no contiene ninguna URL avc-*.workers.dev; pasa --workers-subdomain"
+    [ -n "$WORKERS_SUBDOMAIN" ] || die "workers.json no contiene ninguna URL avc-*.workers.dev; pasa --workers-subdomain"
+  fi
 fi
 WORKER_URL="https://avc-${TENANT}.${WORKERS_SUBDOMAIN}.workers.dev"
 log "Worker nuevo: $WORKER_URL  ·  D1: $DB_NAME  ·  panel: $PAGES_URL"
