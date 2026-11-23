@@ -72,6 +72,62 @@ const MAX_TARGETS_PER_RUN = 10;
 
 export type ZernioPlatform = "youtube" | "tiktok" | "instagram" | "facebook";
 export const ENGAGEMENT_PLATFORMS: ZernioPlatform[] = ["youtube", "tiktok", "instagram", "facebook"];
+
+// --- Modo seguro (2026-11-23, investigación ban/shadowban) ---
+// Hecho: responder comentarios PROPIOS por API oficial a bajo
+// volumen es gestión de comunidad permitida (YouTube: solo en tu
+// canal; Meta: solo reactivo, nunca iniciar; TikTok: solo vía app
+// de Business). Lo que las tres plataformas sancionan como spam /
+// fake engagement es lo de AFUERA: comentarios y likes templados
+// en posts de terceros, a volumen, y cualquier bot por navegador.
+// Por eso las primeras 24 h tras la primera pasada el engagement
+// corre en modo seguro: 2 respuestas y 2 likes a comentarios por
+// plataforma+idioma+día, y CERO hacia afuera. Pasadas las 24 h,
+// mandan los topes configurados (10/10/5/1). No hay nada que
+// configurar: la primera pasada marca engagement_first_run_at en
+// settings y el modo sale solo. TikTok vía Zernio es la vía menos
+// verificada (no consta que Zernio sea TikTok Marketing Partner y
+// TikTok no documenta webhook oficial de auto-respuesta a
+// comentarios públicos), así que el modo seguro es el que más lo
+// protege: 2 respuestas el primer día, solo a comentarios reales
+// en posts propios.
+export const ENGAGEMENT_SAFE_WINDOW_MS = 24 * 3600_000;
+export const ENGAGEMENT_SAFE_REPLY_MAX = 2;
+export const ENGAGEMENT_SAFE_LIKE_MAX = 2;
+
+export interface EngagementCaps {
+  reply: number;
+  like: number;
+  outwardLike: number;
+  outwardComment: number;
+  safeMode: boolean;
+}
+
+export function engagementCaps(
+  settings: Record<string, unknown>,
+  eff: { engagement_reply_daily_max: number; engagement_like_daily_max: number; engagement_outward_like_daily_max: number; engagement_outward_comment_daily_max: number },
+  nowMs: number,
+): EngagementCaps {
+  const first = typeof settings.engagement_first_run_at === "number" ? (settings.engagement_first_run_at as number) : null;
+  const safe = first === null || nowMs - first < ENGAGEMENT_SAFE_WINDOW_MS;
+  if (!safe) {
+    return { reply: eff.engagement_reply_daily_max, like: eff.engagement_like_daily_max, outwardLike: eff.engagement_outward_like_daily_max, outwardComment: eff.engagement_outward_comment_daily_max, safeMode: false };
+  }
+  return {
+    reply: Math.min(ENGAGEMENT_SAFE_REPLY_MAX, eff.engagement_reply_daily_max),
+    like: Math.min(ENGAGEMENT_SAFE_LIKE_MAX, eff.engagement_like_daily_max),
+    outwardLike: 0,
+    outwardComment: 0,
+    safeMode: true,
+  };
+}
+
+/** Marca la primera pasada en settings (si aún no está marcada).
+ *  La usan los runners al guardar su estado; el orquestador la
+ *  preserva en su guardado combinado. */
+export function firstRunAt(settings: Record<string, unknown>, nowMs: number): number {
+  return typeof settings.engagement_first_run_at === "number" ? (settings.engagement_first_run_at as number) : nowMs;
+}
 export type EngagementAction = "reply" | "like_comment" | "outward_like" | "outward_comment";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -369,6 +425,10 @@ export interface EngagementStatus {
   like_daily_max: number;
   outward_like_daily_max: number;
   outward_comment_daily_max: number;
+  /** Modo seguro: true las primeras 24 h tras la primera pasada
+   *  (topes 2/2/0/0). Ver engagementCaps. */
+  safe_mode: boolean;
+  safe_caps: { reply: number; like: number; outward_like: number; outward_comment: number };
   last_run_at: number | null;
   last_status: Record<string, unknown> | null;
   today: Record<string, Record<string, number>>;
@@ -419,12 +479,15 @@ export async function getEngagementStatus(env: Env, tenant: Tenant): Promise<Eng
     native[`tiktok|${lang}`] = { via: "zernio", state: "zernio", missing_scopes: [], granted_count: 0, checked_at: null, error: null };
   }
   const events = await listEngagementEvents(db, tenant, 20);
+  const caps = engagementCaps(settings, eff, Date.now());
   return {
     enabled: eff.engagement_enabled,
     reply_daily_max: eff.engagement_reply_daily_max,
     like_daily_max: eff.engagement_like_daily_max,
     outward_like_daily_max: eff.engagement_outward_like_daily_max,
     outward_comment_daily_max: eff.engagement_outward_comment_daily_max,
+    safe_mode: caps.safeMode,
+    safe_caps: { reply: caps.reply, like: caps.like, outward_like: caps.outwardLike, outward_comment: caps.outwardComment },
     last_run_at: typeof settings.engagement_last_run_at === "number" ? (settings.engagement_last_run_at as number) : null,
     last_status: lastStatus,
     today,
@@ -469,6 +532,8 @@ export async function runZernioEngagement(
   if (!opts.force && now - lastRun < ENGAGEMENT_MIN_INTERVAL_MS) {
     return { ...summary, reason: "throttle: la pasada de engagement corre como mucho 1 vez por hora" };
   }
+  // Modo seguro las primeras 24 h: topes 2/2/0/0 (ver engagementCaps).
+  const caps = engagementCaps(settings, eff, now);
   const pace = async () => {
     if (opts.sleepMs !== undefined) await sleep(opts.sleepMs);
     else await sleep(8000 + Math.floor(Math.random() * 7000));
@@ -538,8 +603,8 @@ export async function runZernioEngagement(
             if (isOwnComment(c, ownNames)) continue;
             if (await hasReplied(db, tenant, commentId)) continue;
             const repliesToday = await countEngagementToday(db, tenant, day, platform, lang, "reply");
-            if (repliesToday >= eff.engagement_reply_daily_max) {
-              summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${eff.engagement_reply_daily_max}` });
+            if (repliesToday >= caps.reply) {
+              summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${caps.reply}${caps.safeMode ? " (modo seguro)" : ""}` });
               break;
             }
             // Título del clip si el hilo trae el id nativo del post.
@@ -569,7 +634,7 @@ export async function runZernioEngagement(
             // puede dar 403). No deshace la respuesta si falla.
             try {
               const likesToday = await countEngagementToday(db, tenant, day, platform, lang, "like_comment");
-              if (likesToday < eff.engagement_like_daily_max) {
+              if (likesToday < caps.like) {
                 await zernioLikeComment(apiKey, row.id, acc.id, commentId);
                 await logEngagement(db, tenant, day, platform, lang, "like_comment", "ok", { accountId: acc.id, targetPostId: row.id, commentId, nowMs: now });
                 summary.commentLikes++;
@@ -606,8 +671,8 @@ export async function runZernioEngagement(
         }
         if (t.kind === "like") {
           const n = await countEngagementToday(db, tenant, day, platform, lang, "outward_like");
-          if (n >= eff.engagement_outward_like_daily_max) {
-            summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope likes afuera ${n}/${eff.engagement_outward_like_daily_max}` });
+          if (n >= caps.outwardLike) {
+            summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope likes afuera ${n}/${caps.outwardLike}${caps.safeMode ? " (modo seguro: afuera apagado)" : ""}` });
             continue;
           }
           try {
@@ -624,8 +689,8 @@ export async function runZernioEngagement(
           }
         } else if (t.kind === "comment") {
           const n = await countEngagementToday(db, tenant, day, platform, lang, "outward_comment");
-          if (n >= eff.engagement_outward_comment_daily_max) {
-            summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope comentarios afuera ${n}/${eff.engagement_outward_comment_daily_max}` });
+          if (n >= caps.outwardComment) {
+            summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope comentarios afuera ${n}/${caps.outwardComment}${caps.safeMode ? " (modo seguro: afuera apagado)" : ""}` });
             continue;
           }
           if (!t.comment_text || t.comment_text.trim().length < 10) {
@@ -665,11 +730,11 @@ export async function runZernioEngagement(
       perLanguage: summary.perLanguage,
       skipped: summary.skipped.slice(0, 10),
     };
-    await saveSettings(db, tenant, { ...settings, engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
+    await saveSettings(db, tenant, { ...settings, engagement_first_run_at: firstRunAt(settings, now), engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
     await logWorkerEvent(
       db,
       "engagement",
-      `Engagement Zernio: ${summary.replies} respuestas, ${summary.commentLikes} likes a comentarios, ${summary.outwardLikes} likes afuera, ${summary.outwardComments} comentarios afuera. ES: ${summary.perLanguage.es ?? "?"} | EN: ${summary.perLanguage.en ?? "?"}`,
+      `Engagement Zernio${caps.safeMode ? " (modo seguro 2/2/0/0)" : ""}: ${summary.replies} respuestas, ${summary.commentLikes} likes a comentarios, ${summary.outwardLikes} likes afuera, ${summary.outwardComments} comentarios afuera. ES: ${summary.perLanguage.es ?? "?"} | EN: ${summary.perLanguage.en ?? "?"}`,
       tenant,
     ).catch(() => undefined);
   }

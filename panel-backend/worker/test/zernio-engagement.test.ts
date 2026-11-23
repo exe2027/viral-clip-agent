@@ -11,6 +11,7 @@ import type { D1Database, Env } from "../src/cloudflare";
 import { effectiveSettings, validateSettingsInput } from "../src/db";
 import {
   countEngagementToday,
+  engagementCaps,
   extractNativePostId,
   getEngagementStatus,
   listPendingTargets,
@@ -170,6 +171,33 @@ describe("settings de engagement", () => {
     expect(validateSettingsInput({ engagement_enabled: "si" })).toBeTruthy();
     expect(validateSettingsInput({ engagement_enabled: true, engagement_reply_daily_max: 10 })).toBeNull();
   });
+
+  test("bug de tipo 2026-11-23: engagement_enabled=1 (número, como lo guardó la D1) se lee encendido", () => {
+    expect(effectiveSettings({ engagement_enabled: 1 }).engagement_enabled).toBe(true);
+    expect(effectiveSettings({ engagement_enabled: true }).engagement_enabled).toBe(true);
+    expect(effectiveSettings({ engagement_enabled: 0 }).engagement_enabled).toBe(false);
+    expect(effectiveSettings({ engagement_enabled: false }).engagement_enabled).toBe(false);
+    expect(effectiveSettings({ engagement_enabled: "1" }).engagement_enabled).toBe(false);
+  });
+
+  test("modo seguro: primera pasada 2/2/0/0, tras 24 h mandan los topes configurados", () => {
+    const eff = effectiveSettings({});
+    const first = engagementCaps({}, eff, NOW);
+    expect(first.safeMode).toBe(true);
+    expect(first.reply).toBe(2);
+    expect(first.like).toBe(2);
+    expect(first.outwardLike).toBe(0);
+    expect(first.outwardComment).toBe(0);
+    const within = engagementCaps({ engagement_first_run_at: NOW - 3600_000 }, eff, NOW);
+    expect(within.safeMode).toBe(true);
+    expect(within.outwardLike).toBe(0);
+    const after = engagementCaps({ engagement_first_run_at: NOW - 25 * 3600_000 }, eff, NOW);
+    expect(after.safeMode).toBe(false);
+    expect(after.reply).toBe(10);
+    expect(after.like).toBe(10);
+    expect(after.outwardLike).toBe(5);
+    expect(after.outwardComment).toBe(1);
+  });
 });
 
 describe("runZernioEngagement", () => {
@@ -265,6 +293,39 @@ describe("runZernioEngagement", () => {
     const s = await runZernioEngagement(fakeEnv(d1), "sebastian", { nowMs: NOW, sleepMs: 0, force: true });
     expect(s.replies).toBe(1);
     expect(seen.filter((r) => r.method === "POST" && r.url.includes("/inbox/comments/zpost1") && !r.url.includes("/like"))).toHaveLength(1);
+  });
+
+  test("modo seguro: en la primera pasada solo responde 2 aunque haya 3 comentarios nuevos", async () => {
+    const { d1, raw } = makeDb();
+    await seedSettings(raw, { engagement_enabled: true });
+    await seedZernioTikTok(raw, "es");
+    const inboxYt = { data: [{ id: "zpost1", platform: "youtube", accountId: "acc_yt", commentCount: 3 }] };
+    const thread = {
+      comments: [
+        { id: "c1", text: "¡Qué buen clip!", from: { username: "fan1" }, replies: [] },
+        { id: "c2", text: "¡Otro momentazo!", from: { username: "fan2" }, replies: [] },
+        { id: "c3", text: "¡El mejor clip del día!", from: { username: "fan3" }, replies: [] },
+      ],
+    };
+    stubFetch([
+      { status: 200, body: ACCOUNTS },
+      { status: 200, body: inboxYt },
+      { status: 200, body: thread },
+      { status: 200, body: {} },
+      { status: 200, body: {} },
+      { status: 200, body: {} },
+      { status: 200, body: {} },
+      { status: 200, body: { data: [] } },
+    ]);
+    const s = await runZernioEngagement(fakeEnv(d1), "sebastian", { nowMs: NOW, sleepMs: 0, force: true });
+    expect(s.replies).toBe(2);
+    expect(s.skipped.some((x) => x.reason.includes("modo seguro"))).toBe(true);
+    // La primera pasada queda marcada: la siguiente pasada dentro
+    // de 24 h sigue en modo seguro.
+    const st = await getEngagementStatus(fakeEnv(d1), "sebastian");
+    expect(st.safe_mode).toBe(true);
+    expect(st.safe_caps.reply).toBe(2);
+    expect(st.safe_caps.outward_like).toBe(0);
   });
 
   test("objetivo TikTok hacia afuera se marca skipped sin llamar al like de Zernio", async () => {

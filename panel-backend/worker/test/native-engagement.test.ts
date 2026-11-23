@@ -302,7 +302,9 @@ describe("runNativeEngagement", () => {
 
   test("objetivo Facebook like con scope: like por Graph; objetivo TikTok queda pendiente (es de Zernio)", async () => {
     const { d1, raw } = makeDb();
-    await seedSettings(raw, { engagement_enabled: true });
+    // Fuera de la ventana de modo seguro (24 h): afuera no está
+    // bloqueado; el modo seguro se cubre en zernio-engagement.test.ts.
+    await seedSettings(raw, { engagement_enabled: true, engagement_first_run_at: NOW - 25 * 3600_000 });
     await seedMeta(raw, "es");
     raw.query(
       "INSERT INTO engagement_targets (tenant_id, platform, language, streamer, post_url, post_id, kind, status, created_at, updated_at) " +

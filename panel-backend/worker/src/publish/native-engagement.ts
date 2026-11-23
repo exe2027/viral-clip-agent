@@ -53,7 +53,9 @@ import {
 } from "./oauth-scopes";
 import {
   countEngagementToday,
+  engagementCaps,
   ENGAGEMENT_MIN_INTERVAL_MS,
+  firstRunAt,
   hasReplied,
   isOwnComment,
   listPendingTargets,
@@ -436,6 +438,8 @@ export async function runNativeEngagement(
   if (!opts.force && now - lastRun < ENGAGEMENT_MIN_INTERVAL_MS) {
     return { ...summary, reason: "throttle: la pasada de engagement corre como mucho 1 vez por hora" };
   }
+  // Modo seguro las primeras 24 h: topes 2/2/0/0 (ver engagementCaps).
+  const caps = engagementCaps(settings, eff, now);
   const pace = async () => {
     if (opts.sleepMs !== undefined) await sleep(opts.sleepMs);
     else await sleep(8000 + Math.floor(Math.random() * 7000));
@@ -502,8 +506,8 @@ export async function runNativeEngagement(
               if (isOwnComment(c as unknown as Record<string, unknown>, ownNames)) continue;
               if (await hasReplied(db, tenant, c.id)) continue;
               const repliesToday = await countEngagementToday(db, tenant, day, platform, lang, "reply");
-              if (repliesToday >= eff.engagement_reply_daily_max) {
-                summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${eff.engagement_reply_daily_max}` });
+              if (repliesToday >= caps.reply) {
+                summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${caps.reply}${caps.safeMode ? " (modo seguro)" : ""}` });
                 break;
               }
               const title = clipTitles.get(videoId) ?? null;
@@ -522,7 +526,7 @@ export async function runNativeEngagement(
               summary.replies++;
               try {
                 const likesToday = await countEngagementToday(db, tenant, day, platform, lang, "like_comment");
-                if (likesToday < eff.engagement_like_daily_max) {
+                if (likesToday < caps.like) {
                   await ytLikeComment(access, c.id);
                   await logEngagement(db, tenant, day, platform, lang, "like_comment", "ok", { targetPostId: videoId, commentId: c.id, nowMs: now });
                   summary.commentLikes++;
@@ -568,8 +572,8 @@ export async function runNativeEngagement(
             if (isOwnComment(c as unknown as Record<string, unknown>, ownNames)) continue;
             if (await hasReplied(db, tenant, c.id)) continue;
             const repliesToday = await countEngagementToday(db, tenant, day, platform, lang, "reply");
-            if (repliesToday >= eff.engagement_reply_daily_max) {
-              summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${eff.engagement_reply_daily_max}` });
+            if (repliesToday >= caps.reply) {
+              summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${caps.reply}${caps.safeMode ? " (modo seguro)" : ""}` });
               break;
             }
             const title = clipTitles.get(mediaId) ?? null;
@@ -588,7 +592,7 @@ export async function runNativeEngagement(
             summary.replies++;
             try {
               const likesToday = await countEngagementToday(db, tenant, day, platform, lang, "like_comment");
-              if (likesToday < eff.engagement_like_daily_max) {
+              if (likesToday < caps.like) {
                 await igLikeComment(token, c.id);
                 await logEngagement(db, tenant, day, platform, lang, "like_comment", "ok", { targetPostId: mediaId, commentId: c.id, nowMs: now });
                 summary.commentLikes++;
@@ -633,8 +637,8 @@ export async function runNativeEngagement(
             if (isOwnComment(c as unknown as Record<string, unknown>, ownNames)) continue;
             if (await hasReplied(db, tenant, c.id)) continue;
             const repliesToday = await countEngagementToday(db, tenant, day, platform, lang, "reply");
-            if (repliesToday >= eff.engagement_reply_daily_max) {
-              summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${eff.engagement_reply_daily_max}` });
+            if (repliesToday >= caps.reply) {
+              summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${caps.reply}${caps.safeMode ? " (modo seguro)" : ""}` });
               break;
             }
             const title = clipTitles.get(postId) ?? null;
@@ -653,7 +657,7 @@ export async function runNativeEngagement(
             summary.replies++;
             try {
               const likesToday = await countEngagementToday(db, tenant, day, platform, lang, "like_comment");
-              if (likesToday < eff.engagement_like_daily_max) {
+              if (likesToday < caps.like) {
                 await fbLikeComment(token, c.id);
                 await logEngagement(db, tenant, day, platform, lang, "like_comment", "ok", { targetPostId: postId, commentId: c.id, nowMs: now });
                 summary.commentLikes++;
@@ -697,8 +701,8 @@ export async function runNativeEngagement(
       }
       if (t.kind === "like") {
         const n = await countEngagementToday(db, tenant, day, platform, lang, "outward_like");
-        if (n >= eff.engagement_outward_like_daily_max) {
-          summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope likes afuera ${n}/${eff.engagement_outward_like_daily_max}` });
+        if (n >= caps.outwardLike) {
+          summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope likes afuera ${n}/${caps.outwardLike}${caps.safeMode ? " (modo seguro: afuera apagado)" : ""}` });
           continue;
         }
         try {
@@ -728,8 +732,8 @@ export async function runNativeEngagement(
         }
       } else if (t.kind === "comment") {
         const n = await countEngagementToday(db, tenant, day, platform, lang, "outward_comment");
-        if (n >= eff.engagement_outward_comment_daily_max) {
-          summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope comentarios afuera ${n}/${eff.engagement_outward_comment_daily_max}` });
+        if (n >= caps.outwardComment) {
+          summary.skipped.push({ what: `objetivo #${t.id}`, reason: `tope comentarios afuera ${n}/${caps.outwardComment}${caps.safeMode ? " (modo seguro: afuera apagado)" : ""}` });
           continue;
         }
         if (!t.comment_text || t.comment_text.trim().length < 10) {
@@ -777,11 +781,11 @@ export async function runNativeEngagement(
       perLanguage: summary.perLanguage,
       skipped: summary.skipped.slice(0, 10),
     };
-    await saveSettings(db, tenant, { ...settings, engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
+    await saveSettings(db, tenant, { ...settings, engagement_first_run_at: firstRunAt(settings, now), engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
     await logWorkerEvent(
       db,
       "engagement",
-      `Engagement nativo: ${summary.replies} respuestas, ${summary.commentLikes} likes a comentarios, ${summary.outwardLikes} likes afuera, ${summary.outwardComments} comentarios afuera. ES: ${summary.perLanguage.es ?? "?"} | EN: ${summary.perLanguage.en ?? "?"}`,
+      `Engagement nativo${caps.safeMode ? " (modo seguro 2/2/0/0)" : ""}: ${summary.replies} respuestas, ${summary.commentLikes} likes a comentarios, ${summary.outwardLikes} likes afuera, ${summary.outwardComments} comentarios afuera. ES: ${summary.perLanguage.es ?? "?"} | EN: ${summary.perLanguage.en ?? "?"}`,
       tenant,
     ).catch(() => undefined);
   }
@@ -846,7 +850,9 @@ export async function runEngagement(
     perLanguage: combined.perLanguage,
     skipped: combined.skipped.slice(0, 10),
   };
-  await saveSettings(db, tenant, { ...settings, engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
+  // Preserva la marca de primera pasada (los sub-runners ya la
+  // estamparon; el snapshot `settings` es previo a la pasada).
+  await saveSettings(db, tenant, { ...settings, engagement_first_run_at: firstRunAt(settings, now), engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
   await logWorkerEvent(
     db,
     "engagement",

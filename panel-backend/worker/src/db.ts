@@ -711,7 +711,12 @@ export function effectiveSettings(raw: Record<string, unknown>): EffectiveSettin
     tiktok_zernio_pending_drafts: clampInt(raw.tiktok_zernio_pending_drafts, 5, 0, 100),
     // Engagement solo-Zernio (2026-11-23, v5.3.0): kill-switch OFF
     // por defecto; los topes son techo por plataforma+idioma+día.
-    engagement_enabled: raw.engagement_enabled === true,
+    // Engagement (2026-11-23, fix bug de tipo): la D1 guardó
+    // engagement_enabled como número 1 (seed v5.3.0 vía SQL) y el
+    // === true lo leía apagado para siempre, en silencio. Se acepta
+    // 1 además de true; el PUT /api/settings sigue exigiendo
+    // booleano, así que el toggle del panel no cambia.
+    engagement_enabled: raw.engagement_enabled === true || raw.engagement_enabled === 1,
     engagement_reply_daily_max: clampInt(raw.engagement_reply_daily_max, 10, 0, 15),
     engagement_like_daily_max: clampInt(raw.engagement_like_daily_max, 10, 0, 20),
     engagement_outward_like_daily_max: clampInt(raw.engagement_outward_like_daily_max, 5, 0, 10),
