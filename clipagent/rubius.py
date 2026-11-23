@@ -213,7 +213,9 @@ def split_banner_title(title):
     y reparto) lo hace fit_title_lines: el título sale COMPLETO,
     nunca cortado. Devuelve (línea1, línea2) en MAYÚSCULAS, o
     (palabra, None) si hay una sola palabra, o (None, None) si
-    no hay título.
+    no hay título. Si el título necesita 3-4 líneas (título muy
+    largo a 40 px, caso Noni 2026-11-23), las líneas 2..n se juntan
+    en la línea 2 para no perder texto en la tupla de dos.
     Ej: 'GTA 6: El chat: "Cinema"' -> ('EL CHAT', 'CINEMA').
     """
     lines, _size = _banner_fit(title)
@@ -221,7 +223,7 @@ def split_banner_title(title):
         return None, None
     if len(lines) == 1:
         return lines[0], None
-    return lines[0], lines[1]
+    return lines[0], " ".join(lines[1:])
 
 
 def _banner_font(size):
@@ -238,9 +240,12 @@ def make_banner_png(title, out_png, font_sizes=BANNER_FONT_SIZES):
     """PNG del banner amarillo (864x288, esquinas redondeadas).
 
     Fondo transparente fuera del banner; relleno amarillo con
-    borde blanco de 6 px; dos líneas centradas (negra arriba,
-    roja abajo) con el tamaño que decide _banner_fit: el título
-    sale COMPLETO, nunca cortado. Devuelve la ruta del PNG.
+    borde blanco de 6 px; líneas centradas (negra, roja, negra,
+    roja, ...) con el tamaño que decide _banner_fit: el título
+    sale COMPLETO, nunca cortado. Un título muy largo puede ocupar
+    3-4 líneas a 40 px (caso Noni 2026-11-23); los colores alternan
+    para que la línea 3+ no se caiga (antes: IndexError con solo
+    dos colores). Devuelve la ruta del PNG.
     """
     from PIL import Image, ImageDraw
 
@@ -271,7 +276,10 @@ def make_banner_png(title, out_png, font_sizes=BANNER_FONT_SIZES):
         # mayúsculas). Con "ma" (ascender) el texto caía ~40 px más
         # abajo: la altura del ascender de Arial Black supera la
         # altura de caja y el banner quedaba cargado abajo.
-        d.text((BANNER_W // 2, y), ln, font=font, fill=colors[i], anchor="mt")
+        # Los colores alternan (negra, roja, negra, ...): un título
+        # muy largo llega a 3-4 líneas y colors[i] se caía.
+        d.text((BANNER_W // 2, y), ln, font=font,
+               fill=colors[i % len(colors)], anchor="mt")
         y += cap_h + BANNER_LINE_GAP
     img.save(out_png)
     return out_png

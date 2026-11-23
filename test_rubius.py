@@ -149,6 +149,43 @@ def test_make_banner_png_titulo_largo_completo(tmp_path):
     assert red_rows.max() < rubius.BANNER_H
 
 
+def test_banner_titulo_muy_largo_tres_lineas_noni(tmp_path):
+    """Regresión 2026-11-23 (commit 9f34b31): el título de Noni
+    (1793 px en una línea) ahora ajusta en 3 líneas a 40 px.
+    Antes de este arreglo make_banner_png se caía con IndexError
+    (solo tenía 2 colores) y split_banner_title perdía la 3.ª línea.
+    El banner sale completo, dentro del ancho y del alto."""
+    title = ("Noni juega a GTA 6 por primera vez y alucina "
+             "con la playa y la ciudad")
+    lines, size = rubius._banner_fit(title)
+    assert len(lines) == 3
+    assert size == 40
+    assert " ".join(lines) == title.upper()
+    font = rubius._banner_font(size)
+    for ln in lines:
+        assert font.getlength(ln) <= rubius.BANNER_MAX_W
+    # split_banner_title no pierde texto: la tupla de dos junta
+    # las líneas 2..n en la segunda.
+    line1, line2 = rubius.split_banner_title(title)
+    assert " ".join(x for x in (line1, line2) if x) == title.upper()
+    out = str(tmp_path / "banner_noni.png")
+    rubius.make_banner_png(title, out)
+    assert os.path.isfile(out)
+    from PIL import Image
+    import numpy as np
+
+    rgba = np.array(Image.open(out).convert("RGBA")).astype(int)
+    opaque = rgba[:, :, 3] > 128
+    r, g, b = rgba[:, :, 0], rgba[:, :, 1], rgba[:, :, 2]
+    black = opaque & (r < 60) & (g < 60) & (b < 60)
+    red = opaque & (r > 150) & (g < 100) & (b < 100)
+    assert int(black.sum()) > 500
+    assert int(red.sum()) > 500
+    # Todo el texto queda dentro del banner.
+    text_rows = np.where((black | red).any(axis=1))[0]
+    assert text_rows.max() < rubius.BANNER_H
+
+
 def test_make_banner_png(tmp_path):
     out = str(tmp_path / "banner.png")
     rubius.make_banner_png('GTA 6: El chat: "Cinema"', out)

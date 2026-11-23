@@ -128,6 +128,8 @@
 #     única de verdad para el hash y los settings).
 #   - worker/node_modules instalado (wrangler 4.x en
 #     worker/node_modules/.bin/wrangler; si falta: (cd worker && npm ci)).
+#     Solo para ejecuciones reales: en --dry-run no se exige (wrangler
+#     nunca se ejecuta en ese modo).
 #   - Token Cloudflare, MISMO PATRÓN que scripts/deploy_with_token.py:
 #     si CLOUDFLARE_API_TOKEN no está en el entorno, el script lo obtiene
 #     con dynamic_credential_entry("custom.cloudflare", "access_token") y
@@ -610,7 +612,13 @@ printf '%s' "$ROLE" | grep -Eq '^[a-z][a-z0-9_]{0,19}$' \
   && die "--prompt-password necesita una TTY (usa --generate-password en no interactivo)"
 
 for c in python3 jq curl openssl node bun; do require_cmd "$c"; done
-[ -x "$WRANGLER" ] || die "falta wrangler en $WRANGLER (ejecuta: (cd worker && npm ci --no-audit --no-fund))"
+# En dry-run wrangler nunca se ejecuta (run/run_in solo imprimen y
+# los pasos con llamadas reales van tras [ "$DRY_RUN" = 0 ]), así que
+# el binario no se exige aquí: un checkout fresco o CI (sin
+# worker/node_modules) debe poder validar el dry-run. En una
+# ejecución real sigue siendo obligatorio.
+[ "$DRY_RUN" = 1 ] || [ -x "$WRANGLER" ] \
+  || die "falta wrangler en $WRANGLER (ejecuta: (cd worker && npm ci --no-audit --no-fund))"
 [ -f "$TEMPLATE_TOML" ] || die "falta la plantilla $TEMPLATE_TOML"
 [ -f "$ROUTER_TOML" ] || die "falta $ROUTER_TOML"
 [ -f "$WORKERS_JSON" ] || die "falta $WORKERS_JSON"
