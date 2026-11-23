@@ -253,8 +253,11 @@ export function publishGate(platform: PanelPlatform, g: GateContext): string | n
     return `cuenta en pausa por spam/límite hasta ${new Date(g.pausedUntilMs).toISOString()}: no se publica ni a mano (pausa de 48 h)`;
   }
   // ROLLING 24 h (regla 2): nunca más de 3 por cuenta en 24 h
-  // móviles. Techo duro: frena SIEMPRE, también a mano.
-  const rollingMax = s.rolling_24h_max;
+  // móviles (6 en YouTube, decisión 2026-11-23: YouTube es
+  // 6/día). Techo duro: frena SIEMPRE, también a mano.
+  const rollingMax = platform === "youtube_shorts"
+    ? (s.rolling_24h_max_youtube ?? s.rolling_24h_max)
+    : s.rolling_24h_max;
   if (g.publishedLast24h !== undefined && g.publishedLast24h >= rollingMax) {
     return `tope rolling 24 h alcanzado: ${g.publishedLast24h}/${rollingMax} en ${platform} (últimas 24 h)`;
   }
@@ -629,19 +632,23 @@ export async function reservePublishSlot(db: D1Database, job: SlotJob): Promise<
     const postedCount = posted?.n ?? 0;
     const reserved = slot?.reserved_count ?? 0;
     // ROLLING 24 h (regla 2, techo duro): nunca más de 3 por
-    // cuenta en 24 h móviles. Frena la reserva incluso a mano:
-    // "Publicar ahora" salta tope diario + espaciamiento, no el
-    // rolling. El gate ya lo comprueba al encolar; aquí es la
-    // segunda valla para dos ciclos solapados.
+    // cuenta en 24 h móviles (6 en YouTube, decisión 2026-11-23).
+    // Frena la reserva incluso a mano: "Publicar ahora" salta
+    // tope diario + espaciamiento, no el rolling. El gate ya lo
+    // comprueba al encolar; aquí es la segunda valla para dos
+    // ciclos solapados.
     const eff = effectiveSettings(await getSettings(db, job.tenant_id));
+    const rollingMax = job.platform === "youtube_shorts"
+      ? (eff.rolling_24h_max_youtube ?? eff.rolling_24h_max)
+      : eff.rolling_24h_max;
     const rolling = await db
       .prepare(
         "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ?",
       )
       .bind(job.tenant_id, job.platform, job.language, nowMs() - 24 * 3600 * 1000)
       .first<{ n: number }>();
-    if ((rolling?.n ?? 0) >= eff.rolling_24h_max) {
-      return { ok: false, reason: `tope rolling 24 h alcanzado: ${rolling?.n ?? 0}/${eff.rolling_24h_max} en ${job.platform} (últimas 24 h)` };
+    if ((rolling?.n ?? 0) >= rollingMax) {
+      return { ok: false, reason: `tope rolling 24 h alcanzado: ${rolling?.n ?? 0}/${rollingMax} en ${job.platform} (últimas 24 h)` };
     }
     // 1 POR PLATAFORMA Y FRANJA (orden 09:25, SIN AMONTONAR):
     // última valla antes del adaptador: si ya se publicó 1 en

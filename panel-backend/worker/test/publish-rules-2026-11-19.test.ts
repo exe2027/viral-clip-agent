@@ -3,7 +3,7 @@
 // Facebook 3/3; orden usuario 2026-11-21 21:09: IG/FB a 3 y
 // YouTube a 6), calentamiento nuevo (<14 días o <20 publicaciones;
 // semana 1/2: plan de calentamiento, semana 3: plan, establecida: plan+máx),
-// espaciamiento 3 h (4 h YouTube), rolling 24 h máx 3, franjas
+// espaciamiento 3 h (2 h YouTube, orden 2026-11-23), rolling 24 h máx 3 (6 YouTube), franjas
 // Chile 12:00-14:00 / 18:00-20:00 / 21:00-23:00 con jitter
 // determinista, día libre semanal determinista, backoff 1/5/15/60
 // (máx 3 reintentos/día, A4) y spam -> pausa 48 h sin reintento, y plan diario JSON.
@@ -65,10 +65,11 @@ describe("topes por plataforma (reglas 2026-11-19)", () => {
     expect(s.facebook_plan).toBe(3);
     expect(s.facebook_max).toBe(3);
     expect(s.spacing_hours).toBe(3);
-    expect(s.youtube_spacing_hours).toBe(4);
+    expect(s.youtube_spacing_hours).toBe(2); // orden 2026-11-23: YouTube 6/día con 2 h
     expect(s.min_spacing_minutes).toBe(5);
     expect(s.cross_platform_spacing_minutes).toBe(15);
     expect(s.rolling_24h_max).toBe(3);
+    expect(s.rolling_24h_max_youtube).toBe(6); // orden 2026-11-23: rolling YouTube 6
     expect(s.new_account_daily).toBe(3); // orden 2026-11-21: mínimo 3 por plataforma
     expect(s.new_account_daily_youtube).toBe(6); // orden 2026-11-21 21:09: YouTube a 6
   });
@@ -153,10 +154,14 @@ describe("calentamiento nuevo (<14 días o <20 publicaciones)", () => {
   });
 });
 
-describe("espaciamiento 3 h / 4 h YouTube y cross-platform 15 min", () => {
-  test("hace 3,5 h: TikTok pasa, YouTube frena (4 h)", () => {
-    const last = Date.now() - 3.5 * 3600 * 1000;
-    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toBeNull();
+describe("espaciamiento 3 h / 2 h YouTube y cross-platform 15 min (YouTube 2 h: orden 2026-11-23)", () => {
+  test("hace 2,5 h: TikTok frena (3 h), YouTube pasa (2 h)", () => {
+    const last = Date.now() - 2.5 * 3600 * 1000;
+    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toContain("espaciamiento");
+    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toBeNull();
+  });
+  test("hace 1,5 h: YouTube frena (2 h)", () => {
+    const last = Date.now() - 1.5 * 3600 * 1000;
     expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toContain("espaciamiento");
   });
   test("hace 4,5 h: YouTube también pasa", () => {
@@ -192,19 +197,41 @@ describe("franjas horarias Chile (revoca 'sin franja' 2026-11-18)", () => {
   });
 });
 
-describe("horario por plataforma (orden usuario 2026-11-22 01:11)", () => {
+describe("horario por plataforma (orden usuario 2026-11-22 01:11; YouTube 6/día 2026-11-23)", () => {
   const day = "2026-11-19";
-  test("cada plataforma tiene 3 horas al día y todas caen dentro de franja", () => {
+  // Las horas del horario son "no antes de": el ciclo las recoge
+  // en la siguiente pasada del cron. Las franjas del cron son
+  // 12:00-16:00 y 18:00-01:00 (Chile); la franja de publicación
+  // (12-14, 18-20, 21-23) es más estrecha y solo se comprueba al
+  // encolar, no al ejecutar, así que las horas no tienen que caer
+  // dentro de ella. Lo que sí se exige: 6 huecos YouTube / 3 el
+  // resto, todos dentro de franja de cron y con ≥2 h entre ellos.
+  const inCronWindow = (hhmm: string): boolean => {
+    const [h, m] = hhmm.split(":").map(Number);
+    const mins = h * 60 + m;
+    return (mins >= 12 * 60 && mins < 16 * 60) || mins >= 18 * 60 || mins < 1 * 60;
+  };
+  test("YouTube tiene 6 horas al día, el resto 3; todas en franja de cron y con ≥2 h entre ellas", () => {
+    const toMin = (hhmm: string) => {
+      const [h, m] = hhmm.split(":").map(Number);
+      return h * 60 + m;
+    };
     for (const [platform, hours] of Object.entries(PLATFORM_SCHEDULE)) {
-      expect(hours).toHaveLength(3);
-      for (const hhmm of hours) {
-        expect(isWithinPublishSlot(santiagoWallToUtcMs(day, hhmm))).toBe(true);
+      expect(hours).toHaveLength(platform === "youtube_shorts" ? 6 : 3);
+      for (let i = 0; i < hours.length; i++) {
+        expect(inCronWindow(hours[i])).toBe(true);
+        if (i > 0) {
+          // Hueco hacia delante (00:00 es el día siguiente: +24 h).
+          const gap = toMin(hours[i]) - toMin(hours[i - 1]);
+          const forward = gap > 0 ? gap : gap + 24 * 60;
+          expect(forward).toBeGreaterThanOrEqual(120);
+        }
       }
       void platform;
     }
   });
-  test("YouTube/IG 12:00, 18:00, 21:00; TikTok/FB 13:00, 19:00, 22:00", () => {
-    expect(PLATFORM_SCHEDULE.youtube_shorts).toEqual(["12:00", "18:00", "21:00"]);
+  test("YouTube 00:00, 12:00, 14:00, 18:00, 20:00, 22:00; IG 12:00, 18:00, 21:00; TikTok/FB 13:00, 19:00, 22:00", () => {
+    expect(PLATFORM_SCHEDULE.youtube_shorts).toEqual(["00:00", "12:00", "14:00", "18:00", "20:00", "22:00"]);
     expect(PLATFORM_SCHEDULE.instagram_reels).toEqual(["12:00", "18:00", "21:00"]);
     expect(PLATFORM_SCHEDULE.tiktok).toEqual(["13:00", "19:00", "22:00"]);
     expect(PLATFORM_SCHEDULE.facebook_reels).toEqual(["13:00", "19:00", "22:00"]);
@@ -218,8 +245,9 @@ describe("horario por plataforma (orden usuario 2026-11-22 01:11)", () => {
     expect(nextPlatformHourMs("youtube_shorts", dentro)).toBe(dentro);
     // 12:05 para TikTok (su hora es 13:00) → 13:00 hoy.
     expect(nextPlatformHourMs("tiktok", dentro)).toBe(santiagoWallToUtcMs(day, "13:00"));
-    // 22:30, pasada la última hora YT (21:00, vence 22:00) → mañana 12:00.
-    expect(nextPlatformHourMs("youtube_shorts", santiagoWallToUtcMs(day, "22:30"))).toBe(santiagoWallToUtcMs("2026-11-20", "12:00"));
+    // 23:30, pasada la última hora YT (22:00, vence 23:00) → mañana 00:00
+    // (la lista empieza en 00:00, así que "mañana a la primera" es medianoche).
+    expect(nextPlatformHourMs("youtube_shorts", santiagoWallToUtcMs(day, "23:30"))).toBe(santiagoWallToUtcMs("2026-11-20", "00:00"));
   });
 });
 

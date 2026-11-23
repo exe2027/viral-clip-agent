@@ -544,18 +544,22 @@ export const DEFAULT_PANEL_SETTINGS = {
   tiktok_zernio_daily: 15,
   tiktok_zernio_pending_drafts: 5,
   // Espaciamiento mínimo entre dos subidas en la misma cuenta:
-  // 3 h en general, 4 h en YouTube (reglas 2026-11-19). Mínimo
+  // 3 h en general, 2 h en YouTube (decisión del usuario
+  // 2026-11-23: antes 4 h, pero con 4 h solo cabían 4 huecos al
+  // día y YouTube es 6/día; con 2 h caben los 6). Mínimo
   // absoluto: nunca 2 vídeos al mismo minuto (5 min).
   spacing_hours: 3,
-  youtube_spacing_hours: 4,
+  youtube_spacing_hours: 2,
   min_spacing_minutes: 5,
   // Mismo clip en distintas plataformas: mínimo 15 min entre una
   // y otra (ideal 12-24 h; el plan diario lo separa en franjas).
   cross_platform_spacing_minutes: 15,
   // Nunca más de 3 publicaciones por cuenta en 24 h móviles
   // (ventana rolling, no día calendario). Techo duro: lo aplica
-  // el gate incluso a la publicación manual.
+  // el gate incluso a la publicación manual. YouTube tiene su
+  // propio techo (6, decisión 2026-11-23: YouTube es 6/día).
   rolling_24h_max: 3,
+  rolling_24h_max_youtube: 6,
   // Días activos por semana por cuenta (reglas 2026-11-19):
   // TikTok 5-6, resto 4-5. Se guarda el mínimo del rango (el
   // plan diario rota el día libre para llegar a esos días).
@@ -685,10 +689,11 @@ export function effectiveSettings(raw: Record<string, unknown>): EffectiveSettin
     tiktok_zernio_daily: clampInt(raw.tiktok_zernio_daily, 15, 0, 100),
     tiktok_zernio_pending_drafts: clampInt(raw.tiktok_zernio_pending_drafts, 5, 0, 100),
     spacing_hours: clampInt(raw.spacing_hours, 3, 0, 24),
-    youtube_spacing_hours: clampInt(raw.youtube_spacing_hours, 4, 0, 24),
+    youtube_spacing_hours: clampInt(raw.youtube_spacing_hours, 2, 0, 24),
     min_spacing_minutes: clampInt(raw.min_spacing_minutes, 5, 0, 60),
     cross_platform_spacing_minutes: clampInt(raw.cross_platform_spacing_minutes, 15, 0, 1440),
     rolling_24h_max: clampInt(raw.rolling_24h_max, 3, 0, 10),
+    rolling_24h_max_youtube: clampInt(raw.rolling_24h_max_youtube, 6, 0, 10),
     tiktok_days_per_week: clampInt(raw.tiktok_days_per_week, 5, 0, 7),
     instagram_days_per_week: clampInt(raw.instagram_days_per_week, 4, 0, 7),
     youtube_days_per_week: clampInt(raw.youtube_days_per_week, 4, 0, 7),
@@ -738,7 +743,7 @@ export function validateSettingsInput(body: Record<string, unknown>): string | n
     "resto_plan", "resto_max", "new_account_daily",
     "new_account_daily_youtube",
     "tiktok_zernio_daily", "tiktok_zernio_pending_drafts",
-    "rolling_24h_max", "hashtag_max_instagram", "hashtag_max",
+    "rolling_24h_max", "rolling_24h_max_youtube", "hashtag_max_instagram", "hashtag_max",
     "daily_limit_youtube_shorts", "daily_limit_tiktok", "daily_limit_instagram", "daily_limit_facebook"] as const) {
     if (body[k] !== undefined) {
       const v = intIn(body[k]);
@@ -815,7 +820,7 @@ export const BASE_SETTINGS_KEYS = [
   "daily_limit_youtube_shorts", "daily_limit_tiktok", "daily_limit_instagram", "daily_limit_facebook",
   "new_account_daily", "new_account_daily_youtube", "tiktok_zernio_daily", "tiktok_zernio_pending_drafts",
   "spacing_hours", "youtube_spacing_hours", "min_spacing_minutes",
-  "cross_platform_spacing_minutes", "rolling_24h_max",
+  "cross_platform_spacing_minutes", "rolling_24h_max", "rolling_24h_max_youtube",
   "tiktok_days_per_week", "instagram_days_per_week", "youtube_days_per_week", "facebook_days_per_week",
   "hashtag_max_instagram", "hashtag_max",
   "hype_burst", "game", "thumbnail_style",
@@ -1115,7 +1120,14 @@ export function nextSlotStartMs(nowMs: number): number {
 // las horas, se cambia aquí y se redespliega).
 // ---------------------------------------------------------------------------
 export const PLATFORM_SCHEDULE: Record<string, string[]> = {
-  youtube_shorts: ["12:00", "18:00", "21:00"],
+  // YouTube 6/día (decisión del usuario 2026-11-23): 6 huecos
+  // con 2 h entre ellos (youtube_spacing_hours=2), todos dentro
+  // de las franjas del cron (12:00-16:00 y 18:00-01:00 Chile;
+  // 16:00 queda fuera porque el cron no corre ahí). La lista va
+  // en orden cronológico desde medianoche para que
+  // nextPlatformHourMs resuelva bien el hueco 00:00 (mañana
+  // 00:00 = esta medianoche).
+  youtube_shorts: ["00:00", "12:00", "14:00", "18:00", "20:00", "22:00"],
   tiktok: ["13:00", "19:00", "22:00"],
   instagram_reels: ["12:00", "18:00", "21:00"],
   facebook_reels: ["13:00", "19:00", "22:00"],

@@ -126,10 +126,14 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
     }
     // Capacidad del día: ritmo normal (o máximo duro si se cumple
     // la regla 6), menos lo ya publicado hoy, con techo del
-    // rolling 24 h (nunca >3 por cuenta en 24 h móviles).
+    // rolling 24 h (nunca >3 por cuenta en 24 h móviles; 6 en
+    // YouTube, decisión 2026-11-23).
     const target = acc.canEscalate && acc.stage === "establecida" ? acc.max : acc.plan;
     let capacity = Math.max(0, target - acc.publishedToday);
-    capacity = Math.min(capacity, Math.max(0, eff.rolling_24h_max - acc.publishedLast24h));
+    const rollingMax = acc.apiPlatform === "youtube"
+      ? (eff.rolling_24h_max_youtube ?? eff.rolling_24h_max)
+      : eff.rolling_24h_max;
+    capacity = Math.min(capacity, Math.max(0, rollingMax - acc.publishedLast24h));
     if (acc.publishedToday > 0 && capacity === 0) {
       alertas.push(`Cuenta ${label}: plan del día cubierto (${acc.publishedToday}/${target}).`);
       continue;

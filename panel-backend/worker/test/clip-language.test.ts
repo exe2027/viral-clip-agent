@@ -648,12 +648,12 @@ describe("topes por plataforma+idioma (0019)", () => {
     expect((db.tables["jobs"] ?? []).filter((j) => j.language === "es")).toHaveLength(4);
   });
 
-  test("rolling 24 h: 3 publicados en 24 h en YouTube EN frenan hasta la manual (reglas 2026-11-19)", async () => {
+  test("rolling 24 h: 6 publicados en 24 h en YouTube EN frenan hasta la manual (YouTube 6, orden 2026-11-23)", async () => {
     const db = new FakeD1();
     seedEsAccounts(db);
     seedEnYoutube(db, ESTABLISHED_EN);
     const today = santiagoDayKey();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       db.seed("jobs", {
         id: 10 + i, tenant_id: "sebastian", clip_id: 900 + i, platform: "youtube_shorts",
         api_account_id: 4, state: "posted", language: "en", posted_day: today,
@@ -666,6 +666,32 @@ describe("topes por plataforma+idioma (0019)", () => {
     const r = await call(env, "POST", `/api/clips/${idEn}/publish`, { token });
     expect(r.status).toBe(400);
     expect(String(r.json.error ?? "")).toContain("rolling 24 h");
+  });
+
+  test("rolling 24 h: 3 publicados en 24 h en YouTube EN ya NO frenan (YouTube 6, orden 2026-11-23)", async () => {
+    const db = new FakeD1();
+    seedEsAccounts(db);
+    seedEnYoutube(db, ESTABLISHED_EN);
+    // Tiempos relativos a SLOT_NOW_MS (12:30, en franja): las 3
+    // subidas son de hace 3 h (09:30), dentro de 24 h pero con
+    // espaciamiento YouTube (2 h) ya cumplido.
+    const today = santiagoDayKey(new Date(SLOT_NOW_MS));
+    for (let i = 0; i < 3; i++) {
+      db.seed("jobs", {
+        id: 10 + i, tenant_id: "sebastian", clip_id: 900 + i, platform: "youtube_shorts",
+        api_account_id: 4, state: "posted", language: "en", posted_day: today,
+        updated_at: SLOT_NOW_MS - 3 * 3600 * 1000, created_at: SLOT_NOW_MS - 3 * 3600 * 1000,
+      });
+    }
+    const env = makeEnv(db, new FakeR2());
+    const token = await tokenFor("seba", "sebastian");
+    const idEn = await setupUnblockedClip(db, env, token, clipBody({ language: "en", title: "Clip EN con rolling a 3" }));
+    const restore = patchNow(SLOT_NOW_MS);
+    let r: { status: number; json: Record<string, unknown> };
+    try {
+      r = await call(env, "POST", `/api/clips/${idEn}/publish`, { token });
+    } finally { restore(); }
+    expect(r.status).toBe(200);
   });
 
   test("clip heredado sin idioma publica por la cuenta ES", async () => {

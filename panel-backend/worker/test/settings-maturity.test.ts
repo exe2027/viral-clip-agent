@@ -56,8 +56,9 @@ describe("settings efectivos (Ajustes)", () => {
     expect(s.tiktok_zernio_daily).toBe(15);
     expect(s.tiktok_zernio_pending_drafts).toBe(5);
     expect(s.spacing_hours).toBe(3);
-    expect(s.youtube_spacing_hours).toBe(4);
+    expect(s.youtube_spacing_hours).toBe(2); // orden 2026-11-23: YouTube 6/día con 2 h
     expect(s.rolling_24h_max).toBe(3);
+    expect(s.rolling_24h_max_youtube).toBe(6); // orden 2026-11-23: rolling YouTube 6
     expect(s.hype_burst).toBe(true);
     expect(s.game).toBe("GTA VI");
     expect(s.thumbnail_style).toBe("gta6");
