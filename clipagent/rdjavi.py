@@ -489,12 +489,13 @@ def fit_title_lines(title, max_w=TITLE_MAX_W, sizes=TITLE_FONT_SIZES,
     tamaño prueba 1 línea, luego 2, ... hasta ``max_lines`` (con
     ``max_h``, el total de líneas tiene que caber en alto).
     Devuelve (líneas, tamaño) o ([], None) si no hay título. Si ni
-    con el mínimo cabe en ``max_lines`` líneas, devuelve el título
-    entero con el tamaño mínimo y el máximo de líneas (en la práctica
-    no ocurre con títulos reales: a 32 px dos líneas aguantan ~60
-    caracteres en la banda). Es la ÚNICA fuente del ajuste: la usan
-    la banda willyrex (title_ass_lines) y el banner rubius
-    (clipagent/rubius.py).
+    con el mínimo cabe en ``max_lines`` líneas, prueba MÁS líneas
+    (3, 4, ...) al tamaño mínimo hasta que quepan en ``max_h`` (o
+    sin límite de alto si no hay max_h): el título sale completo y
+    dentro del ancho, nunca desbordado. Solo si ni así cabe (una
+    palabra más ancha que max_w) se devuelve el título entero.
+    Es la ÚNICA fuente del ajuste: la usan la banda willyrex
+    (title_ass_lines) y el banner rubius (clipagent/rubius.py).
     """
     words = clean_title_prefix(title).split()
     if not words:
@@ -508,7 +509,24 @@ def fit_title_lines(title, max_w=TITLE_MAX_W, sizes=TITLE_FONT_SIZES,
             lines = _split_title_lines(words, n, size, max_w)
             if lines:
                 return lines, size
+    # Nada cupo en max_lines: probar MÁS líneas al tamaño mínimo
+    # (el banner aguanta 3-4 líneas a 40 px en 288 px de alto).
+    # Antes esto devolvía el título entero en UNA línea desbordada
+    # (bug 2026-11-23: título largo de Noni, 1793 px en un banner
+    # de 760 px). Ahora el título sale completo y dentro del ancho.
     size = sizes[-1]
+    line_h = int(size * 1.15)
+    n = max_lines + 1
+    while True:
+        if (max_h is not None
+                and n * line_h + (n - 1) * line_gap > max_h):
+            break
+        lines = _split_title_lines(words, n, size, max_w)
+        if lines:
+            return lines, size
+        n += 1
+        if n > len(words):
+            break
     lines = (_split_title_lines(words, max_lines, size, max_w)
              or [" ".join(words)])
     return lines, size
