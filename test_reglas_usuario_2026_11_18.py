@@ -141,6 +141,9 @@ class TestReglas20261118Streamers(unittest.TestCase):
         # + 8 EN añadidos después
         # (418586a, 2026-11-18: KaiCenat, IShowSpeed, N3ON, xQc,
         # TheBurntPeanut, Burn, Kaysan, WillNeff), todos GTA VI.
+        # + 4 virales de campaña FAMOSOS (2026-11-23): Dasgasd3m,
+        # ArthurTV, Dylan Page, BenDaDonnn. Bobby Van Riper NO está:
+        # desactivado por la regla de fama 18:50 (734 seguidores).
         from watcher import load_influencers
         watched = {i["usuario"] for i in load_influencers()}
         self.assertEqual(watched, {
@@ -149,6 +152,7 @@ class TestReglas20261118Streamers(unittest.TestCase):
             "peereira7", "noni",
             "kaicenat", "ishowspeed", "n3on", "xqc",
             "theburntpeanut", "burn", "kaysan", "willneff",
+            "dasgasd3m", "arthurtv", "dylanpage", "bendadonnn",
         })
 
 

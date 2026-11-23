@@ -49,6 +49,11 @@ class TestSingleList(unittest.TestCase):
             "peereira7", "noni",
             "kaicenat", "ishowspeed", "n3on", "xqc", "theburntpeanut",
             "burn", "kaysan", "willneff",
+            # Virales de campaña (2026-11-23, orden del usuario 18:37).
+            # Bobby Van Riper NO está: desactivado por la regla de
+            # fama 18:50 (734 seguidores), no se vigila.
+            "dasgasd3m", "arthurtv", "dylanpage",
+            "bendadonnn",
         })
         self.assertIn("illojuan", watched)
         from clipagent.publish import load_whitelist
@@ -96,43 +101,136 @@ class TestSingleList(unittest.TestCase):
                                  ["youtube", "tiktok", "instagram",
                                   "facebook"])
 
-    def test_ocho_ingleses_todos_gta_vi(self):
-        """Orden 2026-11-18: 8 influencers EN con categoría GTA VI.
-        Handles verificados en vivo antes de agregarlos (ninguno
-        inventado): KaiCenat e IShowSpeed (YouTube), n3on y xQc
-        (Kick), TheBurntPeanut, Burn, Kaysan y WillNeff (Twitch)."""
+    def test_trece_ingleses_todos_gta_vi(self):
+        """Orden 2026-11-18: 8 influencers EN con categoria GTA VI,
+        + 5 virales de campana EN (2026-11-23). Handles verificados
+        en vivo antes de agregarlos (ninguno inventado): KaiCenat e
+        IShowSpeed (YouTube), n3on y xQc (Kick), TheBurntPeanut,
+        Burn, Kaysan y WillNeff (Twitch); Dasgasd3m (Kick),
+        ArthurTV (Twitch), Bobby Van Riper (Twitch), Dylan Page
+        (YouTube-only) y BenDaDonnn (Twitch). Bobby queda
+        DESACTIVADO por la regla 2026-11-23 18:50 (solo famosos:
+        734 seguidores); los otros 12 EN siguen activos."""
         from clipagent.category import is_gta6
         entries = streamers.load_streamers()
         en = [e for e in entries if e["language"] == "en"]
-        self.assertEqual(len(en), 8)
+        self.assertEqual(len(en), 13)
         esperado = {
-            "kaicenat": ("twitch", "https://www.twitch.tv/kaicenat"),
+            "kaicenat": ("twitch", "https://www.twitch.tv/kaicenat",
+                         "2026-11-18",
+                         ["youtube", "tiktok", "instagram", "facebook"]),
             "ishowspeed": ("youtube",
-                           "https://www.youtube.com/@IShowSpeed"),
-            "n3on": ("kick", "https://kick.com/n3on"),
-            "xqc": ("kick", "https://kick.com/xqc"),
+                           "https://www.youtube.com/@IShowSpeed",
+                           "2026-11-18",
+                           ["youtube", "tiktok", "instagram", "facebook"]),
+            "n3on": ("kick", "https://kick.com/n3on", "2026-11-18",
+                     ["youtube", "tiktok", "instagram", "facebook"]),
+            "xqc": ("kick", "https://kick.com/xqc", "2026-11-18",
+                    ["youtube", "tiktok", "instagram", "facebook"]),
             "theburntpeanut": ("twitch",
-                               "https://www.twitch.tv/theburntpeanut"),
-            "burn": ("twitch", "https://www.twitch.tv/burn"),
-            "kaysan": ("twitch", "https://www.twitch.tv/kaysan"),
-            "willneff": ("twitch",
-                         "https://www.twitch.tv/willneff"),
+                               "https://www.twitch.tv/theburntpeanut",
+                               "2026-11-18",
+                               ["youtube", "tiktok", "instagram",
+                                "facebook"]),
+            "burn": ("twitch", "https://www.twitch.tv/burn",
+                     "2026-11-18",
+                     ["youtube", "tiktok", "instagram", "facebook"]),
+            "kaysan": ("twitch", "https://www.twitch.tv/kaysan",
+                       "2026-11-18",
+                       ["youtube", "tiktok", "instagram", "facebook"]),
+            "willneff": ("twitch", "https://www.twitch.tv/willneff",
+                         "2026-11-18",
+                         ["youtube", "tiktok", "instagram", "facebook"]),
+            "dasgasd3m": ("kick", "https://kick.com/dasgasd3m",
+                          "2026-11-23", ["youtube", "tiktok"]),
+            "arthurtv": ("twitch", "https://www.twitch.tv/arthurtv",
+                         "2026-11-23", ["tiktok"]),
+            "bobby_vanriper": (
+                "twitch", "https://www.twitch.tv/bobby_vanriper",
+                "2026-11-23", ["youtube", "tiktok", "instagram"]),
+            "dylanpage": ("youtube",
+                          "https://www.youtube.com/@dylan.page.",
+                          "2026-11-23",
+                          ["youtube", "tiktok", "instagram"]),
+            "bendadonnn": ("twitch", "https://www.twitch.tv/bendadonnn",
+                           "2026-11-23",
+                           ["youtube", "tiktok", "instagram", "facebook"]),
         }
-        for name, (platform, canal) in esperado.items():
+        for name, (platform, canal, fecha, publish) in esperado.items():
             with self.subTest(streamer=name):
                 e = streamers.get_streamer(name, entries)
                 self.assertIsNotNone(e, f"falta {name} en streamers.yaml")
-                self.assertTrue(e.get("enabled", True), f"{name} activo")
+                if name == "bobby_vanriper":
+                    # Regla 18:50 (solo famosos): desactivado, no se vigila.
+                    self.assertFalse(e.get("enabled", True),
+                                     "bobby_vanriper debe estar desactivado")
+                else:
+                    self.assertTrue(e.get("enabled", True), f"{name} activo")
                 self.assertEqual(e["platform"], platform)
                 self.assertEqual(e["channel_url"], canal)
                 self.assertEqual(e["game"], "GTA VI")
                 self.assertTrue(is_gta6(e["game"]))
                 self.assertEqual(e["language"], "en")
                 self.assertEqual(e["estado"], "concedido")
-                self.assertEqual(e["fecha_permiso"], "2026-11-18")
-                self.assertEqual(e["publish_platforms"],
-                                 ["youtube", "tiktok", "instagram",
-                                  "facebook"])
+                self.assertEqual(e["fecha_permiso"], fecha)
+                self.assertEqual(e["publish_platforms"], publish)
+
+    def test_cuatro_virales_famosos_campana_y_bobby_excluido(self):
+        """Los 5 virales de campana (2026-11-23) llevan su campana,
+        tarifa bruta/neta y minimo en notas; Dylan Page es
+        youtube-only (sin barrido en vivo) y BenDaDonnn queda bajo
+        el piso neto ($0,90 < $1/1k). Regla 2026-11-23 18:50 (solo
+        FAMOSOS, >= 50.000 seguidores): los 4 famosos llevan su
+        evidencia de fama en notas; Bobby Van Riper (734 seguidores
+        en Twitch) queda EXCLUIDO del ranking/prioridad/activación
+        y desactivado en el yaml, aunque su campaña pague $1,50."""
+        entries = streamers.load_streamers()
+        campanas = {
+            "dasgasd3m": ("051002dd-5c46-43d0-a446-43f2957ba3a9",
+                          "$2,00/1k bruto = $1,80 neto"),
+            "arthurtv": ("6e9ca548-f36c-42c2-abc0-61f89b4b53ba",
+                         "$1,50/1k bruto = $1,35 neto"),
+            "bobby_vanriper": ("f583b069-ced7-49e5-9ed3-2d3a13d6df0c",
+                               "$1,50/1k bruto = $1,35 neto"),
+            "dylanpage": ("39753a1a-f1f3-491b-a8f6-0cfee0af0c97",
+                          "$1,20/1k bruto = $1,08 neto"),
+            "bendadonnn": ("bb66f9eb-b90e-4dd0-8cee-9f3cd566c9a0",
+                           "$0,90 NETO"),
+        }
+        fama = {
+            "dasgasd3m": "62.500",
+            "arthurtv": "500.000",
+            "dylanpage": "1,17M",
+            "bendadonnn": "645.690",
+        }
+        for name, (campaign_id, tarifa) in campanas.items():
+            with self.subTest(streamer=name):
+                e = streamers.get_streamer(name, entries)
+                self.assertIsNotNone(e, f"falta {name} en streamers.yaml")
+                self.assertIn(campaign_id, e["notas"])
+                self.assertIn(tarifa, e["notas"])
+                self.assertTrue(streamers.is_allowed(name, entries))
+                # Material (pregunta del usuario 18:49): ninguna campaña
+                # entrega clips listos; hay que cortar tu propio edit.
+                self.assertIn("cortar tu propio edit", e["notas"])
+                self.assertIn("no entrega clips listos", e["notas"])
+                if name in fama:
+                    self.assertIn(fama[name], e["notas"])
+                    self.assertTrue(e.get("enabled", True), f"{name} activo")
+        dylan = streamers.get_streamer("dylanpage", entries)
+        self.assertEqual(dylan["platform"], "youtube")
+        self.assertIn("VOD-fallback", dylan["notas"])
+        self.assertIn("#DylanPage", dylan["notas"])
+        ben = streamers.get_streamer("bendadonnn", entries)
+        self.assertIn("BAJO el piso", ben["notas"])
+        self.assertIn("SIN prioridad", ben["notas"])
+        bobby = streamers.get_streamer("bobby_vanriper", entries)
+        self.assertIn("bobby.vanriper", bobby["notas"])  # variante pendiente
+        self.assertIn("EXCLUIDO", bobby["notas"])
+        self.assertIn("734", bobby["notas"])
+        self.assertIn("18:50", bobby["notas"])
+        self.assertFalse(bobby.get("enabled", True),
+                         "bobby_vanriper desactivado por fama")
 
     def test_respaldo_listas_viejas(self):
         with tempfile.TemporaryDirectory() as tmp:

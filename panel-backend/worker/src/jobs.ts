@@ -48,6 +48,7 @@ import {
   santiagoDayKeyMs,
   saveSettings,
   slotWindowBoundsMs,
+  stampCampaignSubmissionPosted,
   updateClipPublishState,
   updateClipPublishStates,
   withAccountPause,
@@ -1231,11 +1232,15 @@ export async function markPosted(db: D1Database, job: JobRow, platformId: string
   // fila ya cambió de manos, el UPDATE cambia 0 filas y NO se
   // ejecuta ningún efecto secundario (ni published_count, ni clip,
   // ni evento). Sin token (puente, legacy) se mantiene lo antiguo.
+  // postedAtMs es EL instante real de publicación: el mismo que
+  // queda en jobs.updated_at y el que alimenta la ventana de 30 min
+  // de Content Rewards (0041). Se calcula UNA vez y se reusa abajo.
+  const postedAtMs = nowMs();
   const changed = await fencedJobUpdate(
     db,
     job,
     "state = 'posted', platform_id = ?, evidence_url = ?, posted_day = ?, updated_at = ?",
-    [platformId, evidenceUrl, santiagoDayKey(), nowMs()],
+    [platformId, evidenceUrl, santiagoDayKey(), postedAtMs],
   );
   if (!changed) return;
   // 0017: una publicación real cuenta para la madurez de la cuenta
@@ -1264,6 +1269,23 @@ export async function markPosted(db: D1Database, job: JobRow, platformId: string
   // tumba el posted (stampRetentionDeadline traga su propio fallo).
   if (job.clip_id) {
     await stampRetentionDeadline(db, job.clip_id, job.tenant_id).catch(() => false);
+  }
+  // DISPARADOR Content Rewards (0041, 2026-11-23): ESTE es el punto
+  // real de publicación — no POST /api/clips/:id/publish (que solo
+  // ENCOLA el job) ni el panel. Cuando el job pasa a posted con su
+  // evidence_url, la fila pending de ese clip+plataforma recibe el
+  // post_url y el publishedAtMs REALES y queda enviable 30 min.
+  // ¿Por qué aquí y no en el panel? El panel no sabe cuándo publica
+  // la plataforma: el ciclo publica después, por API, y solo el
+  // Worker ve el evidence_url real. El Worker no puede empujar el
+  // evento a la extensión (sin canal push): el disparo es la fila
+  // en D1, que la extensión lee por GET (cola en nube). Best-effort
+  // y sin tocar el posted: si la tabla 0041 no existe, no pasa nada.
+  // Hueco conocido: el volcado del diario WAL (wal.ts) marca posted
+  // con UPDATE directo sin pasar por aquí; lo cubre el relleno
+  // backfillCampaignSubmissionsPosted en la lectura de pendientes.
+  if (job.clip_id && job.platform) {
+    await stampCampaignSubmissionPosted(db, job.tenant_id, job.clip_id, job.platform, evidenceUrl, postedAtMs).catch(() => 0);
   }
 }
 

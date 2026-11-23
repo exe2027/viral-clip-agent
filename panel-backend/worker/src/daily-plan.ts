@@ -20,6 +20,7 @@ import {
   clipLanguage,
   effectiveSettings,
   getSettings,
+  isCampaignStreamer,
   isRestDayEffective,
   listApiAccounts,
   listQueueClips,
@@ -68,6 +69,12 @@ export interface DailyPlanClipInput {
   score: number;
   language: "es" | "en";
   platforms: PanelPlatform[];
+  /** Streamer del clip (resuelto en buildDailyPlanForTenant desde
+   *  influencers); null = sin asignar. */
+  streamer?: string | null;
+  /** true = el streamer tiene campaña activa >= $1/1k NETO
+   *  (isCampaignStreamer): el clip tiene prioridad de campaña. */
+  campaign?: boolean;
 }
 
 export interface DailyPlanPublication {
@@ -155,26 +162,40 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
     // mismo clip en 2 plataformas el mismo día queda para el
     // día siguiente, donde el gate exige ≥15 min entre ambas).
     let assigned = 0;
-    for (const clip of queue) {
-      if (assigned >= capacity) break;
-      if (plannedIds.has(clip.id)) continue;
-      if (clip.language !== acc.language) continue;
-      if (!clip.platforms.includes(acc.platform)) continue;
-      if (usedClipAccount.has(`${clip.id}|${acc.id}`)) continue;
-      if (plannedClipPlatform.has(`${clip.id}|${acc.platform}`)) continue;
+    // PRIORIDAD DE CAMPAÑA (2026-11-23, orden del usuario 18:37):
+    // los clips de streamers con campaña >= $1/1k NETO ocupan
+    // PRIMERO hasta campaign_priority_share_pct % de los slots de
+    // esta cuenta (default 60%: con capacidad 3, 2 slots; con
+    // capacidad 6, 4). El resto de slots se reparte después en
+    // orden normal de Cola — y los clips de campaña que no cupieron
+    // en la reserva también compiten ahí, así que la reserva es un
+    // mínimo garantizado, no un techo. Esto solo cambia el ORDEN
+    // dentro de la capacidad: topes, espaciamiento, calentamiento
+    // y umbrales 45/80 no se tocan (la Cola ya solo trae clips que
+    // los pasan). Con pct=0 no hay prioridad (plan como antes).
+    const pct = eff.campaign_priority_share_pct ?? 60;
+    const campaignReserve = Math.max(0, Math.min(capacity, Math.round((capacity * pct) / 100)));
+    let campaignAssigned = 0;
+    const tryAssign = (clip: DailyPlanClipInput, campaignPass: boolean): boolean => {
+      if (assigned >= capacity) return false;
+      if (plannedIds.has(clip.id)) return false;
+      if (clip.language !== acc.language) return false;
+      if (!clip.platforms.includes(acc.platform)) return false;
+      if (usedClipAccount.has(`${clip.id}|${acc.id}`)) return false;
+      if (plannedClipPlatform.has(`${clip.id}|${acc.platform}`)) return false;
       const hora = slotTimeFor(fecha, `acc-${acc.id}`, assigned, capacity);
       const minutes = hhmmToMinutes(hora);
       // Mismo clip en distintas plataformas: mínimo 15 min entre
       // una y otra (regla 4). Las franjas lo separan por horas,
       // pero se verifica igual antes de devolver el plan.
       const otherTimes = plannedClipTimes.get(clip.id) ?? [];
-      if (otherTimes.some((t) => Math.abs(t - minutes) < eff.cross_platform_spacing_minutes)) continue;
+      if (otherTimes.some((t) => Math.abs(t - minutes) < eff.cross_platform_spacing_minutes)) return false;
       // Espaciamiento en la misma cuenta: 3 h (4 h YouTube). Las
       // ventanas elegidas (mediodía+noche, o las 3) lo cumplen;
       // si no, el clip pasa a la cola.
       const spacingMin = (acc.apiPlatform === "youtube" ? eff.youtube_spacing_hours : eff.spacing_hours) * 60;
       const myTimes = publicaciones.filter((p) => p.cuenta === label).map((p) => hhmmToMinutes(p.hora_local));
-      if (myTimes.some((t) => Math.abs(t - minutes) < spacingMin)) continue;
+      if (myTimes.some((t) => Math.abs(t - minutes) < spacingMin)) return false;
       publicaciones.push({
         clip_id: clip.id,
         plataforma: acc.apiPlatform,
@@ -183,13 +204,29 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
         titulo: clip.title,
         descripcion: clip.description,
         hashtags: capHashtags(clip.hashtags, acc.apiPlatform, eff),
-        motivo: `Top de la Cola (score ${clip.score}) · ${label} · franja ${hora} · ${acc.stage === "establecida" ? (target === acc.max && acc.max > acc.plan ? `ritmo máximo ${target}/día` : `ritmo normal ${target}/día`) : `calentamiento ${acc.stage} (${target}/día)`}`,
+        motivo: `${campaignPass ? `Campaña ${clip.streamer ?? ""} (prioridad ${pct}%) · ` : ""}Top de la Cola (score ${clip.score}) · ${label} · franja ${hora} · ${acc.stage === "establecida" ? (target === acc.max && acc.max > acc.plan ? `ritmo máximo ${target}/día` : `ritmo normal ${target}/día`) : `calentamiento ${acc.stage} (${target}/día)`}`,
       });
       plannedClipPlatform.set(`${clip.id}|${acc.platform}`, minutes);
       plannedClipTimes.set(clip.id, [...otherTimes, minutes]);
       usedClipAccount.add(`${clip.id}|${acc.id}`);
       plannedIds.add(clip.id);
       assigned++;
+      if (campaignPass) campaignAssigned++;
+      return true;
+    };
+    // Pasada 1: solo campaña, hasta la reserva. Pasada 2: resto de
+    // la Cola en orden (incluidos los de campaña que sobraron).
+    for (const clip of queue) {
+      if (campaignAssigned >= campaignReserve || assigned >= capacity) break;
+      if (!clip.campaign) continue;
+      tryAssign(clip, true);
+    }
+    for (const clip of queue) {
+      if (assigned >= capacity) break;
+      tryAssign(clip, false);
+    }
+    if (campaignAssigned > 0) {
+      alertas.push(`Cuenta ${label}: ${campaignAssigned}/${assigned} slots con prioridad de campaña (${pct}% reservado a streamers con campaña >= $1/1k neto).`);
     }
     if (assigned === 0) {
       alertas.push(`Cuenta ${label}: sin clips en Cola para su idioma/plataforma hoy.`);
@@ -279,6 +316,12 @@ export async function buildDailyPlanForTenant(
     score: c.score,
     language: clipLanguage(c),
     platforms: parsePlatforms(c.platforms),
+    // Prioridad de campaña (0041): el streamer viene resuelto en
+    // listQueueClips desde influencers; la campaña es POR TENANT
+    // (la lista de influencers es por tenant) y solo cuenta si la
+    // tarifa neta es >= $1/1k (BenDaDonnn, $0,90 neto, queda fuera).
+    streamer: c.streamer ?? null,
+    campaign: isCampaignStreamer(c.streamer ?? null),
   }));
 
   return buildDailyPlan({ fecha, accounts, queue: clips, eff, nowMs });

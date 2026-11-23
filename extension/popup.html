@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>AVC — Content Rewards</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<h1>AVC · Content Rewards</h1>
+<p class="note">Puente local (v1.3.0). Envío AUTOMÁTICO a la mejor campaña del día (tarifa NETA x viralidad, solo streamers famosos), ES y EN a la vez, para seba y kaez. La nube sigue siendo el camino principal. Si Chrome/PC se cierra, la extensión se pausa y la cola en D1 retoma al reabrir.</p>
+
+<section>
+  <h2>Worker (base de datos D1, vía panel) — 24/7</h2>
+  <p class="note">La extensión consulta D1 solo a través del Worker, nunca directa. Antes de enviar, revisa en vivo si el worker está corriendo y si el clip ya está publicado en D1. El worker tiene que estar activo 24/7: si está parado, el envío queda en pausa y la extensión lo reintenta cada 5 min cuando vuelve — nunca lo enciende ni lo apaga ella. La extensión nunca apaga ni enciende el worker: solo lo lee.</p>
+  <label>Tenant
+    <select id="tenant">
+      <option value="seba">seba</option>
+      <option value="kaez">kaez</option>
+    </select>
+  </label>
+  <p id="workerStatus">Worker: sin consultar todavía.</p>
+  <p id="workersStatus" class="note">seba / kaez: sin consultar todavía.</p>
+  <p id="autoSetupStatus" class="note">Auto-configuración web: sin cargar todavía.</p>
+  <p id="clipStatus">Clip en D1: sin consultar todavía.</p>
+  <button id="checkWorker" class="secondary">Consultar worker ahora</button>
+  <p id="workerCheckedAt" class="note">—</p>
+</section>
+
+<section>
+  <h2>Analíticas — dinero y vistas (desde D1)</h2>
+  <p class="note">Totales por tenant y en total, desde la tabla campaign_submissions en D1 (vistas e importe actualizados por el Worker). El saldo sin retirar y lo retirado NO los da ninguna API verificada: se ven en la web (Whop / Content Rewards), nunca se inventan aquí. Si la tabla aún no responde, verás “sin datos todavía” con el motivo, no ceros.</p>
+  <button id="refreshAnalytics" class="secondary">Actualizar analíticas</button>
+  <p id="analyticsStatus" class="note">Analíticas: sin consultar todavía.</p>
+  <div id="analytics"></div>
+</section>
+
+<section>
+  <h2>Estado</h2>
+  <p id="status">Cargando…</p>
+  <p id="last">—</p>
+</section>
+
+<section>
+  <h2>Conectar cuentas</h2>
+  <p class="note">Se abre el OAuth oficial de Content Rewards en una pestaña nueva. Autorizas ahí mismo, con tu sesión de Chrome (ya estás logueado). La extensión nunca te pide ni guarda contraseñas.</p>
+  <button id="connect">Conectar Instagram / TikTok / YouTube</button>
+  <p class="note">Instagram a conectar, por decisión del usuario (23 nov 2026): <b>@elmegaclipgta6</b> (cuenta Profesional/Creador). Se conecta por OAuth en tu propio Chrome, sin login con contraseña por Muse (regla 2026-11-23 17:41, sigue vigente) y sin códigos.</p>
+</section>
+
+<section>
+  <h2>Enviar clip ya publicado</h2>
+  <p class="note">Normalmente NO usas este formulario: el envío es AUTOMÁTICO cuando el panel publica un clip — el selector dinámico le asigna la mejor campaña del día (tarifa x viralidad) y se envía solo en 30 min. Esto es solo el respaldo manual. Solo un link ya publicado, una sola vez, a una sola campaña.</p>
+  <label>Clip (n.º o id) <input id="clipId" type="text" placeholder="ej. 174"></label>
+  <label>Plataforma
+    <select id="platform">
+      <option value="tiktok">TikTok</option>
+      <option value="youtube">YouTube</option>
+      <option value="instagram">Instagram</option>
+      <option value="facebook">Facebook</option>
+      <option value="x">X</option>
+    </select>
+  </label>
+  <label>Link público del post <input id="postUrl" type="url" placeholder="https://www.tiktok.com/…"></label>
+  <label>Campaña
+    <select id="campaignId"></select>
+  </label>
+  <p id="brief" class="note">Elige una campaña para ver su brief (disclosure, hashtags, material permitido).</p>
+  <p class="note">Las campañas NO entregan clips listos: dan el brief y el stream/VOD permitido, y hay que cortar tu propio edit. Un clip ya hecho y subido tal cual lo rechazan por duplicado / no original. Nuestro cerebro ya corta solo de los streams en vivo.</p>
+  <label>Publicado hace (minutos) <input id="ageMin" type="number" min="0" max="30" value="0"></label>
+  <label class="check"><input id="confirm" type="checkbox"> Confirmo: este post va a una sola campaña, una sola vez.</label>
+  <button id="submit">Enviar a la campaña</button>
+  <p id="result" class="note"></p>
+</section>
+
+<section>
+  <h2>Token de sesión del panel</h2>
+  <p class="note">Para leer el clip en D1 la extensión necesita tu token de sesión del panel (el mismo que el panel guarda en su localStorage como “avc-session”). Lo pegas una vez aquí; vive solo en este Chrome, como la API key. Sin él, el chequeo de D1 no se puede hacer y los envíos se bloquean, así no se duplica nada. Cómo sacarlo: panel AVC abierto y con sesión → F12 → Application → Local Storage → avc-em9.pages.dev → copia el valor de “avc-session”. No es una contraseña de ninguna red.</p>
+  <p id="keysStatus" class="note">Claves por tenant: sin consultar todavía.</p>
+  <label>Token de sesión del panel <input id="panelToken" type="password" placeholder="Pégalo aquí"></label>
+  <button id="savePanelToken">Guardar token del panel</button>
+  <button id="clearPanelToken" class="secondary">Borrar token del panel</button>
+  <p class="note">El token es POR TENANT: se guarda para el tenant activo del desplegable de arriba (seba o kaez). La sesión de seba da 401 en kaez y viceversa (TTL 30 días).</p>
+</section>
+
+<section>
+  <h2>API key de Content Rewards</h2>
+  <p class="note">La obtienes tú en contentrewards.com (tu cuenta). Se guarda solo en este Chrome (chrome.storage.local), nunca se envía a otro sitio que no sea mcp.contentrewards.com. La API key es POR TENANT: se guarda para el tenant activo del desplegable de arriba. Kaez todavía no tiene cuenta propia de Content Rewards: su login está preparado, pero sin su API key sus envíos quedan en espera — nadie inventa su cuenta.</p>
+  <label>API key <input id="apiKey" type="password" placeholder="Pégala aquí"></label>
+  <button id="saveKey">Guardar API key</button>
+  <button id="clearKey" class="secondary">Borrar API key</button>
+</section>
+
+<section>
+  <h2>Últimos envíos</h2>
+  <ul id="history"></ul>
+</section>
+
+<script src="popup.js" type="module"></script>
+</body>
+</html>

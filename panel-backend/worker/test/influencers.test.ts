@@ -284,3 +284,84 @@ describe("GET /api/influencers/live", () => {
     expect(live.find((x) => x.handle === "IlloJuan")?.live).toBe(false);
   });
 });
+
+describe("puerta ampliada: los 4 virales de campaña FAMOSOS también se pueden activar (2026-11-23; regla 18:50: Bobby Van Riper fuera por fama)", () => {
+  const viralBody = (handle: string, platform: string, url: string, language = "en") => ({
+    handle, platform, url, language, permission: true, active: true,
+    game: "GTA VI", permission_date: "2026-11-23",
+    publish_platforms: ["youtube", "tiktok", "instagram", "facebook"],
+  });
+  test("POST Dasgasd3m (Kick) activo: 201", async () => {
+    const env = makeEnv(new FakeD1());
+    const r = await call(env, "POST", "/api/influencers", {
+      token: await tokenFor("seba", "sebastian"),
+      body: viralBody("Dasgasd3m", "kick", "https://kick.com/dasgasd3m"),
+    });
+    expect(r.status).toBe(201);
+    expect((r.json.influencer as Record<string, unknown>).active).toBe(true);
+  });
+  test("POST ArthurTV (Twitch) y Dylan Page (YouTube) activos: 201", async () => {
+    const env = makeEnv(new FakeD1());
+    for (const [handle, platform, url] of [
+      ["ArthurTV", "twitch", "https://www.twitch.tv/arthurtv"],
+      ["Dylan Page", "youtube", "https://www.youtube.com/@dylan.page."],
+    ] as Array<[string, string, string]>) {
+      const r = await call(env, "POST", "/api/influencers", {
+        token: await tokenFor("seba", "sebastian"),
+        body: viralBody(handle, platform, url),
+      });
+      expect(r.status).toBe(201);
+    }
+  });
+  test("POST BenDaDonnn activo: 201 (activa, su campaña no da prioridad: eso lo decide la tarifa neta, no la puerta)", async () => {
+    const env = makeEnv(new FakeD1());
+    const r = await call(env, "POST", "/api/influencers", {
+      token: await tokenFor("seba", "sebastian"),
+      body: viralBody("BenDaDonnn", "twitch", "https://www.twitch.tv/bendadonnn"),
+    });
+    expect(r.status).toBe(201);
+    expect((r.json.influencer as Record<string, unknown>).active).toBe(true);
+  });
+  test("POST Bobby Van Riper activo: 400 (regla 18:50, solo famosos: 734 seguidores en Twitch; se puede crear desactivado)", async () => {
+    const env = makeEnv(new FakeD1());
+    const r = await call(env, "POST", "/api/influencers", {
+      token: await tokenFor("seba", "sebastian"),
+      body: viralBody("Bobby Van Riper", "twitch", "https://www.twitch.tv/bobby_vanriper"),
+    });
+    expect(r.status).toBe(400);
+    expect(String(r.json.error)).toContain("fama");
+    const r2 = await call(env, "POST", "/api/influencers", {
+      token: await tokenFor("seba", "sebastian"),
+      body: { ...viralBody("Bobby Van Riper", "twitch", "https://www.twitch.tv/bobby_vanriper"), active: false },
+    });
+    expect(r2.status).toBe(201);
+    expect((r2.json.influencer as Record<string, unknown>).active).toBe(false);
+  });
+  test("POST de un handle sin campaña ni lanzamiento activo: sigue 400", async () => {
+    const env = makeEnv(new FakeD1());
+    const r = await call(env, "POST", "/api/influencers", {
+      token: await tokenFor("seba", "sebastian"),
+      body: viralBody("OtroStreamer", "twitch", "https://www.twitch.tv/otrostreamer"),
+    });
+    expect(r.status).toBe(400);
+    expect(String(r.json.error)).toContain("10 del lanzamiento");
+    expect(String(r.json.error)).toContain("Dasgasd3m");
+  });
+  test("PATCH activa a un viral creado desactivado", async () => {
+    const db = new FakeD1();
+    db.seed("influencers", {
+      id: 1, tenant_id: "sebastian", name: "Dasgasd3m", platform: "kick",
+      profile_url: "https://kick.com/dasgasd3m", language: "en",
+      permission: 1, active: 0, notes: "", created_at: 1,
+      game: "GTA VI", permission_date: "2026-11-23",
+      publish_platforms: '["youtube","tiktok"]',
+    });
+    const env = makeEnv(db);
+    const r = await call(env, "PATCH", "/api/influencers/1", {
+      token: await tokenFor("seba", "sebastian"),
+      body: { active: true },
+    });
+    expect(r.status).toBe(200);
+    expect((r.json.influencer as Record<string, unknown>).active).toBe(true);
+  });
+});

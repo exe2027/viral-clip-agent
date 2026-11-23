@@ -249,3 +249,73 @@ streamers:
     publish_platforms: [youtube, tiktok, instagram, facebook]
     notas: "WillNeff. EN. Verificado 2026-11-18: canal existe en Twitch (título 'willneff - Twitch')."
     enabled: true
+  # --- Virales de campaña Content Rewards (alta 2026-11-23, orden del
+  # usuario 18:37; tarifas del radar 2026-11-23, NETA = bruta x 0,9) ---
+  # La campaña vive en UNA sola fuente TS (db.ts CAMPAIGN_STREAMERS);
+  # aquí solo se guarda lo verificado + la tarifa en notas (el loader
+  # _norm de clipagent/streamers.py descarta claves desconocidas).
+  # REGLA 2026-11-23 18:50 (solo FAMOSOS, >= 50.000 seguidores en
+  # alguna plataforma): Bobby Van Riper queda DESACTIVADO (enabled:
+  # false) aunque su campaña pague $1,50 — 734 seguidores en Twitch
+  # no es famoso. Los otros 4 pasan el listón (fama anotada en notas).
+  # MATERIAL (pregunta del usuario 18:49): ninguna campaña entrega
+  # clips listos para subir: todas dan brief + stream/VOD permitido
+  # y hay que cortar tu propio edit; un clip ya hecho subido tal cual
+  # lo rechazan por duplicado / no original. El cerebro ya corta solo
+  # de los streams en vivo: estos 4 entran al live scan (twitch/kick;
+  # Dylan Page es youtube-only y solo entra por VOD-fallback).
+  - name: dasgasd3m
+    platform: kick
+    channel_url: "https://kick.com/dasgasd3m"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-23"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok]
+    notas: "Dasgasd3m (Dom). EN. FAMA: ~62.500 seguidores en Kick (pasa el listón de 50.000, regla 18:50). Campaña Content Rewards 'Dasgasd3m x RUCKUS | GTA 6' (051002dd-5c46-43d0-a446-43f2957ba3a9): $2,00/1k bruto = $1,80 neto, mín. 10.000 vistas, tope $150/clip, TikTok+YouTube. Verificado 2026-11-23: Kick kick.com/dasgasd3m (~62.500 seguidores), streams GTA 6 el 18-19 nov (Clyper). MATERIAL: brief + stream de Kick, cortar tu propio edit (la campaña no entrega clips listos). El barrido en vivo (twitch/kick) SÍ lo cubre."
+    enabled: true
+  - name: arthurtv
+    platform: twitch
+    channel_url: "https://www.twitch.tv/arthurtv"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-23"
+    evidencia_url: ""
+    publish_platforms: [tiktok]
+    notas: "ArthurTV. EN. FAMA: >500.000 suscriptores en YouTube (canal principal) + 428.108 en Instagram @arthurtv (pasa el listón de 50.000, regla 18:50; en Twitch solo ~20.000). Campaña Content Rewards 'ArthurTV — GTA Clips' (6e9ca548-f36c-42c2-abc0-61f89b4b53ba): $1,50/1k bruto = $1,35 neto, mín. 10.000 vistas, tope $300/clip, solo TikTok, presupuesto $5.000 intacto. Verificado 2026-11-23: Twitch arthurtv, streams GTA VI 19-21 nov (StreamRecorder); YouTube ArthurTV Plays 50.700 suscriptores y 63.049 vistas en su vídeo GTA VI del 19 nov. MATERIAL: brief + sus VODs/vídeos, cortar tu propio edit (la campaña no entrega clips listos). El barrido en vivo (twitch/kick) SÍ lo cubre."
+    enabled: true
+  - name: bobby_vanriper
+    platform: twitch
+    channel_url: "https://www.twitch.tv/bobby_vanriper"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-23"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram]
+    notas: "Bobby Van Riper. EN. EXCLUIDO por la regla 2026-11-23 18:50 (solo FAMOSOS): 734 seguidores en Twitch, 30 espectadores medios, pico 74, 26 subs (twitchmetrics.net, 23 nov 2026) — NO pasa el listón de 50.000. Su campaña 'BOBBY VAN RIPER GTA VI' (f583b069-ced7-49e5-9ed3-2d3a13d6df0c) paga $1,50/1k bruto = $1,35 neto, mín. 1.500 vistas, tope $150/clip, IG+TikTok+YouTube, pero NO entra al ranking, NO da prioridad y NO se activa: la tarifa alta de un desconocido es una trampa (26 clips aprobados de 22 clippers, 108k vistas en total, 4,1k por clip de media — el tope es inalcanzable). MATERIAL: brief + sus streams de Twitch, cortar tu propio edit (la campaña no entrega clips listos). Si supera 50.000 seguidores, reactivar. PENDIENTE: una fuente escribe el handle bobby.vanriper (con punto); confirmar cuál es el canal exacto antes de vigilarlo en vivo."
+    enabled: false
+  - name: dylanpage
+    platform: youtube
+    channel_url: "https://www.youtube.com/@dylan.page."
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-23"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram]
+    notas: "Dylan Page. EN. FAMA: 1,17M suscriptores en YouTube (vidIQ/TubeGrade, 17-22 nov 2026; pasa el listón de 50.000, regla 18:50). Campaña Content Rewards 'Dylan Page GTA VI Marathon' (39753a1a-f1f3-491b-a8f6-0cfee0af0c97): $1,20/1k bruto = $1,08 neto (re-verificado 22 nov; era $1,00 el 19-20 nov), mín. 3.333 vistas, tope $250/clip, TikTok+IG+YouTube+X. El clip DEBE mostrar a Dylan y llevar #DylanPage; la campaña termina cuando termina el maratón (120 h). MATERIAL: brief + maratón en vivo/VOD de YouTube, cortar tu propio edit (la campaña no entrega clips listos). Verificado 2026-11-23: maratón SOLO en YouTube (@dylan.page., Live). YOUTUBE-ONLY: el barrido en vivo (clipagent/live_scan.py, solo twitch/kick) NO lo cubre; solo entra por VOD-fallback."
+    enabled: true
+  - name: bendadonnn
+    platform: twitch
+    channel_url: "https://www.twitch.tv/bendadonnn"
+    game: "GTA VI"
+    language: en
+    estado: concedido
+    fecha_permiso: "2026-11-23"
+    evidencia_url: ""
+    publish_platforms: [youtube, tiktok, instagram, facebook]
+    notas: "BenDaDonnn. EN. FAMA: 645.690 seguidores en Twitch (pasa el listón de 50.000, regla 18:50). Campaña Content Rewards 'BenDaDonnn x Puffco GTA 6' (bb66f9eb-b90e-4dd0-8cee-9f3cd566c9a0): $1,00/1k bruto = $0,90 NETO — BAJO el piso de $1/1k neto: SIN prioridad de campaña y SIN auto-asignación (solo registro manual con re-verificación). El clip debe mostrarlo usando productos Puffco mientras juega GTA 6; mín. 10.000 vistas, tope $400/clip, FB+IG+TikTok+X+YouTube. MATERIAL: brief + sus vídeos/broadcasts de GTA 6, cortar tu propio edit (la campaña no entrega clips listos). Verificado 2026-11-23: Twitch bendadonnn (645.690 seguidores, GTA VI 9% del tiempo; también Kick/YouTube en simultáneo). El barrido en vivo (twitch/kick) SÍ lo cubre."
+    enabled: true

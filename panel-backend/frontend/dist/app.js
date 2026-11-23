@@ -2183,6 +2183,39 @@ async function loadAnaliticas() {
     if (empty) empty.hidden = false;
     showMsg(e.message, "err");
   }
+  // Evolución neuroevolutiva (0042): solo lectura. Sin generaciones,
+  // se queda el texto por defecto del HTML.
+  try {
+    const evo = await api("/api/evolution/status");
+    renderEvolutionStatus(evo.generations || []);
+  } catch (e) {
+    const box = $("anEvolution");
+    if (box) box.innerHTML = `<h3>Evolución de clips (Content Rewards)</h3><p class="dim">No se pudo cargar el estado de evolución.</p>`;
+  }
+}
+// Evolución (0042): tarjeta solo lectura en Analíticas. Muestra la
+// última generación por momento: ganadora, fitness real vs cerebro
+// y próxima mutación. No hay controles: nada que configurar.
+function renderEvolutionStatus(generations) {
+  const box = $("anEvolution");
+  if (!box) return;
+  if (!generations.length) {
+    box.innerHTML = `<h3>Evolución de clips (Content Rewards)</h3><p class="dim">Variantes generadas offline en el cerebro; solo sale 1 ganadora por momento y plataforma. Sin datos reales todavía.</p>`;
+    return;
+  }
+  const rows = generations.slice(0, 5).map((g) => {
+    const w = g.winner;
+    const fit = w
+      ? (w.has_real_data
+          ? `fitness real ${w.real_fitness ?? "—"} (vistas aprobadas ${w.real_approved_views ?? "—"})`
+          : `sin datos reales todavía (cerebro: viralidad ${w.brain_virality ?? "—"}, SEO ${w.brain_seo ?? "—"})`)
+      : "sin ganadora todavía";
+    const muts = w && Array.isArray(w.mutations) && w.mutations.length
+      ? w.mutations.map((m) => esc(m.axis) + (m.detail ? ` (${esc(m.detail)})` : "")).join(", ")
+      : "línea base (control)";
+    return `<p><b>${esc(g.streamer)}</b> · generación ${g.generation} · ${esc(g.platform)} · ${g.variants_total} variantes (${g.winners} ganadoras, ${g.losers} perdedoras, ${g.untested} sin probar)<br><span class="dim">Ganadora: ${fit} · mutación: ${muts}</span>${g.blocked_reason ? `<br><span class="dim">Bloqueado: ${esc(g.blocked_reason)}</span>` : ""}</p>`;
+  }).join("");
+  box.innerHTML = `<h3>Evolución de clips (Content Rewards)</h3>${rows}`;
 }
 function statOptInt(input, label) {
   const v = input.value.trim();

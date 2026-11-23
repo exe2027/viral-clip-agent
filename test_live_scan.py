@@ -62,13 +62,35 @@ class TestLiveScan(unittest.TestCase):
         self.assertNotIn("ibai", names)      # Just Chatting: fuera
         self.assertNotIn("auronplay", names)  # offline: fuera
         self.assertIn("ishowspeed", " ".join(r["skipped"]))  # youtube
+        self.assertIn("dylanpage", " ".join(r["skipped"]))  # youtube-only: sin barrido en vivo, solo VOD-fallback
 
     def test_nadie_en_vivo_lista_vacia_sin_fallo(self):
         tw, kick = self._patch({}, {})
         with tw, kick:
             r = live_scan.scan_live()
         self.assertEqual(r["live"], [])
-        self.assertEqual(r["checked"], 20)
+        # 25 entries - Bobby Van Riper (desactivado por la regla de
+        # fama 18:50): 24 vigilados.
+        self.assertEqual(r["checked"], 24)
+
+    def test_virales_campana_en_barrido_y_bobby_fuera(self):
+        """Los 4 virales famosos de campaña entran al live scan (el
+        cerebro corta solo de los streams en vivo, no se busca clip
+        por clip a mano); Bobby Van Riper, desactivado por fama, ni
+        se vigila: no sale en live ni en skipped."""
+        tw, kick = self._patch(
+            {"arthurtv": "Grand Theft Auto VI",
+             "bendadonnn": "Grand Theft Auto VI",
+             "bobby_vanriper": "Grand Theft Auto VI"},
+            {"dasgasd3m": "Grand Theft Auto VI"})
+        with tw, kick:
+            r = live_scan.scan_live()
+        names = {x["name"] for x in r["live"]}
+        self.assertEqual(names, {"arthurtv", "bendadonnn", "dasgasd3m"})
+        self.assertEqual({x["language"] for x in r["live"]}, {"en"})
+        self.assertNotIn("bobby_vanriper", names)
+        self.assertNotIn("bobby_vanriper", " ".join(r["skipped"]))
+        self.assertEqual(r["checked"], 24)
 
     def test_matriz_lleva_el_idioma_del_canal(self):
         # 2026-11-19, calibración: el workflow pasa --lang al corte

@@ -26,8 +26,11 @@ import { createBudgetGuard, currentBudgetGuard } from "./budget";
 import { maybeRunBudgetMonitor, maybeSendDailyBudgetReport } from "./budget-monitor";
 import {
   createApiAccount,
+  createCampaignSubmission,
   createClip,
   createClipStat,
+  createEvoGeneration,
+  createEvoVariant,
   createInfluencer,
   createTelegramLinkCode,
   createWatermarkLogo,
@@ -39,7 +42,11 @@ import {
   findTelegramLinkCode,
   getApiAccount,
   getApiAccountByPlatform,
+  getCampaignSubmission,
   getClip,
+  getEvoGeneration,
+  getEvoGenerationById,
+  getEvoVariant,
   getInfluencer,
   getLatestVodCheck,
   getLoginUser,
@@ -52,22 +59,33 @@ import {
   getSource,
   GTA_VI_GAME,
   clipLanguage,
+  campaignForStreamer,
+  campaignSubmissionOut,
+  CAMPAIGN_SUBMISSION_STATUSES,
   effectiveSettings,
+  evoGenerationOut,
+  evoStatusSummary,
+  evoVariantOut,
   extractBaseSettings,
+  isCampaignStreamer,
   isGtaViGame,
-  isLaunchInfluencer,
+  isActivatableInfluencer,
   isPruneHour,
   isTokenRevoked,
   linkTelegramChat,
   listApiAccounts,
   listAnalyticsStatus,
+  listCampaignSubmissions,
   listClipPublishStates,
   listClipStats,
   listClipStatsForClip,
+  listEvoGenerations,
+  listEvoVariants,
   listPostedJobs,
   listInfluencers,
   listJobs,
   listPanelUsers,
+  listPendingCampaignSubmissions,
   listPublishedClips,
   listQueueClips,
   listWatermarkLogos,
@@ -89,6 +107,7 @@ import {
   platformMax,
   platformPlan,
   pruneOldEvents,
+  recordEvoFitness,
   refreshAccountMaturity,
   restWeekdayEffective,
   revokeToken,
@@ -101,7 +120,10 @@ import {
   unlinkTelegramChat,
   unlinkTelegramTenant,
   updateApiAccountVerification,
+  updateCampaignSubmission,
   updateClip,
+  updateEvoGeneration,
+  updateEvoVariant,
   updateInfluencer,
   validateSettingsInput,
   accountPausedUntilMs,
@@ -204,6 +226,19 @@ import { collectWorkerSupply, STUCK_ALERT_MIN_INTERVAL_MS } from "./worker-valid
 import { getWorkerPhase, handleReportClipEvent, handleReportPhase, nextBrainRunAt, phaseView } from "./worker-phase";
 import { checkInfluencersLive } from "./live-check";
 import { handleMcpRequest } from "./mcp";
+import { qualityGateForClip } from "./quality-gate";
+import {
+  EVO_KEEP_WINNERS,
+  EVO_POPULATION_SIZE,
+  generatePopulation,
+  isDistinctCut,
+  passesBrainGates,
+  publishBlockReason,
+  realFitness,
+  selectWinners,
+  type EvoScoredVariant,
+  type EvoVariantParams,
+} from "./evolution";
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", ...headers } });
@@ -3465,11 +3500,14 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
     }
 
     // --- Influencers (tabla influencers) ---
-    // Regla de lanzamiento (10 activos, orden del usuario 2026-11-18
-    // 15:30): Rubius, IlloJuan, AuronPlay, Ibai, TheGrefg, Xokas,
-    // DjMaRiiO, Knekro, RDJavi y Westcol pueden estar activos con
-    // permiso. Activar a otro se rechaza con 400 y el motivo; nunca
-    // se activa en silencio ni se deja activo "por defecto".
+    // Puerta de activación (10 del lanzamiento, orden del usuario
+    // 2026-11-18 15:30, AMPLIADA 2026-11-23 con los 4 virales de
+    // campaña FAMOSOS: Dasgasd3m, ArthurTV, Dylan Page, BenDaDonnn;
+    // Bobby Van Riper queda fuera por la regla 2026-11-23 18:50,
+    // solo famosos: 734 seguidores en Twitch): esos 14 pueden estar
+    // activos con permiso. Activar a otro se rechaza con 400 y el
+    // motivo; nunca se activa en silencio ni se deja activo "por
+    // defecto".
     if (path === "/api/influencers" && method === "GET") {
       const rows = await listInfluencers(env.DB, tenant);
       return json({ ok: true, influencers: rows.map(influencerOut) });
@@ -3491,9 +3529,9 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       const body = await readJson(req);
       const parsed = parseInfluencerInput(body);
       if (typeof parsed === "string") return err(parsed, 400);
-      if (parsed.active === 1 && !isLaunchInfluencer(parsed.name)) {
+      if (parsed.active === 1 && !isActivatableInfluencer(parsed.name)) {
         return err(
-          `Solo los 10 del lanzamiento pueden estar activos con permiso (Rubius, IlloJuan, AuronPlay, Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi, Westcol): "${parsed.name}" no se puede activar. Se puede crear desactivado.`,
+          `Solo los 10 del lanzamiento + los 4 virales de campaña famosos pueden estar activos con permiso (lanzamiento: Rubius, IlloJuan, AuronPlay, Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi, Westcol; campaña: Dasgasd3m, ArthurTV, Dylan Page, BenDaDonnn; Bobby Van Riper queda fuera por fama: 734 seguidores, regla 2026-11-23 18:50): "${parsed.name}" no se puede activar. Se puede crear desactivado.`,
           400,
         );
       }
@@ -3510,9 +3548,9 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       if (typeof parsed === "string") return err(parsed, 400);
       const nextName = parsed.name ?? row.name;
       const nextActive = parsed.active ?? row.active;
-      if (nextActive === 1 && !isLaunchInfluencer(nextName)) {
+      if (nextActive === 1 && !isActivatableInfluencer(nextName)) {
         return err(
-          `Solo los 10 del lanzamiento pueden estar activos con permiso (Rubius, IlloJuan, AuronPlay, Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi, Westcol): "${nextName}" no se puede activar.`,
+          `Solo los 10 del lanzamiento + los 4 virales de campaña famosos pueden estar activos con permiso (lanzamiento: Rubius, IlloJuan, AuronPlay, Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi, Westcol; campaña: Dasgasd3m, ArthurTV, Dylan Page, BenDaDonnn; Bobby Van Riper queda fuera por fama: 734 seguidores, regla 2026-11-23 18:50): "${nextName}" no se puede activar.`,
           400,
         );
       }
@@ -3643,6 +3681,426 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       // NO salta topes, kill-switch ni la sonda de scopes.
       const summary = await runEngagement(env, tenant, { force: true });
       return json({ ok: true, ...summary });
+    }
+
+    // --- Envíos a marketplaces de clipping (tabla campaign_submissions, 0041) ---
+    // Registro + cola en nube de los envíos a Content Rewards.
+    // Solo lectura/escritura VÍA WORKER con sesión del panel: la
+    // extensión (y el panel) nunca escriben directo en D1.
+    // GET /api/campaign-submissions?clip_id=<n>[&platform=&campaign_id=&status=]
+    //   lista las filas de ese clip (la puerta anti-duplicado de la
+    //   extensión). ?pending=1 devuelve la cola en nube: pendientes
+    //   ya publicadas, las más urgentes primero (antes rellena los
+    //   publicados por WAL y caduca lo vencido, ver
+    //   listPendingCampaignSubmissions).
+    // POST: registra la asignación en `pending` (409 si ya existe
+    //   esa tenant+clip+plataforma+campaña). published_at_ms es el
+    //   instante REAL de publicación: si aún no se publicó, va
+    //   vacío (NULL) y el envío no puede salir; el Worker lo
+    //   rellena en markPosted. Nunca se acepta un published_at_ms
+    //   futuro ni inventado por el cliente.
+    // PATCH /:id: marca submitted (con submission_id del
+    //   marketplace), failed o expired. `submitted` es terminal.
+    const SUBMISSION_PLATFORMS = ["youtube", "tiktok", "instagram", "facebook", "x"] as const;
+    if (path === "/api/campaign-submissions" && method === "GET") {
+      const clipRaw = url.searchParams.get("clip_id");
+      const clipId = clipRaw === null ? undefined : Number(clipRaw);
+      if (clipRaw !== null && (!Number.isInteger(clipId) || (clipId as number) <= 0)) {
+        return err("clip_id debe ser el id numérico del clip.", 400);
+      }
+      const platform = url.searchParams.get("platform") ?? undefined;
+      if (platform !== undefined && !(SUBMISSION_PLATFORMS as readonly string[]).includes(platform)) {
+        return err("platform debe ser youtube, tiktok, instagram, facebook o x.", 400);
+      }
+      const campaignId = url.searchParams.get("campaign_id") ?? undefined;
+      if (campaignId !== undefined && !campaignId.trim()) return err("campaign_id no puede ser vacío.", 400);
+      const status = url.searchParams.get("status") ?? undefined;
+      if (status !== undefined && !(CAMPAIGN_SUBMISSION_STATUSES as readonly string[]).includes(status)) {
+        return err(`status debe ser ${CAMPAIGN_SUBMISSION_STATUSES.join(", ")}.`, 400);
+      }
+      if (url.searchParams.get("pending") === "1") {
+        const rows = await listPendingCampaignSubmissions(env.DB, tenant);
+        return json({ ok: true, pending: true, submissions: rows.map(campaignSubmissionOut) });
+      }
+      const rows = await listCampaignSubmissions(env.DB, tenant, { clipId, platform, campaignId, status });
+      return json({ ok: true, submissions: rows.map(campaignSubmissionOut) });
+    }
+    if (path === "/api/campaign-submissions" && method === "POST") {
+      const body = await readJson(req);
+      const clipId = body.clip_id;
+      if (typeof clipId !== "number" || !Number.isInteger(clipId) || clipId <= 0) {
+        return err("clip_id debe ser el id numérico del clip.", 400);
+      }
+      const clip = await getClip(env.DB, clipId, tenant);
+      if (!clip) return err("Clip no encontrado.", 404);
+      const platform = typeof body.platform === "string" ? body.platform.trim().toLowerCase() : "";
+      if (!(SUBMISSION_PLATFORMS as readonly string[]).includes(platform)) {
+        return err("platform debe ser youtube, tiktok, instagram, facebook o x.", 400);
+      }
+      const campaignId = typeof body.campaign_id === "string" ? body.campaign_id.trim() : "";
+      if (!campaignId) return err("campaign_id es obligatorio.", 400);
+      const publishedAtMs = body.published_at_ms ?? null;
+      if (publishedAtMs !== null && (typeof publishedAtMs !== "number" || !Number.isFinite(publishedAtMs) || publishedAtMs <= 0 || publishedAtMs > Date.now() + 60000)) {
+        return err("published_at_ms debe ser el instante real de publicación (epoch-ms, no futuro). Sin publicar, déjalo vacío: lo rellena el Worker al publicar.", 400);
+      }
+      const postUrl = typeof body.post_url === "string" && body.post_url.trim() ? body.post_url.trim() : null;
+      if (postUrl !== null && !postUrl.startsWith("https://")) return err("post_url debe ser https.", 400);
+      if ((postUrl === null) !== (publishedAtMs === null)) {
+        return err("post_url y published_at_ms van juntos: ambos o ninguno (el link solo existe si se publicó).", 400);
+      }
+      const numOrNull = (v: unknown): number | null =>
+        typeof v === "number" && Number.isFinite(v) ? v : null;
+      const { row, duplicate } = await createCampaignSubmission(env.DB, tenant, {
+        clip_id: clipId,
+        platform,
+        marketplace: typeof body.marketplace === "string" && body.marketplace.trim() ? body.marketplace.trim() : "content_rewards",
+        campaign_id: campaignId,
+        campaign_name: typeof body.campaign_name === "string" ? body.campaign_name : null,
+        streamer: typeof body.streamer === "string" ? body.streamer : (clip.streamer ?? null),
+        gross_rate_per_1k: numOrNull(body.gross_rate_per_1k),
+        net_rate_per_1k: numOrNull(body.net_rate_per_1k),
+        min_views: numOrNull(body.min_views),
+        cap_per_clip: numOrNull(body.cap_per_clip),
+        post_url: postUrl,
+        published_at_ms: publishedAtMs,
+      });
+      if (duplicate) {
+        return json({ ok: false, error: "Ese post ya tiene un envío registrado para esa campaña (tenant+clip+plataforma+campaña). No se duplica.", submission: campaignSubmissionOut(row) }, 409);
+      }
+      return json({ ok: true, submission: campaignSubmissionOut(row) }, 201);
+    }
+    const submissionMatch = /^\/api\/campaign-submissions\/(\d+)$/.exec(path);
+    if (submissionMatch && method === "PATCH") {
+      const id = Number(submissionMatch[1]);
+      const body = await readJson(req);
+      const patch: { status?: string; submission_id?: string | null; views?: number | null; amount_usd?: number | null; error?: string | null; post_url?: string | null; published_at_ms?: number | null } = {};
+      if (body.status !== undefined) {
+        if (typeof body.status !== "string" || !(CAMPAIGN_SUBMISSION_STATUSES as readonly string[]).includes(body.status)) {
+          return err(`status debe ser ${CAMPAIGN_SUBMISSION_STATUSES.join(", ")}.`, 400);
+        }
+        patch.status = body.status;
+      }
+      if (body.submission_id !== undefined) {
+        if (body.submission_id !== null && typeof body.submission_id !== "string") return err("submission_id debe ser texto o null.", 400);
+        patch.submission_id = body.submission_id;
+      }
+      if (body.views !== undefined) {
+        if (body.views !== null && (typeof body.views !== "number" || !Number.isFinite(body.views))) return err("views debe ser un número o null.", 400);
+        patch.views = body.views;
+      }
+      if (body.amount_usd !== undefined) {
+        if (body.amount_usd !== null && (typeof body.amount_usd !== "number" || !Number.isFinite(body.amount_usd))) return err("amount_usd debe ser un número o null.", 400);
+        patch.amount_usd = body.amount_usd;
+      }
+      if (body.error !== undefined) {
+        if (body.error !== null && typeof body.error !== "string") return err("error debe ser texto o null.", 400);
+        patch.error = body.error;
+      }
+      if (body.post_url !== undefined) {
+        if (body.post_url !== null && (typeof body.post_url !== "string" || !body.post_url.startsWith("https://"))) return err("post_url debe ser https o null.", 400);
+        patch.post_url = body.post_url;
+      }
+      if (body.published_at_ms !== undefined) {
+        if (body.published_at_ms !== null && (typeof body.published_at_ms !== "number" || !Number.isFinite(body.published_at_ms) || body.published_at_ms <= 0 || body.published_at_ms > Date.now() + 60000)) {
+          return err("published_at_ms debe ser el instante real de publicación (epoch-ms, no futuro).", 400);
+        }
+        patch.published_at_ms = body.published_at_ms;
+      }
+      let updated;
+      try {
+        updated = await updateCampaignSubmission(env.DB, tenant, id, patch);
+      } catch (e) {
+        return err(e instanceof Error ? e.message : String(e), 400);
+      }
+      if (!updated) {
+        const existing = await getCampaignSubmission(env.DB, id, tenant);
+        if (!existing) return err("Envío no encontrado.", 404);
+        return err("Envío ya registrado como enviado (submitted): no se puede cambiar.", 409);
+      }
+      return json({ ok: true, submission: campaignSubmissionOut(updated) });
+    }
+
+    // --- Evolución neuroevolutiva (tablas evo_*, migración 0042) ---
+    // DRY-RUN: genera la población OFFLINE y selecciona la ganadora.
+    // NO publica nada, NO crea jobs ni clips, NO envía a ninguna
+    // campaña: la ganadora queda lista para que el cerebro la
+    // renderice con sus params (start/end/título/miniatura) por la
+    // vía de autopublicación ya existente. Solo 1 ganadora por
+    // momento/plataforma; las perdedoras no se publican ni se
+    // reenvían a otra campaña. Sin datos reales, NUNCA se inventa
+    // un fitness: la generación 1 publica la línea base (control)
+    // y las mutantes quedan como candidatas sin probar.
+    // GET /api/evolution/status — resumen solo lectura (panel).
+    // POST /api/evolution/dry-run — genera + selecciona + persiste.
+    // POST /api/evolution/record-real-fitness — anota vistas
+    // aprobadas/vistas/retención REALES de una variante (24-48 h);
+    // el fitness real manda en la siguiente generación.
+    const EVO_API_TO_SEO: Record<string, string> = {
+      youtube: "youtube_shorts",
+      tiktok: "tiktok",
+      instagram: "instagram_reels",
+      facebook: "facebook_reels",
+    };
+    if (path === "/api/evolution/status" && method === "GET") {
+      const generations = await evoStatusSummary(env.DB, tenant);
+      return json({ ok: true, generations });
+    }
+    if (path === "/api/evolution/dry-run" && method === "POST") {
+      const body = await readJson(req);
+      const clipId = body.clip_id;
+      if (typeof clipId !== "number" || !Number.isInteger(clipId) || clipId <= 0) {
+        return err("clip_id debe ser el id numérico del clip.", 400);
+      }
+      const clip = await getClip(env.DB, clipId, tenant);
+      if (!clip) return err("Clip no encontrado.", 404);
+      // Streamer: del influencer del clip; si no tiene, del body.
+      let handle: string | null = null;
+      if (clip.influencer_id !== null && clip.influencer_id !== undefined) {
+        const inf = await getInfluencer(env.DB, clip.influencer_id, tenant);
+        if (inf) handle = normalizeHandle(inf.name);
+      }
+      if (!handle && typeof body.streamer === "string" && body.streamer.trim()) handle = normalizeHandle(body.streamer);
+      if (!handle) return err("El clip no tiene streamer asignado (ni influencer ni streamer en el body).", 400);
+      const campaign = campaignForStreamer(handle);
+      if (!campaign) return err(`Sin campaña: ${handle} no tiene campaña en Content Rewards.`, 400);
+      if (campaign.followers < 50000) {
+        return err(`Sin campaña: ${handle} no es famoso (${campaign.followers} seguidores < 50.000). Solo influencers famosos.`, 400);
+      }
+      if (campaign.netRatePer1k < 1.0) {
+        return err(`Sin campaña: ${handle} paga $${campaign.netRatePer1k.toFixed(2)}/1k neto, bajo el piso de $1/1k neto.`, 400);
+      }
+      if (!isCampaignStreamer(handle)) return err(`Sin campaña: ${handle} no pasa el filtro fama + tarifa neta.`, 400);
+      const platform = typeof body.platform === "string" && body.platform.trim()
+        ? body.platform.trim().toLowerCase()
+        : campaign.platforms[0]!;
+      if (!campaign.platforms.includes(platform)) {
+        return err(`La campaña de ${handle} no cubre ${platform} (cubre: ${campaign.platforms.join(", ")}).`, 400);
+      }
+      // Puertas del cerebro (45/80) + calidad B4, intactas.
+      const settings = effectiveSettings(await getSettings(env.DB, tenant).catch(() => ({} as Record<string, unknown>)));
+      const viral = parseViralJson(clip.viral);
+      const virality = typeof viral.viral_score === "number" ? viral.viral_score : null;
+      const seoKey = EVO_API_TO_SEO[platform];
+      const seo = seoKey && viral.seo_scores && typeof viral.seo_scores[seoKey as keyof typeof viral.seo_scores] === "number"
+        ? (viral.seo_scores[seoKey as keyof typeof viral.seo_scores] as number)
+        : null;
+      if (virality === null) return err("Sin puntaje del cerebro: el clip no tiene viral_score (no se inventa).", 400);
+      if (seo === null) return err(`Sin puntaje SEO del cerebro para ${platform} (no se inventa).`, 400);
+      if (!passesBrainGates(virality, seo, settings.min_virality, settings.min_seo)) {
+        return err(`Puertas 45/80: viralidad ${virality}, SEO ${seo} en ${platform} (mínimos ${settings.min_virality}/${settings.min_seo}).`, 400);
+      }
+      const quality = qualityGateForClip(clip);
+      if (quality.reason) return err(quality.reason, 400);
+      // RIESGO BAN (ver EVOLUTION-0042.md §8): la evolución corre
+      // ANTES de publicar. Si el clip base YA se publicó en esa
+      // plataforma, generar variantes sería republicar el mismo
+      // momento: TikTok lo marca "unoriginal/reused" (fuera del
+      // For You), Instagram deja de recomendar la cuenta que
+      // repostea, y YouTube lo cuenta como contenido repetitivo.
+      // Se bloquea con motivo exacto, no se genera nada.
+      const panelKey = EVO_API_TO_SEO[platform];
+      if (panelKey) {
+        const entry = parsePublishStates(clip.publish_states)[panelKey];
+        if (entry && entry.state === "publicado") {
+          return err(`El clip base ya se publicó en ${platform}: la evolución corre ANTES de publicar, no republica el mismo momento.`, 409);
+        }
+      }
+      // Un post = UNA campaña: si ya tiene envío a otra campaña (o
+      // a esta), no se genera nada.
+      const existingSubs = await listCampaignSubmissions(env.DB, tenant, { clipId, platform });
+      const other = existingSubs.find((s) => s.campaign_id !== campaign.campaignId);
+      if (other) return err(`Este post ya tiene un envío a OTRA campaña (${other.campaign_name ?? other.campaign_id}): un post = una campaña.`, 409);
+      if (existingSubs.length > 0) return err("Este post ya tiene un envío registrado a esta campaña (no se duplica).", 409);
+      // Generación: la pedida, o la siguiente libre para el clip.
+      let generation: number;
+      if (body.generation !== undefined) {
+        if (typeof body.generation !== "number" || !Number.isInteger(body.generation) || body.generation < 1) {
+          return err("generation debe ser un entero mayor o igual a 1.", 400);
+        }
+        generation = body.generation;
+      } else {
+        generation = 1;
+        while (await getEvoGeneration(env.DB, tenant, clipId, generation)) generation++;
+      }
+      const existingGen = await getEvoGeneration(env.DB, tenant, clipId, generation);
+      if (existingGen) {
+        const rows = await listEvoVariants(env.DB, tenant, existingGen.id);
+        return json({ ok: true, duplicate: true, generation: evoGenerationOut(existingGen), variants: rows.map(evoVariantOut), published_nothing: true });
+      }
+      // Padre (generación anterior): sus ganadoras son la base de
+      // los hijos. Sin ganadora con datos, no hay siguiente gen.
+      let parentParams: EvoVariantParams[] = [];
+      let parentGenerationId: number | null = null;
+      if (body.parent_generation_id !== undefined) {
+        if (typeof body.parent_generation_id !== "number" || !Number.isInteger(body.parent_generation_id) || body.parent_generation_id <= 0) {
+          return err("parent_generation_id debe ser el id numérico de la generación padre.", 400);
+        }
+        const parent = await getEvoGenerationById(env.DB, body.parent_generation_id, tenant);
+        if (!parent) return err("Generación padre no encontrada.", 404);
+        if (parent.base_clip_id !== clipId) return err("La generación padre es de otro clip.", 400);
+        const parentRows = await listEvoVariants(env.DB, tenant, parent.id);
+        const parentWinners = parentRows.filter((v) => v.status === "winner" || v.status === "published");
+        if (parentWinners.length === 0) return err("La generación padre aún no tiene ganadora (sin datos reales ni puntaje del cerebro).", 400);
+        parentParams = parentWinners.map((v) => {
+          try {
+            return JSON.parse(v.params_json) as EvoVariantParams;
+          } catch {
+            return null;
+          }
+        }).filter((p): p is EvoVariantParams => p !== null);
+        if (parentParams.length === 0) return err("La ganadora padre no tiene params guardados.", 400);
+        parentGenerationId = parent.id;
+      }
+      // Puntajes del cerebro POR VARIANTE (solo el cerebro puede
+      // aportarlos, tras validar el render de esa variante). Sin
+      // ellos, solo el control tiene puntaje (el del clip base) y
+      // las mutantes quedan sin probar.
+      const brainScores = new Map<number, { virality: number; seo: number }>();
+      if (body.brain_scores !== undefined) {
+        if (!Array.isArray(body.brain_scores)) return err("brain_scores debe ser un array [{index, virality, seo}].", 400);
+        for (const s of body.brain_scores as unknown[]) {
+          if (typeof s !== "object" || s === null) return err("brain_scores: cada entrada debe ser {index, virality, seo}.", 400);
+          const e = s as Record<string, unknown>;
+          if (typeof e.index !== "number" || !Number.isInteger(e.index) || e.index < 0 || e.index >= EVO_POPULATION_SIZE) {
+            return err(`brain_scores: index debe ser entero entre 0 y ${EVO_POPULATION_SIZE - 1}.`, 400);
+          }
+          if (typeof e.virality !== "number" || e.virality < 0 || e.virality > 100 || typeof e.seo !== "number" || e.seo < 0 || e.seo > 100) {
+            return err("brain_scores: virality y seo deben ser números entre 0 y 100.", 400);
+          }
+          brainScores.set(e.index, { virality: e.virality, seo: e.seo });
+        }
+      }
+      const base = {
+        start_sec: clip.start_sec,
+        end_sec: clip.end_sec,
+        title: clip.title,
+        seo_title: clip.seo_title,
+        thumb_text: clip.thumb_text,
+        subtitle_style: clip.subtitle_style,
+      };
+      const drafts = generatePopulation(base, generation, clipId * 31 + generation, parentParams);
+      const { row: gen } = await createEvoGeneration(env.DB, tenant, {
+        streamer: handle,
+        campaign_id: campaign.campaignId,
+        base_clip_id: clipId,
+        generation,
+        parent_generation_id: parentGenerationId,
+        platform,
+      });
+      // Puntajes: el control hereda los del clip base; las mutantes,
+      // solo los aportados en brain_scores.
+      const scored: EvoScoredVariant[] = drafts.map((d) => {
+        const bs = d.is_control ? { virality, seo } : brainScores.get(d.index) ?? null;
+        return {
+          index: d.index,
+          brain_virality: bs ? bs.virality : null,
+          brain_seo: bs ? bs.seo : null,
+          real_fitness: null,
+          has_real_data: false,
+        };
+      });
+      const sel = selectWinners(scored, EVO_KEEP_WINNERS, settings.min_virality, settings.min_seo);
+      const winnerIdx = new Set(sel.winners.map((w) => w.index));
+      const loserIdx = new Set(sel.losers.map((w) => w.index));
+      const blockedIdx = new Map(sel.blocked.map((w) => [w.index, `puertas 45/80: viralidad ${w.brain_virality}, SEO ${w.brain_seo}`] as const));
+      const saved: Array<Record<string, unknown>> = [];
+      for (const d of drafts) {
+        const bs = scored[d.index]!;
+        const status = winnerIdx.has(d.index) ? "winner" : loserIdx.has(d.index) ? "loser" : blockedIdx.has(d.index) ? "blocked" : "candidate";
+        const row = await createEvoVariant(env.DB, tenant, {
+          generation_id: gen.id,
+          variant_index: d.index,
+          parent_variant_id: null,
+          params: { ...d.params } as unknown as Record<string, unknown>,
+          mutations: d.mutations as unknown as unknown[],
+          is_control: d.is_control,
+          brain_virality: bs.brain_virality,
+          brain_seo: bs.brain_seo,
+          brain_fitness: bs.brain_virality,
+        });
+        if (bs.brain_virality !== null) {
+          await recordEvoFitness(env.DB, tenant, row.id, {
+            source: "brain",
+            virality: bs.brain_virality,
+            seo: bs.brain_seo,
+            fitness: bs.brain_virality,
+          });
+        }
+        const updated = await updateEvoVariant(env.DB, tenant, row.id, {
+          status,
+          blocked_reason: blockedIdx.get(d.index)?.[1] ?? null,
+        });
+        saved.push(evoVariantOut(updated ?? row));
+      }
+      await updateEvoGeneration(env.DB, tenant, gen.id, { status: "winner_ready" });
+      const winnerRow = saved.find((v) => v.status === "winner") ?? null;
+      const winnerParams = winnerRow ? (winnerRow.params as EvoVariantParams) : null;
+      // El control ES el clip base (no un corte nuevo): publicarlo
+      // es publicar el clip base, así que no exige corte distinto.
+      // Una mutante ganadora sí: si su corte es igual al base, no
+      // es un clip distinto y no se publica.
+      const winnerIsControl = winnerRow ? winnerRow.is_control === 1 : false;
+      const publishReason = winnerRow && winnerParams
+        ? publishBlockReason({
+            status: "winner",
+            isDistinctFromBase: winnerIsControl || isDistinctCut(
+              { start_sec: clip.start_sec, end_sec: clip.end_sec, hook_offset_s: 0, title: clip.seo_title || clip.title, thumb_text: clip.thumb_text, subtitle_style: clip.subtitle_style },
+              winnerParams,
+            ),
+            campaignEligible: true,
+            campaignEligibilityReason: null,
+            qualityGateReason: null,
+            alreadySubmittedToOtherCampaign: false,
+            alreadySubmittedToThisCampaign: false,
+          })
+        : "sin ganadora";
+      return json({
+        ok: true,
+        dry_run: true,
+        published_nothing: true,
+        generation: evoGenerationOut({ ...(await getEvoGenerationById(env.DB, gen.id, tenant))!, status: "winner_ready" }),
+        campaign: { id: campaign.campaignId, name: campaign.campaignName, streamer: handle, net_rate_per_1k: campaign.netRatePer1k, platform },
+        winner: winnerRow,
+        publishable: publishReason === null,
+        publish_block_reason: publishReason,
+        variants: saved,
+        note: "Nada publicado ni enviado. La ganadora queda lista para que el cerebro la renderice con sus params; las mutantes sin datos reales quedan como candidatas, no como perdedoras.",
+      }, 201);
+    }
+    if (path === "/api/evolution/record-real-fitness" && method === "POST") {
+      const body = await readJson(req);
+      const variantId = body.variant_id;
+      if (typeof variantId !== "number" || !Number.isInteger(variantId) || variantId <= 0) {
+        return err("variant_id debe ser el id numérico de la variante.", 400);
+      }
+      const approved = body.approved_views ?? null;
+      const views = body.views ?? null;
+      const retention = body.retention_pct ?? null;
+      if (approved !== null && (typeof approved !== "number" || !Number.isInteger(approved) || approved < 0)) {
+        return err("approved_views debe ser un entero mayor o igual a 0.", 400);
+      }
+      if (views !== null && (typeof views !== "number" || !Number.isInteger(views) || views < 0)) {
+        return err("views debe ser un entero mayor o igual a 0.", 400);
+      }
+      if (retention !== null && (typeof retention !== "number" || retention < 0 || retention > 100)) {
+        return err("retention_pct debe ser un número entre 0 y 100.", 400);
+      }
+      if (approved === null && views === null) {
+        return err("Falta el dato real: approved_views o views (nunca se inventa).", 400);
+      }
+      const variant = await getEvoVariant(env.DB, variantId, tenant);
+      if (!variant) return err("Variante no encontrada.", 404);
+      const fitness = realFitness(approved, views);
+      const row = await recordEvoFitness(env.DB, tenant, variantId, {
+        source: "real",
+        approved_views: approved,
+        views,
+        retention,
+        fitness,
+      });
+      if (!row) return err("No se pudo registrar el fitness.", 400);
+      const updated = await getEvoVariant(env.DB, variantId, tenant);
+      return json({ ok: true, variant: updated ? evoVariantOut(updated) : null, real_fitness: fitness, has_real_data: true });
     }
 
     // --- Ajustes (todo lo que el usuario toca: cuentas, subtítulos, límites) ---

@@ -588,6 +588,18 @@ export const DEFAULT_PANEL_SETTINGS = {
   game: GTA_VI_GAME,
   // Miniatura por defecto: "gta6" (neón GTA 6), "gameplay" o "webcam".
   thumbnail_style: "gta6",
+  // Prioridad de campaña en el plan diario (2026-11-23, orden del
+  // usuario 18:37): % de los slots de CADA cuenta que los clips de
+  // streamers con campaña activa >= $1/1k NETO ocupan PRIMERO, antes
+  // que el resto de la Cola. 60% propuesto: con 3 slots/día, 2 van
+  // primero a campaña y 1 queda siempre para el resto (no se deja a
+  // cero a los demás, para no matar el crecimiento). Los clips de
+  // campaña que no caben en la reserva compiten después en orden
+  // normal de Cola. 0 = sin prioridad; 100 = campaña primero en
+  // todos los slots. Vive en settings (POR TENANT, se cambia en
+  // Ajustes sin tocar código) y NUNCA cambia topes, espaciamiento
+  // ni los umbrales 45/80: solo el ORDEN dentro de la capacidad.
+  campaign_priority_share_pct: 60,
   // Marca de agua (2026-11-18): logo semitransparente quemado en el
   // render. Apagada por defecto; se enciende en Ajustes eligiendo un
   // logo subido. Defaults de la prueba del p7775: centrada, ~320 px
@@ -729,6 +741,7 @@ export function effectiveSettings(raw: Record<string, unknown>): EffectiveSettin
       ? raw.watermark_logo_id : null,
     watermark_opacity: clampInt(raw.watermark_opacity, 20, 0, 100),
     watermark_size_px: clampInt(raw.watermark_size_px, 320, 50, 1000),
+    campaign_priority_share_pct: clampInt(raw.campaign_priority_share_pct, 60, 0, 100),
     watermark_position: ["center", "top-left", "top-right", "bottom-left", "bottom-right"].includes(String(raw.watermark_position))
       ? String(raw.watermark_position) : "center",
   } as EffectiveSettings;
@@ -777,6 +790,10 @@ export function validateSettingsInput(body: Record<string, unknown>): string | n
   if (body.spacing_hours !== undefined) {
     const v = intIn(body.spacing_hours);
     if (v === null || v < 0 || v > 24) return "spacing_hours debe ser un entero entre 0 y 24.";
+  }
+  if (body.campaign_priority_share_pct !== undefined) {
+    const v = intIn(body.campaign_priority_share_pct);
+    if (v === null || v < 0 || v > 100) return "campaign_priority_share_pct debe ser un entero entre 0 y 100.";
   }
   if (body.youtube_spacing_hours !== undefined) {
     const v = intIn(body.youtube_spacing_hours);
@@ -2388,6 +2405,140 @@ export function isLaunchInfluencer(handle: string): boolean {
     normalizeHandle(handle));
 }
 
+// --- Streamers virales de campaña (2026-11-23, Content Rewards) --------
+// Fuente única TS del mapa streamer -> campaña: la usan la puerta de
+// activación (isActivatableInfluencer), la prioridad de cola
+// (isCampaignStreamer) y la extensión la replica en lib.js
+// (KNOWN_CAMPAIGNS). Tarifas BRUTAS del radar 2026-11-23; la NETA es
+// bruta x 0,9 (comisión del 10% de Content Rewards) y el piso es
+// $1/1k NETO (orden del usuario). BenDaDonnn: $1,00 bruto = $0,90
+// neto, BAJO el piso: se puede activar como influencer (es viral,
+// 645k seguidores en Twitch) pero su campaña NO da prioridad en
+// cola ni se auto-asigna; solo entraría con re-verificación manual.
+// Dylan Page: fuente SOLO YouTube (@dylan.page., maratón 120 h):
+// el barrido en vivo (twitch/kick) no lo cubre; solo VOD-fallback.
+// Bobby Van Riper: handle bobby_vanriper (heistclips + 2 reels lo
+// escriben así; UNA fuente lo escribe bobby.vanriper con punto:
+// variante sin confirmar, anotada en streamers.yaml). EXCLUIDO por
+// la regla del usuario 2026-11-23 18:50 (solo FAMOSOS): 734
+// seguidores en Twitch, 30 espectadores medios, pico 74
+// (twitchmetrics.net, 23 nov 2026). Su campaña ($1,50 bruta) sigue
+// en el mapa como referencia, pero NO da prioridad en cola, NO se
+// auto-asigna y NO levanta la puerta de activación: un streamer
+// desconocido no entra aunque pague mucho. Si supera 50.000
+// seguidores, reactivar (quitar la exclusión en isFamousCampaignStreamer).
+export const NET_FLOOR_PER_1K_USD = 1.0;
+export const CONTENT_REWARDS_COMMISSION = 0.1;
+
+// REGLA DEL USUARIO 2026-11-23 18:50 (también en MEMORY.md): solo
+// influencers FAMOSOS, no cualquier persona. Criterio (única fuente
+// TS, replicado en la extensión lib.js): >= 50.000 seguidores/
+// suscriptores verificables en ALGUNA plataforma (la de la campaña
+// u otra: ArthurTV pasa por YouTube >500k + IG 428k aunque en
+// Twitch tenga solo ~20k). La tracción de la campaña (creadores,
+// clips aprobados) es señal secundaria y NO compensa el listón.
+export const FAME_MIN_FOLLOWERS = 50_000;
+
+export interface CampaignStreamer {
+  campaignId: string;
+  campaignName: string;
+  marketplace: string;
+  grossRatePer1k: number;
+  netRatePer1k: number;
+  minViews: number;
+  capPerClip: number;
+  platforms: string[];
+  /** Seguidores/suscriptores verificables (23 nov 2026). */
+  followers: number;
+  /** Plataforma donde se contó `followers`. */
+  followersPlatform: string;
+}
+
+export const CAMPAIGN_STREAMERS: Record<string, CampaignStreamer> = {
+  dasgasd3m: {
+    campaignId: "051002dd-5c46-43d0-a446-43f2957ba3a9",
+    campaignName: "Dasgasd3m x RUCKUS | GTA 6",
+    marketplace: "content_rewards",
+    grossRatePer1k: 2.0, netRatePer1k: 1.8,
+    minViews: 10000, capPerClip: 150,
+    platforms: ["tiktok", "youtube"],
+    followers: 62500, followersPlatform: "kick",
+  },
+  arthurtv: {
+    campaignId: "6e9ca548-f36c-42c2-abc0-61f89b4b53ba",
+    campaignName: "ArthurTV — GTA Clips",
+    marketplace: "content_rewards",
+    grossRatePer1k: 1.5, netRatePer1k: 1.35,
+    minViews: 10000, capPerClip: 300,
+    platforms: ["tiktok"],
+    followers: 500000, followersPlatform: "youtube",
+  },
+  bobbyvanriper: {
+    campaignId: "f583b069-ced7-49e5-9ed3-2d3a13d6df0c",
+    campaignName: "BOBBY VAN RIPER GTA VI",
+    marketplace: "content_rewards",
+    grossRatePer1k: 1.5, netRatePer1k: 1.35,
+    minViews: 1500, capPerClip: 150,
+    platforms: ["instagram", "tiktok", "youtube"],
+    followers: 734, followersPlatform: "twitch",
+  },
+  dylanpage: {
+    campaignId: "39753a1a-f1f3-491b-a8f6-0cfee0af0c97",
+    campaignName: "Dylan Page GTA VI Marathon",
+    marketplace: "content_rewards",
+    grossRatePer1k: 1.2, netRatePer1k: 1.08,
+    minViews: 3333, capPerClip: 250,
+    platforms: ["instagram", "tiktok", "x", "youtube"],
+    followers: 1170000, followersPlatform: "youtube",
+  },
+  bendadonnn: {
+    campaignId: "bb66f9eb-b90e-4dd0-8cee-9f3cd566c9a0",
+    campaignName: "BenDaDonnn x Puffco GTA 6",
+    marketplace: "content_rewards",
+    grossRatePer1k: 1.0, netRatePer1k: 0.9,
+    minViews: 10000, capPerClip: 400,
+    platforms: ["facebook", "instagram", "tiktok", "x", "youtube"],
+    followers: 645690, followersPlatform: "twitch",
+  },
+};
+
+/** Handles virales de campaña FAMOSOS (regla 18:50): solo los que
+ *  pasan el listón de fama. Bobby Van Riper NO está aquí (734
+ *  seguidores): su campaña existe en CAMPAIGN_STREAMERS como
+ *  referencia, pero no levanta la puerta ni da prioridad. */
+export const VIRAL_CAMPAIGN_HANDLES = Object.keys(CAMPAIGN_STREAMERS)
+  .filter((h) => (CAMPAIGN_STREAMERS[h]?.followers ?? 0) >= FAME_MIN_FOLLOWERS);
+
+/** ¿El streamer de campaña es famoso? (regla 18:50). */
+export function isFamousCampaignStreamer(handle: string | null | undefined): boolean {
+  const c = campaignForStreamer(handle);
+  return c !== null && c.followers >= FAME_MIN_FOLLOWERS;
+}
+
+/** Campaña de un streamer (o null si no tiene). Nombre normalizado. */
+export function campaignForStreamer(handle: string | null | undefined): CampaignStreamer | null {
+  if (!handle) return null;
+  return CAMPAIGN_STREAMERS[normalizeHandle(handle)] ?? null;
+}
+
+/** ¿El streamer tiene campaña activa con tarifa NETA >= $1/1k Y es
+ *  famoso (regla 18:50)? La prioridad de cola exige las dos cosas:
+ *  dinero Y fama. Bobby Van Riper paga $1,35 neto pero tiene 734
+ *  seguidores: NO es campaign streamer. BenDaDonnn es famoso pero
+ *  su neta es $0,90: tampoco. */
+export function isCampaignStreamer(handle: string | null | undefined): boolean {
+  const c = campaignForStreamer(handle);
+  return c !== null && c.netRatePer1k >= NET_FLOOR_PER_1K_USD && c.followers >= FAME_MIN_FOLLOWERS;
+}
+
+/** Puerta de activación ampliada (2026-11-23): los 10 del lanzamiento
+ *  + los 4 virales de campaña FAMOSOS (regla 18:50: Bobby Van Riper
+ *  queda fuera por fama). Cualquier otro handle se puede crear
+ *  desactivado, pero activarlo sigue siendo 400. */
+export function isActivatableInfluencer(handle: string): boolean {
+  return isLaunchInfluencer(handle) || VIRAL_CAMPAIGN_HANDLES.includes(normalizeHandle(handle));
+}
+
 export async function listInfluencers(db: D1Database, tenant: Tenant): Promise<InfluencerRow[]> {
   const res = await db
     .prepare("SELECT * FROM influencers WHERE tenant_id = ? ORDER BY id ASC")
@@ -2462,6 +2613,576 @@ export async function updateInfluencer(
 export async function deleteInfluencer(db: D1Database, id: number, tenant: Tenant): Promise<boolean> {
   const res = await db.prepare("DELETE FROM influencers WHERE id = ? AND tenant_id = ?").bind(id, tenant).run();
   return (res.meta.changes ?? 0) > 0;
+}
+
+// --- Envíos a marketplaces de clipping (tabla campaign_submissions, 0041) ---
+// Registro + cola en nube de los envíos a Content Rewards. Un post =
+// UNA campaña, una sola vez: lo garantiza el índice UNIQUE
+// (tenant_id, clip_id, platform, campaign_id). Estados: pending
+// (asignado o intento bloqueado, esperando envío), submitted
+// (enviado, con submission_id), failed, expired (pasaron 30 min
+// desde published_at_ms sin enviarse: nunca se envía tarde).
+// `published_at_ms` es el instante REAL de publicación (lo fija
+// markPosted); NULL = aún no publicado = no se puede enviar.
+// Todas las funciones degradan a vacío/0 si la tabla no existe
+// (bases sin la 0041): nunca tumban el ciclo ni la lectura.
+export const CAMPAIGN_SUBMISSION_STATUSES = ["pending", "submitted", "failed", "expired"] as const;
+export type CampaignSubmissionStatus = (typeof CAMPAIGN_SUBMISSION_STATUSES)[number];
+/** Ventana de envío: 30 min desde la publicación real. */
+export const CAMPAIGN_SUBMIT_WINDOW_MS = 30 * 60 * 1000;
+
+export interface CampaignSubmissionRow {
+  id: number;
+  tenant_id: Tenant;
+  clip_id: number;
+  platform: string;
+  marketplace: string;
+  campaign_id: string;
+  campaign_name: string | null;
+  streamer: string | null;
+  gross_rate_per_1k: number | null;
+  net_rate_per_1k: number | null;
+  min_views: number | null;
+  cap_per_clip: number | null;
+  post_url: string | null;
+  published_at_ms: number | null;
+  status: string;
+  submission_id: string | null;
+  views: number | null;
+  amount_usd: number | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface NewCampaignSubmission {
+  clip_id: number;
+  platform: string;
+  marketplace?: string;
+  campaign_id: string;
+  campaign_name?: string | null;
+  streamer?: string | null;
+  gross_rate_per_1k?: number | null;
+  net_rate_per_1k?: number | null;
+  min_views?: number | null;
+  cap_per_clip?: number | null;
+  post_url?: string | null;
+  published_at_ms?: number | null;
+}
+
+export function campaignSubmissionOut(row: CampaignSubmissionRow): Record<string, unknown> {
+  return { ...row };
+}
+
+export async function listCampaignSubmissions(
+  db: D1Database,
+  tenant: Tenant,
+  filter: { clipId?: number; platform?: string; campaignId?: string; status?: string } = {},
+): Promise<CampaignSubmissionRow[]> {
+  try {
+    const conds = ["tenant_id = ?"];
+    const params: unknown[] = [tenant];
+    if (filter.clipId !== undefined) { conds.push("clip_id = ?"); params.push(filter.clipId); }
+    if (filter.platform !== undefined) { conds.push("platform = ?"); params.push(filter.platform); }
+    if (filter.campaignId !== undefined) { conds.push("campaign_id = ?"); params.push(filter.campaignId); }
+    if (filter.status !== undefined) { conds.push("status = ?"); params.push(filter.status); }
+    const res = await db
+      .prepare(`SELECT * FROM campaign_submissions WHERE ${conds.join(" AND ")} ORDER BY created_at ASC`)
+      .bind(...params)
+      .all<CampaignSubmissionRow>();
+    return res.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function findCampaignSubmission(
+  db: D1Database,
+  tenant: Tenant,
+  clipId: number,
+  platform: string,
+  campaignId: string,
+): Promise<CampaignSubmissionRow | null> {
+  const rows = await listCampaignSubmissions(db, tenant, { clipId, platform, campaignId });
+  return rows[0] ?? null;
+}
+
+export async function getCampaignSubmission(db: D1Database, id: number, tenant: Tenant): Promise<CampaignSubmissionRow | null> {
+  try {
+    return await db
+      .prepare("SELECT * FROM campaign_submissions WHERE id = ? AND tenant_id = ?")
+      .bind(id, tenant)
+      .first<CampaignSubmissionRow>();
+  } catch {
+    return null;
+  }
+}
+
+/** Crea la fila en `pending`. Si ya existe (UNIQUE), devuelve la
+ *  existente con `duplicate: true` en vez de fallar: el segundo
+ *  intento de registrar el mismo envío no es un error, es el
+ *  duplicado que hay que bloquear. */
+export async function createCampaignSubmission(
+  db: D1Database,
+  tenant: Tenant,
+  data: NewCampaignSubmission,
+): Promise<{ row: CampaignSubmissionRow; duplicate: boolean }> {
+  const existing = await findCampaignSubmission(db, tenant, data.clip_id, data.platform, data.campaign_id);
+  if (existing) return { row: existing, duplicate: true };
+  const now = nowMs();
+  const res = await db
+    .prepare(
+      "INSERT INTO campaign_submissions (tenant_id, clip_id, platform, marketplace, campaign_id, campaign_name, streamer, " +
+        "gross_rate_per_1k, net_rate_per_1k, min_views, cap_per_clip, post_url, published_at_ms, status, submission_id, views, amount_usd, error, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, NULL, ?, ?)",
+    )
+    .bind(
+      tenant, data.clip_id, data.platform, data.marketplace ?? "content_rewards", data.campaign_id,
+      data.campaign_name ?? null, data.streamer ?? null,
+      data.gross_rate_per_1k ?? null, data.net_rate_per_1k ?? null,
+      data.min_views ?? null, data.cap_per_clip ?? null,
+      data.post_url ?? null, data.published_at_ms ?? null, now, now,
+    )
+    .run();
+  const row = await getCampaignSubmission(db, Number(res.meta.last_row_id), tenant);
+  if (!row) throw new Error("No se pudo leer el envío creado.");
+  return { row, duplicate: false };
+}
+
+/** Actualiza una fila. `submitted` es terminal: no se puede cambiar
+ *  un envío ya registrado como enviado (evita reescribir el
+ *  submission_id). Devuelve null si no existe o si es terminal. */
+export async function updateCampaignSubmission(
+  db: D1Database,
+  tenant: Tenant,
+  id: number,
+  patch: { status?: string; submission_id?: string | null; views?: number | null; amount_usd?: number | null; error?: string | null; post_url?: string | null; published_at_ms?: number | null },
+): Promise<CampaignSubmissionRow | null> {
+  const row = await getCampaignSubmission(db, id, tenant);
+  if (!row) return null;
+  if (row.status === "submitted") return null;
+  if (patch.status !== undefined && !(CAMPAIGN_SUBMISSION_STATUSES as readonly string[]).includes(patch.status)) {
+    throw new Error(`status inválido: usa ${CAMPAIGN_SUBMISSION_STATUSES.join(", ")}.`);
+  }
+  const sets: string[] = ["updated_at = ?"];
+  const params: unknown[] = [nowMs()];
+  const push = (col: string, v: unknown) => { sets.push(`${col} = ?`); params.push(v); };
+  if (patch.status !== undefined) push("status", patch.status);
+  if (patch.submission_id !== undefined) push("submission_id", patch.submission_id);
+  if (patch.views !== undefined) push("views", patch.views);
+  if (patch.amount_usd !== undefined) push("amount_usd", patch.amount_usd);
+  if (patch.error !== undefined) push("error", patch.error);
+  if (patch.post_url !== undefined) push("post_url", patch.post_url);
+  if (patch.published_at_ms !== undefined) push("published_at_ms", patch.published_at_ms);
+  await db
+    .prepare(`UPDATE campaign_submissions SET ${sets.join(", ")} WHERE id = ? AND tenant_id = ?`)
+    .bind(...params, id, tenant)
+    .run();
+  return getCampaignSubmission(db, id, tenant);
+}
+
+/** DISPARADOR — lo llama markPosted (jobs.ts) con el instante REAL
+ *  en que el job pasó a posted con su evidence_url. Rellena
+ *  post_url + published_at_ms en las filas `pending` de ese
+ *  clip+plataforma que aún no los tienen (asignación registrada
+ *  antes de publicar): a partir de ahí la fila es enviable dentro
+ *  de 30 min y la cola en nube la puede retomar. Nunca crea filas
+ *  ni toca las ya enviadas. Devuelve cuántas rellenó. */
+export async function stampCampaignSubmissionPosted(
+  db: D1Database,
+  tenant: Tenant,
+  clipId: number,
+  platform: string,
+  evidenceUrl: string,
+  postedAtMs: number,
+): Promise<number> {
+  try {
+    const res = await db
+      .prepare(
+        "UPDATE campaign_submissions SET post_url = ?, published_at_ms = ?, updated_at = ? " +
+          "WHERE tenant_id = ? AND clip_id = ? AND platform = ? AND status = 'pending' AND published_at_ms IS NULL",
+      )
+      .bind(evidenceUrl, postedAtMs, postedAtMs, tenant, clipId, platform)
+      .run();
+    return res.meta.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Relleno para publicados que NO pasaron por markPosted (volcado
+ *  del diario WAL con UPDATE directo, reconciliaciones manuales):
+ *  igual que backfillRetentionDeadlines (0039), cruza jobs posted
+ *  con filas pending sin published_at_ms. Se llama en la lectura
+ *  de pendientes (best-effort), no en el ciclo. */
+export async function backfillCampaignSubmissionsPosted(db: D1Database, tenant: Tenant): Promise<number> {
+  try {
+    const res = await db
+      .prepare(
+        "UPDATE campaign_submissions SET post_url = " +
+          "(SELECT evidence_url FROM jobs WHERE jobs.tenant_id = campaign_submissions.tenant_id AND jobs.clip_id = campaign_submissions.clip_id AND jobs.platform = campaign_submissions.platform AND jobs.kind = 'publish' AND jobs.state = 'posted' ORDER BY jobs.updated_at DESC LIMIT 1), " +
+          "published_at_ms = " +
+          "(SELECT updated_at FROM jobs WHERE jobs.tenant_id = campaign_submissions.tenant_id AND jobs.clip_id = campaign_submissions.clip_id AND jobs.platform = campaign_submissions.platform AND jobs.kind = 'publish' AND jobs.state = 'posted' ORDER BY jobs.updated_at DESC LIMIT 1), " +
+          "updated_at = ? " +
+          "WHERE tenant_id = ? AND status = 'pending' AND published_at_ms IS NULL AND EXISTS " +
+          "(SELECT 1 FROM jobs WHERE jobs.tenant_id = campaign_submissions.tenant_id AND jobs.clip_id = campaign_submissions.clip_id AND jobs.platform = campaign_submissions.platform AND jobs.kind = 'publish' AND jobs.state = 'posted')",
+      )
+      .bind(nowMs(), tenant)
+      .run();
+    return res.meta.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Marca `expired` las pendientes cuya ventana de 30 min ya pasó
+ *  (published_at_ms + 30 min < ahora). Nunca se envía tarde. */
+export async function expireStaleSubmissions(db: D1Database, tenant: Tenant, now = Date.now()): Promise<number> {
+  try {
+    const res = await db
+      .prepare(
+        "UPDATE campaign_submissions SET status = 'expired', updated_at = ? " +
+          "WHERE tenant_id = ? AND status = 'pending' AND published_at_ms IS NOT NULL AND published_at_ms + ? < ?",
+      )
+      .bind(now, tenant, CAMPAIGN_SUBMIT_WINDOW_MS, now)
+      .run();
+    return res.meta.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Cola en nube: pendientes ya publicadas (con published_at_ms),
+ *  las más urgentes primero (las que antes vencen la ventana).
+ *  Antes de listar, rellena publicados por otras vías y caduca lo
+ *  vencido: la lectura nunca devuelve un envío que ya no se puede
+ *  enviar. Sin tabla, lista vacía. */
+export async function listPendingCampaignSubmissions(db: D1Database, tenant: Tenant, now = Date.now()): Promise<CampaignSubmissionRow[]> {
+  try {
+    await backfillCampaignSubmissionsPosted(db, tenant);
+    await expireStaleSubmissions(db, tenant, now);
+    const res = await db
+      .prepare(
+        "SELECT * FROM campaign_submissions WHERE tenant_id = ? AND status = 'pending' AND published_at_ms IS NOT NULL ORDER BY published_at_ms ASC",
+      )
+      .bind(tenant)
+      .all<CampaignSubmissionRow>();
+    return res.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// --- Evolución neuroevolutiva (tablas evo_*, migración 0042) -----
+// Población OFFLINE: las variantes se generan en el cerebro y NO se
+// publican; solo 1 ganadora por momento/plataforma sale por la vía
+// de autopublicación ya existente. Ver evolution.ts (doctrina) y
+// panel-backend/EVOLUTION-0042.md. Todas las funciones degradan a
+// vacío/null/0 si las tablas aún no existen (bases sin la 0042):
+// nunca tumban el ciclo ni la lectura.
+export const EVO_GENERATION_STATUSES = ["draft", "winner_ready", "done"] as const;
+export const EVO_VARIANT_STATUSES_DB = ["candidate", "winner", "loser", "published", "blocked"] as const;
+
+export interface EvoGenerationRow {
+  id: number;
+  tenant_id: Tenant;
+  streamer: string;
+  campaign_id: string;
+  base_clip_id: number;
+  generation: number;
+  parent_generation_id: number | null;
+  platform: string;
+  status: string;
+  blocked_reason: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface EvoVariantRow {
+  id: number;
+  tenant_id: Tenant;
+  generation_id: number;
+  variant_index: number;
+  parent_variant_id: number | null;
+  clip_id: number | null;
+  params_json: string;
+  mutations_json: string;
+  is_control: number;
+  brain_virality: number | null;
+  brain_seo: number | null;
+  brain_fitness: number | null;
+  real_approved_views: number | null;
+  real_views: number | null;
+  real_retention: number | null;
+  real_fitness: number | null;
+  has_real_data: number;
+  status: string;
+  blocked_reason: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface EvoFitnessRow {
+  id: number;
+  tenant_id: Tenant;
+  variant_id: number;
+  source: string;
+  virality: number | null;
+  seo: number | null;
+  approved_views: number | null;
+  views: number | null;
+  retention: number | null;
+  fitness: number | null;
+  measured_at: number;
+}
+
+export function evoGenerationOut(row: EvoGenerationRow): Record<string, unknown> {
+  return { ...row };
+}
+
+export function evoVariantOut(row: EvoVariantRow): Record<string, unknown> {
+  return {
+    ...row,
+    params: safeJsonParse(row.params_json),
+    mutations: safeJsonParse(row.mutations_json),
+  };
+}
+
+function safeJsonParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Crea la generación. Si ya existe (UNIQUE tenant+clip+
+ *  generación), devuelve la existente con `duplicate: true`. */
+export async function createEvoGeneration(
+  db: D1Database,
+  tenant: Tenant,
+  data: { streamer: string; campaign_id: string; base_clip_id: number; generation: number; parent_generation_id?: number | null; platform: string; blocked_reason?: string | null },
+): Promise<{ row: EvoGenerationRow; duplicate: boolean }> {
+  const existing = await getEvoGeneration(db, tenant, data.base_clip_id, data.generation);
+  if (existing) return { row: existing, duplicate: true };
+  const now = nowMs();
+  const res = await db
+    .prepare(
+      "INSERT INTO evo_generations (tenant_id, streamer, campaign_id, base_clip_id, generation, parent_generation_id, platform, status, blocked_reason, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)",
+    )
+    .bind(tenant, data.streamer, data.campaign_id, data.base_clip_id, data.generation, data.parent_generation_id ?? null, data.platform, data.blocked_reason ?? null, now, now)
+    .run();
+  const row = await getEvoGenerationById(db, Number(res.meta.last_row_id), tenant);
+  if (!row) throw new Error("No se pudo leer la generación creada.");
+  return { row, duplicate: false };
+}
+
+export async function getEvoGenerationById(db: D1Database, id: number, tenant: Tenant): Promise<EvoGenerationRow | null> {
+  try {
+    return await db.prepare("SELECT * FROM evo_generations WHERE id = ? AND tenant_id = ?").bind(id, tenant).first<EvoGenerationRow>();
+  } catch {
+    return null;
+  }
+}
+
+export async function getEvoGeneration(db: D1Database, tenant: Tenant, baseClipId: number, generation: number): Promise<EvoGenerationRow | null> {
+  try {
+    return await db
+      .prepare("SELECT * FROM evo_generations WHERE tenant_id = ? AND base_clip_id = ? AND generation = ?")
+      .bind(tenant, baseClipId, generation)
+      .first<EvoGenerationRow>();
+  } catch {
+    return null;
+  }
+}
+
+export async function listEvoGenerations(db: D1Database, tenant: Tenant, limit = 10): Promise<EvoGenerationRow[]> {
+  try {
+    const res = await db
+      .prepare("SELECT * FROM evo_generations WHERE tenant_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?")
+      .bind(tenant, limit)
+      .all<EvoGenerationRow>();
+    return res.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function updateEvoGeneration(db: D1Database, tenant: Tenant, id: number, patch: { status?: string; blocked_reason?: string | null }): Promise<EvoGenerationRow | null> {
+  const row = await getEvoGenerationById(db, id, tenant);
+  if (!row) return null;
+  const sets: string[] = ["updated_at = ?"];
+  const params: unknown[] = [nowMs()];
+  if (patch.status !== undefined) {
+    if (!(EVO_GENERATION_STATUSES as readonly string[]).includes(patch.status)) throw new Error(`status inválido: usa ${EVO_GENERATION_STATUSES.join(", ")}.`);
+    sets.push("status = ?");
+    params.push(patch.status);
+  }
+  if (patch.blocked_reason !== undefined) {
+    sets.push("blocked_reason = ?");
+    params.push(patch.blocked_reason);
+  }
+  await db.prepare(`UPDATE evo_generations SET ${sets.join(", ")} WHERE id = ? AND tenant_id = ?`).bind(...params, id, tenant).run();
+  return getEvoGenerationById(db, id, tenant);
+}
+
+export async function createEvoVariant(
+  db: D1Database,
+  tenant: Tenant,
+  data: { generation_id: number; variant_index: number; parent_variant_id?: number | null; params: Record<string, unknown>; mutations: unknown[]; is_control: boolean; brain_virality?: number | null; brain_seo?: number | null; brain_fitness?: number | null },
+): Promise<EvoVariantRow> {
+  const now = nowMs();
+  const res = await db
+    .prepare(
+      "INSERT INTO evo_variants (tenant_id, generation_id, variant_index, parent_variant_id, clip_id, params_json, mutations_json, is_control, brain_virality, brain_seo, brain_fitness, real_approved_views, real_views, real_retention, real_fitness, has_real_data, status, blocked_reason, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, 0, 'candidate', NULL, ?, ?)",
+    )
+    .bind(
+      tenant, data.generation_id, data.variant_index, data.parent_variant_id ?? null,
+      JSON.stringify(data.params), JSON.stringify(data.mutations), data.is_control ? 1 : 0,
+      data.brain_virality ?? null, data.brain_seo ?? null, data.brain_fitness ?? null, now, now,
+    )
+    .run();
+  const row = await getEvoVariant(db, Number(res.meta.last_row_id), tenant);
+  if (!row) throw new Error("No se pudo leer la variante creada.");
+  return row;
+}
+
+export async function getEvoVariant(db: D1Database, id: number, tenant: Tenant): Promise<EvoVariantRow | null> {
+  try {
+    return await db.prepare("SELECT * FROM evo_variants WHERE id = ? AND tenant_id = ?").bind(id, tenant).first<EvoVariantRow>();
+  } catch {
+    return null;
+  }
+}
+
+export async function listEvoVariants(db: D1Database, tenant: Tenant, generationId: number): Promise<EvoVariantRow[]> {
+  try {
+    const res = await db
+      .prepare("SELECT * FROM evo_variants WHERE tenant_id = ? AND generation_id = ? ORDER BY variant_index ASC")
+      .bind(tenant, generationId)
+      .all<EvoVariantRow>();
+    return res.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function updateEvoVariant(
+  db: D1Database,
+  tenant: Tenant,
+  id: number,
+  patch: { status?: string; blocked_reason?: string | null; brain_virality?: number | null; brain_seo?: number | null; brain_fitness?: number | null; real_approved_views?: number | null; real_views?: number | null; real_retention?: number | null; real_fitness?: number | null; has_real_data?: number },
+): Promise<EvoVariantRow | null> {
+  const row = await getEvoVariant(db, id, tenant);
+  if (!row) return null;
+  if (patch.status !== undefined && !(EVO_VARIANT_STATUSES_DB as readonly string[]).includes(patch.status)) {
+    throw new Error(`status inválido: usa ${EVO_VARIANT_STATUSES_DB.join(", ")}.`);
+  }
+  const sets: string[] = ["updated_at = ?"];
+  const params: unknown[] = [nowMs()];
+  const push = (col: string, v: unknown) => { sets.push(`${col} = ?`); params.push(v); };
+  if (patch.status !== undefined) push("status", patch.status);
+  if (patch.blocked_reason !== undefined) push("blocked_reason", patch.blocked_reason);
+  if (patch.brain_virality !== undefined) push("brain_virality", patch.brain_virality);
+  if (patch.brain_seo !== undefined) push("brain_seo", patch.brain_seo);
+  if (patch.brain_fitness !== undefined) push("brain_fitness", patch.brain_fitness);
+  if (patch.real_approved_views !== undefined) push("real_approved_views", patch.real_approved_views);
+  if (patch.real_views !== undefined) push("real_views", patch.real_views);
+  if (patch.real_retention !== undefined) push("real_retention", patch.real_retention);
+  if (patch.real_fitness !== undefined) push("real_fitness", patch.real_fitness);
+  if (patch.has_real_data !== undefined) push("has_real_data", patch.has_real_data);
+  await db.prepare(`UPDATE evo_variants SET ${sets.join(", ")} WHERE id = ? AND tenant_id = ?`).bind(...params, id, tenant).run();
+  return getEvoVariant(db, id, tenant);
+}
+
+/** Registra una medición de fitness (cerebro o real) y actualiza
+ *  la variante. Sin datos no se escribe nada: el llamador valida
+ *  que al menos un valor venga informado. */
+export async function recordEvoFitness(
+  db: D1Database,
+  tenant: Tenant,
+  variantId: number,
+  data: { source: "brain" | "real"; virality?: number | null; seo?: number | null; approved_views?: number | null; views?: number | null; retention?: number | null; fitness?: number | null; measured_at?: number },
+): Promise<EvoFitnessRow | null> {
+  const variant = await getEvoVariant(db, variantId, tenant);
+  if (!variant) return null;
+  const now = data.measured_at ?? nowMs();
+  const res = await db
+    .prepare(
+      "INSERT INTO evo_fitness (tenant_id, variant_id, source, virality, seo, approved_views, views, retention, fitness, measured_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(
+      tenant, variantId, data.source,
+      data.virality ?? null, data.seo ?? null,
+      data.approved_views ?? null, data.views ?? null, data.retention ?? null,
+      data.fitness ?? null, now,
+    )
+    .run();
+  if (data.source === "real") {
+    await updateEvoVariant(db, tenant, variantId, {
+      real_approved_views: data.approved_views ?? variant.real_approved_views,
+      real_views: data.views ?? variant.real_views,
+      real_retention: data.retention ?? variant.real_retention,
+      real_fitness: data.fitness ?? variant.real_fitness,
+      has_real_data: 1,
+    });
+  } else {
+    await updateEvoVariant(db, tenant, variantId, {
+      brain_virality: data.virality ?? variant.brain_virality,
+      brain_seo: data.seo ?? variant.brain_seo,
+      brain_fitness: data.fitness ?? variant.brain_fitness,
+    });
+  }
+  try {
+    return await db.prepare("SELECT * FROM evo_fitness WHERE id = ? AND tenant_id = ?").bind(Number(res.meta.last_row_id), tenant).first<EvoFitnessRow>();
+  } catch {
+    return null;
+  }
+}
+
+/** Resumen para el panel (solo lectura): últimas generaciones con
+ *  su ganadora, fitness real vs cerebro y motivo de bloqueo. */
+export async function evoStatusSummary(db: D1Database, tenant: Tenant): Promise<Array<Record<string, unknown>>> {
+  const gens = await listEvoGenerations(db, tenant, 10);
+  const out: Array<Record<string, unknown>> = [];
+  for (const g of gens) {
+    const variants = await listEvoVariants(db, tenant, g.id);
+    const winner = variants.find((v) => v.status === "winner" || v.status === "published") ?? null;
+    out.push({
+      generation_id: g.id,
+      streamer: g.streamer,
+      campaign_id: g.campaign_id,
+      base_clip_id: g.base_clip_id,
+      generation: g.generation,
+      platform: g.platform,
+      status: g.status,
+      blocked_reason: g.blocked_reason,
+      variants_total: variants.length,
+      winners: variants.filter((v) => v.status === "winner").length,
+      losers: variants.filter((v) => v.status === "loser").length,
+      untested: variants.filter((v) => v.status === "candidate").length,
+      has_real_data: variants.some((v) => v.has_real_data === 1),
+      winner: winner
+        ? {
+            variant_id: winner.id,
+            variant_index: winner.variant_index,
+            brain_virality: winner.brain_virality,
+            brain_seo: winner.brain_seo,
+            real_fitness: winner.real_fitness,
+            real_approved_views: winner.real_approved_views,
+            has_real_data: winner.has_real_data === 1,
+            mutations: safeJsonParse(winner.mutations_json),
+            params: safeJsonParse(winner.params_json),
+          }
+        : null,
+      created_at: g.created_at,
+      updated_at: g.updated_at,
+    });
+  }
+  return out;
 }
 
 // --- Fuentes / VODs (tablas sources y vod_checks, migraciones 0002/0006 + tenant_id en 0012) ---
