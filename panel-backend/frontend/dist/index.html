@@ -14,6 +14,7 @@
 <body>
 <a class="skip-link" href="#main">Saltar al contenido</a>
 <header>
+  <button type="button" id="menuBtn" class="menu-btn hidden" aria-label="Abrir menú" aria-controls="tabs" aria-expanded="false">☰</button>
   <h1>AVC — Panel de Clips GTA 6</h1>
   <span class="sub">Agent Viral Clip · <span id="whoLine">sin sesión</span></span>
   <span class="spacer"></span>
@@ -21,6 +22,7 @@
   <span class="dim" id="healthLine">Comprobando API…</span>
   <button class="ghost hidden" id="logoutBtn" type="button">Salir</button>
 </header>
+<div id="sidebarOverlay" class="sidebar-overlay" hidden></div>
 
 <div id="loginBox" class="card">
   <div class="login-sunset" aria-hidden="true"></div>
@@ -47,25 +49,61 @@
 
 <div id="app" class="hidden">
   <nav id="tabs" role="tablist" aria-label="Secciones del panel">
-    <button type="button" data-tab="worker" class="active" role="tab" aria-selected="true" aria-controls="tab-worker" id="tabbtn-worker">Worker</button>
+    <div class="sidebar-head"><span class="brand-mark sidebar-mark" aria-hidden="true">AVC</span><span class="sidebar-title">Panel de Clips</span></div>
+    <p class="nav-group" aria-hidden="true">Principal</p>
+    <button type="button" data-tab="worker" class="active" role="tab" aria-selected="true" aria-controls="tab-worker" id="tabbtn-worker">Dashboard</button>
     <button type="button" data-tab="onboarding" role="tab" aria-selected="false" aria-controls="tab-onboarding" id="tabbtn-onboarding">Onboarding</button>
+    <button type="button" data-tab="avisos" role="tab" aria-selected="false" aria-controls="tab-avisos" id="tabbtn-avisos">Avisos <span id="unreadBadge" class="badge" role="status" aria-live="polite" hidden></span></button>
+    <p class="nav-group" aria-hidden="true">Clips</p>
     <button type="button" data-tab="cola" role="tab" aria-selected="false" aria-controls="tab-cola" id="tabbtn-cola">Cola</button>
     <button type="button" data-tab="subidos" role="tab" aria-selected="false" aria-controls="tab-subidos" id="tabbtn-subidos">Subidos</button>
-    <button type="button" data-tab="cuentas" role="tab" aria-selected="false" aria-controls="tab-cuentas" id="tabbtn-cuentas">Cuentas</button>
     <button type="button" data-tab="editor" role="tab" aria-selected="false" aria-controls="tab-editor" id="tabbtn-editor">Editor</button>
-    <button type="button" data-tab="canales" role="tab" aria-selected="false" aria-controls="tab-canales" id="tabbtn-canales">Canales</button>
     <button type="button" data-tab="tracking" role="tab" aria-selected="false" aria-controls="tab-tracking" id="tabbtn-tracking">Tracking</button>
+    <p class="nav-group" aria-hidden="true">Canales</p>
+    <button type="button" data-tab="cuentas" role="tab" aria-selected="false" aria-controls="tab-cuentas" id="tabbtn-cuentas">Cuentas</button>
+    <button type="button" data-tab="canales" role="tab" aria-selected="false" aria-controls="tab-canales" id="tabbtn-canales">Canales</button>
     <button type="button" data-tab="analiticas" role="tab" aria-selected="false" aria-controls="tab-analiticas" id="tabbtn-analiticas">Analíticas</button>
-    <button type="button" data-tab="usuarios" role="tab" aria-selected="false" aria-controls="tab-usuarios" id="tabbtn-usuarios">Usuarios</button>
+    <p class="nav-group" aria-hidden="true">Fuentes</p>
     <button type="button" data-tab="influencers" role="tab" aria-selected="false" aria-controls="tab-influencers" id="tabbtn-influencers">Influencers</button>
     <button type="button" data-tab="fuentes" role="tab" aria-selected="false" aria-controls="tab-fuentes" id="tabbtn-fuentes">Fuentes</button>
-    <button type="button" data-tab="avisos" role="tab" aria-selected="false" aria-controls="tab-avisos" id="tabbtn-avisos">Avisos <span id="unreadBadge" class="badge" role="status" aria-live="polite" hidden></span></button>
+    <p class="nav-group" aria-hidden="true">Sistema</p>
+    <button type="button" data-tab="usuarios" role="tab" aria-selected="false" aria-controls="tab-usuarios" id="tabbtn-usuarios">Usuarios</button>
     <button type="button" data-tab="ajustes" role="tab" aria-selected="false" aria-controls="tab-ajustes" id="tabbtn-ajustes">Ajustes</button>
   </nav>
   <main id="main">
     <div id="msg" aria-live="polite"></div>
 
     <section id="tab-worker" role="tabpanel" aria-labelledby="tabbtn-worker">
+    <div class="card engine-hero" id="engineHero">
+      <div class="engine-hero-top">
+        <div>
+          <h2>Worker</h2>
+          <p class="dim">El motor que publica solo. Inicia una vez y sigue aunque cierres el navegador.</p>
+        </div>
+        <span class="pill warn" id="heroWorkerState" role="status">Parado</span>
+      </div>
+      <div class="row engine-hero-actions">
+        <button id="btnStartHero" type="button" class="engine-start">▶ Iniciar</button>
+        <button id="btnStopHero" type="button" class="danger engine-stop">■ Parar</button>
+      </div>
+      <p class="dim">Iniciar usa el mismo inicio del Worker de siempre (btnStart). Parar lo pausa y nada se pierde.</p>
+      <div class="dash-metrics" role="group" aria-label="Resumen">
+        <div class="metric"><span class="metric-label">Estado</span><b id="dashMetricState">—</b></div>
+        <div class="metric"><span class="metric-label">Actividad reciente</span><b id="dashMetricActivity">—</b></div>
+        <div class="metric"><span class="metric-label">Jobs recientes</span><b id="dashMetricJobs">—</b></div>
+        <div class="metric"><span class="metric-label">Próxima corrida</span><b id="dashMetricNext">—</b></div>
+      </div>
+    </div>
+      <div class="card" id="dailyPlanCard">
+        <h2>Plan de hoy</h2>
+        <p class="dim">Qué se publica hoy, en qué cuenta y a qué hora (hora de Chile), según las reglas 2026-11-19: topes por plataforma, calentamiento, espaciamiento y franjas 12:00–14:00, 18:00–20:00 y 21:00–23:00. Lo que no cabe queda en cola.</p>
+        <div class="row">
+          <label for="dailyPlanDate">Fecha</label>
+          <input id="dailyPlanDate" type="date">
+          <button id="btnDailyPlan" type="button">Ver plan de hoy</button>
+        </div>
+        <div id="dailyPlan" aria-live="polite"><p class="dim">Pulsa “Ver plan de hoy” para calcular el plan.</p></div>
+      </div>
       <div class="card">
         <h2>Worker</h2>
         <div class="worker-status" aria-live="polite">
@@ -234,16 +272,6 @@
           <p class="note-warn">El clip se crea en la Cola con el Worker. La publicación la haces después con “Publicar ahora”, que crea los trabajos con sus puertas.</p>
         </form>
       </details>
-      <div class="card" id="dailyPlanCard">
-        <h2>Plan de hoy</h2>
-        <p class="dim">Qué se publica hoy, en qué cuenta y a qué hora (hora de Chile), según las reglas 2026-11-19: topes por plataforma, calentamiento, espaciamiento y franjas 12:00–14:00, 18:00–20:00 y 21:00–23:00. Lo que no cabe queda en cola.</p>
-        <div class="row">
-          <label for="dailyPlanDate">Fecha</label>
-          <input id="dailyPlanDate" type="date">
-          <button id="btnDailyPlan" type="button">Ver plan de hoy</button>
-        </div>
-        <div id="dailyPlan" aria-live="polite"><p class="dim">Pulsa “Ver plan de hoy” para calcular el plan.</p></div>
-      </div>
       <div class="card hidden" id="clipDetailCard" aria-busy="false">
         <div class="clip-detail-head">
           <h2 id="clipTitle" tabindex="-1">Clip</h2>
@@ -688,6 +716,22 @@
         <p class="dim">Configuración del panel (subtítulos, límites diarios, Telegram). Los cambios se guardan al pulsar Guardar ajustes.</p>
         <form id="settingsForm" novalidate>
           <p class="dim" id="settingsDirty" role="status" aria-live="polite" hidden>Hay cambios sin guardar.</p>
+          <div id="settingsConflicts" role="status" aria-live="polite"></div>
+          <div class="row settings-tools">
+            <button type="button" id="btnUndoSettings" class="ghost">Deshacer</button>
+            <button type="button" id="btnRestoreSettings" class="ghost">Restaurar valores guardados</button>
+          </div>
+
+          <fieldset class="settings-section mode-fieldset">
+            <legend>Modo rápido</legend>
+            <p class="dim">Rellena el formulario de abajo con un modo. Revisa los valores y pulsa Guardar ajustes: el modo no guarda solo.</p>
+            <div class="mode-grid">
+              <button type="button" class="mode-btn" id="modeSeguro" data-mode="seguro"><b>Seguro</b><span>Menos vídeos, umbrales altos, pide preview</span></button>
+              <button type="button" class="mode-btn" id="modeNormal" data-mode="normal"><b>Normal</b><span>Los valores actuales del canal</span></button>
+              <button type="button" class="mode-btn" id="modeAgresivo" data-mode="agresivo"><b>Agresivo</b><span>Más ritmo y auto-publicación</span></button>
+            </div>
+            <p class="dim" id="modeStatus" role="status"></p>
+          </fieldset>
 
           <fieldset class="settings-section">
             <legend>Subtítulos</legend>
@@ -718,6 +762,17 @@
               <option value="rdjavi">RDJavi GTA 6 / Vice City (webcam centrada arriba, fondo morado desenfocado, gameplay abajo, neón rosa-violeta-naranja)</option>
               <option value="plain">Split simple (juego arriba, cámara abajo)</option>
             </select>
+            <div class="template-preview-wrap">
+              <div class="template-preview" aria-hidden="true">
+                <div class="tp-camera"><span>CÁMARA</span></div>
+                <div class="tp-game"><span>GAMEPLAY</span><span class="tp-sub">Subtítulos aquí</span></div>
+              </div>
+              <div>
+                <p class="dim"><b>Plantilla Rubius:</b> cámara arriba, gameplay abajo, subtítulos sobre la cámara. Es el layout RDJavi.</p>
+                <div class="row"><button type="button" id="btnTemplateRubius" class="ghost">Usar plantilla Rubius</button></div>
+                <p class="dim">Animaciones (banner, fundido, shake, impacto, whoosh): viven en config.yaml del cerebro (clips.animations), no hay campo en /api/settings, por eso no se cambian desde este panel.</p>
+              </div>
+            </div>
           </fieldset>
 
           <fieldset class="settings-section">
@@ -790,6 +845,10 @@
               <input type="file" id="watermarkUpload" accept="image/png,image/jpeg" multiple>
               <button type="button" id="btnWatermarkUpload" class="ghost">Subir logos</button>
             </div>
+            <div class="wm-preview-wrap">
+              <p class="dim">Vista previa (ilustrativa): el logo se mueve con la posición y la opacidad de arriba. El logo real es el marcado como activo en la lista.</p>
+              <div class="wm-preview" id="wmPreview"><span class="wm-preview-logo" id="wmPreviewLogo">LOGO</span></div>
+            </div>
             <p class="field-error" id="watermark-upload-error" role="alert" hidden></p>
           </fieldset>
 
@@ -805,6 +864,37 @@
             <label for="set-limit-facebook">Facebook — al día</label>
             <input id="set-limit-facebook" type="number" inputmode="numeric" min="0" max="10" step="1">
             <p class="field-error" id="set-limit-error" role="alert" hidden></p>
+          </fieldset>
+
+          <fieldset class="settings-section">
+            <legend>Por plataforma — plan al día</legend>
+            <p class="dim">Mueve el deslizador para cambiar el plan de cada plataforma (es el mismo campo que el número de abajo). El plan vale por idioma: español e inglés van por separado en el Worker, con este mismo número. Apagar pone el plan en 0.</p>
+            <div class="platform-cards" id="platformCards">
+              <div class="platform-card" data-platform="youtube">
+                <div class="platform-card-head"><span class="dot youtube" aria-hidden="true"></span><b>YouTube</b><button type="button" class="ghost plat-toggle" id="platToggleYoutube" aria-pressed="true">Encendido</button></div>
+                <label for="platRangeYoutube">Plan al día: <span id="platValYoutube">—</span></label>
+                <input type="range" id="platRangeYoutube" min="0" max="10" step="1" value="6">
+                <p class="dim">Tope: <span id="platLimitYoutube">—</span> al día</p>
+              </div>
+              <div class="platform-card" data-platform="tiktok">
+                <div class="platform-card-head"><span class="dot tiktok" aria-hidden="true"></span><b>TikTok</b><button type="button" class="ghost plat-toggle" id="platToggleTiktok" aria-pressed="true">Encendido</button></div>
+                <label for="platRangeTiktok">Plan al día: <span id="platValTiktok">—</span></label>
+                <input type="range" id="platRangeTiktok" min="0" max="10" step="1" value="3">
+                <p class="dim">Tope: <span id="platLimitTiktok">—</span> al día</p>
+              </div>
+              <div class="platform-card" data-platform="instagram">
+                <div class="platform-card-head"><span class="dot instagram" aria-hidden="true"></span><b>Instagram</b><button type="button" class="ghost plat-toggle" id="platToggleInstagram" aria-pressed="true">Encendido</button></div>
+                <label for="platRangeInstagram">Plan al día: <span id="platValInstagram">—</span></label>
+                <input type="range" id="platRangeInstagram" min="0" max="10" step="1" value="3">
+                <p class="dim">Tope: <span id="platLimitInstagram">—</span> al día</p>
+              </div>
+              <div class="platform-card" data-platform="facebook">
+                <div class="platform-card-head"><span class="dot facebook" aria-hidden="true"></span><b>Facebook</b><button type="button" class="ghost plat-toggle" id="platToggleFacebook" aria-pressed="true">Encendido</button></div>
+                <label for="platRangeFacebook">Plan al día: <span id="platValFacebook">—</span></label>
+                <input type="range" id="platRangeFacebook" min="0" max="10" step="1" value="3">
+                <p class="dim">Tope: <span id="platLimitFacebook">—</span> al día</p>
+              </div>
+            </div>
           </fieldset>
 
           <fieldset class="settings-section">
@@ -879,6 +969,14 @@
           <fieldset class="settings-section">
             <legend>Franja horaria</legend>
             <p class="dim">Reglas 2026-11-19 (hora de Chile): la publicación automática solo sale en estas franjas — mañana 12:00–14:00, tarde 18:00–20:00, noche 21:00–23:00. Con 1 vídeo al día se usa la tarde o la noche; con 2 o más, mediodía + noche. La hora exacta varía ±10 minutos cada día. “Publicar ahora” sigue publicando a cualquier hora, pero no salta el calentamiento ni la pausa por spam. La decisión 2026-11-18 de publicar a cualquier hora queda revocada.</p>
+            <p class="dim">Horarios por plataforma (hora de Chile, fijos en el Worker: no se editan desde aquí):</p>
+            <div class="slot-chips" aria-label="Horarios por plataforma">
+              <span class="slot-chip"><b>YouTube</b> 12:00 · 18:00 · 21:00</span>
+              <span class="slot-chip"><b>TikTok</b> 13:00 · 19:00 · 22:00</span>
+              <span class="slot-chip"><b>Instagram</b> 12:00 · 18:00 · 21:00</span>
+              <span class="slot-chip"><b>Facebook</b> 13:00 · 19:00 · 22:00</span>
+            </div>
+            <p class="dim">Ventanas de publicación: mañana 12:00–14:00, tarde 18:00–20:00, noche 21:00–23:00.</p>
           </fieldset>
 
           <fieldset class="settings-section">

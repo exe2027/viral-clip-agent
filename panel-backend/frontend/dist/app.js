@@ -150,6 +150,9 @@ function showLoginUI() {
   $("loginBox").classList.remove("hidden");
   $("logoutBtn").classList.add("hidden");
   $("workerLight").classList.add("hidden");
+  $("menuBtn").classList.add("hidden");
+  document.body.classList.remove("sidebar-open");
+  $("sidebarOverlay").hidden = true;
   $("whoLine").textContent = "sin sesión";
   const pw = $("password");
   if (pw) { pw.type = "password"; }
@@ -170,6 +173,7 @@ function showApp() {
   $("app").classList.remove("hidden");
   $("logoutBtn").classList.remove("hidden");
   $("workerLight").classList.remove("hidden");
+  $("menuBtn").classList.remove("hidden");
   $("whoLine").textContent = me.sub;
 }
 
@@ -275,6 +279,10 @@ function switchTab(name, fromHash) {
     b.setAttribute("aria-selected", on ? "true" : "false");
   });
   TAB_NAMES.forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== name));
+  // Rediseño: al cambiar de sección se cierra el menú móvil.
+  document.body.classList.remove("sidebar-open");
+  const mb = $("menuBtn"); if (mb) mb.setAttribute("aria-expanded", "false");
+  const ov = $("sidebarOverlay"); if (ov) ov.hidden = true;
   if (!fromHash && window.location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
   loadTab(name);
 }
@@ -308,6 +316,8 @@ function workerButtonsDisabled(start, stop, runOnce, refresh) {
   $("btnStop").disabled = stop;
   $("btnRunOnce").disabled = runOnce;
   $("btnRefreshW").disabled = refresh;
+  const hs = $("btnStartHero"); if (hs) hs.disabled = start;
+  const ht = $("btnStopHero"); if (ht) ht.disabled = stop;
 }
 function renderWorkerState(state, startedAt, note) {
   const dot = $("wDot");
@@ -329,6 +339,11 @@ function renderWorkerState(state, startedAt, note) {
     $("wStarted").textContent = "";
     workerButtonsDisabled(true, true, true, false);
     setWorkerLight("bad", "API caída");
+  }
+  const hero = $("heroWorkerState");
+  if (hero) {
+    hero.textContent = state === "running" ? "En marcha" : state === "stopped" ? "Parado" : "Sin conexión";
+    hero.className = "pill " + (state === "running" ? "ok" : state === "stopped" ? "warn" : "bad");
   }
   $("wNote").textContent = note || "";
 }
@@ -398,6 +413,9 @@ async function loadWorker() {
     workerPollTimer = setTimeout(() => { if (currentTab === "worker") loadWorker(); }, 60000);
     list.setAttribute("aria-busy", "false");
     const acts = s.activity || [];
+    setDashMetric("dashMetricActivity", String(acts.length));
+    setDashMetric("dashMetricNext", s.nextRunAt ? fmtDate(s.nextRunAt) : "—");
+    setDashMetric("dashMetricState", s.running ? "En marcha" : "Parado");
     list.innerHTML = acts.length ? acts.map((a, i) =>
       `<li><span class="dot ${i === 0 ? (s.running ? "ok" : "") : ""}" aria-hidden="true"></span><time datetime="${new Date(Number(a.at)).toISOString()}">${fmtDate(a.at)}</time><span class="tl-kind">${esc(a.kind)}</span> <span class="tl-msg">— ${esc(a.message)}</span></li>`).join("")
       : `<li class="empty-state"><b>Sin actividad todavía.</b><br><span class="dim">Cuando el Worker haga algo, aparecerá aquí con su fecha y hora. Ejecuta un ciclo o inicia el Worker para ver la primera actividad.</span></li>`;
@@ -405,6 +423,7 @@ async function loadWorker() {
   } catch (e) {
     list.setAttribute("aria-busy", "false");
     renderWorkerState("offline", null, $("wNote").textContent);
+    setDashMetric("dashMetricState", "Sin conexión");
     if (workerKnown) showMsg(e.message, "err");
     else showMsg(e.message, "err");
   }
@@ -416,6 +435,7 @@ async function loadJobs() {
   try {
     const data = await api("/api/jobs?limit=10");
     const jobs = data.jobs || [];
+    setDashMetric("dashMetricJobs", String(jobs.length));
     list.setAttribute("aria-busy", "false");
     list.innerHTML = jobs.length ? jobs.map((j) =>
       `<li><span class="dot" aria-hidden="true"></span><time>${fmtDate(j.created_at)}</time><span class="tl-kind">${esc(j.kind || "")}${j.platform ? " / " + esc(j.platform) : ""}</span> <span class="tl-msg">— ${esc(j.state || "")}${j.last_error ? ": " + esc(j.last_error) : ""}</span></li>`).join("")
@@ -428,7 +448,7 @@ async function loadJobs() {
 async function workerAction(path, okText, btn, loadingText) {
   if (workerBusy) return;
   workerBusy = true;
-  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnStartCfg"), $("btnStopCfg")];
+  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnStartCfg"), $("btnStopCfg"), $("btnStartHero"), $("btnStopHero")].filter(Boolean);
   const labels = btns.map((b) => b.innerHTML);
   btns.forEach((b) => { b.disabled = true; });
   if (btn) btn.innerHTML = esc(loadingText);
@@ -2832,6 +2852,7 @@ function fillSettingsForm(s) {
   // Telegram v2: el token y el chat ya no se pegan aquí. El vínculo
   // es por código (ver loadTelegramLink); lo viejo (telegram_bot_token
   // / telegram_chat_id en settings) queda ignorado por el Worker.
+  syncPanelExtras();
 }
 function formToSettings() {
   const out = { ...lastSettings };
@@ -3572,3 +3593,157 @@ if (TAB_NAMES.includes(initialTab)) currentTab = initialTab;
     await maybeOpenOnboarding();
   } catch { showLogin(); }
 })();
+
+// === Rediseño 2026-11-22: sidebar móvil, héroe INICIAR, modos,
+// tarjetas por plataforma, conflictos y vistas previas ===
+// Todo mapea a campos reales de /api/settings o a botones que ya
+// existen (btnStart/btnStop). Nada inventa endpoints ni campos.
+function setDashMetric(id, v) { const el = $(id); if (el) el.textContent = v; }
+function syncPanelExtras() { syncPlatformCards(); checkConflicts(); syncWmPreview(); }
+
+// --- Menú móvil ---
+(function () {
+  const btn = $("menuBtn"), ov = $("sidebarOverlay");
+  if (!btn || !ov) return;
+  const setOpen = (open) => {
+    document.body.classList.toggle("sidebar-open", open);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    ov.hidden = !open;
+  };
+  btn.addEventListener("click", () => setOpen(!document.body.classList.contains("sidebar-open")));
+  ov.addEventListener("click", () => setOpen(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+})();
+
+// --- Héroe INICIAR / PARAR: delega en los botones reales del Worker ---
+(function () {
+  const s = $("btnStartHero"), p = $("btnStopHero");
+  if (s) s.addEventListener("click", () => { const b = $("btnStart"); if (b && !b.disabled) b.click(); });
+  if (p) p.addEventListener("click", () => { const b = $("btnStop"); if (b && !b.disabled) b.click(); });
+})();
+
+// --- Modos: solo rellenan campos reales y marcan sucio (no guardan) ---
+const MODES = {
+  seguro: { plan: { youtube: 3, tiktok: 2, instagram: 2, facebook: 2 }, limit: { youtube: 3, tiktok: 2, instagram: 2, facebook: 2 }, spacing: 4, spacingYt: 6, virality: 55, seo: 85, autoPublish: false, requirePreview: true },
+  normal: { plan: { youtube: 6, tiktok: 3, instagram: 3, facebook: 3 }, limit: { youtube: 6, tiktok: 3, instagram: 3, facebook: 3 }, spacing: 3, spacingYt: 4, virality: 45, seo: 80, autoPublish: false, requirePreview: false },
+  agresivo: { plan: { youtube: 6, tiktok: 3, instagram: 3, facebook: 3 }, limit: { youtube: 6, tiktok: 3, instagram: 3, facebook: 3 }, spacing: 2, spacingYt: 3, virality: 45, seo: 80, autoPublish: true, requirePreview: false },
+};
+const PLAT_FORMS = [
+  { key: "youtube", planId: "set-plan-youtube", limitId: "set-limit-youtube", rangeId: "platRangeYoutube", valId: "platValYoutube", limitValId: "platLimitYoutube", toggleId: "platToggleYoutube", defPlan: 6 },
+  { key: "tiktok", planId: "set-plan-tiktok", limitId: "set-limit-tiktok", rangeId: "platRangeTiktok", valId: "platValTiktok", limitValId: "platLimitTiktok", toggleId: "platToggleTiktok", defPlan: 3 },
+  { key: "instagram", planId: "set-plan-instagram", limitId: "set-limit-instagram", rangeId: "platRangeInstagram", valId: "platValInstagram", limitValId: "platLimitInstagram", toggleId: "platToggleInstagram", defPlan: 3 },
+  { key: "facebook", planId: "set-plan-facebook", limitId: "set-limit-facebook", rangeId: "platRangeFacebook", valId: "platValFacebook", limitValId: "platLimitFacebook", toggleId: "platToggleFacebook", defPlan: 3 },
+];
+let settingsHistory = [];
+function snapshotSettings() {
+  try { settingsHistory.push(JSON.stringify(formToSettings())); if (settingsHistory.length > 20) settingsHistory.shift(); } catch {}
+}
+function setNum(id, v) { const el = $(id); if (el) el.value = String(v); }
+function setSel(id, v) { const el = $(id); if (el) el.value = v ? "true" : "false"; }
+function applyMode(name) {
+  const m = MODES[name]; if (!m) return;
+  snapshotSettings();
+  PLAT_FORMS.forEach((p) => { setNum(p.planId, m.plan[p.key]); setNum(p.limitId, m.limit[p.key]); });
+  setNum("set-spacing", m.spacing); setNum("set-spacing-youtube", m.spacingYt);
+  setNum("set-min-virality", m.virality); setNum("set-min-seo", m.seo);
+  setSel("set-auto-publish-top", m.autoPublish); setSel("set-require-preview", m.requirePreview);
+  document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === name));
+  const st = $("modeStatus"); if (st) st.textContent = "Modo " + name + " aplicado al formulario. Revisa y pulsa Guardar ajustes.";
+  markSettingsDirty(); syncPanelExtras();
+}
+document.querySelectorAll(".mode-btn").forEach((b) => b.addEventListener("click", () => applyMode(b.dataset.mode)));
+
+// --- Tarjetas por plataforma: deslizadores espejo de set-plan-* ---
+function syncPlatformCards() {
+  PLAT_FORMS.forEach((p) => {
+    const planEl = $(p.planId), limitEl = $(p.limitId);
+    const plan = planEl && planEl.value !== "" ? Number(planEl.value) : null;
+    const limit = limitEl && limitEl.value !== "" ? Number(limitEl.value) : null;
+    const r = $(p.rangeId); if (r && plan !== null && !Number.isNaN(plan)) r.value = String(plan);
+    const v = $(p.valId); if (v) v.textContent = plan === null ? "—" : String(plan);
+    const lv = $(p.limitValId); if (lv) lv.textContent = limit === null ? "—" : String(limit);
+    const t = $(p.toggleId);
+    if (t) { const on = plan === null || plan > 0; t.setAttribute("aria-pressed", on ? "true" : "false"); t.textContent = on ? "Encendido" : "Apagado"; }
+  });
+}
+PLAT_FORMS.forEach((p) => {
+  const r = $(p.rangeId);
+  if (r) r.addEventListener("input", () => { setNum(p.planId, Number(r.value)); markSettingsDirty(); syncPlatformCards(); checkConflicts(); });
+  const t = $(p.toggleId);
+  if (t) t.addEventListener("click", () => {
+    snapshotSettings();
+    const planEl = $(p.planId);
+    const cur = planEl && planEl.value !== "" ? Number(planEl.value) : p.defPlan;
+    if (cur > 0) { t.dataset.prev = String(cur); setNum(p.planId, 0); }
+    else setNum(p.planId, Number(t.dataset.prev || p.defPlan));
+    markSettingsDirty(); syncPlatformCards(); checkConflicts();
+  });
+});
+
+// --- Conflictos (aviso, no bloquea Guardar) + Deshacer/Restaurar ---
+function checkConflicts() {
+  const box = $("settingsConflicts"); if (!box) return;
+  const items = [];
+  PLAT_FORMS.forEach((p) => {
+    const planEl = $(p.planId), limitEl = $(p.limitId);
+    const plan = planEl && planEl.value !== "" ? Number(planEl.value) : null;
+    const limit = limitEl && limitEl.value !== "" ? Number(limitEl.value) : null;
+    if (plan !== null && limit !== null && plan > limit) items.push({ html: "Plan de " + p.key + " (" + plan + ") mayor que su tope (" + limit + ").", fix: "plan", key: p.key });
+  });
+  // NOTA 2026-11-22: aquí NO hay aviso de duración 25-35 s. El usuario
+  // eliminó esa regla "para siempre, en todo el canal" el 2026-11-21
+  // (Worker db.ts/gate.ts: solo queda el tope de 60 s). La maqueta la
+  // traía por error; en el panel real no se reimpone. Solo se avisa
+  // de plan > tope, que sí lo aplica el Worker (plan nunca supera el techo).
+  if (!items.length) { box.innerHTML = ""; return; }
+  box.innerHTML = items.map((it, i) => '<div class="conflict-box"><span>' + esc(it.html) + '</span><button type="button" data-fix="' + it.fix + '" data-key="' + (it.key || "") + '" data-idx="' + i + '">Corregir</button></div>').join("");
+  box.querySelectorAll("[data-fix]").forEach((b) => b.addEventListener("click", () => {
+    snapshotSettings();
+    if (b.dataset.fix === "plan") {
+      const p = PLAT_FORMS.find((x) => x.key === b.dataset.key);
+      if (p) { const lim = $(p.limitId); if (lim && lim.value !== "") setNum(p.planId, Number(lim.value)); }
+    }
+    markSettingsDirty(); syncPanelExtras(); showMsg("Conflicto corregido en el formulario. Pulsa Guardar ajustes.", "info");
+  }));
+}
+(function () {
+  const u = $("btnUndoSettings"), r = $("btnRestoreSettings");
+  const form = $("settingsForm");
+  let baselineTaken = false;
+  if (form) form.addEventListener("focusin", () => { if (!baselineTaken) { baselineTaken = true; snapshotSettings(); } }, { once: false });
+  if (u) u.addEventListener("click", () => {
+    const prev = settingsHistory.pop();
+    if (!prev) { showMsg("No hay nada que deshacer.", "info"); return; }
+    try { fillSettingsForm(JSON.parse(prev)); markSettingsDirty(); showMsg("Cambio deshecho en el formulario.", "info"); } catch { showMsg("No se pudo deshacer.", "err"); }
+  });
+  if (r) r.addEventListener("click", async () => { settingsHistory = []; baselineTaken = false; await loadSettings(); showMsg("Valores guardados restaurados.", "info"); });
+  if (form) form.addEventListener("input", () => { checkConflicts(); syncWmPreview(); });
+  if (form) form.addEventListener("change", () => { checkConflicts(); syncWmPreview(); });
+})();
+
+// --- Plantilla Rubius: Layout = rdjavi ---
+(function () {
+  const b = $("btnTemplateRubius"); if (!b) return;
+  b.addEventListener("click", () => {
+    snapshotSettings();
+    const sel = $("set-layout"); if (sel) sel.value = "rdjavi";
+    markSettingsDirty(); showMsg("Plantilla Rubius aplicada: Layout = RDJavi. Pulsa Guardar ajustes.", "info");
+  });
+})();
+
+// --- Vista previa de marca de agua (ilustrativa) ---
+function syncWmPreview() {
+  const logo = $("wmPreviewLogo"); if (!logo) return;
+  const num = (id, dflt) => { const el = $(id); if (!el || el.value.trim() === "") return dflt; const n = Number(el.value); return Number.isFinite(n) ? n : dflt; };
+  const op = num("set-watermark-opacity", 20);
+  const size = num("set-watermark-size", 320);
+  const posEl = $("set-watermark-position");
+  const pos = posEl ? posEl.value : "center";
+  const diam = Math.max(36, Math.min(120, Math.round(size / 4)));
+  logo.style.width = diam + "px"; logo.style.height = diam + "px";
+  logo.style.opacity = String(Math.max(0, Math.min(100, op)) / 100);
+  const map = { center: ["50%", "50%"], "top-left": ["18%", "18%"], "top-right": ["82%", "18%"], "bottom-left": ["18%", "82%"], "bottom-right": ["82%", "82%"] };
+  const xy = map[pos] || map.center;
+  logo.style.left = xy[0]; logo.style.top = xy[1];
+}
+syncPanelExtras();
