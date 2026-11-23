@@ -94,9 +94,10 @@ class TestMigration0041(unittest.TestCase):
             (now, "sebastian", WINDOW_MS, now)).rowcount
         con.commit()
         self.assertEqual(changed, 1)
-        get = lambda i: con.execute(
-            "SELECT status FROM campaign_submissions WHERE id = ?",
-            (i,)).fetchone()[0]
+        def get(i):
+            return con.execute(
+                "SELECT status FROM campaign_submissions WHERE id = ?",
+                (i,)).fetchone()[0]
         self.assertEqual(get(old), "expired")
         self.assertEqual(get(fresh), "pending")
         self.assertEqual(get(no_pub), "pending")
