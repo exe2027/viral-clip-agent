@@ -303,3 +303,72 @@ describe("verificación YouTube por tokeninfo (scope upload)", () => {
     expect(out.ok).toBe(false);
   });
 });
+
+// Topes Zernio POR CUENTA (orden 2026-11-23): TikTok ES y EN son
+// cuentas Zernio distintas, cada una con su propio tope diario (15)
+// y de borradores pendientes (5). Los conteos llevan filtro por
+// idioma (el del job): un ES al tope no frena un EN, y viceversa.
+describe("topes Zernio por idioma (ES y EN cuentan por separado)", () => {
+  const POST_RESUME = { step: "post", publicUrl: "https://media.zernio.com/temp/clip-7.mp4" };
+  const POST_201 = { status: 201, body: { post: { id: "zpost_9", platforms: [{ platform: "tiktok", platformPostUrl: VIDEO_URL }] } } };
+
+  // D1 mínima: settings vacíos (defaults 15/día, 5 borradores) y
+  // conteos por idioma para las dos consultas de topes.
+  function fakeDb(posted: Record<string, number>, drafts: Record<string, number>) {
+    return {
+      prepare: (sql: string) => ({
+        bind: (...params: unknown[]) => ({
+          first: async () => {
+            if (sql.includes("FROM settings")) return { data: "{}" };
+            if (sql.includes("state = 'posted'")) return { n: posted[String(params[1])] ?? 0 };
+            if (sql.includes("state = 'draft'")) return { n: drafts[String(params[1])] ?? 0 };
+            return null;
+          },
+        }),
+      }),
+    };
+  }
+
+  function envWithDb(db: unknown): Env {
+    return { ...fakeEnv(), DB: db } as unknown as Env;
+  }
+
+  function postCtx(language: string): PublishContext {
+    return ctx({ job: { ...job(), language, resumeData: POST_RESUME } });
+  }
+
+  test("ES al tope (15/día) NO frena un EN: el post sale", async () => {
+    const env = envWithDb(fakeDb({ es: 15, en: 0 }, { es: 5, en: 0 }));
+    stubFetch([POST_201]);
+    const out = await zernioTiktokStep(postCtx("en"), env);
+    expect(out).toEqual({ mode: "posted", platformId: "zpost_9", evidenceUrl: VIDEO_URL });
+  });
+
+  test("EN al tope (15/día) SÍ frena un EN: draft con el motivo", async () => {
+    const env = envWithDb(fakeDb({ es: 0, en: 15 }, { es: 0, en: 0 }));
+    stubFetch([POST_201]);
+    const out = await zernioTiktokStep(postCtx("en"), env);
+    expect(out.mode).toBe("draft");
+    if (out.mode !== "draft") throw new Error("esperaba draft");
+    expect(out.reason).toMatch(/Tope Zernio diario alcanzado: 15\/15/);
+    expect(out.reason).toMatch(/TikTok en hoy/);
+    expect(seen).toHaveLength(0); // no se llamó a Zernio
+  });
+
+  test("borradores ES al tope (5) NO frenan un EN: el post sale", async () => {
+    const env = envWithDb(fakeDb({ es: 0, en: 0 }, { es: 5, en: 0 }));
+    stubFetch([POST_201]);
+    const out = await zernioTiktokStep(postCtx("en"), env);
+    expect(out).toEqual({ mode: "posted", platformId: "zpost_9", evidenceUrl: VIDEO_URL });
+  });
+
+  test("borradores EN al tope (5) SÍ frenan un EN: draft con el motivo", async () => {
+    const env = envWithDb(fakeDb({ es: 0, en: 0 }, { es: 0, en: 5 }));
+    stubFetch([POST_201]);
+    const out = await zernioTiktokStep(postCtx("en"), env);
+    expect(out.mode).toBe("draft");
+    if (out.mode !== "draft") throw new Error("esperaba draft");
+    expect(out.reason).toMatch(/Demasiados borradores TikTok en pendientes/);
+    expect(seen).toHaveLength(0);
+  });
+});

@@ -198,20 +198,23 @@ export async function zernioTiktokStep(ctx: PublishContext, env: Env): Promise<P
     // pendientes): se comprueban ANTES de publicar, no después.
     // Son topes de la cuenta Zernio, distintos del tope diario de
     // TikTok del panel (resto_max 3/día, más estricto, ya aplicado
-    // por publishGate). Un fallo de D1 no frena la publicación.
+    // por publishGate). POR CUENTA (orden 2026-11-23): TikTok ES y
+    // EN son cuentas Zernio distintas, cada una con su propio tope;
+    // los conteos llevan filtro por idioma (el del job), igual que
+    // el gate (0019). Un fallo de D1 no frena la publicación.
     try {
       const eff = effectiveSettings(await getSettings(env.DB, ctx.job.tenant_id));
       const postedToday = await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = 'tiktok' AND state = 'posted' AND posted_day = ?",
-      ).bind(ctx.job.tenant_id, todayKey()).first<{ n: number }>();
+        "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = 'tiktok' AND language = ? AND state = 'posted' AND posted_day = ?",
+      ).bind(ctx.job.tenant_id, ctx.job.language, todayKey()).first<{ n: number }>();
       if ((postedToday?.n ?? 0) >= eff.tiktok_zernio_daily) {
-        return { mode: "draft", reason: `Tope Zernio diario alcanzado: ${postedToday?.n ?? 0}/${eff.tiktok_zernio_daily} publicaciones TikTok hoy.` };
+        return { mode: "draft", reason: `Tope Zernio diario alcanzado: ${postedToday?.n ?? 0}/${eff.tiktok_zernio_daily} publicaciones TikTok ${ctx.job.language} hoy.` };
       }
       const drafts = await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = 'tiktok' AND state = 'draft'",
-      ).bind(ctx.job.tenant_id).first<{ n: number }>();
+        "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = 'tiktok' AND language = ? AND state = 'draft'",
+      ).bind(ctx.job.tenant_id, ctx.job.language).first<{ n: number }>();
       if ((drafts?.n ?? 0) >= eff.tiktok_zernio_pending_drafts) {
-        return { mode: "draft", reason: `Demasiados borradores TikTok pendientes en Zernio: ${drafts?.n ?? 0}/${eff.tiktok_zernio_pending_drafts}. Resuelve o cancela borradores antes de publicar otro.` };
+        return { mode: "draft", reason: `Demasiados borradores TikTok ${ctx.job.language} pendientes en Zernio: ${drafts?.n ?? 0}/${eff.tiktok_zernio_pending_drafts}. Resuelve o cancela borradores antes de publicar otro.` };
       }
     } catch {
       // Sin topes verificables se sigue: el dryRun ya frena si
