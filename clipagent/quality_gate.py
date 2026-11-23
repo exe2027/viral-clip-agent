@@ -185,6 +185,10 @@ def _build(final_review, thumbnail_text, no_speech):
 
     # 4. título: el banner/banda de la receta en píxeles (duro,
     # cuando la receta lo mide) + legibilidad según Gemini (suave).
+    # Si los píxeles no dan banner pero el juez LEE el título
+    # (título amarillo sobre negro, caso 170: en píxeles es
+    # indistinguible del juego oscuro), no es fallo duro: es
+    # suave (observación, no bloquea).
     title_check = None
     for name in ("titulo_banner", "banda_titulo"):
         checked = _template_check(template, name)
@@ -192,8 +196,13 @@ def _build(final_review, thumbnail_text, no_speech):
             title_check = checked
             break
     if title_check is False:
-        criterios["titulo"] = _criterion(
-            "titulo", False, True, "sin título en su banda")
+        if _score_ok(scores, "titulo_legible"):
+            criterios["titulo"] = _criterion(
+                "titulo", False, False,
+                "título legible según el juez (banda no medida)")
+        else:
+            criterios["titulo"] = _criterion(
+                "titulo", False, True, "sin título en su banda")
     elif not _score_ok(scores, "titulo_legible"):
         criterios["titulo"] = _criterion(
             "titulo", False, False, "título no legible")

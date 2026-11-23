@@ -419,6 +419,12 @@ _GATE_BLUR_RATIO = 0.30     # energía de bordes laterales/centro: menos
                             # = cámara centrada sobre fondo borroso
 _GATE_LIVE_DIFF = 2.0       # diferencia media entre fotogramas: menos
                             # = banda congelada
+_GATE_BAR_STD = 10.0       # luma std dentro de una banda real: una
+                            # banda es sólida; el juego oscuro varía
+_GATE_BAR_STEP = 25.0      # salto mínimo de luma de la banda al
+                            # contenido adyacente (banda real)
+_GATE_SUB_WORD_PX = 150    # px blancos que delatan UNA palabra corta
+                            # en la zona de subtítulos (174: 1679 px)
 _YELLOW = ((200, 255), (200, 255), (0, 90))  # R, G altos, B bajo
 _WHITE = ((200, 255), (200, 255), (200, 255))
 _BLACK = ((0, 60), (0, 60), (0, 60))  # texto negro del banner rubius
@@ -757,11 +763,14 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
     mueven) y YuNet (cara estable + rectángulo). El primer eslabón
     que encuentra cara en >= ``face_min_share`` de las muestras
     hace pasar la puerta. Si un eslabón encuentra cara pero por
-    debajo del mínimo, es DUDA: no pasa. Si un eslabón no
-    encuentra ninguna cara, se sigue con el siguiente fallback
-    (un detector que no ve la cara no es duda, es "no la
-    encontró": YuNet puede verla donde Haar no). Si ningún
-    eslabón encuentra cara, no pasa. Si ningún detector está
+    debajo del mínimo, es DUDA: no pasa, pero NO cierra la
+    cadena (se guarda y se sigue con el siguiente eslabón: YuNet
+    puede verla donde Haar no — caso 117, Haar 5/20 y YuNet
+    12/12). Si un eslabón no encuentra ninguna cara, se sigue
+    con el siguiente fallback (un detector que no ve la cara no
+    es duda, es "no la encontró"). Si ningún eslabón encuentra
+    cara, no pasa; si alguno dejó duda, se devuelve la duda con
+    más muestras (no un fallo limpio). Si ningún detector está
     disponible en el entorno, no pasa (se registra como fallo de
     entorno, no como aprobado).
 
@@ -787,6 +796,10 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
         os.path.dirname(str(clip_path)), "final_gate")
     os.makedirs(out_dir, exist_ok=True)
     links = {}
+    # Duda guardada (no devuelta): un eslabón que ve cara pero por
+    # debajo del mínimo no cierra la cadena; si ningún eslabón
+    # pasa, se devuelve la duda con más muestras al final.
+    duda_result = None
     try:
         frames = frames or extract_gate_frames(
             clip_path, out_dir,
@@ -851,16 +864,20 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
                     "links": links, "motivo": "",
                     "duda": False}
         if crop["frames_with_face"] > 0:
-            return {"pasa": False, "method": "facecrop", "share": share,
-                    "frames_with_face": crop["frames_with_face"],
-                    "frames_total": crop["frames_total"],
-                    "face_widths": crop.get("face_widths") or [],
-                    "links": links,
-                    "motivo": (f"cara en solo {crop['frames_with_face']}/"
-                               f"{crop['frames_total']} muestras "
-                               f"({share:.0%}, mínimo {min_share:.0%}): "
-                               "duda, no pasa"),
-                    "duda": True}
+            # Duda: se guarda y se sigue la cadena (YuNet puede
+            # ver la cara donde Haar no: caso 117).
+            duda_result = {"pasa": False, "method": "facecrop",
+                           "share": share,
+                           "frames_with_face": crop["frames_with_face"],
+                           "frames_total": crop["frames_total"],
+                           "face_widths": crop.get("face_widths") or [],
+                           "links": links,
+                           "motivo": (f"cara en solo "
+                                      f"{crop['frames_with_face']}/"
+                                      f"{crop['frames_total']} muestras "
+                                      f"({share:.0%}, mínimo "
+                                      f"{min_share:.0%}): duda, no pasa"),
+                           "duda": True}
         # 0 caras: no es duda, es "no la encontró": se sigue con
         # bordes y YuNet (fallbacks en ese orden).
 
@@ -914,16 +931,23 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
                     "links": links, "motivo": "",
                     "duda": False}
         if edge["frames_with_face"] > 0:
-            return {"pasa": False, "method": "edge", "share": share,
-                    "frames_with_face": edge["frames_with_face"],
-                    "frames_total": edge["frames_total"],
-                    "face_widths": [],
-                    "links": links,
-                    "motivo": (f"rectángulo fijo con cara en solo "
-                               f"{edge['frames_with_face']}/"
-                               f"{edge['frames_total']} muestras: duda, "
-                               "no pasa"),
-                    "duda": True}
+            # Duda: se guarda y se sigue a YuNet (misma regla que
+            # en el eslabón face-crop).
+            if duda_result is None or (
+                    edge["frames_with_face"]
+                    > duda_result["frames_with_face"]):
+                duda_result = {"pasa": False, "method": "edge",
+                               "share": share,
+                               "frames_with_face":
+                                   edge["frames_with_face"],
+                               "frames_total": edge["frames_total"],
+                               "face_widths": [],
+                               "links": links,
+                               "motivo": (f"rectángulo fijo con cara en "
+                                          f"solo {edge['frames_with_face']}/"
+                                          f"{edge['frames_total']} muestras: "
+                                          "duda, no pasa"),
+                               "duda": True}
         # 0 caras dentro del rectángulo: no es duda, se sigue a YuNet.
 
     # Eslabón 3: YuNet (cara estable en el vídeo de la banda).
@@ -963,6 +987,11 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
                 "face_widths": yunet.get("face_widths") or [],
                 "links": links, "motivo": "",
                 "duda": False}
+    # Ningún eslabón pasó. Si alguno dejó duda, se devuelve la
+    # duda (con los links completos), no un fallo limpio.
+    if duda_result is not None:
+        duda_result["links"] = links
+        return duda_result
     tried = [k for k, v in links.items() if v.get("available")]
     if not tried:
         motivo = ("sin detector de cara disponible en este entorno "
@@ -1297,8 +1326,16 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     by0, by1 = int(banner["y0"]), int(banner["y1"])
     zy0, zy1 = (int(recipe["subs_zone"]["y0"]),
                 int(recipe["subs_zone"]["y1"]))
+    t0 = float(vcfg["rubius_banner_t0"]) if vcfg else _RUBIUS_BANNER_T0
+    t1 = float(vcfg["rubius_banner_t1"]) if vcfg else _RUBIUS_BANNER_T1
+    # Instantes con subtítulo: fuera de la ventana del banner
+    # (make_word_ass suprime las palabras que caen ahí: contar
+    # esos instantes como activos era el falso negativo del 174)
+    # y con pertenencia estricta al cue (sin margen: un instante
+    # 0.5 s antes de la palabra no tiene palabra en pantalla).
     active = [(ts, a) for ts, a in arrays
-              if not spans or _is_active(ts, spans)]
+              if not spans or (_is_active(ts, spans, margin=0)
+                              and not (t0 <= ts <= t1))]
     # Cámara a ancho completo (sin rectángulo interior).
     _check_full_width(check, face_result)
     # Gameplay presente (no vacío/negro).
@@ -1311,14 +1348,30 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     # Sin bandas negras: ni arriba del gameplay ni abajo del todo
     # (el corte es limpio; una banda delata otra plantilla). Una
     # barra con subtítulos encima sigue siendo barra: se mide la
-    # fracción de píxeles casi negros, no la media.
-    def _is_bar(a, y0, y1):
+    # fracción de píxeles casi negros, no la media. Pero una
+    # escena OSCURA del juego no es una banda: una banda real es
+    # casi negra Y uniforme Y con un salto nítido al contenido
+    # adyacente (el juego oscuro no tiene salto: lo de al lado
+    # está igual de oscuro; un fundido a negro, tampoco).
+    def _is_bar(a, y0, y1, ay0, ay1):
         zone = _luma(a[y0:y1])
-        return float((zone < _GATE_BLACK_LUMA).mean()) > 0.9
+        if float((zone < _GATE_BLACK_LUMA).mean()) <= 0.9:
+            return False
+        if float(zone.std()) > _GATE_BAR_STD:
+            return False
+        step = float(_luma(a[ay0:ay1]).mean()) - float(zone.mean())
+        return step >= _GATE_BAR_STEP
+
+    # La ventana adyacente está 100 px fuera de la franja (no
+    # pegada a ella): una banda real puede medir hasta ~180 px y
+    # si la ventana cae dentro de la banda el salto da 0 y la
+    # banda no se detecta (test_rubius_con_bandas_falla).
     top_ok = _template_share(
-        arrays, lambda a: not _is_bar(a, gy0, gy0 + 100))
+        arrays, lambda a: not _is_bar(a, gy0, gy0 + 100,
+                                      gy0 + 200, gy0 + 220))
     bottom_ok = _template_share(
-        arrays, lambda a: not _is_bar(a, gy1 - 120, gy1))
+        arrays, lambda a: not _is_bar(a, gy1 - 120, gy1,
+                                      gy1 - 220, gy1 - 200))
     check("sin_bandas", top_ok >= 0.8 and bottom_ok >= 0.8,
           f"arriba {top_ok:.0%}, abajo {bottom_ok:.0%} sin banda "
           "negra",
@@ -1329,8 +1382,6 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     # pasa cualquier escena de juego con amarillo (caso scooter
     # 2026-11-21: 890 px amarillos de la calle en la zona del
     # banner, sin banner).
-    t0 = float(vcfg["rubius_banner_t0"]) if vcfg else _RUBIUS_BANNER_T0
-    t1 = float(vcfg["rubius_banner_t1"]) if vcfg else _RUBIUS_BANNER_T1
     yellow_frac = (float(vcfg["rubius_banner_yellow_frac"]) if vcfg
                    else _RUBIUS_BANNER_YELLOW_FRAC)
     edge_w = int(vcfg["rubius_subs_edge_w"]) if vcfg else None
@@ -1355,12 +1406,16 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
           f"la ventana (amarillo máx. {best_frac:.0%})",
           f"sin banner amarillo de título en t={t0}-{t1} s")
     # Subtítulos blancos palabra por palabra sobre el gameplay
-    # (zona central de la franja 900-1020; solo con SRT).
+    # (zona central de la franja 900-1020; solo con SRT). El
+    # umbral es el de UNA palabra corta (150 px): con habla escasa
+    # y palabras cortas, 300 px pedía más blanco del que cabe en
+    # una palabra (caso 174: palabra real de 1679 px, pero el
+    # instante con una sola palabra corta no llegaba a 300).
     if spans and active:
         white_share = sum(
             1 for _ts, a in active
             if _count_color(a[zy0:zy1, 350:730], _WHITE)
-            > _GATE_SUB_PX) / len(active)
+            > _GATE_SUB_WORD_PX) / len(active)
         check("subtitulos_blancos", white_share >= 0.5,
               f"blancos en {white_share:.0%} de los instantes con "
               "subtítulo",
@@ -1766,19 +1821,34 @@ def validate_final_clip(clip_path, title, transcript_text="",
     template = template_gate(clip_path, vcfg, recipe, frames=frames,
                              srt_path=srt_path, face_result=face,
                              out_dir=out_dir)
-    hard_failures = []
-    if not face.get("pasa"):
-        hard_failures.append("cara")
-    if not template.get("pasa"):
-        hard_failures.append("plantilla")
-    hard_pasa = not hard_failures
+    # Gemini ANTES de la puerta dura: su lectura del título es la
+    # única que distingue un título amarillo sobre negro (170, bueno
+    # a mano) de un clip sin título — en píxeles son iguales (5
+    # métricas probadas, ninguna separa). Si la plantilla falla
+    # SOLO por titulo_banner y el juez lee el título, no es fallo
+    # duro: se registra en `overridden` y la puerta sigue.
     gemini = review_final_clip(
         clip_path, title, transcript_text=transcript_text,
         out_dir=out_dir, gemini_fn=gemini_fn, model=model,
         min_score=float(vcfg["min_score"]),
         template_name=template_name)
-    gemini_fallos = list(gemini.get("fallos") or [])
     overridden = []
+    hard_failures = []
+    if not face.get("pasa"):
+        hard_failures.append("cara")
+    if not template.get("pasa"):
+        template_fallos = template.get("fallos") or []
+        titulo_legible = (gemini.get("scores") or {}).get(
+            "titulo_legible", 0.0)
+        if (template_fallos == ["titulo_banner"]
+                and titulo_legible >= float(vcfg["min_score"])):
+            overridden.append(
+                "titulo_banner: píxeles sin banner pero el juez "
+                f"lee el título ({titulo_legible:.1f})")
+        else:
+            hard_failures.append("plantilla")
+    hard_pasa = not hard_failures
+    gemini_fallos = list(gemini.get("fallos") or [])
     if gemini.get("decision") == "rechazado":
         # La medida determinista manda sobre el juez en cara y
         # plantilla: si Gemini dice que no hay cara pero la cadena
