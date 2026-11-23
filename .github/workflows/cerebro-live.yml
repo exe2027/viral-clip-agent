@@ -91,6 +91,19 @@ concurrency:
 permissions:
   contents: read
 
+# URL del Worker del tenant (2026-11-23): el token de un solo uso
+# vive SOLO en la D1 del Worker que lo emitió. El puente canjeaba
+# siempre en avc (default) y los dispatches de kaez daban 401
+# "Token del cerebro inválido" (sus tokens están en su D1, nunca
+# en avc): el live cutter de kaez no cortó nada. La sesión
+# canjeada solo vale en ese Worker, así que la URL es la misma
+# en TODOS los jobs (detect/cut/vod-fallback). Para sebastian
+# sigue siendo avc (el Worker del panel; avc-sebastian emite
+# tokens que ningún workflow canjea: su ciclo no debe disparar
+# panel-live, ver AGENTS.md).
+env:
+  PANEL_BASE_URL: ${{ (github.event.client_payload.tenant || inputs.tenant) == 'kaez' && 'https://avc-kaez.clipsultravirales768.workers.dev' || 'https://avc.vikingosfoodspa.workers.dev' }}
+
 jobs:
   detect:
     name: Detectar en vivo en GTA VI

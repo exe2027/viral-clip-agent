@@ -225,5 +225,48 @@ class TestMain(unittest.TestCase):
             self.assertNotIn("sesion-falsa-123", open(out_path).read())
 
 
+class PanelBaseUrlTest(unittest.TestCase):
+    """El puente habla con el Worker del tenant (2026-11-23).
+
+    Regresión: cerebro-live.yml no fijaba PANEL_BASE_URL y el
+    puente canjeaba el token siempre en avc (default). Los tokens
+    de kaez viven en SU D1 (su Worker), así que todos sus
+    dispatches panel-live daban 401 "Token del cerebro inválido"
+    y su live cutter no cortó nada. El workflow fija ahora
+    PANEL_BASE_URL por tenant; el puente tiene que respetarlo
+    (y la sesión canjeada solo vale en ese Worker).
+    """
+
+    def test_base_url_por_tenant_desde_env(self):
+        from clipagent.panel_bridge import PanelBridge
+
+        kaez_url = "https://avc-kaez.clipsultravirales768.workers.dev"
+        with mock.patch.dict(
+            os.environ,
+            {"PANEL_BASE_URL": kaez_url, "PANEL_TENANT": "kaez"},
+            clear=False,
+        ):
+            self.assertEqual(PanelBridge().base_url, kaez_url)
+        with mock.patch.dict(
+            os.environ,
+            {"PANEL_BASE_URL": "https://avc.vikingosfoodspa.workers.dev",
+             "PANEL_TENANT": "sebastian"},
+            clear=False,
+        ):
+            self.assertEqual(
+                PanelBridge().base_url,
+                "https://avc.vikingosfoodspa.workers.dev")
+
+    def test_sin_base_url_cae_al_default_avc(self):
+        from clipagent.panel_bridge import PanelBridge
+
+        env = {k: v for k, v in os.environ.items()
+               if k != "PANEL_BASE_URL"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(
+                PanelBridge().base_url,
+                "https://avc.vikingosfoodspa.workers.dev")
+
+
 if __name__ == "__main__":
     unittest.main()
