@@ -192,11 +192,19 @@ jobs:
           key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
           restore-keys: |
             pip-${{ runner.os }}-py312-
-      - name: Instalar ffmpeg, streamlink y whisper
+      - name: Instalar ffmpeg, streamlink, whisper y vision
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg streamlink
-          python -m pip install -q -e ".[whisper]"
+          # vision (OpenCV) ES obligatoria aquí (2026-11-23): sin
+          # cv2 no hay detección de caras — decide_layout no
+          # encuentra la webcam (el render sale a juego completo),
+          # la puerta de cara no tiene ningún eslabón disponible
+          # (Haar y YuNet caen) y TODOS los clips se descartan.
+          # Así se perdieron los clips live del 20 al 23-nov: el
+          # job instalaba solo .[whisper] y el runner nunca tuvo
+          # cv2. No quitar vision de este install.
+          python -m pip install -q -e ".[whisper,vision]"
           # Arial Black GENUINA (plantilla v2, 2026-11-18): título y
           # subtítulos usan SUBS_FONT = "Arial Black". Sin ella
           # libass cae a otra fuente: los subtítulos salen en la
@@ -296,7 +304,7 @@ jobs:
           key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
           restore-keys: |
             pip-${{ runner.os }}-py312-
-      - name: Instalar ffmpeg y TwitchDownloaderCLI
+      - name: Instalar ffmpeg, TwitchDownloaderCLI y vision
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
@@ -306,7 +314,10 @@ jobs:
           sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
           sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
           TwitchDownloaderCLI --help || true
-          python -m pip install -q -e ".[whisper]"
+          # vision obligatoria: mismo motivo que el job `cut`
+          # (2026-11-23: sin cv2 el render pierde la webcam y la
+          # puerta de cara descarta todos los clips).
+          python -m pip install -q -e ".[whisper,vision]"
           # Arial Black GENUINA (plantilla v2): el quemado de
           # subtítulos + título (workers.subtitle_clip) usa Arial
           # Black. Mismo bloque que el job `cut`.
