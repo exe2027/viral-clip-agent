@@ -137,14 +137,15 @@ import {
   type JobRow,
 } from "./jobs";
 import { dispatchRetryAllowed, isD1QuotaError, isQuotaBreakerOpen, noteDispatchFailure, tripQuotaBreaker } from "./retry";
+import { GOOGLE_SCOPES, META_SCOPES } from "./publish/oauth-scopes";
 import {
   ENGAGEMENT_PLATFORMS,
   extractNativePostId,
   getEngagementStatus,
   listTargets,
-  runZernioEngagement,
   type ZernioPlatform,
 } from "./publish/zernio-engagement";
+import { probeNativeScopes, runEngagement } from "./publish/native-engagement";
 import { clipPublishBreakdown, clipRetentionSummary } from "./r2-retention";
 // Intervalos del ciclo y los dispatches (A3, 2026-11-20): viven en
 // cycle-gate.ts (single-source); aquí solo se importan.
@@ -279,8 +280,10 @@ function requireBridge(req: Request, env: Env): boolean {
 // ---------------------------------------------------------------------------
 const FRONT_URL = "https://avc-em9.pages.dev";
 const WORKER_URL = "https://avc.vikingosfoodspa.workers.dev";
-const GOOGLE_SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly";
-const META_SCOPES = "public_profile,pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish,pages_manage_posts,business_management,instagram_manage_insights,read_insights,pages_read_user_content";
+// Scopes OAuth: fuente única en ./publish/oauth-scopes.ts (v5.4.0:
+// se añadió youtube.force-ssl + instagram_manage_comments +
+// pages_manage_engagement para el engagement nativo; solo afectan a
+// la próxima autorización, no invalidan los tokens actuales).
 const ZERNIO_CONNECT_URL = "https://zernio.com/dashboard/connections";
 const TWITCH_CONSOLE_URL = "https://dev.twitch.tv/console/apps";
 const GEMINI_KEYS_URL = "https://aistudio.google.com/apikey";
@@ -3582,15 +3585,25 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       return json({ ok: true, ...plan });
     }
 
-    // --- Engagement SOLO por Zernio (2026-11-23, v5.3.0) ---
-    // Sin follow (Zernio no lo expone para IG/FB/YT/TikTok), sin
-    // TikTok hacia afuera (Like post devuelve 400) y sin descubrir
-    // posts de terceros: los objetivos de afuera se aportan con su
-    // URL y el streamer tiene que estar en la lista de influencers
-    // activos con permiso. El kill-switch es engagement_enabled en
-    // Ajustes (default OFF).
+    // --- Engagement v2 (2026-11-23, v5.4.0): vía NATIVA para
+    // YouTube/Instagram/Facebook (tokens OAuth del panel) + Zernio
+    // SOLO para TikTok. Sin follow en ninguna vía, sin TikTok hacia
+    // afuera (Like post devuelve 400) y sin descubrir posts de
+    // terceros: los objetivos de afuera se aportan con su URL y el
+    // streamer tiene que estar en la lista de influencers activos
+    // con permiso. El kill-switch es engagement_enabled en Ajustes
+    // (default OFF). El status dispara la sonda de scopes si no hay
+    // una cacheada de la última hora: la primera apertura de la
+    // sección Engagement comprueba los permisos reales.
     if (path === "/api/engagement/status" && method === "GET") {
+      await probeNativeScopes(env, tenant).catch(() => undefined);
       return json({ ok: true, ...(await getEngagementStatus(env, tenant)) });
+    }
+    // Sonda de scopes en vivo (forzada): por plataforma+idioma,
+    // con la lista concedida y lo que falta. Sin exponer tokens.
+    if (path === "/api/engagement/scopes" && method === "GET") {
+      const probe = await probeNativeScopes(env, tenant, { force: true });
+      return json({ ok: true, ...probe });
     }
     if (path === "/api/engagement/targets" && method === "GET") {
       return json({ ok: true, targets: await listTargets(env.DB, tenant) });
@@ -3626,7 +3639,9 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       return json({ ok: true, id: Number(res.meta.last_row_id), post_id: postId });
     }
     if (path === "/api/engagement/run" && method === "POST") {
-      const summary = await runZernioEngagement(env, tenant, { force: true });
+      // INICIAR manual: salta solo la franja y el throttle de 1 h;
+      // NO salta topes, kill-switch ni la sonda de scopes.
+      const summary = await runEngagement(env, tenant, { force: true });
       return json({ ok: true, ...summary });
     }
 

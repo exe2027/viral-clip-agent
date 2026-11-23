@@ -64,7 +64,7 @@ import { appendWalEntry, flushWal, isD1QuotaError } from "./wal";
 // esencial sin pasarlo por cada llamada.
 import { createBudgetGuard, setCurrentBudgetGuard } from "./budget";
 import { collectAnalytics } from "./publish/stats";
-import { runZernioEngagement } from "./publish/zernio-engagement";
+import { runEngagement } from "./publish/native-engagement";
 import {
   backfillRetentionDeadlines,
   stampRetentionDeadline,
@@ -1631,17 +1631,18 @@ export async function runWorkerCycle(
       // garantiza que no suba.
     }
   }
-  // Engagement SOLO por Zernio (2026-11-23, v5.3.0): al final del
-  // ciclo, con throttle propio (1 vez/hora, dentro del runner).
-  // Apagado por defecto (engagement_enabled=false). Nunca tumba el
-  // ciclo: cualquier fallo queda en worker_events / engagement_log.
-  // Escritura no esencial: con el freno de presupuesto activo o el
-  // circuito 7500 abierto se salta entero.
+  // Engagement v2 (2026-11-23, v5.4.0): vía nativa YT/IG/FB +
+  // Zernio solo TikTok, al final del ciclo, con throttle propio
+  // (1 vez/hora, dentro del runner). Apagado por defecto
+  // (engagement_enabled=false). Nunca tumba el ciclo: cualquier
+  // fallo queda en worker_events / engagement_log. Escritura no
+  // esencial: con el freno de presupuesto activo o el circuito
+  // 7500 abierto se salta entero.
   if (guard.shouldWrite("analytics") && !isQuotaBreakerOpen(Date.now())) {
     try {
-      await runZernioEngagement(env, tenant);
+      await runEngagement(env, tenant);
     } catch {
-      // runZernioEngagement ya registra su propio fallo.
+      // runEngagement ya registra su propio fallo.
     }
   }
   return { ran: true, processed, stalled: stalled.length, autoEnqueued: auto.enqueued, gate, retention };

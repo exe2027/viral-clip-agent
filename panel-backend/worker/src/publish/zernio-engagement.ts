@@ -213,7 +213,7 @@ export async function hasReplied(db: D1Database, tenant: Tenant, commentId: stri
   return row !== null;
 }
 
-async function markReplied(db: D1Database, tenant: Tenant, commentId: string, platform: ZernioPlatform, nowMs: number): Promise<void> {
+export async function markReplied(db: D1Database, tenant: Tenant, commentId: string, platform: ZernioPlatform, nowMs: number): Promise<void> {
   await db
     .prepare("INSERT OR IGNORE INTO engagement_replied (tenant_id, comment_id, platform, replied_at) VALUES (?, ?, ?, ?)")
     .bind(tenant, commentId, platform, nowMs)
@@ -253,7 +253,7 @@ export async function listTargets(db: D1Database, tenant: Tenant, limit = 50): P
   return res.results;
 }
 
-async function markTarget(db: D1Database, tenant: Tenant, id: number, status: string, reason: string | null, nowMs: number): Promise<void> {
+export async function markTarget(db: D1Database, tenant: Tenant, id: number, status: string, reason: string | null, nowMs: number): Promise<void> {
   await db
     .prepare("UPDATE engagement_targets SET status = ?, reason = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
     .bind(status, reason, nowMs, id, tenant)
@@ -323,6 +323,44 @@ async function zernioLikePost(apiKey: string, postId: string, accountId: string)
   if (r.status !== 200 && r.status !== 201) throw new Error(`Zernio like post: HTTP ${r.status}: ${zernioError(r.json, "sin detalle")}`);
 }
 
+/** Títulos de clips publicados, por id nativo de plataforma, para
+ *  personalizar la respuesta. Solo jobs posted (listPostedJobs).
+ *  Lo usan la pasada Zernio y la nativa. */
+export async function loadClipTitles(db: D1Database, tenant: Tenant): Promise<Map<string, string>> {
+  const posted = await listPostedJobs(db, tenant).catch(() => []);
+  const clipTitles = new Map<string, string>();
+  for (const j of posted) {
+    if (!clipTitles.has(j.platform_id)) {
+      const clip = await db.prepare("SELECT title FROM clips WHERE id = ? AND tenant_id = ?").bind(j.clip_id, tenant).first<{ title: string }>().catch(() => null);
+      if (clip?.title) clipTitles.set(j.platform_id, clip.title);
+    }
+  }
+  return clipTitles;
+}
+
+export interface EngagementEventRow {
+  id: number;
+  day: string;
+  platform: string;
+  language: string;
+  action: string;
+  target_post_id: string | null;
+  comment_id: string | null;
+  status: string;
+  reason: string | null;
+  created_at: number;
+}
+
+/** Últimos eventos de engagement_log (para la sección del panel). */
+export async function listEngagementEvents(db: D1Database, tenant: Tenant, limit = 20): Promise<EngagementEventRow[]> {
+  const res = await db
+    .prepare("SELECT * FROM engagement_log WHERE tenant_id = ? ORDER BY created_at DESC, id DESC LIMIT ?")
+    .bind(tenant, limit)
+    .all<EngagementEventRow>()
+    .catch(() => ({ results: [] as EngagementEventRow[] }));
+  return res.results;
+}
+
 // --- Estado para el panel ---
 
 export interface EngagementStatus {
@@ -336,6 +374,12 @@ export interface EngagementStatus {
   today: Record<string, Record<string, number>>;
   pending_targets: number;
   note: string;
+  /** Estado de la vía nativa por plataforma+idioma (sonda de scopes
+   *  guardada en settings.engagement_scopes; sin sonda aún, todos
+   *  en sin_sonda). TikTok no tiene vía nativa: vía zernio. */
+  native: Record<string, { via: string; state: string; missing_scopes: string[]; granted_count: number; checked_at: number | null; error: string | null }>;
+  scopes_checked_at: number | null;
+  events: EngagementEventRow[];
 }
 
 export async function getEngagementStatus(env: Env, tenant: Tenant): Promise<EngagementStatus> {
@@ -355,6 +399,26 @@ export async function getEngagementStatus(env: Env, tenant: Tenant): Promise<Eng
   }
   const pending = await listPendingTargets(db, tenant, 1000);
   const lastStatus = (settings.engagement_last_status ?? null) as Record<string, unknown> | null;
+  const stored = (settings.engagement_scopes ?? {}) as Record<string, { state?: string; granted_scopes?: string[]; missing_scopes?: string[]; checked_at?: number | null; error?: string | null }>;
+  const scopesCheckedAt = typeof settings.engagement_scopes_at === "number" ? (settings.engagement_scopes_at as number) : null;
+  const native: EngagementStatus["native"] = {};
+  for (const p of ["youtube", "instagram", "facebook"] as const) {
+    for (const lang of ["es", "en"] as const) {
+      const rec = stored[`${p}|${lang}`];
+      native[`${p}|${lang}`] = {
+        via: "nativa",
+        state: rec?.state ?? "sin_sonda",
+        missing_scopes: rec?.missing_scopes ?? [],
+        granted_count: Array.isArray(rec?.granted_scopes) ? (rec.granted_scopes as string[]).length : 0,
+        checked_at: typeof rec?.checked_at === "number" ? (rec.checked_at as number) : null,
+        error: typeof rec?.error === "string" ? (rec.error as string) : null,
+      };
+    }
+  }
+  for (const lang of ["es", "en"] as const) {
+    native[`tiktok|${lang}`] = { via: "zernio", state: "zernio", missing_scopes: [], granted_count: 0, checked_at: null, error: null };
+  }
+  const events = await listEngagementEvents(db, tenant, 20);
   return {
     enabled: eff.engagement_enabled,
     reply_daily_max: eff.engagement_reply_daily_max,
@@ -365,7 +429,10 @@ export async function getEngagementStatus(env: Env, tenant: Tenant): Promise<Eng
     last_status: lastStatus,
     today,
     pending_targets: pending.length,
-    note: "Solo Zernio por API oficial. Sin follow (Zernio no lo expone para IG/FB/YT/TikTok), sin TikTok hacia afuera (like devuelve 400) y sin descubrir posts de terceros: los objetivos de afuera se aportan con su URL.",
+    note: "Vía nativa (YouTube, Instagram y Facebook con tus tokens OAuth) + Zernio solo para TikTok. Sin follow en ninguna vía, sin TikTok hacia afuera (su like devuelve 400) y sin descubrir posts de terceros: los objetivos de afuera se aportan con su URL. Si una plataforma marca sin_permiso, re-autoriza en Cuentas para conceder el scope que falta.",
+    native,
+    scopes_checked_at: scopesCheckedAt,
+    events,
   };
 }
 
@@ -385,8 +452,12 @@ export interface EngagementRunSummary {
 export async function runZernioEngagement(
   env: Env,
   tenant: Tenant,
-  opts: { force?: boolean; nowMs?: number; sleepMs?: number } = {},
+  opts: { force?: boolean; nowMs?: number; sleepMs?: number; platforms?: ZernioPlatform[]; saveStatus?: boolean } = {},
 ): Promise<EngagementRunSummary> {
+  // v5.4.0: el orquestador (runEngagement) limita Zernio a TikTok;
+  // IG/FB/YT van por vía nativa. Llamado directo, sigue cubriendo
+  // las 4 plataformas como en v5.3.0. saveStatus:false lo usa el
+  // orquestador para guardar un único estado combinado.
   const db = env.DB;
   const now = opts.nowMs ?? Date.now();
   const day = santiagoDayKey(new Date(now));
@@ -403,16 +474,8 @@ export async function runZernioEngagement(
     else await sleep(8000 + Math.floor(Math.random() * 7000));
   };
   // Títulos de clips publicados, por id nativo, para personalizar la
-  // respuesta. Solo jobs posted (listPostedJobs); el título sale de
-  // clips. Si no se encuentra, la respuesta va sin título.
-  const posted = await listPostedJobs(db, tenant).catch(() => []);
-  const clipTitles = new Map<string, string>();
-  for (const j of posted) {
-    if (!clipTitles.has(j.platform_id)) {
-      const clip = await db.prepare("SELECT title FROM clips WHERE id = ? AND tenant_id = ?").bind(j.clip_id, tenant).first<{ title: string }>().catch(() => null);
-      if (clip?.title) clipTitles.set(j.platform_id, clip.title);
-    }
-  }
+  // respuesta. Si no se encuentra, la respuesta va sin título.
+  const clipTitles = await loadClipTitles(db, tenant);
   for (const lang of ["es", "en"] as ClipLanguage[]) {
     try {
       // La clave Zernio vive en la fila TikTok via=zernio de ESE
@@ -438,7 +501,8 @@ export async function runZernioEngagement(
       const ownNames = accounts.map((a) => (a.username ?? "").replace(/^@/, "").toLowerCase()).filter(Boolean);
       const langStatus: string[] = [];
       // --- Adentro: comentarios en TUS posts ---
-      for (const platform of ENGAGEMENT_PLATFORMS) {
+      const runPlatforms = opts.platforms ?? ENGAGEMENT_PLATFORMS;
+      for (const platform of runPlatforms) {
         const acc = byPlatform.get(platform);
         if (!acc) {
           langStatus.push(`${platform}: sin_conexion_zernio`);
@@ -521,6 +585,10 @@ export async function runZernioEngagement(
       const targets = await listPendingTargets(db, tenant);
       for (const t of targets) {
         if (t.language !== lang) continue;
+        // Con platforms limitado (v2: solo TikTok), los objetivos de
+        // las demás plataformas los atiende la pasada nativa: se
+        // dejan PENDING, no se tocan.
+        if (!(opts.platforms ?? ENGAGEMENT_PLATFORMS).includes(t.platform as ZernioPlatform)) continue;
         const platform = t.platform as ZernioPlatform;
         const acc = byPlatform.get(platform);
         if (!acc) {
@@ -586,21 +654,24 @@ export async function runZernioEngagement(
     }
   }
   summary.ran = true;
-  const status = {
-    at: now,
-    replies: summary.replies,
-    commentLikes: summary.commentLikes,
-    outwardLikes: summary.outwardLikes,
-    outwardComments: summary.outwardComments,
-    perLanguage: summary.perLanguage,
-    skipped: summary.skipped.slice(0, 10),
-  };
-  await saveSettings(db, tenant, { ...settings, engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
-  await logWorkerEvent(
-    db,
-    "engagement",
-    `Engagement Zernio: ${summary.replies} respuestas, ${summary.commentLikes} likes a comentarios, ${summary.outwardLikes} likes afuera, ${summary.outwardComments} comentarios afuera. ES: ${summary.perLanguage.es ?? "?"} | EN: ${summary.perLanguage.en ?? "?"}`,
-    tenant,
-  ).catch(() => undefined);
+  if (opts.saveStatus !== false) {
+    const status = {
+      via: opts.platforms ? "zernio-limitado" : "zernio",
+      at: now,
+      replies: summary.replies,
+      commentLikes: summary.commentLikes,
+      outwardLikes: summary.outwardLikes,
+      outwardComments: summary.outwardComments,
+      perLanguage: summary.perLanguage,
+      skipped: summary.skipped.slice(0, 10),
+    };
+    await saveSettings(db, tenant, { ...settings, engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
+    await logWorkerEvent(
+      db,
+      "engagement",
+      `Engagement Zernio: ${summary.replies} respuestas, ${summary.commentLikes} likes a comentarios, ${summary.outwardLikes} likes afuera, ${summary.outwardComments} comentarios afuera. ES: ${summary.perLanguage.es ?? "?"} | EN: ${summary.perLanguage.en ?? "?"}`,
+      tenant,
+    ).catch(() => undefined);
+  }
   return summary;
 }

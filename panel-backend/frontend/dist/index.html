@@ -63,6 +63,7 @@
     <button type="button" data-tab="cuentas" role="tab" aria-selected="false" aria-controls="tab-cuentas" id="tabbtn-cuentas">Cuentas</button>
     <button type="button" data-tab="canales" role="tab" aria-selected="false" aria-controls="tab-canales" id="tabbtn-canales">Canales</button>
     <button type="button" data-tab="analiticas" role="tab" aria-selected="false" aria-controls="tab-analiticas" id="tabbtn-analiticas">Analíticas</button>
+    <button type="button" data-tab="engagement" role="tab" aria-selected="false" aria-controls="tab-engagement" id="tabbtn-engagement">Engagement</button>
     <p class="nav-group" aria-hidden="true">Fuentes</p>
     <button type="button" data-tab="influencers" role="tab" aria-selected="false" aria-controls="tab-influencers" id="tabbtn-influencers">Influencers</button>
     <button type="button" data-tab="fuentes" role="tab" aria-selected="false" aria-controls="tab-fuentes" id="tabbtn-fuentes">Fuentes</button>
@@ -966,9 +967,9 @@
           </fieldset>
 
           <fieldset class="settings-section">
-            <legend>Engagement automático (solo Zernio)</legend>
-            <p class="dim">Apagado por defecto. Responde y da like a los comentarios en tus propios vídeos (máx 10 respuestas al día por cuenta) y da like o comenta en posts de otros streamers solo con los objetivos que aportes con su URL. Solo usa la API oficial de Zernio: sin follow (Zernio no lo expone), sin TikTok hacia afuera (su like devuelve 400) y sin descubrir posts de terceros. El estado y los conteos del día están en GET /api/engagement/status.</p>
-            <label for="set-engagement-enabled">Engagement automático por Zernio</label>
+            <legend>Engagement automático (nativo + Zernio)</legend>
+            <p class="dim">Apagado por defecto. Responde y da like a los comentarios en tus propios vídeos (máx 10 respuestas al día por cuenta) y da like o comenta en posts de otros streamers solo con los objetivos que aportes con su URL. Vía nativa para YouTube, Instagram y Facebook (tus tokens OAuth) y Zernio solo para TikTok: sin follow en ninguna vía, sin TikTok hacia afuera (su like devuelve 400) y sin descubrir posts de terceros. El estado por plataforma, los contadores y los eventos están en la sección Engagement.</p>
+            <label for="set-engagement-enabled">Engagement automático</label>
             <select id="set-engagement-enabled">
               <option value="">Sin cambiar</option>
               <option value="true">Sí</option>
@@ -1032,6 +1033,71 @@
         <p id="cfgWorkerState" role="status">Worker: …</p>
         <button type="button" id="btnStartCfg">Iniciar</button>
         <button type="button" id="btnStopCfg" class="ghost">Parar</button>
+      </div>
+    </section>
+    <section id="tab-engagement" class="hidden" role="tabpanel" aria-labelledby="tabbtn-engagement">
+      <div class="card engine-hero" id="engHero">
+        <div class="engine-hero-top">
+          <div>
+            <h2>Engagement</h2>
+            <p class="dim">Responde a los comentarios en tus vídeos y reacciona a posts de streamers. Vía nativa (YouTube, Instagram, Facebook) + Zernio solo para TikTok. Sin follow en ninguna vía.</p>
+          </div>
+          <span class="pill warn" id="engStatePill" role="status">Apagado</span>
+        </div>
+        <div class="row engine-hero-actions">
+          <button id="btnEngRun" type="button" class="engine-start">▶ INICIAR pasada</button>
+          <button id="btnEngToggle" type="button">Encender</button>
+          <button id="btnEngScopes" type="button" class="ghost">Comprobar permisos</button>
+        </div>
+        <p class="dim">INICIAR corre una pasada ahora (salta la espera de 1 hora, pero no los topes ni el apagado). La pasada automática corre sola 1 vez por hora tras las analíticas, solo si está encendido. Topes por cuenta e idioma y día: 10 respuestas, 10 likes a comentarios, 5 likes afuera, 1 comentario afuera.</p>
+        <p id="engLastRun" role="status">Última pasada: —</p>
+      </div>
+      <div class="card">
+        <h2>Estado por plataforma e idioma</h2>
+        <p class="dim">La sonda comprueba los permisos reales concedidos a cada token (YouTube por tokeninfo, Meta por debug_token). Si falta un permiso, la pasada no comenta y marca <b>sin_permiso</b>: re-autoriza esa cuenta en Cuentas para concederlo. Sin sonda aún, el estado es <b>sin_sonda</b>.</p>
+        <div id="engStatusList" aria-busy="true"><p class="dim">Cargando estado…</p></div>
+      </div>
+      <div class="card">
+        <h2>Hoy</h2>
+        <div id="engCounts"><p class="dim">Sin actividad hoy todavía.</p></div>
+      </div>
+      <div class="card">
+        <h2>Objetivos (posts de otros)</h2>
+        <p class="dim">Solo con URL aportada: el engagement no descubre posts de terceros. El streamer tiene que estar en la lista de influencers activos con permiso. TikTok hacia afuera no está cubierto (Zernio devuelve 400). Un objetivo con sin_permiso queda pendiente: tras re-autorizar, la siguiente pasada lo intenta.</p>
+        <form id="engTargetForm">
+          <div class="row">
+            <label>Plataforma
+              <select id="engTargetPlatform">
+                <option value="youtube">YouTube</option>
+                <option value="instagram">Instagram</option>
+                <option value="facebook">Facebook</option>
+                <option value="tiktok">TikTok</option>
+              </select>
+            </label>
+            <label>Idioma
+              <select id="engTargetLang">
+                <option value="es">ES</option>
+                <option value="en">EN</option>
+              </select>
+            </label>
+            <label>Acción
+              <select id="engTargetKind">
+                <option value="like">Like</option>
+                <option value="comment">Comentar</option>
+              </select>
+            </label>
+          </div>
+          <label>Streamer <input id="engTargetStreamer" type="text" placeholder="rubius" autocomplete="off"></label>
+          <label>URL del post <input id="engTargetUrl" type="url" placeholder="https://www.youtube.com/shorts/…" autocomplete="off"></label>
+          <label>Texto del comentario (solo si es Comentar, 10–280 caracteres, específico del clip) <input id="engTargetText" type="text" placeholder="Ese momento en el que…" autocomplete="off"></label>
+          <p class="field-error" id="engTargetError" role="alert" hidden></p>
+          <button type="submit" id="btnEngTargetAdd">Añadir objetivo</button>
+        </form>
+        <div id="engTargetsList"><p class="dim">Sin objetivos todavía.</p></div>
+      </div>
+      <div class="card">
+        <h2>Últimos eventos</h2>
+        <div id="engEventsList"><p class="dim">Sin eventos todavía.</p></div>
       </div>
     </section>
   </main>

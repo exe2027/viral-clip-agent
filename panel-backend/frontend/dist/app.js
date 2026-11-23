@@ -261,7 +261,7 @@ async function doLogin(ev) {
 }
 
 // --- Tabs con hash ---
-const TAB_NAMES = ["worker", "onboarding", "cola", "subidos", "cuentas", "editor", "canales", "tracking", "analiticas", "usuarios", "influencers", "fuentes", "avisos", "ajustes"];
+const TAB_NAMES = ["worker", "onboarding", "cola", "subidos", "cuentas", "editor", "canales", "tracking", "analiticas", "engagement", "usuarios", "influencers", "fuentes", "avisos", "ajustes"];
 function switchTab(name, fromHash) {
   if (!TAB_NAMES.includes(name)) name = "worker";
   if (name !== "ajustes" && currentTab === "ajustes" && settingsDirty) {
@@ -298,6 +298,7 @@ async function loadTab(name) {
     if (name === "canales") await loadChannels();
     if (name === "tracking") await loadTracking();
     if (name === "analiticas") await loadAnaliticas();
+    if (name === "engagement") await loadEngagement();
     if (name === "usuarios") await loadPanelUsers();
     if (name === "influencers") await loadInfluencers();
     if (name === "fuentes") await loadFuentes();
@@ -2475,6 +2476,134 @@ async function loadTrackingTimeline(id) {
     tl.innerHTML = `<li><b>No se pudo cargar el seguimiento</b><br><span class="dim">${esc(e.message)}</span><br><button type="button" id="retryTracking">Reintentar</button></li>`;
     $("retryTracking").addEventListener("click", () => loadTrackingTimeline(id));
     showMsg(e.message, "err");
+  }
+}
+
+// --- Engagement v2 (2026-11-23): vía nativa YT/IG/FB + Zernio solo TikTok ---
+let engWired = false;
+let engStatusCache = null;
+function engStatePill(state) {
+  if (state === "ok") return `<span class="pill ok">OK</span>`;
+  if (state === "sin_permiso") return `<span class="pill bad">Sin permiso</span>`;
+  if (state === "sin_conexion") return `<span class="pill warn">Sin conexión</span>`;
+  if (state === "sin_sonda") return `<span class="pill warn">Sin sonda</span>`;
+  if (state === "sonda_fallida") return `<span class="pill bad">Sonda fallida</span>`;
+  return `<span class="pill neutral">${esc(state)}</span>`;
+}
+function renderEngagement(st) {
+  engStatusCache = st;
+  const pill = $("engStatePill");
+  pill.textContent = st.enabled ? "Encendido" : "Apagado";
+  pill.className = "pill " + (st.enabled ? "ok" : "warn");
+  $("btnEngToggle").textContent = st.enabled ? "Apagar" : "Encender";
+  const last = st.last_status || null;
+  $("engLastRun").textContent = st.last_run_at
+    ? "Última pasada: " + fmtDate(st.last_run_at) + (last ? ` — ${last.replies ?? 0} respuestas, ${last.commentLikes ?? 0} likes a comentarios, ${last.outwardLikes ?? 0} likes afuera, ${last.outwardComments ?? 0} comentarios afuera (${esc(last.via || "")})` : "")
+    : "Última pasada: —";
+  const order = ["youtube|es", "youtube|en", "instagram|es", "instagram|en", "facebook|es", "facebook|en", "tiktok|es", "tiktok|en"];
+  const labels = { youtube: "YouTube", instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok" };
+  $("engStatusList").innerHTML = order.map((k) => {
+    const [p, lang] = k.split("|");
+    const v = (st.native || {})[k] || { via: p === "tiktok" ? "zernio" : "nativa", state: "sin_sonda", missing_scopes: [], granted_count: 0, checked_at: null, error: null };
+    const counts = (st.today || {})[k];
+    const hint = v.state === "sin_permiso"
+      ? `<br><span class="dim">Falta: ${esc((v.missing_scopes || []).join(", "))} — re-autorizar en Cuentas.</span>`
+      : v.state === "sin_sonda"
+        ? `<br><span class="dim">Permisos sin comprobar todavía (pulsa Comprobar permisos).</span>`
+        : v.state === "sin_conexion"
+          ? `<br><span class="dim">Sin cuenta conectada en este idioma.</span>`
+          : v.error ? `<br><span class="dim">${esc(v.error)}</span>` : "";
+    return `<p><b>${labels[p]} ${lang.toUpperCase()}</b> <span class="dim">vía ${esc(v.via)}</span> ${engStatePill(v.state)}${counts ? ` <span class="dim">hoy: ${counts.replies || 0} resp. · ${counts.likes || 0} likes · ${counts.outward_likes || 0} afuera</span>` : ""}${hint}</p>`;
+  }).join("") + `<p class="dim">${esc(st.note || "")}</p>`;
+  const todayKeys = Object.keys(st.today || {});
+  $("engCounts").innerHTML = todayKeys.length
+    ? todayKeys.map((k) => {
+        const c = st.today[k];
+        const [p, lang] = k.split("|");
+        return `<p><b>${labels[p]} ${lang.toUpperCase()}</b>: ${c.replies || 0} respuestas · ${c.likes || 0} likes a comentarios · ${c.outward_likes || 0} likes afuera · ${c.outward_comments || 0} comentarios afuera (topes ${st.reply_daily_max}/${st.like_daily_max}/${st.outward_like_daily_max}/${st.outward_comment_daily_max})</p>`;
+      }).join("")
+    : `<p class="dim">Sin actividad hoy todavía. Objetivos pendientes: ${st.pending_targets || 0}.</p>`;
+  const evs = st.events || [];
+  $("engEventsList").innerHTML = evs.length
+    ? `<ul>${evs.map((e) => `<li><span class="dot ${e.status === "ok" ? "ok" : e.status === "skipped" ? "warn" : "bad"}" aria-hidden="true"></span><time>${fmtDate(e.created_at)}</time> <b>${esc(e.platform)} ${esc(e.language)}</b> · ${esc(e.action)} · ${esc(e.status)}${e.reason ? `<br><span class="tl-msg">${esc(e.reason)}</span>` : ""}</li>`).join("")}</ul>`
+    : `<p class="dim">Sin eventos todavía.</p>`;
+}
+async function loadEngagementTargets() {
+  try {
+    const data = await api("/api/engagement/targets");
+    const list = data.targets || [];
+    $("engTargetsList").innerHTML = list.length
+      ? `<ul>${list.map((t) => `<li><b>${esc(t.platform)} ${esc(t.language)}</b> · ${esc(t.streamer)} · ${esc(t.kind)} · <span class="pill ${t.status === "done" ? "ok" : t.status === "pending" ? "warn" : "neutral"}">${esc(t.status)}</span><br><span class="dim">${esc(t.post_url)}</span>${t.reason ? `<br><span class="tl-msg">${esc(t.reason)}</span>` : ""}</li>`).join("")}</ul>`
+      : `<p class="dim">Sin objetivos todavía.</p>`;
+  } catch (e) {
+    $("engTargetsList").innerHTML = `<p class="dim">No se pudieron cargar los objetivos: ${esc(e.message)}</p>`;
+  }
+}
+async function loadEngagement() {
+  const box = $("engStatusList");
+  box.setAttribute("aria-busy", "true");
+  try {
+    const st = await api("/api/engagement/status");
+    box.setAttribute("aria-busy", "false");
+    renderEngagement(st);
+    await loadEngagementTargets();
+  } catch (e) {
+    box.setAttribute("aria-busy", "false");
+    box.innerHTML = `<p><b>No se pudo cargar el engagement</b><br><span class="dim">${esc(e.message)}</span></p>`;
+    showMsg(e.message, "err");
+  }
+  if (!engWired) {
+    engWired = true;
+    $("btnEngRun").addEventListener("click", async () => {
+      const b = $("btnEngRun");
+      b.disabled = true;
+      try {
+        const s = await api("/api/engagement/run", { method: "POST", body: "{}" });
+        showMsg(s.ran ? `Pasada hecha: ${s.replies} respuestas, ${s.commentLikes} likes a comentarios, ${s.outwardLikes} likes afuera, ${s.outwardComments} comentarios afuera.` : ("Pasada no hecha: " + (s.reason || "")), s.ran ? "info" : "err");
+        await loadEngagement();
+      } catch (e) { showMsg(e.message, "err"); } finally { b.disabled = false; }
+    });
+    $("btnEngToggle").addEventListener("click", async () => {
+      const b = $("btnEngToggle");
+      b.disabled = true;
+      try {
+        const next = !(engStatusCache && engStatusCache.enabled);
+        await api("/api/settings", { method: "PUT", body: JSON.stringify({ engagement_enabled: next }) });
+        showMsg(next ? "Engagement encendido." : "Engagement apagado.", "info");
+        await loadEngagement();
+      } catch (e) { showMsg(e.message, "err"); } finally { b.disabled = false; }
+    });
+    $("btnEngScopes").addEventListener("click", async () => {
+      const b = $("btnEngScopes");
+      b.disabled = true;
+      try {
+        await api("/api/engagement/scopes");
+        showMsg("Permisos comprobados en vivo.", "info");
+        await loadEngagement();
+      } catch (e) { showMsg(e.message, "err"); } finally { b.disabled = false; }
+    });
+    $("engTargetForm").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const errEl = $("engTargetError");
+      errEl.hidden = true;
+      const body = {
+        platform: $("engTargetPlatform").value,
+        language: $("engTargetLang").value,
+        streamer: $("engTargetStreamer").value.trim(),
+        post_url: $("engTargetUrl").value.trim(),
+        kind: $("engTargetKind").value,
+        comment_text: $("engTargetText").value.trim() || undefined,
+      };
+      try {
+        await api("/api/engagement/targets", { method: "POST", body: JSON.stringify(body) });
+        showMsg("Objetivo añadido.", "info");
+        $("engTargetForm").reset();
+        await loadEngagement();
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.hidden = false;
+      }
+    });
   }
 }
 
