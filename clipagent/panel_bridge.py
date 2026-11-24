@@ -49,7 +49,7 @@ USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
 # Contrato CONGELADO: POST /api/worker/event, body {kind, message},
 # message <= 500 caracteres, una línea en español.
 EVENT_KINDS = ("clip_cortado", "clip_encolado", "clip_descartado",
-               "corte_fallido")
+               "corte_fallido", "revalidado")
 MAX_EVENT_MESSAGE = 500
 
 

@@ -260,15 +260,15 @@ describe("POST /api/worker/event — eventos de clip del cerebro (visibilidad)",
     expect(db.events[0]?.tenant_id).toBe("sebastian");
   });
 
-  test("los 4 kinds válidos pasan; cualquier otro es 400", async () => {
+  test("los 5 kinds válidos pasan; cualquier otro es 400", async () => {
     const db = fakeEventDb();
-    for (const kind of ["clip_cortado", "clip_encolado", "clip_descartado", "corte_fallido"]) {
+    for (const kind of ["clip_cortado", "clip_encolado", "clip_descartado", "corte_fallido", "revalidado"]) {
       const res = await handleReportClipEvent(db, "sebastian", { kind, message: "x" }, NOW);
       expect(res.status).toBe(200);
     }
     const bad = await handleReportClipEvent(db, "sebastian", { kind: "ATASCADO", message: "x" }, NOW);
     expect(bad.status).toBe(400);
-    expect(db.events).toHaveLength(4);
+    expect(db.events).toHaveLength(5);
   });
 
   test("message vacío es 400 y mensaje largo se recorta a 500", async () => {

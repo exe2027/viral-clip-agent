@@ -910,6 +910,7 @@ const TRACKING_STEPS: string[] = [
   "subtitulos",
   "paquete",
   "revision",
+  "revalidado",
   "decision",
   "cola_publicacion",
   "publicado",

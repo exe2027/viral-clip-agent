@@ -148,6 +148,26 @@ class TestReportEvent(unittest.TestCase):
                 self._bridge().report_event("pico_detectado", "x"))
         self.assertEqual(calls, [])
 
+    def test_kind_revalidado_si_hace_post(self):
+        # auto-seo 2026-11-24: el loop marca cada intento con
+        # "revalidado"; antes el puente lo rechazaba en local
+        # ("evento kind inválido") y el anti-atasco de 24 h nunca
+        # quedaba registrado en el panel.
+        calls = []
+
+        def fake_urlopen(req, timeout=60):
+            calls.append(req)
+            return _Resp()
+
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=fake_urlopen):
+            res = self._bridge().report_event(
+                "revalidado", "clip 12 «X»: SEO 89 veredicto rechazado")
+        self.assertEqual(res, {"ok": True})
+        self.assertEqual(len(calls), 1)
+        body = json.loads(calls[0].data.decode("utf-8"))
+        self.assertEqual(body["kind"], "revalidado")
+
     def test_mensaje_se_normaliza_a_una_linea_y_500_max(self):
         calls = []
 

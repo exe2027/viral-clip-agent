@@ -134,7 +134,7 @@ export async function handleReportPhase(
  *  cortado / encolado / descartado llega al panel con su motivo, y
  *  aparece en Actividad reciente. Sin esto un clip cortado que no
  *  se encola es invisible: el usuario no sabe dónde se perdió. */
-export const BRAIN_CLIP_EVENT_KINDS = ["clip_cortado", "clip_encolado", "clip_descartado", "corte_fallido"] as const;
+export const BRAIN_CLIP_EVENT_KINDS = ["clip_cortado", "clip_encolado", "clip_descartado", "corte_fallido", "revalidado"] as const;
 export type BrainClipEventKind = (typeof BRAIN_CLIP_EVENT_KINDS)[number];
 
 export function parseBrainClipEventKind(v: unknown): BrainClipEventKind | null {

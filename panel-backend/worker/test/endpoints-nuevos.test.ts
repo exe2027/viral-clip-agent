@@ -763,6 +763,23 @@ describe("M3: POST /api/tracking/step", () => {
     const noClip = await call(env, "POST", "/api/tracking/step", { token, body: { step: "detectado" } });
     expect(noClip.status).toBe(400);
   });
+
+  test("step revalidado (loop auto-seo) se registra y se ve en tracking", async () => {
+    const db = new FakeD1();
+    seedClip(db, 1, "sebastian");
+    const env = makeEnv(db);
+    const token = await tokenFor("seba", "sebastian");
+    const r = await call(env, "POST", "/api/tracking/step", {
+      token,
+      body: { clip_id: 1, step: "revalidado", estado: "completado", message: "revalidación automática: SEO 85 veredicto aprobado" },
+    });
+    expect(r.status).toBe(201);
+    expect(r.json.event).toMatchObject({ clip_id: 1, step: "revalidado", estado: "completado" });
+    const tr = await call(env, "GET", "/api/clips/1/tracking", { token });
+    expect(tr.status).toBe(200);
+    const events = tr.json.events as Record<string, unknown>[];
+    expect(events.some((e) => e.step === "revalidado")).toBe(true);
+  });
 });
 
 describe("M5: POST /api/accounts", () => {
