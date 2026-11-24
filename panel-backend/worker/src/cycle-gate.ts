@@ -76,6 +76,38 @@ export const WATCHDOG_DISPATCHED_PREFIX = "Dispatch panel-watchdog enviado";
  *  (antes en index.ts): el dedupe del dispatch 09:00 es por lectura. */
 export const BRAIN_DAILY_SENT_DAY_KEY = "brain_daily_dispatched_day";
 
+/** Clave en settings del resumen de la última validación diaria
+ *  COMPLETA de cuentas (validación diaria 2026-11-23): objeto
+ *  { day: "YYYY-MM-DD" (Chile), n_ok, n_invalid, checked_at: ms }.
+ *  Solo se escribe en corrida completa (sin transitorios); una
+ *  corrida parcial no marca el día. */
+export const ACCOUNT_VALIDATION_DAY_KEY = "last_account_validation";
+
+/** Hora de Santiago a partir de la cual toca la validación diaria
+ *  de cuentas (primera pasada del ciclo >= 15:00 Chile; en invierno
+ *  la primera pasada real es a las 17:00, el mecanismo >= sigue
+ *  robusto). */
+export const ACCOUNT_VALIDATION_HOUR_SANTIAGO = 15;
+
+/** ¿Toca la validación diaria de cuentas? Primera pasada del ciclo
+ *  a partir de las 15:00 Santiago y el día aún sin marcar en
+ *  settings (misma clave y misma lectura que
+ *  maybeValidateAccountsDaily; esa función vuelve a comprobarlo
+ *  antes de validar). Solo lectura. Fail-open dentro de la ventana:
+ *  si no se puede leer, que maybeValidateAccountsDaily decida. */
+export async function isAccountValidationDue(db: D1Database, tenant: Tenant, nowMsValue: number): Promise<boolean> {
+  const { day, hour } = santiagoParts(new Date(nowMsValue));
+  if (hour < ACCOUNT_VALIDATION_HOUR_SANTIAGO) return false;
+  try {
+    const settings = await getSettings(db, tenant);
+    const last = settings[ACCOUNT_VALIDATION_DAY_KEY] as { day?: string } | string | undefined;
+    const lastDay = typeof last === "string" ? last : last?.day;
+    return lastDay !== day;
+  } catch {
+    return true;
+  }
+}
+
 export type CycleWakeReason = "due-job" | "review" | "journal" | "none";
 
 export interface CycleGateDecision {

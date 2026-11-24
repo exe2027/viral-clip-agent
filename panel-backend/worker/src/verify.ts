@@ -16,6 +16,17 @@ import { httpJson } from "./publish/http";
 export interface VerifyOutcome {
   ok: boolean;
   message: string;
+  /** Transitorio (red/timeout/HTTP 5xx): reintentable, NO invalida la
+   *  cuenta. Ausente/false = fallo de autenticación (token inválido,
+   *  revocado, permiso quitado). Clasificación POR SITIO (N6, spec
+   *  2026-11-23): nunca por cadena de mensaje. */
+  transient?: boolean;
+}
+
+/** HTTP 5xx o fallo de red (httpJson devuelve status 0 cuando el
+ *  fetch no llega): transitorio. 4xx = la credencial no vale. */
+function isTransientStatus(status: number): boolean {
+  return status === 0 || status >= 500;
 }
 
 function str(v: unknown): string | undefined {
@@ -49,7 +60,7 @@ async function verifyZernioTiktok(apiKey: string, accountId?: string): Promise<V
         return { ok: false, message: "Zernio no encuentra esa cuenta: revisa el account_id guardado en extra." };
       }
       if (r.status !== 200) {
-        return { ok: false, message: "Zernio no respondió a la verificación. Espera un minuto y vuelve a intentarlo." };
+        return { ok: false, message: "Zernio no respondió a la verificación. Espera un minuto y vuelve a intentarlo.", transient: isTransientStatus(r.status) };
       }
       const status = typeof r.json.status === "string" ? r.json.status : "";
       const issues = joinIssues(r.json.issues);
@@ -65,7 +76,7 @@ async function verifyZernioTiktok(apiKey: string, accountId?: string): Promise<V
       return { ok: false, message: "Zernio rechazó la clave. Pégala de nuevo en Cuentas." };
     }
     if (r.status !== 200) {
-      return { ok: false, message: "Zernio no respondió a la verificación. Espera un minuto y vuelve a intentarlo." };
+      return { ok: false, message: "Zernio no respondió a la verificación. Espera un minuto y vuelve a intentarlo.", transient: isTransientStatus(r.status) };
     }
     const accounts = Array.isArray(r.json.accounts) ? r.json.accounts : [];
     const connected = accounts.some((a) => {
@@ -77,7 +88,7 @@ async function verifyZernioTiktok(apiKey: string, accountId?: string): Promise<V
       ? { ok: true, message: "Zernio: hay una cuenta TikTok conectada." }
       : { ok: false, message: "La clave Zernio es válida, pero no hay ninguna cuenta TikTok conectada en Zernio. Conéctala en zernio.com y pega su account_id en extra." };
   } catch {
-    return { ok: false, message: "No pudimos hablar con Zernio. Espera un minuto y vuelve a intentarlo." };
+    return { ok: false, message: "No pudimos hablar con Zernio. Espera un minuto y vuelve a intentarlo.", transient: true };
   }
 }
 
@@ -118,7 +129,7 @@ export async function verifyCredential(platform: string, credential: string, ext
           const ex = await httpJson("POST", "https://oauth2.googleapis.com/token", { "Content-Type": "application/x-www-form-urlencoded" }, body.toString());
           const fresh = typeof ex.json.access_token === "string" ? ex.json.access_token : "";
           if (ex.status !== 200 || !fresh) {
-            return { ok: false, message: "YouTube no renovó el token con ese refresh_token: reautoriza OAuth y pega el JSON nuevo." };
+            return { ok: false, message: "YouTube no renovó el token con ese refresh_token: reautoriza OAuth y pega el JSON nuevo.", transient: isTransientStatus(ex.status) };
           }
           const ti = await httpJson("GET", `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(fresh)}`);
           const scope = typeof ti.json.scope === "string" ? ti.json.scope.split(" ") : [];
@@ -128,7 +139,7 @@ export async function verifyCredential(platform: string, credential: string, ext
           if (ti.status === 200 && scope.some((s) => s.includes("youtube"))) {
             return { ok: false, message: "El token OAuth vale para YouTube pero NO tiene scope youtube.upload: reautoriza con ese permiso." };
           }
-          return { ok: false, message: "YouTube renovó el token pero no se pudo comprobar su scope: vuelve a intentarlo." };
+          return { ok: false, message: "YouTube renovó el token pero no se pudo comprobar su scope: vuelve a intentarlo.", transient: isTransientStatus(ti.status) };
         }
         // JSON sin refresh_token: se comprueba el access token que trae.
         if (accessToken) {
@@ -136,6 +147,9 @@ export async function verifyCredential(platform: string, credential: string, ext
           const scope = typeof ti.json.scope === "string" ? ti.json.scope.split(" ") : [];
           if (ti.status === 200 && scope.some((s) => s.includes("youtube.upload"))) {
             return { ok: true, message: "YouTube aceptó el token OAuth (scope youtube.upload). Sin refresh_token: cuando caduque habrá que pegar uno nuevo." };
+          }
+          if (ti.status !== 200) {
+            return { ok: false, message: "YouTube no respondió a la comprobación del token: vuelve a intentarlo.", transient: isTransientStatus(ti.status) };
           }
           return { ok: false, message: "El token del JSON no tiene scope youtube.upload o caducó: pega el JSON con refresh_token." };
         }
@@ -145,7 +159,7 @@ export async function verifyCredential(platform: string, credential: string, ext
         const r = await httpJson("GET", `https://www.googleapis.com/youtube/v3/i18nLanguages?part=snippet&key=${encodeURIComponent(cred)}`);
         return r.status === 200
           ? { ok: true, message: "YouTube aceptó la clave." }
-          : { ok: false, message: "La clave no funcionó en YouTube. Revisa que sea la clave de tu proyecto y pégala de nuevo." };
+          : { ok: false, message: "La clave no funcionó en YouTube. Revisa que sea la clave de tu proyecto y pégala de nuevo.", transient: isTransientStatus(r.status) };
       }
       // Token OAuth: primero tokeninfo. El token de subida del panel
       // solo tiene scope youtube.upload y channels?mine=true exige
@@ -161,7 +175,7 @@ export async function verifyCredential(platform: string, credential: string, ext
       const r = await httpJson("GET", "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", { Authorization: `Bearer ${cred}` });
       return r.status === 200
         ? { ok: true, message: "YouTube aceptó la clave." }
-        : { ok: false, message: "El acceso no funcionó en YouTube. Puede que haya vencido: crea uno nuevo y pégalo de nuevo." };
+        : { ok: false, message: "El acceso no funcionó en YouTube. Puede que haya vencido: crea uno nuevo y pégalo de nuevo.", transient: isTransientStatus(ti.status) || isTransientStatus(r.status) };
     }
     if (platform === "tiktok") {
       // Vía Zernio: extra {"via":"zernio"} o clave con prefijo zk_.
@@ -173,7 +187,7 @@ export async function verifyCredential(platform: string, credential: string, ext
       const code = typeof err.code === "string" ? err.code : "";
       return r.status === 200 && (code === "" || code === "ok")
         ? { ok: true, message: "TikTok aceptó la clave." }
-        : { ok: false, message: "La clave no funcionó en TikTok. Puede que haya vencido: crea una nueva y pégala de nuevo." };
+        : { ok: false, message: "La clave no funcionó en TikTok. Puede que haya vencido: crea una nueva y pégala de nuevo.", transient: isTransientStatus(r.status) };
     }
     if (platform === "twitch") {
       // Onboarding: credential = Client Secret, extra = {client_id}.
@@ -185,7 +199,7 @@ export async function verifyCredential(platform: string, credential: string, ext
       const tok = await httpJson("POST", "https://id.twitch.tv/oauth2/token", { "Content-Type": "application/x-www-form-urlencoded" }, body.toString());
       const access = typeof tok.json.access_token === "string" ? tok.json.access_token : "";
       if (tok.status !== 200 || !access) {
-        return { ok: false, message: "Twitch rechazó el Client ID/Secret. Revisa que los copiaste de dev.twitch.tv/console/apps." };
+        return { ok: false, message: "Twitch rechazó el Client ID/Secret. Revisa que los copiaste de dev.twitch.tv/console/apps.", transient: isTransientStatus(tok.status) };
       }
       // Validar el token (2026-11-19: /helix/users sin parámetros
       // devuelve 400 siempre, así que la verificación fallaba aunque
@@ -195,7 +209,7 @@ export async function verifyCredential(platform: string, credential: string, ext
       const valClientId = typeof val.json.client_id === "string" ? val.json.client_id : "";
       return val.status === 200 && valClientId === clientId
         ? { ok: true, message: "Twitch aceptó el Client ID/Secret." }
-        : { ok: false, message: "Twitch dio el token pero no se pudo validar. Vuelve a intentarlo." };
+        : { ok: false, message: "Twitch dio el token pero no se pudo validar. Vuelve a intentarlo.", transient: isTransientStatus(val.status) };
     }
     if (platform === "gemini") {
       // Onboarding: credential = API key de Google AI Studio.
@@ -205,7 +219,7 @@ export async function verifyCredential(platform: string, credential: string, ext
       if (r.status === 400 || r.status === 403) {
         return { ok: false, message: "Gemini rechazó la API key. Revisa que la copiaste de aistudio.google.com/apikey." };
       }
-      return { ok: false, message: "Gemini no respondió a la verificación. Espera un minuto y vuelve a intentarlo." };
+      return { ok: false, message: "Gemini no respondió a la verificación. Espera un minuto y vuelve a intentarlo.", transient: isTransientStatus(r.status) };
     }
     // Meta (instagram / facebook / meta): Graph API /me con el token.
     // OJO (2026-11-18): /me solo prueba el token de la Página, NO la
@@ -224,6 +238,7 @@ export async function verifyCredential(platform: string, credential: string, ext
         return {
           ok: false,
           message: "Meta aceptó el token, pero la cuenta de Instagram guardada no es accesible (puede que se haya desvinculado de la Página o esté restringida). Vuelve a conectar Meta en Cuentas para actualizar el vínculo.",
+          transient: isTransientStatus(ig.status),
         };
       }
       return { ok: true, message: "Meta aceptó el token." };
@@ -231,8 +246,9 @@ export async function verifyCredential(platform: string, credential: string, ext
     return {
       ok: false,
       message: "Meta no aceptó la clave. Tiene que ser el token LARGO de la Página: en el Explorador, en «Usuario o página» elige tu Página y copia ese token (el corto vence en 1 hora).",
+      transient: isTransientStatus(r.status),
     };
   } catch {
-    return { ok: false, message: "No pudimos hablar con la plataforma. Espera un minuto y vuelve a intentarlo." };
+    return { ok: false, message: "No pudimos hablar con la plataforma. Espera un minuto y vuelve a intentarlo.", transient: true };
   }
 }

@@ -293,7 +293,7 @@ async function loadTab(name) {
     if (name === "onboarding") await loadOnboarding();
     if (name === "cola") await loadClips();
     if (name === "subidos") await loadPublished();
-    if (name === "cuentas") { switchCuentasSubtab("apis", false); await loadSocialAccounts(); await loadAccounts(); }
+    if (name === "cuentas") { switchCuentasSubtab("apis", false); await loadDailyValidationHeader(); await loadSocialAccounts(); await loadAccounts(); }
     if (name === "editor") await loadEditor();
     if (name === "canales") await loadChannels();
     if (name === "tracking") await loadTracking();
@@ -1386,14 +1386,24 @@ function renderSocialAccounts(accounts) {
   list.innerHTML = accounts.map((a) => {
     const key = String(a.platform || "").toLowerCase();
     const p = byKey[key] || { key, label: a.label || a.platform || key, dot: "", metaNote: "" };
+    // Validez de la cuenta API subyacente (join en el servidor, spec
+    // 2026-11-23 §3.3): la fila social no guarda credencial, pero el
+    // panel muestra si su cuenta API está vigente. Sin cuenta API,
+    // se muestra el estado social como antes.
+    const apiPill = a.api_account_id != null
+      ? (a.verification_current ? `<span class="pill ok">Conectada</span>` : `<span class="pill warn">No conectada</span>`)
+      : socialStatusPill(a.status);
+    const apiLine = a.api_account_id != null && !a.verification_current && a.verify_message
+      ? `<p class="dim">${esc(a.verify_message)}</p>` : "";
     return `<article class="card account-card" id="social-card-${esc(key)}-${a.id}">
     <div class="account-head">
       <span class="platform-mark" aria-hidden="true"><span class="dot ${p.dot}"></span></span>
       <div class="account-title"><h3>${esc(a.label || p.label)}</h3>${a.handle ? `<p class="account-sub">${esc(a.handle)}</p>` : `<p class="account-sub">${esc(p.label)}</p>`}</div>
-      ${socialStatusPill(a.status)}
+      ${apiPill}
     </div>
     ${p.metaNote ? `<p class="dim">${esc(p.metaNote)}</p>` : ""}
     ${a.note ? `<p class="dim">${esc(a.note)}</p>` : ""}
+    ${apiLine}
     <p class="field-error" id="social-${a.id}-error" role="alert" hidden></p>
     <div class="row account-actions">
       <button type="button" class="ghost" data-verify-social="${a.id}">Verificar</button>
@@ -1413,6 +1423,30 @@ function renderSocialAccounts(accounts) {
       showMsg(e.message, "err");
     } finally { setLoading(b, false); }
   }));
+}
+// Cabecera de la validación diaria (spec 2026-11-23 §3.3): la
+// última validación completa sale del resumen de la puerta
+// (last_account_validation en settings, vía GET /api/settings).
+// El "hace X h" se calcula desde checked_at del resumen, NUNCA
+// desde verified_at por cuenta (la regla A2 no lo refresca).
+async function loadDailyValidationHeader() {
+  const el = $("dailyValidationHeader");
+  if (!el) return;
+  try {
+    const data = await api("/api/settings");
+    const s = (data.settings || {}).last_account_validation;
+    if (!s || typeof s !== "object" || !s.day) {
+      el.textContent = "Validación diaria de cuentas: sin validar hoy.";
+      return;
+    }
+    const ok = Number(s.n_ok) || 0;
+    const bad = Number(s.n_invalid) || 0;
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    const hoursAgo = s.checked_at ? Math.max(0, Math.floor((Date.now() - Number(s.checked_at)) / 3600000)) : null;
+    el.textContent = `Última validación diaria: ${fmtDate(s.checked_at)}${hoursAgo !== null ? ` (hace ${hoursAgo} h)` : ""} — ${ok}/${ok + bad} válidas${s.day === today ? "" : " · sin validar hoy"}.`;
+  } catch (e) {
+    el.textContent = "Validación diaria de cuentas: no se pudo leer el último resumen.";
+  }
 }
 async function loadSocialAccounts() {
   const list = $("socialList");
@@ -2805,7 +2839,12 @@ function renderApiGroups(accs) {
   }).join("");
 }
 function accountState(a) {
-  if (a.verify_ok === 1) return { pill: "ok", label: "Conectada" };
+  // El campo que manda es verification_current (V2, spec 2026-11-23
+  // §3.3): un verify_ok viejo con credencial cambiada es falso
+  // positivo ("Conectada" con la credencial anterior). Sin el campo
+  // (Worker viejo), se usa verify_ok como antes.
+  if (a.verification_current === true) return { pill: "ok", label: "Conectada" };
+  if (a.verification_current === undefined && a.verify_ok === 1) return { pill: "ok", label: "Conectada" };
   if (!a.has_credential) return { pill: "bad", label: "Sin credencial" };
   return { pill: "warn", label: "No conectada" };
 }

@@ -24,6 +24,7 @@ import { BRAIN_SESSION_TTL_MS, hasRecentBrainToken, issueBrainToken, liveRunInFl
 // diario 20:50 corren desde el cron (ver scheduled()).
 import { createBudgetGuard, currentBudgetGuard } from "./budget";
 import { maybeRunBudgetMonitor, maybeSendDailyBudgetReport } from "./budget-monitor";
+import { maybeValidateAccountsDaily, validateAccountsDaily } from "./daily-validation";
 import {
   createApiAccount,
   createCampaignSubmission,
@@ -136,6 +137,8 @@ import {
   type ClipRow,
   type ClipStatRow,
   type InfluencerRow,
+  type ApiAccountRow,
+  type SocialAccountRow,
   type JobStateFilter,
   type NewClip,
   type NewClipStat,
@@ -379,6 +382,32 @@ async function upsertAccountCredential(
     .run();
   await invalidateProbeCache(env.DB, tenant);
   return { id: acc.id, platform: acc.platform, label: acc.label };
+}
+
+/** Validez de la cuenta API subyacente a una fila social (GET
+ *  /api/social-accounts, spec 2026-11-23 §3.3): el join vive en el
+ *  servidor, el front no lo hace. YouTube y TikTok mapean a su fila
+ *  del mismo idioma; Instagram y Facebook comparten la ÚNICA fila
+ *  meta (mismo idioma si existe, si no cualquier fila meta). El
+ *  campo que manda "válida" es verification_current, no verify_ok:
+ *  un OK viejo con credencial cambiada es el falso positivo V2. */
+function apiVerificationForSocial(
+  social: SocialAccountRow,
+  apiAccounts: ApiAccountRow[],
+): { api_account_id: number; verification_current: boolean; verify_ok: number | null; verify_message: string; verified_at: number | null } | null {
+  const platform = social.platform === "instagram" || social.platform === "facebook" ? "meta" : social.platform;
+  const lang = (social.language || "es").toLowerCase();
+  const row =
+    apiAccounts.find((a) => a.platform === platform && (a.language || "es").toLowerCase() === lang) ??
+    apiAccounts.find((a) => a.platform === platform);
+  if (!row) return null;
+  return {
+    api_account_id: row.id,
+    verification_current: isAccountVerificationCurrent(row),
+    verify_ok: row.verify_ok,
+    verify_message: row.verify_message,
+    verified_at: row.verified_at,
+  };
 }
 
 /** Verifica DE VERDAD una cuenta API contra su plataforma y guarda
@@ -3483,6 +3512,28 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       const outcome = await verifyApiAccount(env, tenant, account);
       return json({ ok: outcome.ok, status: outcome.ok ? "conectada" : "error", message: outcome.message, verifiedAt: new Date().toISOString() });
     }
+    // POST /api/accounts/validate-daily — validación diaria FORZADA
+    // (spec 2026-11-23, §3.5): ejecuta el mismo camino diario
+    // (puerta ignorada, mismos flips y transitorios) y devuelve el
+    // resumen. Exige sesión de panel; marca el día (la automática
+    // posterior salta) y corre aunque el Worker esté parado (es una
+    // acción manual, no va por la puerta del ciclo).
+    if (path === "/api/accounts/validate-daily" && method === "POST") {
+      // La sesión ya la exige el gate global de handleFetch (401
+      // "Inicia sesión primero."): aquí solo corre la validación.
+      const result = await validateAccountsDaily(env, tenant, Date.now(), { force: true });
+      return json({
+        ok: true,
+        ran: result.ran,
+        reason: result.reason,
+        partial: result.partial,
+        summary: result.summary,
+        checked: result.checked,
+        valid: result.valid,
+        invalid: result.invalid,
+        transient: result.transient,
+      });
+    }
 
     // --- Cuentas sociales (tabla accounts, migración 0002 + tenant_id en 0013) ---
     // Solo lectura: la tabla no guarda credenciales, así que no hay
@@ -3490,18 +3541,32 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
     // un éxito fingido.
     if (path === "/api/social-accounts" && method === "GET") {
       const accounts = await listSocialAccounts(env.DB, tenant);
+      const apiAccounts = await listApiAccounts(env.DB, tenant);
       return json({
         ok: true,
-        accounts: accounts.map((a) => ({
-          id: a.id,
-          platform: a.platform,
-          language: a.language,
-          label: a.label,
-          handle: a.handle,
-          status: a.status,
-          note: a.note,
-          sort: a.sort,
-        })),
+        accounts: accounts.map((a) => {
+          const v = apiVerificationForSocial(a, apiAccounts);
+          return {
+            id: a.id,
+            platform: a.platform,
+            language: a.language,
+            label: a.label,
+            handle: a.handle,
+            status: a.status,
+            note: a.note,
+            sort: a.sort,
+            // Validez de la cuenta API subyacente (join en el
+            // servidor, spec 2026-11-23 §3.3): la fila social no
+            // guarda credencial, pero el panel muestra si su cuenta
+            // API está vigente. null = sin cuenta API en este
+            // idioma/plataforma.
+            api_account_id: v?.api_account_id ?? null,
+            verification_current: v?.verification_current ?? null,
+            verify_ok: v?.verify_ok ?? null,
+            verify_message: v?.verify_message ?? null,
+            verified_at: v?.verified_at ?? null,
+          };
+        }),
       });
     }
     const socialVerifyMatch = /^\/api\/social-accounts\/(\d+)\/verify$/.exec(path);
@@ -4306,6 +4371,12 @@ export default {
         // workflow genérico. Solo si el Worker está en marcha
         // (r.ran) o si la puerta dice que toca (r.gate.dailyDue).
         if (r.ran || r.gate.dailyDue) await maybeDispatchDaily(env, tenant, event.scheduledTime);
+        // Validación diaria de cuentas (spec 2026-11-23): primera
+        // pasada >= 15:00 Chile, una vez al día, DESPUÉS del ciclo
+        // publicador y con su propio catch: nunca bloquea el corte
+        // (la puerta y el estado del Worker se comprueban dentro de
+        // maybeValidateAccountsDaily).
+        await maybeValidateAccountsDaily(env, tenant, event.scheduledTime).catch(() => {});
         // Caducidad nocturna de eventos (A2, 03:00 Santiago):
         // borra eventos de más de 14 días en lotes pequeños, solo
         // si el día va frío (<70% del límite). Corre aunque el
