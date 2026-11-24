@@ -114,7 +114,13 @@ jobs:
         env:
           PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
           PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
-        run: python -m clipagent.panel_credentials
+        run: |
+          # El tenant tambien va a $GITHUB_ENV: el env del paso de
+          # bootstrap es solo de ese paso y la revalidación lo exige
+          # (require_tenant falla sin PANEL_TENANT; así fallaron las
+          # dos primeras corridas, runs 45420621290 y 45421600281).
+          echo "PANEL_TENANT=${{ github.event.client_payload.tenant || inputs.tenant }}" >> "$GITHUB_ENV"
+          python -m clipagent.panel_credentials
       - name: Revalidar clips pendientes
         run: |
           ARGS=""
