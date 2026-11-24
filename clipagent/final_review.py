@@ -471,6 +471,11 @@ _RUBIUS_BANNER_DARK_FRAC = 0.50  # fracción mínima de fondo casi
 # Cobertura mínima de blanco en cada banda para darla por tocada.
 _RUBIUS_SUBS_EDGE_W = 150
 _RUBIUS_SUBS_EDGE_COV = 0.10
+_RUBIUS_SUBS_OUTLINE_FRAC = 0.03  # fracción mínima de píxeles
+# blancos-con-contorno-negro en cada banda para darla por tocada
+# (Fix 3, 2026-11-24: scooter real 0.034-0.092 por borde,
+# FP 119/179 <= 0.0148; umbral en config.yaml
+# validator.rubius_subs_outline_frac, requerido)
 # SFX: correlación mínima con un efecto del pack (scooter ≤0.22,
 # 52h ≥0.98: boom 0.994, riser 0.979).
 _SFX_MIN_NCC = 0.5
@@ -553,6 +558,13 @@ def _subs_edge_coverages(arr, zy0, zy1, edge_w=None):
     bordes a la vez. Una línea completa sí (caso scooter 2026-11-21).
     ``edge_w`` sale de config.yaml (validator.rubius_subs_edge_w)
     vía template_gate; sin él, la constante calibrada.
+
+    LEGADO (Fix 3, 2026-11-24): la puerta ya no usa este medidor
+    para ``subtitulos_una_palabra`` — el blanco sin contorno es
+    juego, no texto (ver ``_subs_edge_outlined_coverages``). Se
+    conserva porque el espejo ``render_gate`` lo usaba y hay
+    calibraciones antiguas que lo citan; no volver a usarlo como
+    detector de texto.
     """
     zone = arr[zy0:zy1]
     white = ((zone[:, :, 0] >= 200) & (zone[:, :, 1] >= 200)
@@ -565,6 +577,45 @@ def _subs_edge_coverages(arr, zy0, zy1, edge_w=None):
     if edge <= 0:
         return 0.0, 0.0
     return float(has[:edge].mean()), float(has[-edge:].mean())
+
+
+def _subs_edge_outlined_coverages(arr, zy0, zy1, edge_w=None):
+    """Cobertura de TEXTO (blanco con contorno negro) en los
+    bordes izquierdo/derecho de la zona de subtítulos, por borde
+    (fracción de píxeles de la franja, denominador
+    ``edge_w`` x alto de la zona).
+
+    Blanco = 3 canales >= 200; negro = 3 canales < 60 (convención
+    por canal, como ``_BLACK``). El negro se dilata 5x5 SOBRE el
+    recorte zy0:zy1 (el negro fuera del recorte no cuenta). Un
+    píxel cuenta si es blanco Y tiene negro dilatado cerca: texto
+    blanco con contorno negro. El juego claro (cielo, mapa, suelo)
+    es blanco sin negro pegado y no cuenta (Fix 3, casos 119/179
+    del run 45310466231: blanco en bordes 0.10-0.92, con contorno
+    <= 0.0148). Solo numpy, sin rama cv2: los jobs vivos sin
+    ``vision`` no tienen cv2.
+    """
+    import numpy as np
+    zone = arr[zy0:zy1]
+    white = ((zone[:, :, 0] >= 200) & (zone[:, :, 1] >= 200)
+             & (zone[:, :, 2] >= 200))
+    black = ((zone[:, :, 0] < 60) & (zone[:, :, 1] < 60)
+             & (zone[:, :, 2] < 60))
+    padded = np.pad(black, 2, mode="constant", constant_values=False)
+    dil = np.zeros_like(black)
+    for dy in range(5):
+        for dx in range(5):
+            dil |= padded[dy:dy + black.shape[0],
+                          dx:dx + black.shape[1]]
+    out = white & dil
+    w = int(arr.shape[1])
+    edge = min(edge_w if edge_w is not None else _RUBIUS_SUBS_EDGE_W,
+               w // 2)
+    if edge <= 0:
+        return 0.0, 0.0
+    denom = float((zy1 - zy0) * edge)
+    return (float(out[:, :edge].sum()) / denom,
+            float(out[:, -edge:].sum()) / denom)
 
 
 def _ncc_best(x, y, sr):
@@ -1458,8 +1509,8 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     yellow_frac = (float(vcfg["rubius_banner_yellow_frac"]) if vcfg
                    else _RUBIUS_BANNER_YELLOW_FRAC)
     edge_w = int(vcfg["rubius_subs_edge_w"]) if vcfg else None
-    edge_cov = (float(vcfg["rubius_subs_edge_cov"]) if vcfg
-                else _RUBIUS_SUBS_EDGE_COV)
+    outline_frac = (float(vcfg["rubius_subs_outline_frac"]) if vcfg
+                    else _RUBIUS_SUBS_OUTLINE_FRAC)
     window = [(ts, a) for ts, a in arrays
               if t0 <= ts <= t1]
     pool = window if window else arrays
@@ -1505,26 +1556,39 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     # scooter 2026-11-21: 4/7 fotogramas con texto en ambos
     # bordes; 52h: 0/5). Solo con SRT: sin SRT la presencia no se
     # puede verificar y queda débil, como subtitulos_blancos.
-    # 2026-11-24: UN solo fotograma con ambos bordes no es línea
-    # completa. El juego claro (cielo, carretera) cubre los bordes
-    # con blanco aunque el subtítulo sea una sola palabra centrada
-    # (IlloJuan 45299157326: 1/18 en t=39.0s, palabra "But"). Falla
-    # solo si hay >=2 fotogramas Y >10% de los activos: la línea
-    # completa real es sistemática (scooter 4/7, 57%).
+    # 2026-11-24 (Fix 3): el defecto era de ATRIBUCIÓN, no de
+    # conteo — el juego claro (cielo, mapa, suelo) cubre los
+    # bordes con blanco aunque el subtítulo sea una sola palabra
+    # centrada (119/179 del run 45310466231: 2 fotogramas cada
+    # uno). El check ya no mide blanco, mide TEXTO: blanco con
+    # contorno negro pegado (``_subs_edge_outlined_coverages``,
+    # por borde, umbral ``rubius_subs_outline_frac``). El scooter
+    # real da 0.034-0.092 por borde; los FP 119/179, <= 0.0148.
+    # Se conserva la regla de conteo Fix 2 (falla solo si hay
+    # >=2 fotogramas Y >10% de los activos: la línea completa
+    # real es sistemática) y NO hay vía de severidad: un solo
+    # fotograma, por alto que sea su outlined, nunca falla
+    # (decisión conservadora, spec §8.4).
     if spans and active:
         both = 0
         both_ts = []
+        worst_l = 0.0
+        worst_r = 0.0
         for _ts, a in active:
-            left, right = _subs_edge_coverages(a, zy0, zy1, edge_w=edge_w)
-            if (left >= edge_cov
-                    and right >= edge_cov):
+            left, right = _subs_edge_outlined_coverages(
+                a, zy0, zy1, edge_w=edge_w)
+            worst_l = max(worst_l, left)
+            worst_r = max(worst_r, right)
+            if left > outline_frac and right > outline_frac:
                 both += 1
                 both_ts.append(_ts)
         share = both / len(active) if active else 0.0
         check("subtitulos_una_palabra",
               not (both >= 2 and share > 0.10),
-              f"{both} fotogramas con texto en ambos bordes "
-              f"({share:.0%} de {len(active)} activos)"
+              f"{both} fotogramas con texto con contorno en ambos "
+              f"bordes ({share:.0%} de {len(active)} activos; "
+              f"con contorno máx L={worst_l:.3f} R={worst_r:.3f}, "
+              f"umbral {outline_frac:.2f})"
               + (f" en t={both_ts}" if both_ts else ""),
               "subtítulos de línea completa (no palabra por palabra)")
     else:

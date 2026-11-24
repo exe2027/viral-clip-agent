@@ -84,6 +84,9 @@ _RUBIUS_BANNER_DARK_FRAC = 0.50  # fracción mínima de fondo casi
     # negro en la zona
 _RUBIUS_SUBS_EDGE_W = 150
 _RUBIUS_SUBS_EDGE_COV = 0.10
+_RUBIUS_SUBS_OUTLINE_FRAC = 0.03  # fracción mínima de píxeles
+# blancos-con-contorno-negro en cada banda para darla por tocada
+# (Fix 3, 2026-11-24; espejo de final_review.py)
 _SFX_MIN_NCC = 0.5
 
 _SFX_TEMPLATE_CACHE = {}
@@ -174,6 +177,33 @@ def _subs_edge_coverages(arr, zy0, zy1, edge_w=None):
     if edge <= 0:
         return 0.0, 0.0
     return float(has[:edge].mean()), float(has[-edge:].mean())
+
+
+def _subs_edge_outlined_coverages(arr, zy0, zy1, edge_w=None):
+    """Espejo de ``final_review._subs_edge_outlined_coverages``:
+    cobertura de TEXTO (blanco con contorno negro) por borde.
+    Mantener sincronizados (Fix 3, 2026-11-24)."""
+    import numpy as np
+    zone = arr[zy0:zy1]
+    white = ((zone[:, :, 0] >= 200) & (zone[:, :, 1] >= 200)
+             & (zone[:, :, 2] >= 200))
+    black = ((zone[:, :, 0] < 60) & (zone[:, :, 1] < 60)
+             & (zone[:, :, 2] < 60))
+    padded = np.pad(black, 2, mode="constant", constant_values=False)
+    dil = np.zeros_like(black)
+    for dy in range(5):
+        for dx in range(5):
+            dil |= padded[dy:dy + black.shape[0],
+                          dx:dx + black.shape[1]]
+    out = white & dil
+    w = int(arr.shape[1])
+    edge = min(edge_w if edge_w is not None else _RUBIUS_SUBS_EDGE_W,
+               w // 2)
+    if edge <= 0:
+        return 0.0, 0.0
+    denom = float((zy1 - zy0) * edge)
+    return (float(out[:, :edge].sum()) / denom,
+            float(out[:, -edge:].sum()) / denom)
 
 
 def _ncc_best(x, y, sr):
@@ -427,6 +457,9 @@ def _validator_cfg(cfg):
             vcfg.get("rubius_subs_edge_w", _RUBIUS_SUBS_EDGE_W)),
         "rubius_subs_edge_cov": float(
             vcfg.get("rubius_subs_edge_cov", _RUBIUS_SUBS_EDGE_COV)),
+        "rubius_subs_outline_frac": float(
+            vcfg.get("rubius_subs_outline_frac",
+                     _RUBIUS_SUBS_OUTLINE_FRAC)),
         "sfx_min_ncc": float(
             vcfg.get("sfx_min_ncc", _SFX_MIN_NCC)),
     }
@@ -525,7 +558,7 @@ def render_gate(clip_path, srt_path=None, cfg=None, out_dir=None):
     t1 = vcfg["rubius_banner_t1"]
     yellow_frac = vcfg["rubius_banner_yellow_frac"]
     edge_w = vcfg["rubius_subs_edge_w"]
-    edge_cov = vcfg["rubius_subs_edge_cov"]
+    outline_frac = vcfg["rubius_subs_outline_frac"]
     window = [(ts, a) for ts, a in arrays if t0 <= ts <= t1]
     pool = window if window else arrays
     banner_frames = 0
@@ -558,13 +591,28 @@ def render_gate(clip_path, srt_path=None, cfg=None, out_dir=None):
         _check("subtitulos_blancos", True,
                "sin SRT: presencia no verificada (débil)", "")
     if spans and active:
+        # Fix 3: misma regla que final_review (ambos >= 2 Y > 10%
+        # de los activos; antes era tolerancia cero, both == 0).
+        # El espejo ya no diverge del gate que decide.
         both = 0
+        both_ts = []
+        worst_l = 0.0
+        worst_r = 0.0
         for _ts, a in active:
-            left, right = _subs_edge_coverages(a, zy0, zy1, edge_w=edge_w)
-            if left >= edge_cov and right >= edge_cov:
+            left, right = _subs_edge_outlined_coverages(
+                a, zy0, zy1, edge_w=edge_w)
+            worst_l = max(worst_l, left)
+            worst_r = max(worst_r, right)
+            if left > outline_frac and right > outline_frac:
                 both += 1
-        _check("subtitulos_una_palabra", both == 0,
-               f"{both} fotogramas con texto en ambos bordes",
+                both_ts.append(_ts)
+        share = both / len(active) if active else 0.0
+        _check("subtitulos_una_palabra", not (both >= 2 and share > 0.10),
+               f"{both} fotogramas con texto con contorno en ambos "
+               f"bordes ({share:.0%} de {len(active)} activos; "
+               f"con contorno máx L={worst_l:.3f} R={worst_r:.3f}, "
+               f"umbral {outline_frac:.2f})"
+               + (f" en t={both_ts}" if both_ts else ""),
                "subtítulos de línea completa (no palabra por palabra)")
     else:
         _check("subtitulos_una_palabra", True,

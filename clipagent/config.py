@@ -682,7 +682,8 @@ def load_validator_config(cfg=None):
         # con subtítulos de línea completa o sin SFX.
         "rubius_banner_t0", "rubius_banner_t1",
         "rubius_banner_yellow_frac", "rubius_subs_edge_w",
-        "rubius_subs_edge_cov", "sfx_min_ncc",
+        "rubius_subs_edge_cov", "rubius_subs_outline_frac",
+        "sfx_min_ncc",
     )
     missing = [k for k in required if k not in section]
     if missing:
@@ -763,6 +764,8 @@ def load_validator_config(cfg=None):
             section["rubius_banner_yellow_frac"]),
         "rubius_subs_edge_w": int(section["rubius_subs_edge_w"]),
         "rubius_subs_edge_cov": float(section["rubius_subs_edge_cov"]),
+        "rubius_subs_outline_frac": float(
+            section["rubius_subs_outline_frac"]),
         "sfx_min_ncc": float(section["sfx_min_ncc"]),
         "enabled": bool(review["enabled"]),
         "observe_only": bool(review["observe_only"]),

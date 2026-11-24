@@ -66,6 +66,7 @@ def _cfg_dict(**over):
             "rubius_banner_t0": 0.5, "rubius_banner_t1": 3.5,
             "rubius_banner_yellow_frac": 0.30,
             "rubius_subs_edge_w": 150, "rubius_subs_edge_cov": 0.10,
+            "rubius_subs_outline_frac": 0.03,
             "sfx_min_ncc": 0.5,
             "chain": ["facecrop", "edge", "yunet"],
         },
@@ -600,6 +601,24 @@ class TestConfigUnSoloSitio(unittest.TestCase):
         with self.assertRaises(ConfigError):
             fr.validate_final_clip(_make_video("rubius"), "Título",
                                    cfg=cfg)
+
+    def test_quitar_outline_frac_falla_en_voz_alta(self):
+        """Fix 3: sin validator.rubius_subs_outline_frac el run
+        para en voz alta (sin defaults silenciosos): la puerta no
+        puede medir texto sin su umbral."""
+        from clipagent.validate import ConfigError
+        cfg = _cfg_dict()
+        del cfg["validator"]["rubius_subs_outline_frac"]
+        with self.assertRaises(ConfigError) as ctx:
+            load_validator_config(cfg)
+        self.assertIn("rubius_subs_outline_frac",
+                      str(ctx.exception))
+
+    def test_outline_frac_resuelto_vale_003(self):
+        """La clave requerida se resuelve y llega al gate con el
+        valor calibrado (R9: scooter 0.034-0.092, FP <= 0.015)."""
+        vcfg = load_validator_config(_cfg_dict())
+        self.assertEqual(vcfg["rubius_subs_outline_frac"], 0.03)
 
     def test_sin_seccion_templates_falla_en_voz_alta(self):
         from clipagent.validate import ConfigError

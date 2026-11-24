@@ -571,6 +571,12 @@ validator:
   rubius_banner_yellow_frac: 0.30  # el amarillo debe dominar >=30% de la zona del banner (scooter 0.004, 52h 0.79)
   rubius_subs_edge_w: 150    # ancho (px) de cada banda lateral de la zona de subtítulos
   rubius_subs_edge_cov: 0.10 # cobertura blanca mínima en cada banda para darla por tocada
+  # Fix 3 (2026-11-24): fracción mínima de píxeles BLANCOS CON
+  # CONTORNO NEGRO en cada banda para darla por tocada. El blanco
+  # sin contorno es juego claro, no texto (scooter real 0.034-0.092
+  # por borde; FP 119/179 <= 0.0148). Clave REQUERIDA por
+  # load_validator_config: sin ella el run para (sin defaults).
+  rubius_subs_outline_frac: 0.03
   sfx_min_ncc: 0.5           # correlación mínima con un efecto del pack SFX (scooter <=0.22, 52h >=0.98)
 
 # Plantillas del validador final (2026-11-19). TRES recetas

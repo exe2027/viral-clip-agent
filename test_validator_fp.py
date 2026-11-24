@@ -37,6 +37,20 @@ hablados sin dip de silencio ni grito ni fail. La puerta ahora
 verifica lo que SE DECIDIÓ poner: si no se decidió nada, pasa;
 si se decidió SFX y no aparece en el audio, sigue fallando
 (el mezclador roto sigue detectándose).
+
+2026-11-24 (Fix 3, spec SPEC-2026-11-24-fix3-una-palabra.md):
+7. subtitulos_una_palabra: el defecto era de ATRIBUCIÓN, no de
+conteo — el juego claro cubre los bordes con blanco aunque el
+subtítulo sea una sola palabra (119/179 del run 45310466231).
+El check ya no mide blanco, mide TEXTO: blanco con contorno
+negro pegado, por borde, umbral 0.03 (R9: scooter real
+0.034-0.092 por borde, FP 119/179 <= 0.0148). Los bloques
+lisos de _paint_both_edges son juego, no texto: ya no fallan.
+Los fixtures sintéticos se repintan con glifos reales (Arial
+Black 100 px, contorno 10, como el render rubius; en CI,
+DejaVuSans-Bold 100/10 como equivalente portátil) y cada
+fixture declara su outlined MEDIDO. Los 4 fotogramas FP
+reales viven en testdata/fix3-una-palabra/.
 """
 
 import json
@@ -602,7 +616,11 @@ class TestBannerTitlePresentHelpers(unittest.TestCase):
 def _paint_both_edges(arrays, idxs):
     """Pinta blanco los dos bordes de la zona de subtítulos
     (filas 900-1020, cols 0-150 y 930-1080) en los fotogramas
-    indicados: imita un fotograma con texto en ambos bordes."""
+    indicados. LEGADO (Fix 2): los bloques lisos son JUEGO, no
+    texto — con Fix 3 ya no disparan el check (ver
+    test_bloques_lisos_ya_no_son_texto). No usar como modelo de
+    "texto": un bloque sólido sobre fondo oscuro dispara el
+    medidor nuevo solo por adyacencia bloque/fondo."""
     out = []
     for i, (ts, a) in enumerate(arrays):
         a = a.copy()
@@ -613,15 +631,91 @@ def _paint_both_edges(arrays, idxs):
     return out
 
 
+def _subs_font(size=100):
+    """Fuente del estilo rubius para los fixtures: Arial Black
+    (100 px, contorno 10, como el render real) cuando está
+    disponible; en CI, DejaVuSans-Bold 100/10 como equivalente
+    portátil (misma talla y mismo contorno). Los tests comprueban
+    umbrales, no el valor exacto, así que ambas valen."""
+    from PIL import ImageFont
+
+    for p in (os.path.expanduser("~/.fonts/arial-black.ttf"),
+              "/usr/share/fonts/truetype/arial-black.ttf"):
+        if os.path.isfile(p):
+            return ImageFont.truetype(p, size), "Arial Black"
+    return ImageFont.truetype(
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        size), "DejaVuSans-Bold"
+
+
+def _paint_text_line(arr, text, y=905):
+    """Pinta UNA línea de texto blanco con contorno negro (estilo
+    rubius: 100 px, contorno 10) centrada en la zona de
+    subtítulos (filas 900-1020). Si la línea es más ancha que el
+    fotograma se recorta por los lados, como la real del scooter
+    (que ocupa dos líneas a 141 px). Devuelve el array."""
+    from PIL import Image, ImageDraw
+
+    font, _name = _subs_font(100)
+    img = Image.fromarray(arr)
+    d = ImageDraw.Draw(img)
+    tw = d.textlength(text, font=font)
+    d.text(((1080 - tw) / 2, y), text, font=font,
+           fill=(255, 255, 255), stroke_width=10,
+           stroke_fill=(0, 0, 0))
+    return np.asarray(img)
+
+
+def _paint_text_both_edges(arrays, idxs,
+                           text="No, see I feel bad now, bro"):
+    """Pinta una línea completa con contorno en los fotogramas
+    indicados: el modelo de "texto en ambos bordes" de Fix 3.
+    Con Arial Black 100/10 la línea mide outlined L=0.064
+    R=0.051 (medido); con DejaVuSans-Bold 100/10, L/R > 0.05
+    igualmente (los tests comprueban > 0.05, no el valor exacto)."""
+    out = []
+    for i, (ts, a) in enumerate(arrays):
+        if i in idxs:
+            a = _paint_text_line(a, text)
+        out.append((ts, a))
+    return out
+
+
+def _paint_text_centered(arrays, idxs, text="tema,"):
+    """Pinta UNA palabra centrada con contorno en los fotogramas
+    indicados: no toca las franjas (outlined en bordes 0.0000,
+    medido con Arial Black 100/10)."""
+    out = []
+    for i, (ts, a) in enumerate(arrays):
+        if i in idxs:
+            a = _paint_text_line(a, text)
+        out.append((ts, a))
+    return out
+
+
+def _load_fixture(name):
+    """Un fotograma real de testdata/fix3-una-palabra/ como
+    array 1080x1920."""
+    from PIL import Image
+
+    return np.asarray(Image.open(
+        os.path.join(HERE, "testdata", "fix3-una-palabra", name)
+    ).convert("RGB"))
+
+
 class TestUnaPalabraTolerancia(unittest.TestCase):
     """2026-11-24: un solo fotograma con ambos bordes no es
     línea completa (el juego claro cubre los bordes). Falla
-    solo si hay >=2 fotogramas Y >10% de los activos."""
+    solo si hay >=2 fotogramas Y >10% de los activos.
+
+    Fix 3: los fixtures se repintan con glifos reales con
+    contorno (los bloques lisos son juego, no texto)."""
 
     def test_un_fotograma_de_18_pasa_caso_illojuan(self):
         """El caso real: 1/18 en t=39.0s, palabra "But" (el
         blanco de los bordes era el cielo del juego)."""
-        arrays = _paint_both_edges(_word_white_arrays(n=19), {18})
+        arrays = _paint_text_both_edges(
+            _word_white_arrays(n=19), {18})
         checks = _run_word_white(arrays, [(0.0, 100.0)])
         self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
                         checks["subtitulos_una_palabra"])
@@ -629,15 +723,24 @@ class TestUnaPalabraTolerancia(unittest.TestCase):
     def test_un_fotograma_de_4_pasa_denominador_pequeno(self):
         """El mismo defecto físico (1 fotograma) no puede pasar
         o fallar según cuánto habló el streamer."""
-        arrays = _paint_both_edges(_word_white_arrays(n=5), {4})
+        arrays = _paint_text_both_edges(
+            _word_white_arrays(n=5), {4})
         checks = _run_word_white(arrays, [(0.0, 100.0)])
         self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
                         checks["subtitulos_una_palabra"])
 
     def test_cuatro_de_6_sigue_fallando_caso_scooter(self):
-        """La línea completa real es sistemática (scooter 4/7)."""
-        arrays = _paint_both_edges(
+        """La línea completa real es sistemática (scooter 4/7).
+        Fixture repintado con glifos reales: outlined medido
+        L=0.064 R=0.051 por fotograma (Arial Black 100/10)."""
+        from clipagent.final_review import (
+            _subs_edge_outlined_coverages as outlined)
+
+        arrays = _paint_text_both_edges(
             _word_white_arrays(n=7), {2, 3, 4, 5})
+        left, right = outlined(arrays[2][1], 900, 1020)
+        self.assertGreater(left, 0.05, (left, right))
+        self.assertGreater(right, 0.05, (left, right))
         checks = _run_word_white(arrays, [(0.0, 100.0)])
         self.assertFalse(checks["subtitulos_una_palabra"]["pasa"],
                          checks["subtitulos_una_palabra"])
@@ -645,11 +748,165 @@ class TestUnaPalabraTolerancia(unittest.TestCase):
     def test_dos_de_19_sigue_fallando(self):
         """2 fotogramas Y 10.5% > 10%: sigue siendo línea
         completa, no ruido de un fotograma."""
-        arrays = _paint_both_edges(
+        arrays = _paint_text_both_edges(
             _word_white_arrays(n=20), {18, 19})
         checks = _run_word_white(arrays, [(0.0, 100.0)])
         self.assertFalse(checks["subtitulos_una_palabra"]["pasa"],
                          checks["subtitulos_una_palabra"])
+
+    def test_bloques_lisos_ya_no_son_texto(self):
+        """Cambio de comportamiento Fix 3: los bloques blancos
+        lisos (el viejo _paint_both_edges) son juego claro, no
+        texto con contorno. 4/7 con bloques ya NO fallan el check
+        (antes sí). Si este test se pone rojo, alguien volvió a
+        contar blanco sin contorno."""
+        arrays = _paint_both_edges(
+            _word_white_arrays(n=7), {2, 3, 4, 5})
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
+                        checks["subtitulos_una_palabra"])
+
+
+class TestUnaPalabraContorno(unittest.TestCase):
+    """Fix 3 (spec SPEC-2026-11-24-fix3-una-palabra.md): el check
+    mide texto (blanco con contorno negro) por borde, umbral 0.03.
+    Casos R1/R2/R3/R8 de la spec + positivo real del scooter."""
+
+    def test_r1_r2_fotogramas_reales_pasan(self):
+        """R1/R2: los 4 fotogramas FP reales del run 45310466231
+        (burn 119 gate_11/20, thegrefg 179 gate_04/05) pasan con
+        Fix 3. Outlined medido por borde <= 0.015 en los 4
+        (peor: burn gate_11 L=0.0144). Con el medidor viejo
+        (blanco) estos 4 fotogramas tumbaban los clips: burn 2/14
+        activos = 14.3% > 10%, thegrefg 2/7 = 28.6%."""
+        from clipagent.final_review import (
+            _subs_edge_outlined_coverages as outlined)
+
+        frames = [
+            (21.0, "burn-119-gate-11-21.0s.jpg"),
+            (39.0, "burn-119-gate-20-39.0s.jpg"),
+            (7.0, "thegrefg-179-gate-04-7.0s.jpg"),
+            (9.0, "thegrefg-179-gate-05-9.0s.jpg"),
+        ]
+        arrays = []
+        for ts, name in frames:
+            arr = _load_fixture(name)
+            left, right = outlined(arr, 900, 1020)
+            self.assertLessEqual(left, 0.015, (name, left, right))
+            self.assertLessEqual(right, 0.015, (name, left, right))
+            arrays.append((ts, arr))
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
+                        checks["subtitulos_una_palabra"])
+
+    def test_r3_linea_sintetica_con_contorno_falla(self):
+        """R3: línea completa sintética con contorno (estilo de
+        producción: 100 px, contorno 10) en 2 de 7 fotogramas:
+        falla. Outlined medido L=0.064 R=0.051 por fotograma."""
+        from clipagent.final_review import (
+            _subs_edge_outlined_coverages as outlined)
+
+        arrays = _paint_text_both_edges(
+            _word_white_arrays(n=7), {2, 3})
+        left, right = outlined(arrays[2][1], 900, 1020)
+        self.assertGreater(left, 0.05, (left, right))
+        self.assertGreater(right, 0.05, (left, right))
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertFalse(checks["subtitulos_una_palabra"]["pasa"],
+                         checks["subtitulos_una_palabra"])
+
+    def test_r3_tambien_con_vcfg_de_config(self):
+        """La misma R3 pero con la vcfg de config.yaml (la vía
+        de producción, con la clave requerida): mismo veredicto."""
+        arrays = _paint_text_both_edges(
+            _word_white_arrays(n=7), {2, 3})
+        checks = {}
+
+        def _check(name, ok, medicion, motivo=""):
+            checks[name] = {"pasa": bool(ok), "medicion": medicion,
+                            "motivo": motivo if not ok else ""}
+            return bool(ok)
+
+        _template_word_white(
+            _check, arrays, [(0.0, 100.0)], RUBIUS_RECIPE, {},
+            vcfg=dict(VCFG_TEMPLATE))
+        self.assertFalse(checks["subtitulos_una_palabra"]["pasa"],
+                         checks["subtitulos_una_palabra"])
+
+    def test_r8_palabra_centrada_pasa(self):
+        """R8: una sola palabra centrada ("tema,") con contorno
+        no toca las franjas: outlined en bordes 0.0000 (medido)."""
+        from clipagent.final_review import (
+            _subs_edge_outlined_coverages as outlined)
+
+        arrays = _paint_text_centered(
+            _word_white_arrays(n=7), {2, 3, 4, 5})
+        left, right = outlined(arrays[2][1], 900, 1020)
+        self.assertEqual((left, right), (0.0, 0.0))
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
+                        checks["subtitulos_una_palabra"])
+
+    def test_scooter_publicado_real_falla(self):
+        """Positivo real R9: dos fotogramas del scooter publicado
+        (t=22 s y t=24 s, línea completa quemada en la fuente)
+        entre 7 activos: 2/7 = 28.6% > 10% -> falla. Outlined
+        medido: t22 L=0.0918 R=0.0805, t24 L=0.0918 R=0.0804.
+        (La línea del scooter NO viene de ningún evento ASS: está
+        quemada en el vídeo fuente, por eso la opción B no la
+        vería; solo el discriminador sobre el render la ve.)"""
+        from clipagent.final_review import (
+            _subs_edge_outlined_coverages as outlined)
+
+        arrays = []
+        for i, (ts, name) in enumerate(
+                [(22.0, "scooter-publicado-t22s.jpg"),
+                 (24.0, "scooter-publicado-t24s.jpg")]):
+            arr = _load_fixture(name)
+            left, right = outlined(arr, 900, 1020)
+            self.assertGreater(left, 0.05, (name, left, right))
+            self.assertGreater(right, 0.05, (name, left, right))
+            arrays.append((ts, arr))
+        base = _word_white_arrays(n=5)
+        arrays = arrays + [(float(30 + 2 * i), a) for i, (_t, a)
+                           in enumerate(base)]
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertFalse(checks["subtitulos_una_palabra"]["pasa"],
+                         checks["subtitulos_una_palabra"])
+
+    def test_espejo_render_gate_coincide(self):
+        """El espejo render_gate.py mide lo mismo que
+        final_review.py en los 4 FP reales + el scooter + un
+        sintético con contorno."""
+        from clipagent.final_review import (
+            _subs_edge_outlined_coverages as outlined1)
+        from clipagent.render_gate import (
+            _subs_edge_outlined_coverages as outlined2)
+
+        names = ["burn-119-gate-11-21.0s.jpg",
+                 "burn-119-gate-20-39.0s.jpg",
+                 "thegrefg-179-gate-04-7.0s.jpg",
+                 "thegrefg-179-gate-05-9.0s.jpg",
+                 "scooter-publicado-t22s.jpg"]
+        for name in names:
+            arr = _load_fixture(name)
+            self.assertEqual(outlined1(arr, 900, 1020),
+                             outlined2(arr, 900, 1020), name)
+        painted = _paint_text_line(
+            _word_white_arrays(n=1)[0][1],
+            "No, see I feel bad now, bro")
+        self.assertEqual(outlined1(painted, 900, 1020),
+                         outlined2(painted, 900, 1020))
+
+    def test_un_solo_fotograma_muy_alto_no_falla(self):
+        """Spec §8.4 (decisión conservadora): sin vía de
+        severidad — un solo fotograma con outlined muy alto
+        (línea completa de 0.064/0.051) no falla si es 1 de 19."""
+        arrays = _paint_text_both_edges(
+            _word_white_arrays(n=19), {10})
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
+                        checks["subtitulos_una_palabra"])
 
 
 VCFG_TEMPLATE = {
@@ -659,6 +916,7 @@ VCFG_TEMPLATE = {
     "rubius_banner_yellow_frac": 0.30,
     "rubius_subs_edge_w": 150,
     "rubius_subs_edge_cov": 0.10,
+    "rubius_subs_outline_frac": 0.03,
     "sfx_min_ncc": 0.5,
 }
 
