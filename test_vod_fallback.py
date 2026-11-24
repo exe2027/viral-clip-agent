@@ -96,6 +96,8 @@ class FakeBridge:
         self.created = []
         self.uploaded = []
         self.published = []
+        self.patched = []
+        self.previews = []
         self._next_id = 100
 
     def list_clips(self):
@@ -111,6 +113,14 @@ class FakeBridge:
 
     def upload_video(self, clip_id, video_path):
         self.uploaded.append((clip_id, video_path))
+        return {"ok": True}
+
+    def update_clip(self, clip_id, fields):
+        self.patched.append((clip_id, fields))
+        return {"ok": True}
+
+    def preview_seen(self, clip_id):
+        self.previews.append(clip_id)
         return {"ok": True}
 
     def publish_clip(self, clip_id):
@@ -426,6 +436,116 @@ class TestBurnAndEnqueue(unittest.TestCase):
             f.write("1\n00:00:00,000 --> 00:00:02,000\nHola\n")
         res = subtitle_clip(self.video, cfg={})
         self.assertEqual(res["style"], "rubius")
+
+
+class TestBurnAndEnqueueSeoPatch(unittest.TestCase):
+    """burn_and_enqueue (2026-11-24, auto-seo): el POST no lleva
+    seo_scores (la puerta SEO del POST tiraría los de máximo < 80);
+    el SEO y el veredicto viajan en un PATCH posterior. Solo
+    plataformas con número medido: nunca 0 por una sin medir."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.tmp.name, "clips"), exist_ok=True)
+        self.video = os.path.join(self.tmp.name, "clips", "clip_01.mp4")
+        with open(self.video, "wb") as f:
+            f.write(b"fake-mp4")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _patch_subtitles(self, **result):
+        defaults = {"publish_blocked": False, "no_speech": False,
+                    "srt": self.video + ".srt", "burn": self.video,
+                    "transcript": None}
+        defaults.update(result)
+        patcher = mock.patch("clipagent.workers.subtitle_clip",
+                             return_value=defaults)
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def _patch_review(self, decision="aprobado"):
+        verdict = {"decision": decision,
+                   "pasa": decision == "aprobado",
+                   "hard_pasa": decision == "aprobado",
+                   "needs_rerender": False, "rerender_reason": "",
+                   "hard_failures": [], "motivo": "", "resumen": decision,
+                   "fallos": [],
+                   "scores": {"momento_comprensible": 8,
+                              "titulo_legible": 8,
+                              "sin_barras_negras": 8,
+                              "webcam_visible": 8},
+                   "frames_n": 0, "model": "", "transcript_words": 50,
+                   "observe_only": True,
+                   "face": {"pasa": True},
+                   "template": {"pasa": True, "checks": {
+                       "dimensiones": {"pasa": True},
+                       "titulo_banner": {"pasa": True}}},
+                   "gemini": {"decision": decision}}
+        patcher = mock.patch(
+            "clipagent.final_review.validate_final_clip",
+            return_value=verdict)
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def _clip_con_thumb(self, **over):
+        clip = _clip(viral={
+            "best_title": "GTA 6: Rubius descubre los cromos",
+            "game": "GTA VI",
+            "description": "Rubius descubre los cromos.",
+            "tags": ["#GTA6"],
+            "thumbnail_text": "¡QUÉ BARBARIDAD!"})
+        clip.update(over)
+        return clip
+
+    def test_post_sin_seo_y_patch_con_seo_y_veredicto(self):
+        self._patch_subtitles()
+        self._patch_review()
+        bridge = FakeBridge()
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "2932415021", self.tmp.name,
+            self._clip_con_thumb())
+        self.assertEqual(panel_id, 101, why)
+        self.assertNotIn("seo_scores", bridge.created[0])
+        self.assertEqual(len(bridge.patched), 1)
+        _cid, fields = bridge.patched[0]
+        self.assertEqual(fields["seo_scores"], {
+            "youtube_shorts": 94, "tiktok": 94,
+            "instagram_reels": 94, "facebook_reels": 94})
+        gate = fields["viral"]["quality_gate"]
+        self.assertEqual(gate["decision"], "aprobado")
+        self.assertIs(gate["pasa"], True)
+        self.assertEqual(fields["viral"]["seo_source"], "corte")
+        self.assertEqual(bridge.previews, [101])
+
+    def test_seo_parcial_solo_las_medidas(self):
+        self._patch_subtitles()
+        self._patch_review()
+        bridge = FakeBridge()
+        clip = self._clip_con_thumb(seo_scores={
+            "youtube_shorts": {"score": 94, "status": "ok"},
+            "tiktok": {"score": 91, "status": "ok"}})
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "2932415021", self.tmp.name, clip)
+        self.assertEqual(panel_id, 101, why)
+        self.assertEqual(len(bridge.patched), 1)
+        _cid, fields = bridge.patched[0]
+        self.assertEqual(fields["seo_scores"], {
+            "youtube_shorts": 94, "tiktok": 91})
+        self.assertNotIn("instagram_reels", fields["seo_scores"])
+        self.assertNotIn("facebook_reels", fields["seo_scores"])
+
+    def test_rechazado_no_postea_ni_parchea(self):
+        self._patch_subtitles()
+        self._patch_review(decision="rechazado")
+        bridge = FakeBridge()
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "2932415021", self.tmp.name,
+            self._clip_con_thumb())
+        self.assertIsNone(panel_id)
+        self.assertEqual(bridge.created, [])
+        self.assertEqual(bridge.patched, [])
+        self.assertEqual(bridge.previews, [])
 
 
 class TestLatestVodYoutube(unittest.TestCase):

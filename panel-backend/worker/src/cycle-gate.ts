@@ -125,6 +125,8 @@ export interface CycleGateDecision {
   watchdogDue: boolean;
   /** El dispatch diario de las 09:00 toca. */
   dailyDue: boolean;
+  /** La revalidación automática (cada 6 h) toca. */
+  revalidateDue: boolean;
   /** El diario de escritura previa (R2, B1) tiene algo pendiente de volcar. */
   journalPending: boolean;
 }
@@ -140,6 +142,7 @@ export function idleCycleGate(): CycleGateDecision {
     liveDue: false,
     watchdogDue: false,
     dailyDue: false,
+    revalidateDue: false,
     journalPending: false,
   };
 }
@@ -216,6 +219,26 @@ export async function isDailyDispatchDue(db: D1Database, tenant: Tenant, nowMsVa
   }
 }
 
+/** Intervalo de la revalidación automática (spec 2026-11-24,
+ *  auto-seo): cada 6 h se dispara `panel-revalidate` al workflow
+ *  cerebro-revalidate. La marca vive en settings (sin migración). */
+export const REVALIDATE_INTERVAL_MS = 6 * 3600 * 1000;
+export const REVALIDATE_LAST_KEY = "last_revalidate_at_ms";
+
+/** ¿Toca disparar la revalidación? Sin marca (nunca se disparó)
+ *  toca; si no, toca cuando pasaron >= 6 h desde la última.
+ *  Solo lectura. Fail-open: sin lectura, se dispara como antes. */
+export async function isRevalidateDue(db: D1Database, tenant: Tenant, nowMsValue: number): Promise<boolean> {
+  try {
+    const settings = await getSettings(db, tenant);
+    const last = settings[REVALIDATE_LAST_KEY];
+    if (typeof last !== "number" || last <= 0) return true;
+    return nowMsValue - last >= REVALIDATE_INTERVAL_MS;
+  } catch {
+    return true;
+  }
+}
+
 /** ¿Está pendiente un dispatch del cerebro en vivo? Solo lecturas,
  *  en orden de barato a caro:
  *   1. throttle en worker_state (último dispatch hace <15 min);
@@ -275,7 +298,8 @@ export async function cycleGate(env: Env, tenant: Tenant, nowMsValue: number): P
   const liveDue = await isLiveDispatchDue(env, tenant, nowMsValue);
   const watchdogDue = await isWatchdogDispatchDue(env.DB, tenant, nowMsValue);
   const dailyDue = await isDailyDispatchDue(env.DB, tenant, nowMsValue);
+  const revalidateDue = await isRevalidateDue(env.DB, tenant, nowMsValue);
   const run = dueSoon || reviewDue || journalPending;
   const reason: CycleWakeReason = dueSoon ? "due-job" : journalPending ? "journal" : reviewDue ? "review" : "none";
-  return { run, reason, nextDueAtMs, reviewDue, liveDue, watchdogDue, dailyDue, journalPending };
+  return { run, reason, nextDueAtMs, reviewDue, liveDue, watchdogDue, dailyDue, revalidateDue, journalPending };
 }

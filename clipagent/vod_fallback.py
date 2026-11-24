@@ -771,6 +771,37 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
                 pass
     except Exception as e:  # noqa: BLE001 - el panel no tumba la corrida
         return None, f"panel: no se pudo encolar ({e})"
+    # SEO + veredicto al panel por PATCH (2026-11-24, auto-seo): el
+    # POST no lleva seo_scores (la puerta SEO del POST tiraría los
+    # de máximo < 80); el PATCH no tiene puerta. Solo plataformas
+    # con número medido: nunca 0 por una sin medir (0 es un bloque
+    # medido, no "sin medir"). El veredicto se construye DESPUÉS
+    # del posible re-render (final_review ya es el definitivo). Si
+    # el PATCH falla, el clip ya está en la Cola y se sigue.
+    try:
+        from .quality_gate import build_quality_gate
+        _scores = {}
+        for _p in PLATFORMS:
+            _entry = (seo or {}).get(_p)
+            if isinstance(_entry, (int, float)):
+                _value = _entry
+            elif isinstance(_entry, dict):
+                _value = _entry.get("score")
+            else:
+                _value = None
+            if isinstance(_value, (int, float)):
+                _scores[_p] = _value
+        _fields = {"viral": {
+            "quality_gate": build_quality_gate(
+                final_review, thumbnail_text=thumbnail_text,
+                no_speech=no_speech),
+            "seo_source": "corte",
+        }}
+        if _scores:
+            _fields["seo_scores"] = _scores
+        bridge.update_clip(panel_id, _fields)
+    except Exception:  # noqa: BLE001 - el clip ya está en la Cola
+        pass
     return panel_id, ""
 
 

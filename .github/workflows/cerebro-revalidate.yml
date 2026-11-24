@@ -1,0 +1,122 @@
+# Revalidar clips pendientes + backfill de SEO (2026-11-24, auto-seo)
+#
+# Corre `python -m clipagent.revalidate_pending`: revisa la Cola del
+# panel y deja listos los clips que quedaron a medias (sin SEO, sin
+# veredicto o en `pendiente_revision`). Escribe de vuelta a D1 con
+# PATCH (seo_scores + quality_gate); nunca publica ni encola (eso lo
+# hace el ciclo del Worker con `auto_publish_top`). Tope 10 clips
+# por corrida, los más antiguos primero; anti-atasco de 24 h por
+# clip (evento `revalidado` en el tracking).
+#
+# Disparadores (como cerebro-live y validate-all: sin cron en
+# GitHub, un run por cron no tendría token para autenticarse):
+# - repository_dispatch panel-revalidate (lo dispara el Worker con
+#   un token de un solo uso en client_payload, cada 6 h cuando
+#   toca: maybeDispatchRevalidate en index.ts, marca
+#   `last_revalidate_at_ms` en settings).
+# - workflow_dispatch manual (tenant obligatorio). Sin token de un
+#   solo uso el bootstrap falla con mensaje claro: dispara desde
+#   el panel. No hay secreto PANEL_BRAIN_TOKEN en el repo.
+#
+# Concurrencia por tenant: dos revalidaciones del MISMO tenant
+# nunca van en paralelo (cancel-in-progress: false, encolan).
+# Timeout 60 min: 10 clips (descarga + transcripción + 1 llamada
+# Gemini por clip) caben de sobra.
+#
+# Orden de estreno (spec 2026-11-24): la primera corrida es
+# DESPUÉS de Fix 3 (commit fda26b8, ya en main) y DESPUÉS de que
+# termine el trabajo manual de puntuación en curso (la marca
+# inicial `last_revalidate_at_ms` se puso en el deploy para que el
+# primer dispatch automático caiga 6 h después).
+name: Revalidar clips pendientes (auto-seo)
+
+on:
+  repository_dispatch:
+    types: [panel-revalidate]
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant del panel (p. ej. sebastian, kaez)"
+        required: true
+      limit:
+        description: "Máximo de clips por corrida (vacío = 10)"
+        required: false
+        default: ""
+
+concurrency:
+  group: revalidate-${{ github.event.client_payload.tenant || inputs.tenant }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# URL del Worker del tenant (2026-11-23, fix f6f0a0f): el token de
+# un solo uso vive SOLO en la D1 del Worker que lo emitió. El puente
+# canjeaba siempre en avc (default) y los dispatches de kaez daban
+# 401 "Token del cerebro inválido". La sesión canjeada solo vale en
+# ese Worker, así que la URL es la misma en todo el workflow.
+env:
+  PANEL_BASE_URL: ${{ (github.event.client_payload.tenant || inputs.tenant) == 'kaez' && 'https://avc-kaez.clipsultravirales768.workers.dev' || 'https://avc.vikingosfoodspa.workers.dev' }}
+
+jobs:
+  revalidate:
+    name: Revalidar clips pendientes
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache de pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
+      - name: Instalar ffmpeg y dependencias
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          # whisper (transcripción a SRT) y vision (OpenCV) SON
+          # obligatorios aquí: sin cv2 la puerta de cara no tiene
+          # ningún eslabón disponible y TODOS los clips se
+          # descartan (así se perdieron los clips live del 20 al
+          # 23-nov: el job instalaba solo .[whisper]). No quitar
+          # vision de este install.
+          python -m pip install -q -e ".[whisper,vision]"
+          # Arial Black GENUINA (plantilla v2, 2026-11-18): la
+          # puerta de plantilla verifica la fuente en píxeles
+          # (fuente_ariblk). Sin ella libass cae a otra fuente y
+          # el chequeo falla aunque el montaje esté bien. Mismo
+          # bloque que cerebro-live.yml y validate-all.yml.
+          if ! fc-list | grep -qi "Arial Black"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/ariblk.woff \
+              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+            test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+            python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+            test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
+      # Bootstrap: credenciales del tenant desde el panel. Canjea
+      # el token de un solo uso del dispatch por una sesión de 12 h
+      # (PANEL_SESSION_TOKEN en $GITHUB_ENV, la usa el loop para
+      # descargar los vídeos por GET /api/clips/:id/video) y
+      # materializa Gemini en el entorno (la capa Gemini del
+      # validador). Sin token falla con mensaje claro: dispara
+      # desde el panel. El token NO va en env: (el runner imprime
+      # el bloque env: del paso en el registro).
+      - name: Credenciales desde el panel
+        id: bootstrap
+        env:
+          PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+          PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
+        run: python -m clipagent.panel_credentials
+      - name: Revalidar clips pendientes
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
+          python -m clipagent.revalidate_pending $ARGS

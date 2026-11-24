@@ -1306,10 +1306,12 @@ class LiveCutterSession(LiveSession):
             # descripción llegaba vacía al panel).
             yt_priority = None
             pkg_desc, pkg_tags = "", []
+            pkg_data = {}
             try:
                 with open(record["package_path"],
                           encoding="utf-8") as f:
                     pkg = json.load(f)
+                pkg_data = pkg
                 yt_priority = (pkg.get("priority") or {}).get(
                     "youtube_shorts", {}).get("priority")
                 pkg_desc = pkg.get("description") or ""
@@ -1393,6 +1395,30 @@ class LiveCutterSession(LiveSession):
                     "quality_gate": record["quality_gate"]}
             clip = self.bridge.create_clip(payload)
             panel_id = clip.get("id")
+            # SEO al panel por PATCH (2026-11-24, auto-seo): el POST
+            # no lleva seo_scores en clips normales (la puerta SEO
+            # del POST tiraría los de máximo < 80, que hoy entran
+            # como borrador); el PATCH no tiene puerta. El rescate
+            # ya lo mandó en el POST y no se duplica. Si el PATCH
+            # falla, el clip ya está en la Cola: se registra y se
+            # sigue (el loop de revalidación lo rellena después).
+            if panel_id and not _is_rescue and record.get("seo"):
+                try:
+                    from .metadata import seo_inputs_from_package
+                    _viral = {"seo_source": "corte"}
+                    if pkg_data:
+                        _viral["seo_inputs"] = seo_inputs_from_package(
+                            pkg_data, self.lang)
+                    self.bridge.update_clip(panel_id, {
+                        "seo_scores": record["seo"],
+                        "viral": _viral,
+                    })
+                except Exception as _seo_exc:  # noqa: BLE001 - el
+                    # clip ya está en la Cola; el loop lo rellena.
+                    self._report_event(
+                        "seo_sin_enviar",
+                        f"{self.streamer}: «{record['title']}» SEO "
+                        f"sin enviar al panel ({_seo_exc})")
             preview_ok = False
             if panel_id and os.path.isfile(record["clip"]):
                 self.bridge.upload_video(panel_id, record["clip"])

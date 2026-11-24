@@ -1981,6 +1981,37 @@ def score_package_seo(pkg, game_verified=None, visible=None, lang="es"):
     })
 
 
+def seo_inputs_from_package(pkg, lang="es"):
+    """Entradas exactas de `score_package_seo` para un paquete.
+
+    Es el MISMO mapeo que `score_package_seo` (mismos campos, mismos
+    defaults): el cerebro lo manda al panel junto con los scores
+    (2026-11-24, auto-seo) para que el loop de revalidación pueda
+    reproducir el score del corte sin el paquete. Sin red, sin
+    Gemini, sin coste: solo lee el dict.
+    """
+    pkg = pkg or {}
+    game = pkg.get("game")
+    game_verified = bool(game) and game != "desconocido"
+    visible = pkg.get("visible")
+    if visible == "unknown":
+        visible = None
+    hashtags = []
+    platforms = pkg.get("platforms") or {}
+    if platforms:
+        yt = platforms.get("youtube_shorts") or {}
+        hashtags = yt.get("hashtags") or []
+    if not hashtags:
+        hashtags = pkg.get("hashtags") or []
+    return {
+        "hashtags": list(hashtags),
+        "visible": visible,
+        "game_verified": game_verified,
+        "keyword": "GTA 6" if (game or "GTA 6") in ("GTA 6", "GTA VI") else (game or "GTA 6"),
+        "lang": lang,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Self-test (arreglos 3 y 4): python3 viral_package.py [--self-test]
 # Casos reales: Coker (GTA V RP, solo cams), Locones (GTA RP rumano,

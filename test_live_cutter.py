@@ -426,6 +426,110 @@ class TestEnqueuePanelRescue(unittest.TestCase):
             self.assertNotIn("seo_scores", payload)
 
 
+class TestEnqueuePanelSeoPatch(unittest.TestCase):
+    """_enqueue_panel (2026-11-24, auto-seo): el POST de un clip
+    normal NO lleva seo_scores (la puerta SEO del POST tiraría los
+    de máximo < 80); el SEO viaja en un PATCH posterior con las
+    entradas exactas del scorer. El rescate sigue mandándolo en el
+    POST (el Worker verifica la marca) y no se duplica."""
+
+    def _session(self, tmp, bridge):
+        return LiveCutterSession(
+            "auronplay", platform="twitch", stream_id="2026-11-18",
+            out_dir=os.path.join(tmp, "clips"), base_dir=tmp,
+            bridge=bridge, dry_run=False, vod_id="123")
+
+    def _record(self, tmp, rescue, seo=None):
+        pkg_path = os.path.join(tmp, "pkg.json")
+        with open(pkg_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "priority": {"youtube_shorts": {"priority": 45}},
+                "hashtags": ["#GTA6", "#GTA6Clips", "#GTA",
+                             "#RockstarGames"],
+                "visible": "cams+gameplay", "game": "GTA 6",
+            }, f)
+        return {
+            "clip_id": "live:auronplay:x:p167", "clip": __file__,
+            "title": "Auronplay grita", "start_sec": 100, "end_sec": 140,
+            "peak_ts": 167.0, "category": "Grand Theft Auto VI",
+            "category_source": "helix", "game": "GTA 6", "origin": "live",
+            "viral_total": 55.0, "viral_auto": 55.0,
+            "review": {"revision": "gemini", "viral_revisado": 55.0,
+                       "human": None, "motivo": "",
+                       "shouts": 17 if rescue else 0,
+                       "rescate_gritos": rescue},
+            "streamer_hype": {"count": 0, "distinct": 0, "phrases": []},
+            "subtitles_complete": True, "publish_blocked": False,
+            "seo": {"youtube_shorts": 94, "tiktok": 92,
+                    "instagram_reels": 91, "facebook_reels": 90}
+            if seo is None else seo,
+            "publish_status": {}, "package_path": pkg_path,
+            "hype_score": 8.0, "burst_score": 8.0, "hype_ratio": 4.0,
+        }
+
+    class _FakeBridge:
+        def __init__(self):
+            self.payloads = []
+            self.patched = []
+
+        def create_clip(self, payload):
+            self.payloads.append(payload)
+            return {"id": 99}
+
+        def upload_video(self, clip_id, path):
+            return {"ok": True}
+
+        def update_clip(self, clip_id, fields):
+            self.patched.append((clip_id, fields))
+            return {"ok": True}
+
+        def tracking_step(self, *a, **k):
+            return {"ok": True}
+
+    def test_normal_patch_con_seo_e_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = self._FakeBridge()
+            session = self._session(tmp, bridge)
+            panel_id = session._enqueue_panel(
+                self._record(tmp, rescue=False))
+            self.assertEqual(panel_id, 99)
+            self.assertNotIn("seo_scores", bridge.payloads[0])
+            self.assertEqual(len(bridge.patched), 1)
+            clip_id, fields = bridge.patched[0]
+            self.assertEqual(clip_id, 99)
+            self.assertEqual(fields["seo_scores"], {
+                "youtube_shorts": 94, "tiktok": 92,
+                "instagram_reels": 91, "facebook_reels": 90})
+            self.assertEqual(fields["viral"]["seo_source"], "corte")
+            inputs = fields["viral"]["seo_inputs"]
+            self.assertEqual(inputs["hashtags"], [
+                "#GTA6", "#GTA6Clips", "#GTA", "#RockstarGames"])
+            self.assertEqual(inputs["visible"], "cams+gameplay")
+            self.assertIs(inputs["game_verified"], True)
+            self.assertEqual(inputs["keyword"], "GTA 6")
+            self.assertEqual(inputs["lang"], "es")
+
+    def test_sin_seo_no_hay_patch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = self._FakeBridge()
+            session = self._session(tmp, bridge)
+            panel_id = session._enqueue_panel(
+                self._record(tmp, rescue=False, seo={}))
+            self.assertEqual(panel_id, 99)
+            self.assertEqual(bridge.patched, [])
+
+    def test_rescate_no_duplica_el_seo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = self._FakeBridge()
+            session = self._session(tmp, bridge)
+            panel_id = session._enqueue_panel(
+                self._record(tmp, rescue=True))
+            self.assertEqual(panel_id, 99)
+            self.assertEqual(
+                bridge.payloads[0]["seo_scores"]["youtube_shorts"], 94)
+            self.assertEqual(bridge.patched, [])
+
+
 class TestEnqueuePanelLanguage(unittest.TestCase):
     """_enqueue_panel: el payload lleva el idioma del streamer.
 

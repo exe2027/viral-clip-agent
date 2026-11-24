@@ -178,6 +178,8 @@ import { clipPublishBreakdown, clipRetentionSummary } from "./r2-retention";
 import {
   BRAIN_DAILY_SENT_DAY_KEY,
   LIVE_DISPATCH_MIN_INTERVAL_MS,
+  REVALIDATE_INTERVAL_MS,
+  REVALIDATE_LAST_KEY,
   WATCHDOG_DISPATCH_MIN_INTERVAL_MS,
   WATCHDOG_DISPATCHED_PREFIX,
 } from "./cycle-gate";
@@ -1687,6 +1689,33 @@ export async function maybeDispatchDaily(env: Env, tenant: Tenant, nowMs: number
     // Que el dispatch diario falle no para la cola ni el resto del ciclo.
     try {
       await logWorkerEvent(env.DB, "github_dispatch", `Dispatch diario falló (${day}): ${e instanceof Error ? e.message : String(e)}`, tenant);
+    } catch {
+      // Sin D1 no hay nada que hacer.
+    }
+  }
+}
+
+/** Revalidación automática (spec 2026-11-24, auto-seo): cada 6 h
+ *  se dispara `panel-revalidate` al workflow cerebro-revalidate,
+ *  que revalida los clips pendientes y rellena el SEO que falta
+ *  en la Cola. La cadencia se marca en settings
+ *  (`last_revalidate_at_ms`); sin marca, la primera pasada tras
+ *  el deploy dispara (la puerta `revalidateDue` del ciclo ya lo
+ *  evaluó con solo lecturas). Un fallo nunca para la cola ni el
+ *  resto del ciclo. Exportada para los tests. */
+export async function maybeDispatchRevalidate(env: Env, tenant: Tenant, nowMs: number): Promise<void> {
+  try {
+    const settings = await getSettings(env.DB, tenant);
+    const last = typeof settings[REVALIDATE_LAST_KEY] === "number" ? (settings[REVALIDATE_LAST_KEY] as number) : 0;
+    if (last > 0 && nowMs - last < REVALIDATE_INTERVAL_MS) return;
+    const ok = await dispatchCerebro(env, "panel-revalidate", tenant);
+    if (!ok) return;
+    await saveSettings(env.DB, tenant, { ...settings, [REVALIDATE_LAST_KEY]: nowMs });
+    await logWorkerEvent(env.DB, "github_dispatch", `Dispatch panel-revalidate enviado a GitHub.`, tenant);
+  } catch (e) {
+    // Que el dispatch de revalidación falle no para la cola ni el resto del ciclo.
+    try {
+      await logWorkerEvent(env.DB, "github_dispatch", `Dispatch revalidate falló: ${e instanceof Error ? e.message : String(e)}`, tenant);
     } catch {
       // Sin D1 no hay nada que hacer.
     }
@@ -4377,6 +4406,13 @@ export default {
         // (la puerta y el estado del Worker se comprueban dentro de
         // maybeValidateAccountsDaily).
         await maybeValidateAccountsDaily(env, tenant, event.scheduledTime).catch(() => {});
+        // Revalidación automática (spec 2026-11-24, auto-seo): cada
+        // 6 h se dispara panel-revalidate al workflow
+        // cerebro-revalidate (rellena SEO + revalida pendientes).
+        // Solo si el Worker está en marcha (r.ran) o la puerta
+        // dice que toca (r.gate.revalidateDue); con su propio
+        // catch: nunca bloquea el ciclo.
+        if (r.ran || r.gate.revalidateDue) await maybeDispatchRevalidate(env, tenant, event.scheduledTime).catch(() => {});
         // Caducidad nocturna de eventos (A2, 03:00 Santiago):
         // borra eventos de más de 14 días en lotes pequeños, solo
         // si el día va frío (<70% del límite). Corre aunque el

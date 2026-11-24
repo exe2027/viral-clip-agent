@@ -226,6 +226,21 @@ export interface ViralData {
   // quality-gate.ts; aquí solo se valida la FORMA para no duplicar
   // literales ni crear un ciclo de imports.
   quality_gate?: QualityGateVerdict;
+  // Entradas exactas del scorer SEO (2026-11-24, auto-seo): las
+  // guarda el cerebro al cortar para que el loop de revalidación
+  // pueda reproducir el score del corte sin el paquete. El gate
+  // no las lee; solo son trazabilidad del score.
+  seo_inputs?: {
+    hashtags: string[];
+    visible: string | null;
+    game_verified: boolean;
+    keyword: string;
+    lang: string;
+  };
+  // Procedencia del seo_scores guardado: "corte" (medido al
+  // cortar), "backfill_exacto" (reproducido con seo_inputs),
+  // "backfill_aproximado" (derivado sin seo_inputs).
+  seo_source?: "corte" | "backfill_exacto" | "backfill_aproximado";
 }
 
 /** Parsea clips.viral (string JSON) a objeto; si está vacío o roto, {}. */
@@ -377,6 +392,39 @@ export function parseViralInput(body: Record<string, unknown>): Partial<ViralDat
       }
       out.platforms = plats;
     }
+    // Entradas del scorer SEO (2026-11-24, auto-seo): se guardan
+    // tal cual para reproducir el score del corte en el backfill.
+    if (v.seo_inputs !== undefined) {
+      if (typeof v.seo_inputs !== "object" || v.seo_inputs === null || Array.isArray(v.seo_inputs)) {
+        return "viral.seo_inputs debe ser un objeto con las entradas del scorer SEO.";
+      }
+      const si = v.seo_inputs as Record<string, unknown>;
+      if (!Array.isArray(si.hashtags) || (si.hashtags as unknown[]).some((h) => typeof h !== "string")) {
+        return "viral.seo_inputs.hashtags debe ser una lista de strings.";
+      }
+      if (si.visible !== undefined && si.visible !== null && typeof si.visible !== "string") {
+        return "viral.seo_inputs.visible debe ser un string o null.";
+      }
+      if (typeof si.game_verified !== "boolean") {
+        return "viral.seo_inputs.game_verified debe ser booleano.";
+      }
+      if (typeof si.keyword !== "string" || typeof si.lang !== "string") {
+        return "viral.seo_inputs.keyword y lang deben ser strings.";
+      }
+      out.seo_inputs = {
+        hashtags: si.hashtags as string[],
+        visible: (si.visible as string | null) ?? null,
+        game_verified: si.game_verified as boolean,
+        keyword: si.keyword as string,
+        lang: si.lang as string,
+      };
+    }
+    if (v.seo_source !== undefined) {
+      if (v.seo_source !== "corte" && v.seo_source !== "backfill_exacto" && v.seo_source !== "backfill_aproximado") {
+        return "viral.seo_source debe ser corte, backfill_exacto o backfill_aproximado.";
+      }
+      out.seo_source = v.seo_source;
+    }
   }
   // Campos sueltos (mandan sobre `viral`).
   if (body.seo_scores !== undefined) {
@@ -453,6 +501,10 @@ export function mergeViralJson(existing: string | null | undefined, patch: Parti
   // Puerta de calidad B4: el veredicto reemplaza al anterior (no
   // se fusiona por criterio: cada render tiene su propio veredicto).
   if (patch.quality_gate !== undefined) next.quality_gate = patch.quality_gate;
+  // Entradas y procedencia del SEO (2026-11-24, auto-seo): se
+  // guardan tal cual (reemplazan a las anteriores, como el gate).
+  if (patch.seo_inputs !== undefined) next.seo_inputs = patch.seo_inputs;
+  if (patch.seo_source !== undefined) next.seo_source = patch.seo_source;
   return JSON.stringify(next);
 }
 export const GTA_VI_GAME = "GTA VI";

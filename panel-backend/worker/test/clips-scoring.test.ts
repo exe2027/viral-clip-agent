@@ -352,3 +352,99 @@ describe("seoForPlatform lee seo_scores (contrato IA)", () => {
     expect(seoForPlatform(clip, "youtube_shorts").score).toBe(92);
   });
 });
+
+const SEO_INPUTS = {
+  hashtags: ["#GTA6", "#GTA6Clips", "#GTA", "#RockstarGames"],
+  visible: "cams+gameplay",
+  game_verified: true,
+  keyword: "GTA 6",
+  lang: "es",
+};
+
+describe("seo_inputs/seo_source viajan en viral (auto-seo 2026-11-24)", () => {
+  test("POST con viral.seo_inputs + seo_source: GET los devuelve", async () => {
+    const env = makeEnv(new FakeD1());
+    const tok = await createSessionToken("seba", "sebastian", SECRET);
+    const r = await call(env, "POST", "/api/clips", {
+      token: tok,
+      body: { ...P3220_BODY, viral: { seo_inputs: SEO_INPUTS, seo_source: "corte" } },
+    });
+    expect(r.status).toBe(201);
+    const viral = (r.json.clip as Record<string, unknown>).viral as Record<string, unknown>;
+    expect(viral.seo_inputs).toEqual(SEO_INPUTS);
+    expect(viral.seo_source).toBe("corte");
+    expect(viral.seo_scores).toEqual({ youtube_shorts: 92, tiktok: 94, instagram_reels: 94, facebook_reels: 94 });
+  });
+
+  test("PATCH con uno solo preserva el otro y el resto de viral", async () => {
+    const env = makeEnv(new FakeD1());
+    const tok = await createSessionToken("seba", "sebastian", SECRET);
+    const created = await call(env, "POST", "/api/clips", {
+      token: tok,
+      body: { ...P3220_BODY, viral: { seo_inputs: SEO_INPUTS, seo_source: "corte" } },
+    });
+    const id = (created.json.clip as Record<string, unknown>).id as number;
+    const r = await call(env, "PATCH", `/api/clips/${id}`, {
+      token: tok,
+      body: { viral: { seo_source: "backfill_exacto" } },
+    });
+    expect(r.status).toBe(200);
+    const viral = (r.json.clip as Record<string, unknown>).viral as Record<string, unknown>;
+    expect(viral.seo_source).toBe("backfill_exacto");
+    expect(viral.seo_inputs).toEqual(SEO_INPUTS);
+    expect(viral.seo_scores).toEqual({ youtube_shorts: 92, tiktok: 94, instagram_reels: 94, facebook_reels: 94 });
+  });
+
+  test("seo_source inválido: 400; seo_inputs sin hashtags: 400", async () => {
+    const env = makeEnv(new FakeD1());
+    const tok = await createSessionToken("seba", "sebastian", SECRET);
+    const badSource = await call(env, "POST", "/api/clips", {
+      token: tok,
+      body: { ...P3220_BODY, viral: { seo_source: "a_mano" } },
+    });
+    expect(badSource.status).toBe(400);
+    const badInputs = await call(env, "POST", "/api/clips", {
+      token: tok,
+      body: { ...P3220_BODY, viral: { seo_inputs: { hashtags: "no-lista" } } },
+    });
+    expect(badInputs.status).toBe(400);
+  });
+});
+
+describe("puerta SEO del POST intacta (auto-seo 2026-11-24)", () => {
+  test("POST normal con máximo SEO < 80: 400 (el clip normal no manda SEO en el POST, va por PATCH)", async () => {
+    const env = makeEnv(new FakeD1());
+    const tok = await createSessionToken("seba", "sebastian", SECRET);
+    const r = await call(env, "POST", "/api/clips", {
+      token: tok,
+      body: { ...P3220_BODY, seo_scores: { youtube_shorts: 70, tiktok: 65, instagram_reels: 60, facebook_reels: 55 } },
+    });
+    expect(r.status).toBe(400);
+    expect(String(r.json.error)).toContain("SEO máximo 70");
+  });
+
+  test("POST sin seo_scores: 201 (entra a la Cola, el SEO se mide luego por PATCH)", async () => {
+    const env = makeEnv(new FakeD1());
+    const tok = await createSessionToken("seba", "sebastian", SECRET);
+    const { seo_scores: _s, ...plain } = P3220_BODY;
+    const r = await call(env, "POST", "/api/clips", { token: tok, body: plain });
+    expect(r.status).toBe(201);
+  });
+
+  test("POST rescate con máximo SEO < 80: 400 (el rescate exige SEO >= 80)", async () => {
+    const env = makeEnv(new FakeD1());
+    const tok = await createSessionToken("seba", "sebastian", SECRET);
+    const r = await call(env, "POST", "/api/clips", {
+      token: tok,
+      body: {
+        ...P3220_BODY,
+        rescue: true,
+        rescue_shouts: 3,
+        viral_score: 48,
+        seo_scores: { youtube_shorts: 70, tiktok: 65, instagram_reels: 60, facebook_reels: 55 },
+      },
+    });
+    expect(r.status).toBe(400);
+    expect(String(r.json.error)).toContain("SEO");
+  });
+});

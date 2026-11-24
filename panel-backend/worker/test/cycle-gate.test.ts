@@ -11,10 +11,13 @@ import {
   idleCycleGate,
   isDailyDispatchDue,
   isLiveDispatchDue,
+  isRevalidateDue,
   isWatchdogDispatchDue,
   nextDueJobAt,
   pendingWriteJournal,
   CYCLE_REVIEW_INTERVAL_MS,
+  REVALIDATE_INTERVAL_MS,
+  REVALIDATE_LAST_KEY,
 } from "../src/cycle-gate";
 import { runWorkerCycle } from "../src/jobs";
 import { clearBudgetCounterCache } from "../src/budget";
@@ -345,6 +348,23 @@ describe("cycleGate — la puerta (solo lecturas)", () => {
     seedWorkerState(raw, {});
     expect(await isDailyDispatchDue(d1, "sebastian", new Date("2026-11-20T12:59:00.000Z").getTime())).toBe(true);
     expect(await isDailyDispatchDue(d1, "sebastian", new Date("2026-11-20T13:00:00.000Z").getTime())).toBe(false);
+  });
+
+  test("revalidateDue (auto-seo 2026-11-24): sin marca toca; con marca < 6 h no; a las 6 h toca", async () => {
+    const { d1, raw } = makeDbPair();
+    seedWorkerState(raw, { last_cycle_review_at: NOON - 5 * 60 * 1000 });
+    const env = makeEnv(d1, new FakeR2());
+    // Sin marca: toca (primera pasada tras el deploy).
+    expect(await isRevalidateDue(d1, "sebastian", NOON)).toBe(true);
+    const g = await withFrozenDate(NOON, () => cycleGate(env, "sebastian", Date.now()));
+    expect(g.revalidateDue).toBe(true);
+    // Con marca reciente: no toca.
+    seedSettings(raw, { [REVALIDATE_LAST_KEY]: NOON });
+    expect(await isRevalidateDue(d1, "sebastian", NOON + 5 * 3600 * 1000)).toBe(false);
+    const g2 = await withFrozenDate(NOON + 5 * 3600 * 1000, () => cycleGate(env, "sebastian", Date.now()));
+    expect(g2.revalidateDue).toBe(false);
+    // Justo a las 6 h: toca otra vez.
+    expect(await isRevalidateDue(d1, "sebastian", NOON + REVALIDATE_INTERVAL_MS)).toBe(true);
   });
 
   test("dispatch en vivo: freno por lectura, sin escribir nada", async () => {
