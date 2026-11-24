@@ -1,12 +1,166 @@
-body { width: 360px; font-family: system-ui, sans-serif; font-size: 13px; margin: 0; padding: 12px; color: #111; }
-h1 { font-size: 16px; margin: 0 0 4px; }
-h2 { font-size: 13px; margin: 14px 0 6px; border-top: 1px solid #ddd; padding-top: 10px; }
-.note { color: #555; font-size: 12px; }
-label { display: block; margin: 6px 0; }
-label.check { display: flex; gap: 6px; align-items: flex-start; }
-input, select { width: 100%; box-sizing: border-box; padding: 6px; margin-top: 2px; }
-input[type="checkbox"] { width: auto; }
-button { width: 100%; padding: 8px; margin-top: 6px; background: #111; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
-button.secondary { background: #eee; color: #111; }
-ul { padding-left: 18px; }
-li { margin: 4px 0; }
+/* AVC — Content Rewards · Popup v1.4.0
+   Diseño GTA 6 / Vice City (atardecer neón), igual que la web del panel.
+   Fuente única: panel-backend/frontend/dist/tokens-gta6.css (valores literales).
+   Solo presentación: ningún id ni comportamiento cambia (popup.js solo usa
+   document.getElementById). Pares de texto verificados >= 4.5:1 en tokens. */
+
+* { box-sizing: border-box; }
+
+html { background: #100a1a; }
+
+body {
+  width: 360px;
+  margin: 0;
+  padding: 0 12px 16px;
+  font-family: 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #e8eaf0;
+  background-color: #100a1a;
+  background-image: radial-gradient(120% 46% at 50% 0%, rgba(157, 23, 77, 0.55) 0%, rgba(109, 40, 217, 0.35) 45%, rgba(16, 10, 26, 0) 78%);
+  background-repeat: no-repeat;
+}
+
+/* === Header: marca AVC + título con gradiente + franja atardecer === */
+.popup-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 0 10px;
+}
+.brand-mark {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue Condensed', system-ui, sans-serif;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  background-color: #9d174d;
+  background-image: linear-gradient(135deg, #6d28d9 0%, #9d174d 52%, #c2410c 100%);
+  border-radius: 12px;
+  box-shadow: 0 0 16px rgba(236, 72, 153, 0.35), 0 0 40px rgba(124, 58, 237, 0.25);
+}
+.popup-header h1 {
+  margin: 0;
+  font-family: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue Condensed', system-ui, sans-serif;
+  font-size: 21px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  color: #f9a8d4;
+}
+@supports ((background-clip: text) or (-webkit-background-clip: text)) {
+  .popup-header h1 {
+    background: linear-gradient(90deg, #f9a8d4 0%, #fdba74 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+}
+.eyebrow {
+  margin: 2px 0 0;
+  font-family: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue Condensed', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: #fbbf24;
+}
+.sunset-strip {
+  height: 6px;
+  margin: 0 -12px 12px;
+  background: linear-gradient(90deg, #7c3aed 0%, #ec4899 45%, #ff5e00 100%);
+}
+
+/* === Tarjetas === */
+.card {
+  margin: 12px 0;
+  padding: 12px;
+  background: #261a38;
+  border: 1px solid #7c6aa0;
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(124, 58, 237, 0.08);
+}
+.card h2 {
+  margin: 0 0 6px;
+  font-family: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue Condensed', system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  color: #e8eaf0;
+}
+.intro { margin: 0 0 4px; color: #b8b3c9; font-size: 12px; }
+.note { color: #b8b3c9; font-size: 12px; margin: 6px 0; }
+.note b, .note strong { color: #e8eaf0; }
+
+/* === Formularios === */
+label { display: block; margin: 8px 0; color: #e8eaf0; }
+label.check { display: flex; gap: 8px; align-items: flex-start; }
+input, select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  margin-top: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  color: #e8eaf0;
+  background: #150d24;
+  border: 1px solid #7c6aa0;
+  border-radius: 10px;
+}
+input::placeholder { color: #b8b3c9; }
+input[type="checkbox"] { width: auto; margin-top: 2px; accent-color: #9d174d; }
+input:focus-visible, select:focus-visible, button:focus-visible {
+  outline: 3px solid #fbbf24;
+  outline-offset: 2px;
+}
+
+/* === Botones: primario atardecer, secundario borde violeta === */
+button {
+  width: 100%;
+  min-height: 40px;
+  padding: 10px;
+  margin-top: 8px;
+  font-family: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue Condensed', system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #ffffff;
+  background-color: #9d174d;
+  background-image: linear-gradient(135deg, #6d28d9 0%, #9d174d 52%, #c2410c 100%);
+  border: 0;
+  border-radius: 10px;
+  box-shadow: 0 0 16px rgba(236, 72, 153, 0.35), 0 0 40px rgba(124, 58, 237, 0.25);
+  cursor: pointer;
+}
+button:hover {
+  background-color: #a21caf;
+  background-image: linear-gradient(135deg, #7c3aed 0%, #a21caf 52%, #c2410c 100%);
+}
+button.secondary {
+  background-color: transparent;
+  background-image: none;
+  color: #e8eaf0;
+  border: 1px solid #7c6aa0;
+  box-shadow: none;
+  font-size: 14px;
+}
+button.secondary:hover { background: #150d24; }
+
+/* === Estado e historial === */
+#status, #workerStatus, #last, #workerCheckedAt, #analyticsStatus, #keysStatus, #result, #brief, #clipStatus, #workersStatus, #autoSetupStatus { color: #e8eaf0; }
+#status { font-weight: 600; }
+ul { padding-left: 18px; margin: 6px 0; }
+li { margin: 4px 0; color: #b8b3c9; }
+li b, li strong { color: #e8eaf0; }
+a { color: #f9a8d4; }

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# validate.sh — valida la extensión v1.3.0 sin Chrome: JSON, sintaxis JS y reglas.
+# validate.sh — valida la extensión v1.4.0 sin Chrome: JSON, sintaxis JS y reglas.
 set -e
 cd "$(dirname "$0")"
 echo "== manifest.json =="
 python3 -m json.tool manifest.json > /dev/null && echo "JSON válido"
-python3 -c "import json; m=json.load(open('manifest.json')); assert m['manifest_version']==3; assert m['version']=='1.3.0', m['version']; assert m['background']['service_worker']=='background.js'; assert not m.get('content_scripts'); assert 'identity' not in m.get('permissions', []), 'identity no se usa (OAuth por pestaña) y se quitó en v1.3.0'; assert any('workers.dev' in h for h in m['host_permissions']), 'faltan hosts workers.dev'; print('MV3 OK v1.3.0, sin content scripts, sin identity, hosts:', m['host_permissions'])"
+python3 -c "import json; m=json.load(open('manifest.json')); assert m['manifest_version']==3; assert m['version']=='1.4.0', m['version']; assert m['background']['service_worker']=='background.js'; assert not m.get('content_scripts'); assert 'identity' not in m.get('permissions', []), 'identity no se usa (OAuth por pestaña) y se quitó en v1.4.0'; assert any('workers.dev' in h for h in m['host_permissions']), 'faltan hosts workers.dev'; print('MV3 OK v1.4.0, sin content scripts, sin identity, hosts:', m['host_permissions'])"
 echo "== sintaxis JS =="
 node --check lib.js && echo "lib.js OK"
 node --check worker.js && echo "worker.js OK"
@@ -20,14 +20,14 @@ if grep -rn '"/api/worker/stop"\|"/api/worker/start"\|"/api/worker/run-once"' ba
   echo "ERROR: una llamada a start/stop/run-once fuera de lib.js"; exit 1
 fi
 echo "OK: background/worker/popup no llaman a start/stop/run-once"
-# v1.3.0: POST/PATCH a /api/campaign-submissions SÍ está permitido
+# v1.4.0: POST/PATCH a /api/campaign-submissions SÍ está permitido
 # (escritura mediada por el Worker, con sesión; el navegador nunca
 # toca D1 directo). POST a /api/clips/:id sigue prohibido.
 if grep -rn '"/api/clips/[0-9]' background.js worker.js popup.js | grep -v "GET\|api/clips/\""; then
   echo "ERROR: escritura a /api/clips/:id fuera de lib.js"; exit 1
 fi
 echo "OK: nadie escribe a /api/clips/:id (solo GET)"
-echo "== reglas v1.3.0 (Node) =="
+echo "== reglas v1.4.0 (Node) =="
 node --input-type=module -e "
 import { validateSubmission, alreadySubmitted, isWithinWindow, buildMcpPayload, decideWorkerGate, isForbiddenWorkerCall, parseHealth, parseClipState, resolveWorkerBase, CAMPAIGN_SUBMISSIONS_PENDING, KNOWN_CAMPAIGNS, CAMPAIGN_BRIEFS, getCampaignBrief, rankCampaigns, selectBestCampaign, selectBestCampaignForClip, campaignScore, isCampaignExhausted, isRetryableBlocked, RETRYABLE_BLOCK_CODES, submissionKey, assignmentKey, netRatePer1k, meetsNetFloor, isFamousCampaign, FAME_MIN_FOLLOWERS, parseMcpResponse, parseMcpHttpResponse, extractSubmissionId, MARKETPLACES, netRateForMarketplace, meetsNetFloorForMarketplace, CLIPSTER_GTA6_CAMPAIGNS, CANDIDATE_CAMPAIGNS_NO_ID, rankMarketplaceCampaigns, selectMarketplaceForClip, marketplaceAssignmentKey, alreadyAssignedMarketplace, summarizeAnalytics, summarizeAllAnalytics, formatUsd, AUTO_SETUP_URL, parseAutoSetup } from './lib.js';
 import { checkWorkerGate, checkCampaignSubmissions, listAllSubmissions } from './worker.js';
@@ -46,14 +46,14 @@ console.assert(alreadySubmitted(subs, base), 'duplicado debe detectarse');
 console.assert(!validateSubmission(subs, base).ok, 'doble envío debe bloquearse');
 const p = buildMcpPayload({ campaignId: base.campaignId, postUrl: base.postUrl, platform: 'tiktok' });
 console.assert(p.params.name === 'create_my_submission', 'payload MCP debe usar create_my_submission');
-// --- v1.3.0: sin publishedAtMs REAL no se envía (nunca Date.now() por defecto) ---
+// --- v1.4.0: sin publishedAtMs REAL no se envía (nunca Date.now() por defecto) ---
 console.assert(!validateSubmission([], { ...base, publishedAtMs: undefined }).ok, 'sin publishedAtMs debe bloquearse');
 console.assert(!validateSubmission([], { ...base, publishedAtMs: 0 }).ok, 'publishedAtMs 0 debe bloquearse');
 console.assert(!validateSubmission([], { ...base, publishedAtMs: 'no-numerico' }).ok, 'publishedAtMs no numérico debe bloquearse');
-// --- v1.3.0: piso NETO y FAMA en validateSubmission ---
+// --- v1.4.0: piso NETO y FAMA en validateSubmission ---
 console.assert(!validateSubmission([], { ...base, campaignId: 'bb66f9eb-b90e-4dd0-8cee-9f3cd566c9a0' }).ok, 'BenDaDonnn ($0,90 neto) debe bloquearse por piso');
 console.assert(!validateSubmission([], { ...base, campaignId: 'f583b069-ced7-49e5-9ed3-2d3a13d6df0c' }).ok, 'Bobby Van Riper (no famoso) debe bloquearse por fama aunque pague $1,50');
-// --- v2: puerta del Worker, CORREGIDA v1.3.0 ---
+// --- v2: puerta del Worker, CORREGIDA v1.4.0 ---
 // 'publicado en la red' NO es 'enviado a Content Rewards': posted en
 // D1 es el REQUISITO para enviar, no un duplicado. El duplicado lo
 // decide la fila en campaign_submissions.
@@ -126,7 +126,7 @@ console.assert(gateFallback.ok && gateFallback.submissions.available === false, 
 const stubStopped = async (url) => ({ ok: true, status: 200, json: async () => ({ ok: true, tenant: 'sebastian', worker_running: false }) });
 const gateStopped = await checkWorkerGate({ base: 'https://avc.vikingosfoodspa.workers.dev', panelToken: 'tok', clipId: 174, platform: 'tiktok', postUrl: base.postUrl, campaignId: base.campaignId, localSubmissions: [], fetchImpl: stubStopped });
 console.assert(!gateStopped.ok && gateStopped.code === 'worker_down', 'puerta con worker parado debe bloquearse');
-// --- v1.3.0: ranking NETO + FAMA (regla 18:50) ---
+// --- v1.4.0: ranking NETO + FAMA (regla 18:50) ---
 console.assert(KNOWN_CAMPAIGNS.length === 5, 'ranking: 5 campañas por defecto');
 console.assert(FAME_MIN_FOLLOWERS === 50000, 'listón de fama: 50.000 seguidores');
 console.assert(isFamousCampaign(KNOWN_CAMPAIGNS[0]), 'Dasgasd3m (62.500) es famoso');
@@ -148,18 +148,18 @@ console.assert(isCampaignExhausted({ budgetRemaining: 0 }), 'campaña con $0 res
 console.assert(!isCampaignExhausted(KNOWN_CAMPAIGNS[0]), 'Dasgasd3m no está agotada');
 console.assert(selectBestCampaign([{ ...KNOWN_CAMPAIGNS[0], budgetRemaining: 0 }], {}) === null, 'sin campañas viables (agotada) no se elige ninguna');
 console.assert(rankCampaigns(KNOWN_CAMPAIGNS, { today: '2026-11-24' })[0].stale === true, 'tarifa del 23 nov es stale el 24: hay que re-verificar el día del envío');
-// --- v1.3.0: asignación por clip (streamer del clip ↔ streamer de la campaña) ---
+// --- v1.4.0: asignación por clip (streamer del clip ↔ streamer de la campaña) ---
 console.assert(selectBestCampaignForClip(KNOWN_CAMPAIGNS, { platform: 'tiktok', clipStreamer: null }).reason === 'sin_streamer', 'sin streamer del clip no se auto-asigna');
 console.assert(selectBestCampaignForClip(KNOWN_CAMPAIGNS, { platform: 'tiktok', clipStreamer: 'Kai Cenat' }).reason === 'no_match', 'clip de Kai Cenat no cobra en la campaña de Dasgasd3m');
 console.assert(selectBestCampaignForClip(KNOWN_CAMPAIGNS, { platform: 'tiktok', clipStreamer: 'Dasgasd3m' }).campaign.id === '051002dd-5c46-43d0-a446-43f2957ba3a9', 'clip de Dasgasd3m sí se asigna a su campaña');
 console.assert(selectBestCampaignForClip(KNOWN_CAMPAIGNS, { platform: 'tiktok', clipStreamer: 'Bobby Van Riper' }).reason === 'no_match', 'clip de Bobby no se auto-asigna (fuera del ranking por fama)');
 console.assert(selectBestCampaignForClip(KNOWN_CAMPAIGNS, { platform: 'youtube', clipStreamer: 'dylan page' }).campaign.id === '39753a1a-f1f3-491b-a8f6-0cfee0af0c97', 'el match normaliza mayúsculas/espacios');
-// --- v1.3.0: brief por campaña (material: brief_only, nunca clips listos) ---
+// --- v1.4.0: brief por campaña (material: brief_only, nunca clips listos) ---
 console.assert(Object.values(CAMPAIGN_BRIEFS).every((b) => b.material === 'brief_only'), 'todas las fichas dicen brief_only: ninguna campaña entrega clips listos');
 const briefDylan = getCampaignBrief('39753a1a-f1f3-491b-a8f6-0cfee0af0c97');
 console.assert(briefDylan.hashtags.includes('#DylanPage') && briefDylan.materialNote.includes('maratón'), 'brief Dylan: #DylanPage + maratón');
 console.assert(getCampaignBrief('inexistente').incomplete === true, 'sin ficha, brief incompleto (leer en Discover, nunca inventar)');
-// --- v1.3.0: MCP — 200 con error = FALLO, no éxito ---
+// --- v1.4.0: MCP — 200 con error = FALLO, no éxito ---
 console.assert(parseMcpHttpResponse(200, JSON.stringify({ jsonrpc: '2.0', id: 1, result: { submissionId: 'sub_123' } })).ok, 'MCP 200 con result debe pasar');
 console.assert(parseMcpHttpResponse(200, JSON.stringify({ jsonrpc: '2.0', id: 1, result: { submissionId: 'sub_123' } })).submissionId === 'sub_123', 'submissionId se guarda del result');
 console.assert(!parseMcpHttpResponse(200, JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'nope' } })).ok, 'MCP 200 con error JSON-RPC es FALLO');
@@ -169,11 +169,11 @@ console.assert(parseMcpResponse('data: ' + JSON.stringify({ jsonrpc: '2.0', id: 
 console.assert(extractSubmissionId({ content: [{ type: 'text', text: JSON.stringify({ submission_id: 'sub_txt' }) }] }) === 'sub_txt', 'extractSubmissionId lee content[0].text JSON');
 console.assert(extractSubmissionId({ submissionId: 'sub_x' }) === 'sub_x', 'extractSubmissionId directo');
 console.assert(extractSubmissionId({}) === null, 'sin id, null');
-// --- v1.3.0: asignación por tenant+clip+plataforma ---
+// --- v1.4.0: asignación por tenant+clip+plataforma ---
 console.assert(assignmentKey({ tenant: 'seba', clipId: 174, platform: 'tiktok' }) === 'seba|174|tiktok', 'clave de asignación seba|174|tiktok');
 console.assert(assignmentKey({ tenant: 'seba', clipId: 174, platform: 'tiktok' }) !== assignmentKey({ tenant: 'seba', clipId: 174, platform: 'youtube' }), 'mismo clip en otra plataforma = otra asignación');
 console.assert(assignmentKey({ tenant: 'seba', clipId: 174, platform: 'tiktok' }) !== assignmentKey({ tenant: 'kaez', clipId: 174, platform: 'tiktok' }), 'mismo clip en otro tenant = otra asignación');
-// --- v1.3.0: reintentos de TODOS los bloqueos reparables ---
+// --- v1.4.0: reintentos de TODOS los bloqueos reparables ---
 console.assert(RETRYABLE_BLOCK_CODES.join(',') === 'worker_down,clip_check_failed,no_worker_base,mcp_error,worker_error,submissions_unavailable', 'códigos reintentables');
 for (const code of RETRYABLE_BLOCK_CODES) {
   console.assert(isRetryableBlocked({ status: 'blocked', blockedBy: code, publishedAtMs: now }, now), code + ' en ventana debe reintentarse');
@@ -249,9 +249,9 @@ console.assert((await listAllSubmissions('https://avc.vikingosfoodspa.workers.de
 console.assert((await listAllSubmissions('https://avc.vikingosfoodspa.workers.dev', null)).available === false, 'listAllSubmissions: sin token -> no disponible');
 if (__assertFails) { console.error('ASSERTS FALLIDOS: ' + __assertFails); process.exit(1); }
 console.assert(AUTO_SETUP_URL === 'https://avc-em9.pages.dev/extension/auto-setup.json', 'auto-setup: URL web del panel');
-console.assert(parseAutoSetup({ version: '1.3.0', campaigns: [{}, {}], rules: {} }).ok, 'auto-setup valido pasa');
-console.assert(!parseAutoSetup(null).ok && !parseAutoSetup({ version: '1.3.0' }).ok, 'auto-setup incompleto se rechaza');
-console.log('Reglas OK: v1.3.0 (puerta corregida, ranking neto+fama, brief, MCP, asignación por plataforma, reintentos) + v1.2.0 intactas');
+console.assert(parseAutoSetup({ version: '1.4.0', campaigns: [{}, {}], rules: {} }).ok, 'auto-setup valido pasa');
+console.assert(!parseAutoSetup(null).ok && !parseAutoSetup({ version: '1.4.0' }).ok, 'auto-setup incompleto se rechaza');
+console.log('Reglas OK: v1.4.0 (puerta corregida, ranking neto+fama, brief, MCP, asignación por plataforma, reintentos) + v1.2.0 intactas');
 "
 echo "== archivos =="
 ls -l

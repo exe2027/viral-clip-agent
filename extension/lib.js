@@ -27,7 +27,7 @@ export function parseAutoSetup(data) {
 }
 
 export const MCP_URL = "https://mcp.contentrewards.com/mcp";
-export const EXTENSION_VERSION = "1.3.0";
+export const EXTENSION_VERSION = "1.4.0";
 
 // v1.3.0 (2026-11-23 18:32, login por tenant): tarifa NETA, no bruta.
 // Content Rewards cobra 10% de comisión: neta = bruta x 0,9. El piso

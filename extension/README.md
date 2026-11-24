@@ -1,8 +1,18 @@
-# AVC — Content Rewards (puente local) — extensión Chrome v1.3.0
+# AVC — Content Rewards (puente local) — extensión Chrome v1.4.0
 
 Extensión en **modo desarrollador (unpacked), gratis, sin Chrome Web Store y sin pagar $5**.
 La nube sigue siendo el camino principal; esta extensión es el puente local para
 lo que la nube no puede hacer sin la sesión de Chrome del usuario.
+
+## v1.4.0 — qué cambió (2026-11-23)
+
+### Diseño como la web del panel (tema GTA 6 / Vice City)
+- Popup con los tokens de `tokens-gta6.css`: fondo violeta noche #100a1a,
+  tarjetas #261a38, degradado atardecer en botones y marca AVC, franja
+  atardecer, Barlow Condensed en títulos, foco ámbar. Cero cambio de
+  comportamiento: mismos ids, mismo JS.
+- Página de instalación (`/extension/`) alineada con los mismos tokens.
+- `EXTENSION_VERSION` en `lib.js` pasa a 1.4.0.
 
 ## v1.3.0 — qué cambió (2026-11-23)
 
@@ -374,10 +384,10 @@ Sin token, el chequeo de D1 no se puede hacer y los envíos se bloquean.
 Todo desde Chrome, sin pasar archivos por el chat:
 
 - **Página de instalación:** https://avc-em9.pages.dev/extension/
-- **ZIP de la extensión:** https://avc-em9.pages.dev/extension/avc-extension-1.3.0.zip
+- **ZIP de la extensión:** https://avc-em9.pages.dev/extension/avc-extension-1.4.0.zip
   (también https://avc-em9.pages.dev/extension/avc-extension.zip, siempre la última versión publicada)
 - **Auto-configuración:** https://avc-em9.pages.dev/extension/auto-setup.json
-  (tenants seba/kaez desde `workers.json`, campañas del ranking y reglas; los valores por defecto de `lib.js` ya son idénticos a estos. Desde v1.3.0 `background.js` la descarga sola al instalar y cada hora — el popup muestra "Auto-configuración web v1.3.0 cargada". Si la web no responde, se usan los valores del ZIP.)
+  (tenants seba/kaez desde `workers.json`, campañas del ranking y reglas; los valores por defecto de `lib.js` ya son idénticos a estos. Desde v1.3.0 `background.js` la descarga sola al instalar y cada hora — el popup muestra "Auto-configuración web v1.4.0 cargada". Si la web no responde, se usan los valores del ZIP.)
 - También enlazada desde el panel: sidebar → **Extensión Chrome ↗**.
 
 ## Auto-configuración: qué configura sola (sin que toques nada)
@@ -523,9 +533,9 @@ Verificadas en el código, no inventadas:
 - No subir a la Chrome Web Store desde esta v2; modo desarrollador, gratis.
 - No prometer que corre sin PC: con Chrome cerrado, se pausa.
 
-## Archivos (v1.3.0)
+## Archivos (v1.4.0)
 
-- `manifest.json` — Manifest V3 v1.3.0, permisos mínimos (storage, alarms;
+- `manifest.json` — Manifest V3 v1.4.0, permisos mínimos (storage, alarms;
   **`identity` quitado**: no se usaba, el OAuth va por pestaña).
   Hosts: contentrewards.com, mcp.contentrewards.com, api.whop.com,
   avc-em9.pages.dev (workers.json) y los dos Workers de tenant
