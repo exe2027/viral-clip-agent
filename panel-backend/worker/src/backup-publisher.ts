@@ -77,7 +77,7 @@ import { clipLanguage, getClip, listSocialAccounts, type PanelPlatform } from ".
 import { santiagoDayKey } from "./gate";
 import type { JobRow } from "./jobs";
 import { appendWalEntry, readWalEntries, type WalEntry } from "./wal";
-import { checkDuplicateBeforeUpload, type FetchJson } from "./publish/idempotency";
+import { captionMarkerReason, checkDuplicateBeforeUpload, hasOwnClipMarker, type FetchJson } from "./publish/idempotency";
 import { resolveCreds, type PublishContext, type PublishResult, type ResumeData } from "./publish/index";
 import { youtubeStep } from "./publish/youtube";
 import { tiktokStep } from "./publish/tiktok";
@@ -497,13 +497,38 @@ export async function runBackupCycle(env: Env, opts: RunBackupOptions = {}): Pro
         resumeData: state?.resume_data ? parseResumeData(state.resume_data) : parseResumeData(job.resume_data),
         // Sin marca [clip:<id>] (2026-11-23): el caption viaja tal
         // cual, igual que en el principal. La comprobación B2 solo
-        // LEE la marca en posts viejos que ya la llevan.
+        // LEE la marca en posts viejos que ya la llevan. El chequeo
+        // V4 está justo debajo, antes de llamar al adaptador.
         caption: job.caption,
       },
       creds,
       r2Size: head?.size ?? null,
       tiktokHandle,
     };
+    // V4 — VALIDADOR DE CAPTION (SPEC validators, Goldfish 8):
+    // el caption con la marca propia se rechaza ANTES de llamar
+    // al adaptador (también cubre uploadStep inyectados: el
+    // principal ya lo rechaza en dispatchPublishStep, pero el
+    // respaldo llama a los adaptadores directamente). Se deja
+    // resultado error en el diario y NO se intenta subir: sin
+    // intento no hay duplicado que reconciliar.
+    if (hasOwnClipMarker(job.caption, job.clip_id)) {
+      const reason = captionMarkerReason(job.clip_id as number);
+      await appendWalEntry(env, tenant, {
+        type: "result",
+        clip_id: job.clip_id,
+        platform: job.platform,
+        account_id: job.api_account_id ?? null,
+        job_id: job.id,
+        idempotency_key: job.idempotency_key,
+        day: dayKey,
+        outcome: "error",
+        error: reason.slice(0, 500),
+      });
+      result.errors++;
+      result.attempts.push({ ...base, action: "error", reason });
+      continue;
+    }
     const adapterEnv: Env = { ...env, DB: asReadOnlyDb(env.DB) };
     let step: PublishResult;
     result.attempted++;

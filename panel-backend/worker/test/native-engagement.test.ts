@@ -201,7 +201,7 @@ describe("probeNativeScopes", () => {
     await seedSettings(raw, {});
     await seedMeta(raw, "es");
     stubFetch([
-      { status: 200, body: { data: { scopes: ["public_profile", "instagram_basic", "instagram_manage_comments", "instagram_manage_engagement"] } } },
+      { status: 200, body: { data: { app_id: "app.test", is_valid: true, expires_at: 0, scopes: ["public_profile", "instagram_basic", "instagram_manage_comments", "instagram_manage_engagement"] } } },
     ]);
     const env = fakeEnv(d1, { META_APP_ID: "app.test", META_APP_SECRET: "sec.test" });
     const r = await probeNativeScopes(env, "sebastian", { force: true, nowMs: NOW });
@@ -287,7 +287,7 @@ describe("runNativeEngagement", () => {
     const env = fakeEnv(d1, { META_APP_ID: "app.test", META_APP_SECRET: "sec.test" });
     const comments = { data: [{ id: "igc1", text: "¡Brutal!", username: "fan9", replies: { data: [] } }] };
     stubFetch([
-      { status: 200, body: { data: { scopes: ["public_profile", "instagram_basic", "instagram_manage_comments", "instagram_manage_engagement", "pages_manage_engagement"] } } },
+      { status: 200, body: { data: { app_id: "app.test", is_valid: true, expires_at: 0, scopes: ["public_profile", "instagram_basic", "instagram_manage_comments", "instagram_manage_engagement", "pages_manage_engagement"] } } },
       { status: 200, body: { username: "elmegaclipgta6" } },
       { status: 200, body: comments },
       { status: 200, body: { id: "igc1_reply" } },
@@ -316,7 +316,7 @@ describe("runNativeEngagement", () => {
     ).run(NOW);
     const env = fakeEnv(d1, { META_APP_ID: "app.test", META_APP_SECRET: "sec.test" });
     stubFetch([
-      { status: 200, body: { data: { scopes: ["public_profile", "instagram_basic", "instagram_manage_comments", "instagram_manage_engagement", "pages_manage_engagement"] } } },
+      { status: 200, body: { data: { app_id: "app.test", is_valid: true, expires_at: 0, scopes: ["public_profile", "instagram_basic", "instagram_manage_comments", "instagram_manage_engagement", "pages_manage_engagement"] } } },
       { status: 200, body: { username: "elmegaclipgta6" } },
       { status: 200, body: { name: "El Clip de GTA 6" } },
       { status: 200, body: { success: true } },
@@ -340,7 +340,7 @@ describe("runNativeEngagement", () => {
     ).run(NOW);
     const env = fakeEnv(d1, { META_APP_ID: "app.test", META_APP_SECRET: "sec.test" });
     stubFetch([
-      { status: 200, body: { data: { scopes: ["public_profile", "instagram_basic"] } } },
+      { status: 200, body: { data: { app_id: "app.test", is_valid: true, expires_at: 0, scopes: ["public_profile", "instagram_basic"] } } },
     ]);
     const s = await runNativeEngagement(env, "sebastian", { nowMs: NOW, sleepMs: 0, force: true });
     expect(s.outwardLikes).toBe(0);

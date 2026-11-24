@@ -63,7 +63,9 @@ import {
   logEngagement,
   markReplied,
   markTarget,
+  mergeFoundMaps,
   pickReply,
+  PROBE_CACHE_MS,
   runZernioEngagement,
   shouldSkipComment,
   type EngagementAction,
@@ -76,7 +78,6 @@ const GRAPH = `https://graph.facebook.com/${GRAPH_VERSION}`;
 const YT_API = "https://www.googleapis.com/youtube/v3";
 const MAX_POSTS_PER_RUN = 10;
 const MAX_COMMENTS_PER_POST = 10;
-const PROBE_CACHE_MS = 3600_000; // la sonda se cachea 1 h en settings
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -90,7 +91,12 @@ async function safeCreds(env: Env, platform: PanelPlatform, tenant: Tenant, lang
 export type NativePlatform = "youtube" | "instagram" | "facebook";
 export const NATIVE_PLATFORMS: NativePlatform[] = ["youtube", "instagram", "facebook"];
 
-export type ProbeState = "ok" | "sin_permiso" | "sin_conexion" | "sin_sonda" | "sonda_fallida";
+export type ProbeState = "ok" | "sin_permiso" | "sin_conexion" | "sin_sonda" | "sonda_fallida" | "sin_veredicto";
+
+/** "sin_veredicto": la sonda NO cubre esa plataforma (TikTok, solo
+ *  vía Zernio). No es un OK ni un fallo: el estado real está en
+ *  Cuentas. Se declara explícito para que la casilla nunca quede
+ *  vacía ni implique OK (V1, spec validadores 2026-11-23). */
 
 export interface StoredScopeProbe {
   state: ProbeState;
@@ -134,6 +140,11 @@ export interface ScopeProbeResult {
   probes: ProbeMap;
   checked_at: number;
   meta_configured: boolean;
+  /** true si el resultado viene de la caché de 1 h (sin llamar a
+   *  ninguna API); false si es fresco. Un veredicto cacheado tras
+   *  un cambio de credenciales NO vale como confirmación: la caché
+   *  se invalida al cambiar credenciales (V2). */
+  cached: boolean;
 }
 
 function storedProbes(settings: Record<string, unknown>): { probes: ProbeMap; at: number | null } {
@@ -159,11 +170,22 @@ export async function probeNativeScopes(
   const settings = await getSettings(db, tenant).catch(() => ({} as Record<string, unknown>));
   const stored = storedProbes(settings);
   if (!opts.force && stored.at && now - stored.at < PROBE_CACHE_MS && Object.keys(stored.probes).length > 0) {
-    return { probes: stored.probes, checked_at: stored.at, meta_configured: metaAppConfigured(env) };
+    return { probes: stored.probes, checked_at: stored.at, meta_configured: metaAppConfigured(env), cached: true };
   }
   const probes: ProbeMap = {};
   const metaConfigured = metaAppConfigured(env);
   for (const lang of ["es", "en"] as ClipLanguage[]) {
+    // TikTok: la sonda no tiene vía nativa (solo Zernio) y nunca
+    // debe dejar la casilla vacía ni implicar OK. Veredicto
+    // explícito al inicio de la vuelta (antes de los `continue` de
+    // YT/Meta): sin_veredicto, el estado real está en Cuentas.
+    probes[probeKey("tiktok", lang)] = {
+      state: "sin_veredicto",
+      granted_scopes: [],
+      missing_scopes: [],
+      checked_at: now,
+      error: "la sonda no cubre TikTok: el estado real está en Cuentas (vía Zernio)",
+    };
     // --- YouTube: tokeninfo con el token renovado por refresh_token ---
     const ytCreds = await safeCreds(env, "youtube_shorts", tenant, lang);
     if (!ytCreds.youtube) {
@@ -208,11 +230,33 @@ export async function probeNativeScopes(
       "GET",
       `${GRAPH}/debug_token?input_token=${encodeURIComponent(metaToken)}&access_token=${encodeURIComponent(appToken)}`,
     ).catch(() => null);
-    const scopes = (dbg?.json.data as Record<string, unknown> | undefined)?.scopes;
+    const data = (dbg?.json.data ?? {}) as Record<string, unknown>;
+    const scopes = data.scopes;
     if (!dbg || dbg.status !== 200 || !Array.isArray(scopes)) {
       const err = dbg ? graphError(dbg.json, `debug_token HTTP ${dbg.status}`) : "debug_token sin respuesta";
       probes[probeKey("instagram", lang)] = emptyProbe("sonda_fallida", NATIVE_REQUIRED_SCOPES.instagram as string[], err);
       probes[probeKey("facebook", lang)] = emptyProbe("sonda_fallida", [FACEBOOK_ENGAGE_SCOPE], err);
+      continue;
+    }
+    // V1 (validadores 2026-11-23): los scopes solos NO bastan para
+    // un OK. Un token de OTRA app o expirado con los scopes puestos
+    // daba OK antes de este cambio (falso positivo). Se comprueba:
+    //   app_id de debug_token == META_APP_ID configurado,
+    //   is_valid !== false,
+    //   expires_at == 0 (no expira) o en el futuro (segundos UNIX).
+    const tokenAppId = typeof data.app_id === "string" ? data.app_id : "";
+    const expiresAt = typeof data.expires_at === "number" ? data.expires_at : 0;
+    const metaMismatch =
+      tokenAppId !== (env.META_APP_ID ?? "").trim()
+        ? `token Meta de otra app (app_id ${tokenAppId || "sin app_id"} distinto del configurado ${env.META_APP_ID ?? ""})`
+        : data.is_valid === false
+          ? "debug_token: el token Meta no es válido"
+          : expiresAt > 0 && expiresAt * 1000 <= now
+            ? "token Meta expirado según debug_token"
+            : null;
+    if (metaMismatch) {
+      probes[probeKey("instagram", lang)] = emptyProbe("sonda_fallida", NATIVE_REQUIRED_SCOPES.instagram as string[], metaMismatch);
+      probes[probeKey("facebook", lang)] = emptyProbe("sonda_fallida", [FACEBOOK_ENGAGE_SCOPE], metaMismatch);
       continue;
     }
     const granted = (scopes as unknown[]).filter((s): s is string => typeof s === "string");
@@ -236,7 +280,16 @@ export async function probeNativeScopes(
     };
   }
   await saveSettings(db, tenant, { ...settings, engagement_scopes: probes, engagement_scopes_at: now }).catch(() => undefined);
-  return { probes, checked_at: now, meta_configured: metaConfigured };
+  return { probes, checked_at: now, meta_configured: metaConfigured, cached: false };
+}
+
+/** Invalida la caché de la sonda (V2): al cambiar una credencial,
+ *  el veredicto guardado deja de valer y la próxima sonda debe ser
+ *  fresca. Se llama desde los puntos que escriben credenciales
+ *  (upsertAccountCredential y POST /api/accounts/:id/credential). */
+export async function invalidateProbeCache(db: D1Database, tenant: Tenant): Promise<void> {
+  const settings = await getSettings(db, tenant).catch(() => ({} as Record<string, unknown>));
+  await saveSettings(db, tenant, { ...settings, engagement_scopes: null, engagement_scopes_at: null }).catch(() => undefined);
 }
 
 export function metaAppConfigured(env: Env): boolean {
@@ -430,7 +483,7 @@ export async function runNativeEngagement(
   const db = env.DB;
   const now = opts.nowMs ?? Date.now();
   const day = santiagoDayKey(new Date(now));
-  const summary: NativeEngagementSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {}, probes: {} };
+  const summary: NativeEngagementSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {}, probes: {}, found: {} };
   const settings = await getSettings(db, tenant).catch(() => ({} as Record<string, unknown>));
   const eff = effectiveSettings(settings);
   if (!eff.engagement_enabled) return { ...summary, reason: "engagement apagado en Ajustes (engagement_enabled=false)" };
@@ -490,16 +543,22 @@ export async function runNativeEngagement(
           const ownTitle = await ytOwnChannelTitle(access);
           const ownNames = ownTitle ? [ownTitle.replace(/^@/, "").toLowerCase()] : [];
           const mine = posted.filter((j) => j.platform === "youtube_shorts" && j.language === lang && j.platform_id).slice(0, MAX_POSTS_PER_RUN);
+          // V3: conteo de lo encontrado (en bruto, antes de filtros).
+          const ytFound = { comments: 0, postsChecked: 0, postsFailed: 0 };
+          summary.found[`${platform}|${lang}`] = ytFound;
           let lastTemplate = -1;
           for (const job of mine) {
             const videoId = job.platform_id as string;
             let threads: NativeComment[];
+            ytFound.postsChecked++;
             try {
               threads = await ytListThreads(access, videoId);
             } catch (e) {
+              ytFound.postsFailed++;
               summary.skipped.push({ what: `hilo youtube ${videoId}`, reason: e instanceof Error ? e.message : String(e) });
               continue;
             }
+            ytFound.comments += threads.length;
             for (const c of threads.slice(0, MAX_COMMENTS_PER_POST)) {
               const skip = shouldSkipComment(c.text);
               if (skip) continue;
@@ -556,16 +615,22 @@ export async function runNativeEngagement(
         const ownName = await igOwnUsername(token, creds.igUserId);
         const ownNames = ownName ? [ownName.replace(/^@/, "").toLowerCase()] : [];
         const mine = posted.filter((j) => j.platform === "instagram_reels" && j.language === lang && j.platform_id).slice(0, MAX_POSTS_PER_RUN);
+        // V3: conteo de lo encontrado (en bruto, antes de filtros).
+        const igFound = { comments: 0, postsChecked: 0, postsFailed: 0 };
+        summary.found[`${platform}|${lang}`] = igFound;
         let lastTemplate = -1;
         for (const job of mine) {
           const mediaId = job.platform_id as string;
           let comments: NativeComment[];
+          igFound.postsChecked++;
           try {
             comments = await igListComments(token, mediaId);
           } catch (e) {
+            igFound.postsFailed++;
             summary.skipped.push({ what: `hilo instagram ${mediaId}`, reason: e instanceof Error ? e.message : String(e) });
             continue;
           }
+          igFound.comments += comments.length;
           for (const c of comments.slice(0, MAX_COMMENTS_PER_POST)) {
             const skip = shouldSkipComment(c.text);
             if (skip) continue;
@@ -621,16 +686,22 @@ export async function runNativeEngagement(
         const ownName = await fbOwnPageName(token, creds.pageId);
         const ownNames = ownName ? [ownName.replace(/^@/, "").toLowerCase()] : [];
         const mine = posted.filter((j) => j.platform === "facebook_reels" && j.language === lang && j.platform_id).slice(0, MAX_POSTS_PER_RUN);
+        // V3: conteo de lo encontrado (en bruto, antes de filtros).
+        const fbFound = { comments: 0, postsChecked: 0, postsFailed: 0 };
+        summary.found[`${platform}|${lang}`] = fbFound;
         let lastTemplate = -1;
         for (const job of mine) {
           const postId = job.platform_id as string;
           let comments: NativeComment[];
+          fbFound.postsChecked++;
           try {
             comments = await fbListComments(token, postId);
           } catch (e) {
+            fbFound.postsFailed++;
             summary.skipped.push({ what: `hilo facebook ${postId}`, reason: e instanceof Error ? e.message : String(e) });
             continue;
           }
+          fbFound.comments += comments.length;
           for (const c of comments.slice(0, MAX_COMMENTS_PER_POST)) {
             const skip = shouldSkipComment(c.text);
             if (skip) continue;
@@ -780,6 +851,7 @@ export async function runNativeEngagement(
       outwardComments: summary.outwardComments,
       perLanguage: summary.perLanguage,
       skipped: summary.skipped.slice(0, 10),
+      found: summary.found,
     };
     await saveSettings(db, tenant, { ...settings, engagement_first_run_at: firstRunAt(settings, now), engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
     await logWorkerEvent(
@@ -809,10 +881,10 @@ export async function runEngagement(
   const now = opts.nowMs ?? Date.now();
   const settings = await getSettings(db, tenant).catch(() => ({} as Record<string, unknown>));
   const eff = effectiveSettings(settings);
-  const emptyNative: NativeEngagementSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {}, probes: {} };
-  const emptyZernio: EngagementRunSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {} };
+  const emptyNative: NativeEngagementSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {}, probes: {}, found: {} };
+  const emptyZernio: EngagementRunSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {}, found: {} };
   const combined: CombinedEngagementSummary = {
-    ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {},
+    ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {}, found: {},
     native: emptyNative, zernio: emptyZernio,
   };
   if (!eff.engagement_enabled) return { ...combined, reason: "engagement apagado en Ajustes (engagement_enabled=false)" };
@@ -840,6 +912,7 @@ export async function runEngagement(
     if (parts.length > 0) combined.perLanguage[lang] = parts.join(" | ");
   }
   combined.ran = true;
+  combined.found = mergeFoundMaps(native.found, zernio.found);
   const status = {
     via: "nativa+zernio",
     at: now,
@@ -849,6 +922,7 @@ export async function runEngagement(
     outwardComments: combined.outwardComments,
     perLanguage: combined.perLanguage,
     skipped: combined.skipped.slice(0, 10),
+    found: combined.found,
   };
   // Preserva la marca de primera pasada (los sub-runners ya la
   // estamparon; el snapshot `settings` es previo a la pasada).

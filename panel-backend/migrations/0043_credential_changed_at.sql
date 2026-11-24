@@ -1,0 +1,25 @@
+-- 0043: marca de último cambio de credencial en api_accounts
+-- (validadores anti falsos positivos, 2026-11-23, V2).
+--
+-- Problema (hallazgo 5 del Goldfish): V2 exige que "Conectada" solo
+-- valga si la última verificación es posterior al último cambio de
+-- credencial, pero api_accounts no tenía ningún campo de cambio de
+-- credencial: el criterio era incomprobable. Esta migración añade
+-- credential_changed_at (ms UNIX, null = sin cambio registrado, es
+-- decir, filas creadas antes de la migración: su verificación vigente
+-- se respeta).
+--
+-- Se actualiza en cada escritura de credencial (upsertAccountCredential
+-- y POST /api/accounts/:id/credential, index.ts) y en el callback
+-- OAuth (que usa upsertAccountCredential). Al cambiar la credencial
+-- se invalida además la caché de la sonda (engagement_scopes /
+-- engagement_scopes_at en settings), para que el veredicto guardado
+-- no se reutilice como confirmación con la credencial vieja.
+--
+-- verified_at NO se refresca cuando la re-verificación da el mismo
+-- resultado: es DISEÑO (db.ts updateApiAccountVerification, "sin
+-- cambio no hay UPDATE"), no un falso positivo. El falso positivo es
+-- solo "verificado hace tiempo con credencial cambiada", que es lo
+-- que detecta isAccountVerificationCurrent (db.ts).
+
+ALTER TABLE api_accounts ADD COLUMN credential_changed_at INTEGER;

@@ -423,8 +423,13 @@ _GATE_BAR_STD = 10.0       # luma std dentro de una banda real: una
                             # banda es sólida; el juego oscuro varía
 _GATE_BAR_STEP = 25.0      # salto mínimo de luma de la banda al
                             # contenido adyacente (banda real)
-_GATE_SUB_WORD_PX = 150    # px blancos que delatan UNA palabra corta
-                            # en la zona de subtítulos (174: 1679 px)
+_GATE_SUB_WORD_PX = 50     # px blancos que delatan UNA palabra corta
+                            # en la zona de subtítulos (174: 1679 px;
+                            # "y"/"a" a 110 px dan 1656-1935 px, "i"
+                            # fina 728 px; el suelo es _GATE_TEXT_PX,
+                            # el mínimo que cuenta como texto presente,
+                            # para que un glifo fino degradado por el
+                            # contorno negro y el JPEG no se pierda)
 _YELLOW = ((200, 255), (200, 255), (0, 90))  # R, G altos, B bajo
 _WHITE = ((200, 255), (200, 255), (200, 255))
 _BLACK = ((0, 60), (0, 60), (0, 60))  # texto negro del banner rubius
@@ -435,6 +440,15 @@ _RED = ((180, 255), (0, 90), (0, 90))  # línea 2 roja del banner rubius
 # zona. Un conteo bajo de píxeles amarillos lo pasa cualquier
 # escena de juego con amarillo (caso scooter 2026-11-21: 890 px
 # amarillos de la calle en la zona del banner, sin banner).
+# PERO el título también puede ir como TEXTO amarillo sobre fondo
+# casi negro (caso 170, 2026-11-23: 10.410-33.517 px amarillos en
+# títulos reales a 90-110 px, negro 75-85% de la zona): ahí el
+# amarillo no domina, pero los trazos del título sí son muchos
+# más que el amarillo disperso del juego. La rama de texto exige
+# por eso amarillo SUFICIENTE (>= 3.000 px, 3,4x sobre el
+# scooter) Y fondo casi negro (>= 50%): el negro solo no basta
+# (un juego oscuro sin título es 89% negro con 0 px amarillos)
+# y el amarillo solo tampoco (la calle del scooter).
 # FUENTE ÚNICA de estos valores: config.yaml (validator.*), leída
 # por load_validator_config y pasada por template_gate. Las
 # constantes de abajo solo son el fallback de las llamadas
@@ -443,6 +457,14 @@ _RED = ((180, 255), (0, 90), (0, 90))  # línea 2 roja del banner rubius
 _RUBIUS_BANNER_T0 = 0.5
 _RUBIUS_BANNER_T1 = 3.5
 _RUBIUS_BANNER_YELLOW_FRAC = 0.30  # scooter 0.004, 52h 0.79
+# Rama de texto amarillo sobre negro (170): umbrales calibrados
+# V7 2026-11-23 en títulos sintéticos realistas (DejaVu Bold
+# 90-110 px) y en el negativo del scooter. Mantener sincronizados
+# con clipagent/render_gate.py (espejo del gate en CircleCI).
+_RUBIUS_BANNER_YELLOW_TEXT_PX = 3000  # px amarillos mínimos de
+    # los trazos del título (170: 10.410-33.517; scooter: 890)
+_RUBIUS_BANNER_DARK_FRAC = 0.50  # fracción mínima de fondo casi
+    # negro en la zona (170: 0.75-0.85)
 # Subtítulos palabra por palabra: el subtítulo centrado nunca toca
 # los dos bordes de su zona a la vez; una línea completa sí (caso
 # scooter: 4/7 fotogramas con texto en ambos bordes; 52h: 0/5).
@@ -491,6 +513,36 @@ def _banner_yellow_frac(zone):
     if total == 0:
         return 0.0
     return _count_color(zone, _YELLOW) / total
+
+
+def _banner_title_present(zone, yellow_frac):
+    """¿Hay título en la zona del banner? Dos formas válidas
+    (V7, caso 170): (a) banner amarillo clásico: el amarillo
+    DOMINA la zona (>= yellow_frac) con texto blanco y negro o
+    rojo; (b) TEXTO amarillo sobre fondo casi negro: los trazos
+    del título suman >= _RUBIUS_BANNER_YELLOW_TEXT_PX px
+    amarillos y el fondo es >= _RUBIUS_BANNER_DARK_FRAC negro.
+    Devuelve (pasa, detalle). Un clip sin título sigue
+    fallando: juego oscuro sin amarillo (0 px) y amarillo
+    disperso de la calle (scooter: 890 px) quedan por debajo
+    del mínimo de trazos en ambas ramas."""
+    frac = _banner_yellow_frac(zone)
+    if (frac >= yellow_frac
+            and _count_color(zone, _WHITE) > 100
+            and (_count_color(zone, _BLACK) > 50
+                 or _count_color(zone, _RED) > 50)):
+        return True, f"banner amarillo ({frac:.0%} de la zona)"
+    total = int(zone.shape[0]) * int(zone.shape[1])
+    yellow_px = _count_color(zone, _YELLOW)
+    black_frac = (_count_color(zone, _BLACK) / total
+                  if total else 0.0)
+    if (yellow_px >= _RUBIUS_BANNER_YELLOW_TEXT_PX
+            and black_frac >= _RUBIUS_BANNER_DARK_FRAC):
+        return True, (f"texto amarillo sobre negro "
+                      f"({yellow_px} px amarillos, "
+                      f"negro {black_frac:.0%})")
+    return False, (f"amarillo {frac:.0%} ({yellow_px} px), "
+                   f"negro {black_frac:.0%}")
 
 
 def _subs_edge_coverages(arr, zy0, zy1, edge_w=None):
@@ -1378,10 +1430,11 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
           "hay banda negra (no es el corte limpio rubius)")
     # Título en banner amarillo TRANSITORIO (t=0.5-3.5 s de la
     # receta): tiene que aparecer en esa ventana, con el amarillo
-    # DOMINANDO su zona. Un conteo bajo de píxeles amarillos lo
-    # pasa cualquier escena de juego con amarillo (caso scooter
-    # 2026-11-21: 890 px amarillos de la calle en la zona del
-    # banner, sin banner).
+    # DOMINANDO su zona, O como texto amarillo sobre fondo casi
+    # negro (caso 170: _banner_title_present, rama b). Un conteo
+    # bajo de píxeles amarillos lo pasa cualquier escena de juego
+    # con amarillo (caso scooter 2026-11-21: 890 px amarillos de
+    # la calle en la zona del banner, sin banner).
     yellow_frac = (float(vcfg["rubius_banner_yellow_frac"]) if vcfg
                    else _RUBIUS_BANNER_YELLOW_FRAC)
     edge_w = int(vcfg["rubius_subs_edge_w"]) if vcfg else None
@@ -1392,25 +1445,29 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     pool = window if window else arrays
     banner_frames = 0
     best_frac = 0.0
+    best_detail = ""
     for _ts, a in pool:
         zone = a[by0:by1, bx0:bx1]
         frac = _banner_yellow_frac(zone)
         best_frac = max(best_frac, frac)
-        if (frac >= yellow_frac
-                and _count_color(zone, _WHITE) > 100
-                and (_count_color(zone, _BLACK) > 50
-                     or _count_color(zone, _RED) > 50)):
+        ok, detail = _banner_title_present(zone, yellow_frac)
+        if ok:
             banner_frames += 1
+            best_detail = detail
     check("titulo_banner", banner_frames >= 1,
           f"banner en {banner_frames}/{len(pool)} fotogramas de "
-          f"la ventana (amarillo máx. {best_frac:.0%})",
+          f"la ventana (amarillo máx. {best_frac:.0%}"
+          + (f", {best_detail}" if best_detail else "") + ")",
           f"sin banner amarillo de título en t={t0}-{t1} s")
     # Subtítulos blancos palabra por palabra sobre el gameplay
     # (zona central de la franja 900-1020; solo con SRT). El
-    # umbral es el de UNA palabra corta (150 px): con habla escasa
-    # y palabras cortas, 300 px pedía más blanco del que cabe en
-    # una palabra (caso 174: palabra real de 1679 px, pero el
-    # instante con una sola palabra corta no llegaba a 300).
+    # umbral es el de UNA palabra corta (_GATE_SUB_WORD_PX): con
+    # habla escasa y palabras cortas, 300 px pedía más blanco
+    # del que cabe en una palabra (caso 174: palabra real de
+    # 1679 px, pero el instante con una sola palabra corta no
+    # llegaba a 300). V7: el suelo es el de texto presente (50
+    # px) para que tampoco se pierda un glifo fino de 1-2 letras
+    # degradado por contorno y JPEG.
     if spans and active:
         white_share = sum(
             1 for _ts, a in active

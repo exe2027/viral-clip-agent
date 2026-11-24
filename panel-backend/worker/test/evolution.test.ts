@@ -75,7 +75,7 @@ function makeDb(): { d1: D1Database; raw: Database } {
       "file_deleted INTEGER NOT NULL DEFAULT 0, r2_delete_after INTEGER, archived INTEGER NOT NULL DEFAULT 0, " +
       "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, captions TEXT NOT NULL DEFAULT '', viral TEXT NOT NULL DEFAULT '', " +
       "seo_overrides TEXT NOT NULL DEFAULT '', preview_seen INTEGER NOT NULL DEFAULT 0, origin TEXT NOT NULL DEFAULT '', " +
-      "publish_states TEXT NOT NULL DEFAULT '{}')",
+      "publish_states TEXT NOT NULL DEFAULT '{}', language TEXT NOT NULL DEFAULT 'es')",
   );
   raw.exec(
     "CREATE TABLE influencers (" +
@@ -103,15 +103,15 @@ function insertInfluencer(raw: Database, id: number, name: string): void {
   ).run(id, name, NOW);
 }
 
-function insertClip(raw: Database, id: number, influencerId: number, viral: string, publishStates = "{}"): void {
+function insertClip(raw: Database, id: number, influencerId: number, viral: string, publishStates = "{}", language = "es"): void {
   raw.query(
     "INSERT INTO clips (id, tenant_id, source_id, influencer_id, title, start_sec, end_sec, score, status, subtitle_style, " +
       "seo_title, seo_description, seo_tags, thumb_text, platforms, scheduled_for, published_at, file_deleted, r2_delete_after, " +
-      "archived, created_at, updated_at, captions, viral, seo_overrides, preview_seen, origin, publish_states) " +
+      "archived, created_at, updated_at, captions, viral, seo_overrides, preview_seen, origin, publish_states, language) " +
       "VALUES (?, 'sebastian', NULL, ?, 'Dasgasd3m se ríe', 100, 140, 70, 'en_carpeta', 'rubius', " +
       "'Dasgasd3m se ríe: el mejor momento de GTA 6', '', '', 'SE RÍE SIN PARAR', '[\"tiktok\"]', NULL, NULL, 0, NULL, " +
-      "0, ?, ?, '', ?, '', 0, '', ?)",
-  ).run(id, influencerId, NOW, NOW, viral, publishStates);
+      "0, ?, ?, '', ?, '', 0, '', ?, ?)",
+  ).run(id, influencerId, NOW, NOW, viral, publishStates, language);
 }
 
 const VIRAL_OK = JSON.stringify({
@@ -388,6 +388,73 @@ describe("rutas /api/evolution (con sesión)", () => {
     // En otra plataforma no publicada, sí corre.
     const yt = await callApi(env, "POST", "/api/evolution/dry-run", { clip_id: 174, platform: "youtube" });
     expect(yt.status).toBe(201);
+  });
+
+  test("V5 — dry-run NO da 409 si el clip NO se publicó en esa plataforma (negativo del 409)", async () => {
+    const { d1, raw } = makeDb();
+    insertInfluencer(raw, 1, "Dasgasd3m");
+    insertClip(raw, 174, 1, VIRAL_OK); // publish_states "{}": nada publicado
+    const env = makeTestEnv(d1);
+    const res = await callApi(env, "POST", "/api/evolution/dry-run", { clip_id: 174, platform: "tiktok" });
+    expect(res.status).toBe(201);
+    expect(res.json.published_nothing).toBe(true);
+  });
+
+  test("V5 — FALSO POSITIVO CONOCIDO: publicado en D1 pero borrado en la plataforma sigue dando 409", async () => {
+    // Documenta el comportamiento actual, NO lo arregla: la fuente
+    // de verdad del 409 es solo D1 clips.publish_states (ver el
+    // comentario V5 en la ruta dry-run de src/index.ts). La ruta no
+    // consulta la plataforma ni jobs.deleted_at (0031: vídeo
+    // borrado o privado, probado por la medición), así que una
+    // republicación legítima queda bloqueada. Cambiar la fuente de
+    // verdad sería cambio de lógica, fuera de esta spec.
+    const { d1, raw } = makeDb();
+    insertInfluencer(raw, 1, "Dasgasd3m");
+    insertClip(raw, 174, 1, VIRAL_OK, JSON.stringify({ tiktok: { state: "publicado", scheduledFor: null, publishedAt: "2026-11-23T10:00:00.000Z", note: "", since: "", updatedAt: "" } }));
+    // El vídeo ya no existe en TikTok: job posted con deleted_at
+    // (migración 0031). La ruta dry-run no lee esta tabla.
+    raw.exec(
+      "CREATE TABLE jobs (id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, clip_id INTEGER, platform TEXT NOT NULL, " +
+        "language TEXT NOT NULL DEFAULT 'es', state TEXT NOT NULL DEFAULT 'posted', deleted_at INTEGER, posted_day TEXT)",
+    );
+    raw.query(
+      "INSERT INTO jobs (id, tenant_id, clip_id, platform, language, state, deleted_at) VALUES (1, 'sebastian', 174, 'tiktok', 'es', 'posted', ?)",
+    ).run(NOW);
+    const env = makeTestEnv(d1);
+    const res = await callApi(env, "POST", "/api/evolution/dry-run", { clip_id: 174, platform: "tiktok" });
+    expect(res.status).toBe(409);
+    expect(String(res.json.error)).toContain("ya se publicó en tiktok");
+  });
+
+  test("V5 — ES/EN: el 409 NO distingue idioma dentro de una fila de clip; ES y EN son filas distintas", async () => {
+    // Verificado contra el código (2026-11-23): la ruta dry-run no
+    // recibe idioma ni lee clip.language; el 409 es
+    // parsePublishStates(clip.publish_states)[platform] y
+    // publish_states es un espejo por clip SIN idioma (db.ts:3480:
+    // la clave es solo la plataforma). Un clip tiene UN solo
+    // idioma (clipLanguage: es o en; los jobs heredan el del
+    // clip), así que la versión ES y la EN son filas distintas con
+    // su propio publish_states: publicar la ES no bloquea el
+    // dry-run de la EN, pero dentro de UNA fila el 409 es ciego
+    // al idioma — no hay forma de pedir "dry-run EN" de un clip
+    // ES ya publicado.
+    const { d1, raw } = makeDb();
+    insertInfluencer(raw, 1, "Dasgasd3m");
+    // Fila ES del momento: ya publicada en TikTok.
+    insertClip(raw, 174, 1, VIRAL_OK, JSON.stringify({ tiktok: { state: "publicado", scheduledFor: null, publishedAt: "2026-11-23T10:00:00.000Z", note: "", since: "", updatedAt: "" } }), "es");
+    // Fila EN del mismo momento (otro id): sin publicar.
+    insertClip(raw, 175, 1, VIRAL_OK, "{}", "en");
+    const env = makeTestEnv(d1);
+    // La fila ES bloquea su propio dry-run en TikTok...
+    const es = await callApi(env, "POST", "/api/evolution/dry-run", { clip_id: 174, platform: "tiktok" });
+    expect(es.status).toBe(409);
+    // ...pero NO bloquea el dry-run de la fila EN del mismo momento.
+    const en = await callApi(env, "POST", "/api/evolution/dry-run", { clip_id: 175, platform: "tiktok" });
+    expect(en.status).toBe(201);
+    // Y la fila ES sí corre en otra plataforma no publicada: el
+    // 409 es por (clip, plataforma), sin dimensión de idioma.
+    const esYt = await callApi(env, "POST", "/api/evolution/dry-run", { clip_id: 174, platform: "youtube" });
+    expect(esYt.status).toBe(201);
   });
 
   test("record-real-fitness: anota vistas aprobadas, marca has_real_data; sin dato, 400; variante inexistente, 404", async () => {

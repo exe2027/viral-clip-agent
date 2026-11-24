@@ -18,9 +18,13 @@ clip, cada ``face_sample_every_s`` segundos, tope 24):
   * sin_bandas: sin banda negra arriba del gameplay ni abajo del
     todo en >= 80%.
   * titulo_banner: banner amarillo TRANSITORIO en t=0,5-3,5 s
-    (amarillo >= 30% de su zona + texto blanco y negro/rojo).
+    (amarillo >= 30% de su zona + texto blanco y negro/rojo),
+    O texto amarillo sobre fondo casi negro (caso 170, V7:
+    >= 3.000 px amarillos de trazos y >= 50% de fondo negro).
   * subtitulos_blancos: blancos en la zona de subtítulos en
-    >= 50% de los instantes con subtítulo (según el SRT).
+    >= 50% de los instantes con subtítulo (según el SRT), con
+    el umbral de UNA palabra corta (50 px, V7: también valen
+    palabras de 1-2 letras y glifos finos degradados).
   * subtitulos_una_palabra: ningún fotograma con texto en los
     dos bordes de la zona a la vez (una palabra centrada nunca
     toca los dos bordes; una línea completa sí).
@@ -55,6 +59,12 @@ _GATE_MAX_FRAMES = 24
 _GATE_BLACK_LUMA = 40.0
 _GATE_GAME_LUMA_MIN = 12.0
 _GATE_SUB_PX = 300
+_GATE_SUB_WORD_PX = 50  # px blancos que delatan UNA palabra corta
+    # en la zona de subtítulos (V7, caso 174: "y"/"a" a 110 px dan
+    # 1656-1935 px, "i" fina 728 px; el suelo es el mínimo que
+    # cuenta como texto presente, para que un glifo fino degradado
+    # por contorno negro y JPEG no se pierda). Mantener
+    # sincronizado con clipagent/final_review.py.
 _GATE_LIVE_DIFF = 2.0
 _YELLOW = ((200, 255), (200, 255), (0, 90))
 _WHITE = ((200, 255), (200, 255), (200, 255))
@@ -63,6 +73,15 @@ _RED = ((180, 255), (0, 90), (0, 90))
 _RUBIUS_BANNER_T0 = 0.5
 _RUBIUS_BANNER_T1 = 3.5
 _RUBIUS_BANNER_YELLOW_FRAC = 0.30
+# Rama de texto amarillo sobre negro (170, V7): umbrales
+# calibrados 2026-11-23 en títulos sintéticos realistas (90-110
+# px: 10.410-33.517 px amarillos, negro 75-85%) y en el negativo
+# del scooter (890 px amarillos dispersos, sin título).
+# Mantener sincronizados con clipagent/final_review.py.
+_RUBIUS_BANNER_YELLOW_TEXT_PX = 3000  # px amarillos mínimos de
+    # los trazos del título (3,4x sobre el scooter)
+_RUBIUS_BANNER_DARK_FRAC = 0.50  # fracción mínima de fondo casi
+    # negro en la zona
 _RUBIUS_SUBS_EDGE_W = 150
 _RUBIUS_SUBS_EDGE_COV = 0.10
 _SFX_MIN_NCC = 0.5
@@ -107,6 +126,38 @@ def _banner_yellow_frac(zone):
     if total == 0:
         return 0.0
     return _count_color(zone, _YELLOW) / total
+
+
+def _banner_title_present(zone, yellow_frac):
+    """¿Hay título en la zona del banner? Espejo de
+    final_review._banner_title_present: (a) banner amarillo
+    clásico (amarillo dominante + texto blanco y negro/rojo) o
+    (b) TEXTO amarillo sobre fondo casi negro (caso 170, V7).
+    Devuelve (pasa, detalle)."""
+    frac = _banner_yellow_frac(zone)
+    if (frac >= yellow_frac
+            and _count_color(zone, _WHITE) > 100
+            and (_count_color(zone, _BLACK) > 50
+                 or _count_color(zone, _RED) > 50)):
+        return True, f"banner amarillo ({frac:.0%} de la zona)"
+    total = int(zone.shape[0]) * int(zone.shape[1])
+    yellow_px = _count_color(zone, _YELLOW)
+    black_frac = (_count_color(zone, _BLACK) / total
+                  if total else 0.0)
+    if (yellow_px >= _RUBIUS_BANNER_YELLOW_TEXT_PX
+            and black_frac >= _RUBIUS_BANNER_DARK_FRAC):
+        return True, (f"texto amarillo sobre negro "
+                      f"({yellow_px} px amarillos, "
+                      f"negro {black_frac:.0%})")
+    return False, (f"amarillo {frac:.0%} ({yellow_px} px), "
+                   f"negro {black_frac:.0%}")
+
+
+def _subs_white_present(crop):
+    """¿Hay palabra de subtítulo en el recorte (zona central de
+    subtítulos)? Umbral de UNA palabra corta (V7): también valen
+    palabras de 1-2 letras y glifos finos degradados."""
+    return _count_color(crop, _WHITE) > _GATE_SUB_WORD_PX
 
 
 def _subs_edge_coverages(arr, zy0, zy1, edge_w=None):
@@ -468,7 +519,8 @@ def render_gate(clip_path, srt_path=None, cfg=None, out_dir=None):
            f"arriba {top_ok:.0%}, abajo {bottom_ok:.0%} sin banda negra",
            "hay banda negra (no es el corte limpio rubius)")
 
-    # 4. Título en banner amarillo TRANSITORIO (t=0,5-3,5 s).
+    # 4. Título en banner amarillo TRANSITORIO (t=0,5-3,5 s), o
+    # como texto amarillo sobre fondo casi negro (caso 170, V7).
     t0 = vcfg["rubius_banner_t0"]
     t1 = vcfg["rubius_banner_t1"]
     yellow_frac = vcfg["rubius_banner_yellow_frac"]
@@ -478,26 +530,26 @@ def render_gate(clip_path, srt_path=None, cfg=None, out_dir=None):
     pool = window if window else arrays
     banner_frames = 0
     best_frac = 0.0
+    best_detail = ""
     for _ts, a in pool:
         zone = a[by0:by1, bx0:bx1]
         frac = _banner_yellow_frac(zone)
         best_frac = max(best_frac, frac)
-        if (frac >= yellow_frac
-                and _count_color(zone, _WHITE) > 100
-                and (_count_color(zone, _BLACK) > 50
-                     or _count_color(zone, _RED) > 50)):
+        ok, detail = _banner_title_present(zone, yellow_frac)
+        if ok:
             banner_frames += 1
+            best_detail = detail
     _check("titulo_banner", banner_frames >= 1,
            f"banner en {banner_frames}/{len(pool)} fotogramas de "
-           f"la ventana (amarillo máx. {best_frac:.0%})",
+           f"la ventana (amarillo máx. {best_frac:.0%}"
+           + (f", {best_detail}" if best_detail else "") + ")",
            f"sin banner amarillo de título en t={t0}-{t1} s")
 
     # 5. Subtítulos blancos palabra por palabra sobre el gameplay.
     if spans and active:
         white_share = sum(
             1 for _ts, a in active
-            if _count_color(a[zy0:zy1, 350:730], _WHITE)
-            > _GATE_SUB_PX) / len(active)
+            if _subs_white_present(a[zy0:zy1, 350:730])) / len(active)
         _check("subtitulos_blancos", white_share >= 0.5,
                f"blancos en {white_share:.0%} de los instantes con "
                "subtítulo",

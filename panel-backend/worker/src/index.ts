@@ -119,6 +119,7 @@ import {
   toApiPlatform,
   unlinkTelegramChat,
   unlinkTelegramTenant,
+  isAccountVerificationCurrent,
   updateApiAccountVerification,
   updateCampaignSubmission,
   updateClip,
@@ -167,7 +168,7 @@ import {
   listTargets,
   type ZernioPlatform,
 } from "./publish/zernio-engagement";
-import { probeNativeScopes, runEngagement } from "./publish/native-engagement";
+import { invalidateProbeCache, probeNativeScopes, runEngagement } from "./publish/native-engagement";
 import { clipPublishBreakdown, clipRetentionSummary } from "./r2-retention";
 // Intervalos del ciclo y los dispatches (A3, 2026-11-20): viven en
 // cycle-gate.ts (single-source); aquí solo se importan.
@@ -369,9 +370,14 @@ async function upsertAccountCredential(
   if (!acc) acc = await createApiAccount(env.DB, tenant, { platform, language, label });
   const credentialEnc = await encryptCredential(credential, env.CREDENTIAL_ENCRYPTION_KEY, tenant);
   const extraEnc = extraObj ? await encryptCredential(JSON.stringify(extraObj), env.CREDENTIAL_ENCRYPTION_KEY, tenant) : "";
-  await env.DB.prepare("UPDATE api_accounts SET credential = '', credential_enc = ?, extra = '', extra_enc = ?, status = 'pendiente' WHERE id = ? AND tenant_id = ?")
-    .bind(credentialEnc, extraEnc, acc.id, tenant)
+  // V2 (0043): la credencial cambió: se sella credential_changed_at
+  // y se invalida la caché de la sonda, para que el veredicto
+  // guardado no se reutilice como confirmación con la credencial
+  // vieja. Lo usa también el callback OAuth (google/meta).
+  await env.DB.prepare("UPDATE api_accounts SET credential = '', credential_enc = ?, extra = '', extra_enc = ?, status = 'pendiente', credential_changed_at = ? WHERE id = ? AND tenant_id = ?")
+    .bind(credentialEnc, extraEnc, Date.now(), acc.id, tenant)
     .run();
+  await invalidateProbeCache(env.DB, tenant);
   return { id: acc.id, platform: acc.platform, label: acc.label };
 }
 
@@ -3043,6 +3049,7 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
                 language: acc.language,
                 verified_at: acc.verified_at,
                 verify_message: acc.verify_message,
+                verification_current: isAccountVerificationCurrent(acc),
                 has_credential: !!(acc.credential_enc || acc.credential),
               }
             : null,
@@ -3366,6 +3373,11 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
             verified_at: a.verified_at,
             verify_ok: a.verify_ok,
             verify_message: a.verify_message,
+            credential_changed_at: a.credential_changed_at ?? null,
+            // V2: false si la verificación es anterior al último
+            // cambio de credencial (falso positivo: "Conectada" con
+            // la credencial anterior). Ver isAccountVerificationCurrent.
+            verification_current: isAccountVerificationCurrent(a),
             has_credential: !!(a.credential_enc || a.credential),
             credential_masked: a.credential_enc ? "cifrada en D1" : a.credential ? "texto plano legacy: volver a pegar" : "",
             // Escalado automático de topes (0017, reglas 2026-11-19):
@@ -3450,9 +3462,12 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       const credentialEnc = await encryptCredential(credential, env.CREDENTIAL_ENCRYPTION_KEY, tenant);
       const extraEnc = extra ? await encryptCredential(extra, env.CREDENTIAL_ENCRYPTION_KEY, tenant) : "";
       // Se cifra y se borra el texto plano legacy en la misma escritura.
-      await env.DB.prepare("UPDATE api_accounts SET credential = '', credential_enc = ?, extra = '', extra_enc = ?, status = 'pendiente' WHERE id = ? AND tenant_id = ?")
-        .bind(credentialEnc, extraEnc, id, tenant)
+      // V2 (0043): se sella credential_changed_at y se invalida la
+      // caché de la sonda (ver upsertAccountCredential).
+      await env.DB.prepare("UPDATE api_accounts SET credential = '', credential_enc = ?, extra = '', extra_enc = ?, status = 'pendiente', credential_changed_at = ? WHERE id = ? AND tenant_id = ?")
+        .bind(credentialEnc, extraEnc, Date.now(), id, tenant)
         .run();
+      await invalidateProbeCache(env.DB, tenant);
       return json({ ok: true, masked: maskCredential(credential) });
     }
     const verifyMatch = /^\/api\/accounts\/(\d+)\/verify$/.exec(path);
@@ -3898,6 +3913,19 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       // For You), Instagram deja de recomendar la cuenta que
       // repostea, y YouTube lo cuenta como contenido repetitivo.
       // Se bloquea con motivo exacto, no se genera nada.
+      // V5 — FUENTE DE VERDAD DEL 409 (SPEC validators, Goldfish 9):
+      // D1 clips.publish_states[platform].state === "publicado".
+      // NO es la plataforma ni los jobs. publish_states es un
+      // espejo por clip SIN idioma (db.ts:3480): la clave es solo
+      // la plataforma, así que el 409 NO distingue ES/EN dentro
+      // de una misma fila de clip (ES y EN son filas distintas,
+      // cada una con su propio publish_states; ver test ES/EN en
+      // evolution.test.ts). FALSO POSITIVO CONOCIDO (documentado,
+      // no arreglado aquí): un clip "publicado en D1 pero borrado
+      // en la plataforma" sigue dando 409 — la ruta no consulta
+      // la plataforma ni jobs.deleted_at (0031). Cambiar la
+      // fuente de verdad sería cambio de lógica, fuera de esta
+      // spec.
       const panelKey = EVO_API_TO_SEO[platform];
       if (panelKey) {
         const entry = parsePublishStates(clip.publish_states)[panelKey];

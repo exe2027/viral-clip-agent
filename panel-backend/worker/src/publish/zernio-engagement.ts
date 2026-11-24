@@ -66,6 +66,10 @@ import { resolveCreds } from "./index";
 
 const API = "https://zernio.com/api/v1";
 export const ENGAGEMENT_MIN_INTERVAL_MS = 3600_000; // 1 pasada/hora
+/** Ventana de caché de la sonda de scopes (native-engagement.ts):
+ *  1 h. Un veredicto guardado dentro de esta ventana se reutiliza
+ *  sin llamar a Google/Meta. */
+export const PROBE_CACHE_MS = 3600_000;
 const MAX_POSTS_PER_RUN = 10;
 const MAX_COMMENTS_PER_POST = 10;
 const MAX_TARGETS_PER_RUN = 10;
@@ -436,9 +440,15 @@ export interface EngagementStatus {
   note: string;
   /** Estado de la vía nativa por plataforma+idioma (sonda de scopes
    *  guardada en settings.engagement_scopes; sin sonda aún, todos
-   *  en sin_sonda). TikTok no tiene vía nativa: vía zernio. */
+   *  en sin_sonda). TikTok no tiene vía nativa: su estado es
+   *  sin_veredicto (la sonda lo declara explícito; el estado real
+   *  está en Cuentas, vía Zernio). */
   native: Record<string, { via: string; state: string; missing_scopes: string[]; granted_count: number; checked_at: number | null; error: string | null }>;
   scopes_checked_at: number | null;
+  /** true si la sonda guardada sigue dentro de su ventana de caché
+   *  de 1 h (misma ventana que PROBE_CACHE_MS): el veredicto puede
+   *  ser anterior al último cambio de credenciales. */
+  scopes_cached: boolean;
   events: EngagementEventRow[];
 }
 
@@ -476,7 +486,19 @@ export async function getEngagementStatus(env: Env, tenant: Tenant): Promise<Eng
     }
   }
   for (const lang of ["es", "en"] as const) {
-    native[`tiktok|${lang}`] = { via: "zernio", state: "zernio", missing_scopes: [], granted_count: 0, checked_at: null, error: null };
+    // V1: TikTok declara sin_veredicto (la sonda no lo cubre). Si
+    // hay sonda guardada se lee de ahí; si no, el mismo veredicto
+    // por defecto. Nunca "zernio" como estado: eso no es un
+    // veredicto y el panel lo mostraba como si lo fuera.
+    const rec = stored[`tiktok|${lang}`];
+    native[`tiktok|${lang}`] = {
+      via: "zernio",
+      state: rec?.state ?? "sin_veredicto",
+      missing_scopes: rec?.missing_scopes ?? [],
+      granted_count: Array.isArray(rec?.granted_scopes) ? (rec.granted_scopes as string[]).length : 0,
+      checked_at: typeof rec?.checked_at === "number" ? (rec.checked_at as number) : null,
+      error: typeof rec?.error === "string" ? (rec.error as string) : "la sonda no cubre TikTok: el estado real está en Cuentas (vía Zernio)",
+    };
   }
   const events = await listEngagementEvents(db, tenant, 20);
   const caps = engagementCaps(settings, eff, Date.now());
@@ -495,11 +517,40 @@ export async function getEngagementStatus(env: Env, tenant: Tenant): Promise<Eng
     note: "Vía nativa (YouTube, Instagram y Facebook con tus tokens OAuth) + Zernio solo para TikTok. Sin follow en ninguna vía, sin TikTok hacia afuera (su like devuelve 400) y sin descubrir posts de terceros: los objetivos de afuera se aportan con su URL. Si una plataforma marca sin_permiso, re-autoriza en Cuentas para conceder el scope que falta.",
     native,
     scopes_checked_at: scopesCheckedAt,
+    scopes_cached: scopesCheckedAt !== null && Date.now() - scopesCheckedAt < PROBE_CACHE_MS,
     events,
   };
 }
 
 // --- Pasada de engagement ---
+
+/** Conteo de lo encontrado en una pasada, por plataforma+idioma
+ *  (clave `${platform}|${lang}`). V3 (validadores 2026-11-23): sin
+ *  este conteo un 0/0 no se puede interpretar. `comments` = comentarios
+ *  listados en bruto (antes de filtros: vacíos, propios, ya
+ *  respondidos o tope); `postsChecked` = posts cuyo listado se
+ *  intentó; `postsFailed` = posts (o el inbox entero, = 1) cuyo
+ *  listado falló. 0/0 con comments=0 es "sin trabajo"; 0/0 con
+ *  comments>0 y 0 acciones es fallo y debe decir por qué (skipped);
+ *  postsFailed>0 con comments=0 es "no se pudo listar", no "sin
+ *  comentarios". Vive agregado en el summary y en
+ *  engagement_last_status: nunca una fila por comentario (D1). */
+export interface EngagementFound {
+  comments: number;
+  postsChecked: number;
+  postsFailed: number;
+}
+
+export type EngagementFoundMap = Record<string, EngagementFound>;
+
+export function mergeFoundMaps(a: EngagementFoundMap, b: EngagementFoundMap): EngagementFoundMap {
+  const out: EngagementFoundMap = {};
+  for (const [k, v] of [...Object.entries(a), ...Object.entries(b)]) {
+    const prev = out[k] ?? { comments: 0, postsChecked: 0, postsFailed: 0 };
+    out[k] = { comments: prev.comments + v.comments, postsChecked: prev.postsChecked + v.postsChecked, postsFailed: prev.postsFailed + v.postsFailed };
+  }
+  return out;
+}
 
 export interface EngagementRunSummary {
   ran: boolean;
@@ -510,6 +561,8 @@ export interface EngagementRunSummary {
   outwardComments: number;
   skipped: Array<{ what: string; reason: string }>;
   perLanguage: Record<string, string>;
+  /** V3: lo encontrado por plataforma+idioma (ver EngagementFound). */
+  found: EngagementFoundMap;
 }
 
 export async function runZernioEngagement(
@@ -524,7 +577,7 @@ export async function runZernioEngagement(
   const db = env.DB;
   const now = opts.nowMs ?? Date.now();
   const day = santiagoDayKey(new Date(now));
-  const summary: EngagementRunSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {} };
+  const summary: EngagementRunSummary = { ran: false, replies: 0, commentLikes: 0, outwardLikes: 0, outwardComments: 0, skipped: [], perLanguage: {}, found: {} };
   const settings = await getSettings(db, tenant).catch(() => ({} as Record<string, unknown>));
   const eff = effectiveSettings(settings);
   if (!eff.engagement_enabled) return { ...summary, reason: "engagement apagado en Ajustes (engagement_enabled=false)" };
@@ -573,11 +626,18 @@ export async function runZernioEngagement(
           langStatus.push(`${platform}: sin_conexion_zernio`);
           continue;
         }
+        // V3: conteo de lo encontrado (en bruto, antes de filtros).
+        const zFound = { comments: 0, postsChecked: 0, postsFailed: 0 };
+        summary.found[`${platform}|${lang}`] = zFound;
         let rows: InboxRow[];
         try {
           rows = await zernioListInbox(apiKey, platform);
         } catch (e) {
+          // El listado entero falló: no es "sin comentarios", es
+          // "no se pudo listar" (postsFailed 1 = el inbox).
+          zFound.postsFailed = 1;
           langStatus.push(`${platform}: inbox falló (${e instanceof Error ? e.message : String(e)})`);
+          summary.skipped.push({ what: `inbox ${platform} ${lang}`, reason: e instanceof Error ? e.message : String(e) });
           continue;
         }
         // Solo filas de NUESTRA cuenta en Zernio: el inbox agrega
@@ -586,14 +646,17 @@ export async function runZernioEngagement(
         const mine = rows.filter((r) => r.accountId === acc.id).slice(0, MAX_POSTS_PER_RUN);
         let lastTemplate = -1;
         for (const row of mine) {
+          zFound.postsChecked++;
           if (row.commentCount === 0) continue;
           let comments: Array<Record<string, unknown>>;
           try {
             comments = await zernioGetComments(apiKey, row.id, acc.id);
           } catch (e) {
+            zFound.postsFailed++;
             summary.skipped.push({ what: `hilo ${platform} ${row.id}`, reason: e instanceof Error ? e.message : String(e) });
             continue;
           }
+          zFound.comments += comments.length;
           for (const c of comments.slice(0, MAX_COMMENTS_PER_POST)) {
             const commentId = typeof c.id === "string" ? c.id : typeof c._id === "string" ? c._id : "";
             if (!commentId) continue;
@@ -729,6 +792,7 @@ export async function runZernioEngagement(
       outwardComments: summary.outwardComments,
       perLanguage: summary.perLanguage,
       skipped: summary.skipped.slice(0, 10),
+      found: summary.found,
     };
     await saveSettings(db, tenant, { ...settings, engagement_first_run_at: firstRunAt(settings, now), engagement_last_run_at: now, engagement_last_status: status }).catch(() => undefined);
     await logWorkerEvent(

@@ -58,6 +58,70 @@ export function containsClipMarker(text: string | null | undefined, clipId: numb
   return typeof text === "string" && text.includes(clipMarker(clipId));
 }
 
+/** Motivo exacto cuando un caption lleva la marca propia (V4,
+ *  SPEC validators, Resolución Goldfish punto 8). Compartido por
+ *  los 4 puntos de salida para que el rechazo diga lo mismo en
+ *  todas las plataformas. */
+export function captionMarkerReason(clipId: number): string {
+  return `El caption lleva la marca propia [clip:${clipId}] (visible en público): quítala del caption del job antes de publicar.`;
+}
+
+/** ¿Lleva el caption la marca de ESTE clip? (V4).
+ *
+ *  Solo la marca PROPIA: `[clip:<id-del-clip>]` (patrón
+ *  `\[clip:\d+\]` con el id propio). Un `[clip:123]` de otro
+ *  clip, o citado por el streamer en el texto ("dijo [clip:999]
+ *  en el directo"), NO es la marca del sistema y NO se marca.
+ *  El `]` final evita que `[clip:1680]` se confunda con la
+ *  marca del clip 168. Sin clip_id no se puede saber cuál es la
+ *  marca propia: no se rechaza nada. */
+export function hasOwnClipMarker(caption: string | null | undefined, clipId: number | null | undefined): boolean {
+  if (typeof caption !== "string" || typeof clipId !== "number" || !Number.isInteger(clipId)) return false;
+  return new RegExp(`\\[clip:${clipId}\\]`).test(caption);
+}
+
+/** Rechaza (lanza) un caption con la marca propia. Para los
+ *  puntos de salida que devuelven PublishResult se usa
+ *  hasOwnClipMarker + captionMarkerReason; para builders puros
+ *  se usa este assert. */
+export function assertCaptionClean(caption: string | null | undefined, clipId: number | null | undefined): void {
+  if (hasOwnClipMarker(caption, clipId)) {
+    throw new Error(captionMarkerReason(clipId as number));
+  }
+}
+
+/** Entrada del escaneo report-only de captions ya publicados. */
+export interface CaptionMarkerEntry {
+  platform: string;
+  clipId: number;
+  caption: string | null | undefined;
+}
+
+/** Un caption ya publicado que lleva su marca propia. */
+export interface CaptionMarkerHit {
+  platform: string;
+  clipId: number;
+  caption: string;
+  marker: string;
+}
+
+/** Escanea captions ya publicados buscando la marca propia de
+ *  cada clip (V4). SOLO REPORTE: no edita ni borra posts
+ *  viejos, no llama a ninguna API. Editarlos es trabajo del
+ *  usuario en la app (p. ej. el reel del clip 168 en
+ *  Instagram). Devuelve solo los que llevan SU marca propia;
+ *  la marca de otro clip o un "[clip:999]" citado no se
+ *  reportan. */
+export function scanCaptionsForOwnMarker(entries: CaptionMarkerEntry[]): CaptionMarkerHit[] {
+  const hits: CaptionMarkerHit[] = [];
+  for (const e of entries) {
+    if (typeof e.caption === "string" && hasOwnClipMarker(e.caption, e.clipId)) {
+      hits.push({ platform: e.platform, clipId: e.clipId, caption: e.caption, marker: clipMarker(e.clipId) });
+    }
+  }
+  return hits;
+}
+
 export type FetchJson = (
   url: string,
   headers?: Record<string, string>,

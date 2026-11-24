@@ -402,5 +402,186 @@ class TestTituloRescateE2E(unittest.TestCase):
         )
 
 
+def _paint_banner_zone(arrays, idx, paint):
+    """Pinta en la zona del banner (x103-967, y811-1099) del
+    fotograma idx. ``paint`` recibe el array y pinta en él."""
+    ts, a = arrays[idx]
+    paint(a)
+    arrays[idx] = (ts, a)
+
+
+def _paint_title_yellow_on_black(a):
+    """Título amarillo sobre negro (caso 170): fondo negro en la
+    zona del banner + dos líneas de trazos amarillos gruesos.
+    Los trazos suman 12.000 px amarillos: dentro del rango
+    medido en títulos reales (10.410-33.517 px a 90-110 px,
+    calibración V7 2026-11-23), muy por encima del amarillo
+    disperso de juego sin título (scooter: 890 px)."""
+    a[811:1099, 103:967] = 0
+    a[850:862, 200:800] = (255, 255, 0)   # línea 1: 600x12
+    a[950:962, 300:700] = (255, 255, 0)   # línea 2: 400x12
+
+
+def _paint_scattered_yellow_on_black(a, n=1000):
+    """Amarillo disperso sobre negro, SIN título: 1.000 px
+    amarillos sueltos (caso scooter: 890 px). El negro solo no
+    basta: sin suficientes píxeles amarillos debe seguir
+    fallando."""
+    a[811:1099, 103:967] = 0
+    rng = np.random.default_rng(23)
+    ys = rng.integers(811, 1099, size=n)
+    xs = rng.integers(103, 967, size=n)
+    a[ys, xs] = (255, 255, 0)
+
+
+def _paint_classic_banner(a):
+    """Banner amarillo clásico sólido (caso 52h: 79% amarillo)."""
+    a[811:1099, 103:967] = (255, 220, 0)
+    a[850:862, 200:800] = (0, 0, 0)       # texto negro línea 1
+    a[950:962, 300:700] = (255, 255, 255)  # borde blanco
+
+
+def _paint_sub_word(arrays, idx, w, h):
+    """Palabra blanca centrada en la zona de subtítulos
+    (recorte x350-730, y900-1020): un rectángulo de w*h px
+    blancos que simula los trazos de la palabra. El chequeo
+    solo cuenta píxeles de color, no hace OCR."""
+    ts, a = arrays[idx]
+    x0 = 540 - w // 2
+    a[940:940 + h, x0:x0 + w] = 255
+    arrays[idx] = (ts, a)
+
+
+class TestTituloAmarilloSobreNegro(unittest.TestCase):
+    """V7 (caso 170): el título amarillo sobre negro debe PASAR
+    el chequeo de píxeles, no solo rescatarse por el juez."""
+
+    def test_titulo_amarillo_sobre_negro_pasa(self):
+        arrays = _word_white_arrays(n=4)
+        # t=2 s está en la ventana del banner (0.5-3.5 s).
+        _paint_banner_zone(arrays, 1, _paint_title_yellow_on_black)
+        checks = _run_word_white(arrays, spans=[])
+        self.assertTrue(
+            checks["titulo_banner"]["pasa"], checks["titulo_banner"])
+
+    def test_banner_amarillo_clasico_sigue_pasando(self):
+        arrays = _word_white_arrays(n=4)
+        _paint_banner_zone(arrays, 1, _paint_classic_banner)
+        checks = _run_word_white(arrays, spans=[])
+        self.assertTrue(
+            checks["titulo_banner"]["pasa"], checks["titulo_banner"])
+
+    def test_sin_titulo_sigue_fallando(self):
+        arrays = _word_white_arrays(n=4)
+        checks = _run_word_white(arrays, spans=[])
+        self.assertFalse(
+            checks["titulo_banner"]["pasa"], checks["titulo_banner"])
+
+    def test_amarillo_disperso_sobre_negro_sigue_fallando(self):
+        """El negro de fondo no basta: 1.000 px amarillos
+        dispersos (scooter: 890) no son un título."""
+        arrays = _word_white_arrays(n=4)
+        _paint_banner_zone(arrays, 1, _paint_scattered_yellow_on_black)
+        checks = _run_word_white(arrays, spans=[])
+        self.assertFalse(
+            checks["titulo_banner"]["pasa"], checks["titulo_banner"])
+
+
+class TestSubtitulosPalabrasCortas(unittest.TestCase):
+    """V7 (caso 174): palabras cortas de 1-2 caracteres deben
+    contar como subtítulo presente. Las palabras se pintan en
+    el fotograma t=6 s, instante activo del cue 5-7 s (fuera de
+    la ventana del banner)."""
+
+    def test_palabra_de_una_letra_pasa(self):
+        """'y'/'a' realista a ~110 px: ~1.200 px blancos."""
+        arrays = _word_white_arrays(n=4)
+        _paint_sub_word(arrays, 3, w=20, h=60)
+        checks = _run_word_white(arrays, spans=[(5.0, 7.0)])
+        self.assertTrue(
+            checks["subtitulos_blancos"]["pasa"],
+            checks["subtitulos_blancos"])
+
+    def test_palabra_de_dos_letras_pasa(self):
+        arrays = _word_white_arrays(n=4)
+        _paint_sub_word(arrays, 3, w=40, h=35)
+        checks = _run_word_white(arrays, spans=[(5.0, 7.0)])
+        self.assertTrue(
+            checks["subtitulos_blancos"]["pasa"],
+            checks["subtitulos_blancos"])
+
+    def test_palabra_fina_degradada_pasa(self):
+        """Glifo fino de 1 letra degradado por contorno negro y
+        JPEG: solo 120 px blancos. El umbral viejo (150 en
+        final_review, 300 en render_gate) lo rechazaba."""
+        arrays = _word_white_arrays(n=4)
+        _paint_sub_word(arrays, 3, w=10, h=12)
+        checks = _run_word_white(arrays, spans=[(5.0, 7.0)])
+        self.assertTrue(
+            checks["subtitulos_blancos"]["pasa"],
+            checks["subtitulos_blancos"])
+
+    def test_sin_subtitulo_sigue_fallando(self):
+        arrays = _word_white_arrays(n=4)
+        checks = _run_word_white(arrays, spans=[(5.0, 7.0)])
+        self.assertFalse(
+            checks["subtitulos_blancos"]["pasa"],
+            checks["subtitulos_blancos"])
+
+
+class TestBannerTitlePresentHelpers(unittest.TestCase):
+    """Los dos validadores (final_review, el que decide, y
+    render_gate, su espejo de CircleCI) comparten la misma
+    medición: misma zona, mismo veredicto. Offline, sin Gemini."""
+
+    def _zone(self, paint):
+        a = np.zeros((288, 864, 3), dtype=np.uint8)
+        paint(a)
+        return a
+
+    def test_helpers_coinciden_en_los_cuatro_casos(self):
+        from clipagent.final_review import _banner_title_present as f1
+        from clipagent.render_gate import _banner_title_present as f2
+
+        def texto(a):
+            a[:, :] = 0
+            a[39:51, 97:697] = (255, 255, 0)
+            a[139:151, 197:597] = (255, 255, 0)
+
+        def clasico(a):
+            a[:, :] = (255, 220, 0)
+            a[39:51, 97:697] = (0, 0, 0)
+            a[139:151, 197:597] = (255, 255, 255)
+
+        def disperso(a):
+            a[:, :] = 0
+            rng = np.random.default_rng(23)
+            a[rng.integers(0, 288, size=1000),
+              rng.integers(0, 864, size=1000)] = (255, 255, 0)
+
+        def vacio(a):
+            a[:, :] = 0
+
+        for name, paint, esperado in (
+                ("texto amarillo/negro", texto, True),
+                ("banner clasico", clasico, True),
+                ("amarillo disperso", disperso, False),
+                ("negro vacio", vacio, False)):
+            for fn in (f1, f2):
+                ok, detalle = fn(self._zone(paint), 0.30)
+                self.assertEqual(ok, esperado, (name, fn.__module__,
+                                                detalle))
+
+    def test_subs_white_present_mirror(self):
+        """render_gate ya no usa 300 px: una palabra fina de
+        120 px blancos pasa y el recorte vacío sigue fallando."""
+        from clipagent.render_gate import _subs_white_present
+
+        crop = np.zeros((120, 380, 3), dtype=np.uint8)
+        self.assertFalse(_subs_white_present(crop))
+        crop[40:52, 185:195] = 255  # 120 px: glifo fino de 1 letra
+        self.assertTrue(_subs_white_present(crop))
+
+
 if __name__ == "__main__":
     unittest.main()

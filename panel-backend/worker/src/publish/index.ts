@@ -30,7 +30,7 @@ import { instagramStep } from "./instagram";
 import { tiktokStep } from "./tiktok";
 import { youtubeStep, type YoutubeCreds } from "./youtube";
 import { zernioTiktokStep } from "./zernio-tiktok";
-import { checkDuplicateBeforeUpload } from "./idempotency";
+import { captionMarkerReason, checkDuplicateBeforeUpload, hasOwnClipMarker } from "./idempotency";
 import { appendWalEntry } from "../wal";
 import { santiagoDayKey } from "../gate";
 
@@ -252,12 +252,26 @@ export async function dispatchPublishStep(env: Env, job: JobRow): Promise<Publis
     // Instagram). El caption guardado en el job viaja tal cual a
     // todas las plataformas; la protección contra duplicados es
     // WAL + idempotency_key, y la marca solo se LEE para posts
-    // viejos que ya la llevan.
+    // viejos que ya la llevan. El chequeo V4 está justo debajo,
+    // antes del switch: un caption que YA lleve su marca propia
+    // (job viejo) se rechaza aquí, no se envía.
     job: { ...job, resumeData: job.resume_data ? parseJson(job.resume_data) : null, caption: job.caption },
     creds,
     r2Size: head?.size ?? null,
     tiktokHandle,
   };
+  // V4 — VALIDADOR DE CAPTION (SPEC validators, Goldfish 8):
+  // el caption con la marca PROPIA ([clip:<id-del-clip>]) se
+  // rechaza ANTES de despachar a cualquier adaptador. Sin
+  // cambiar límites de caracteres: el corte a 150 (TikTok
+  // Direct) / 2200 (Zernio) lo hace cada adaptador. Error no
+  // reintentable: es un defecto del dato guardado en el job,
+  // no un fallo temporal. La intención B1 ya quedó en el
+  // diario; el respaldo la ve y la rechaza igual con su propio
+  // chequeo V4 (sin subir).
+  if (hasOwnClipMarker(ctx.job.caption, ctx.job.clip_id)) {
+    return { mode: "error", reason: captionMarkerReason(ctx.job.clip_id as number), retryable: false };
+  }
   switch (job.platform) {
     case "youtube_shorts":
       return youtubeStep(ctx, env);

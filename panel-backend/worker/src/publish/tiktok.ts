@@ -11,6 +11,7 @@
 import type { Env } from "../cloudflare";
 import { evidenceUrl } from "../db";
 import { errorMessage, httpJson, isRetryableStatus } from "./http";
+import { captionMarkerReason, hasOwnClipMarker } from "./idempotency";
 import type { PublishContext, PublishResult, ResumeData } from "./index";
 
 const API = "https://open.tiktokapis.com";
@@ -72,6 +73,12 @@ export async function tiktokStep(ctx: PublishContext, env: Env): Promise<Publish
 
   // Paso 2: init FILE_UPLOAD.
   if (resume.step === "init") {
+    // V4 — el caption (title) con la marca propia se rechaza
+    // ANTES de llamar a TikTok: el límite de 150 caracteres no
+    // cambia, solo se valida que no lleve [clip:<id-del-clip>].
+    if (hasOwnClipMarker(ctx.job.caption, ctx.job.clip_id)) {
+      return { mode: "error", reason: captionMarkerReason(ctx.job.clip_id as number), retryable: false };
+    }
     const total = ctx.r2Size ?? 0;
     if (!total) return { mode: "error", reason: "no se pudo medir el MP4 en R2", retryable: true };
     const chunkSize = Math.min(CHUNK, total);

@@ -1532,6 +1532,9 @@ export interface ApiAccountRow {
   verified_at: number | null;
   verify_ok: number | null;
   verify_message: string;
+  /** 0043: último cambio de credencial (ms UNIX) o null si no hay
+   *  cambio registrado (filas anteriores a la migración). */
+  credential_changed_at?: number | null;
   // 0017: escalado automático de topes por antigüedad/actividad.
   first_published_at: number | null;
   published_count: number;
@@ -2232,6 +2235,27 @@ export async function updateApiAccountVerification(
     )
     .bind(ok ? 1 : 0, nowMs(), message, status, id, tenant)
     .run();
+}
+
+/** V2 (validadores 2026-11-23): ¿es vigente la verificación de esta
+ *  cuenta? "Conectada" solo vale si la última verificación es
+ *  posterior al último cambio de credencial. Un timestamp viejo con
+ *  credencial nueva es FALSO POSITIVO (la verificación es de la
+ *  credencial anterior). Sin cambio registrado (null, filas
+ *  anteriores a la migración 0043) la verificación vigente se
+ *  respeta. Nunca verificada (verified_at null) nunca es vigente.
+ *  Que verified_at no se refresque al re-verificar sin cambio es
+ *  DISEÑO (ver updateApiAccountVerification, A2), no un falso
+ *  positivo: aquí solo se compara contra el cambio de credencial. */
+export function isAccountVerificationCurrent(acc: {
+  verified_at: number | null;
+  verify_ok: number | null;
+  credential_changed_at?: number | null;
+}): boolean {
+  if (acc.verify_ok !== 1) return false;
+  if (acc.verified_at === null || acc.verified_at === undefined) return false;
+  if (acc.credential_changed_at === null || acc.credential_changed_at === undefined) return true;
+  return acc.verified_at >= acc.credential_changed_at;
 }
 
 // --- Crear cuenta API (Frente 2, M5): POST /api/accounts ---

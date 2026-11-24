@@ -28,6 +28,7 @@
 import type { Env } from "../cloudflare";
 import { effectiveSettings, getSettings } from "../db";
 import { errorMessage, httpJson, isRetryableStatus } from "./http";
+import { captionMarkerReason, hasOwnClipMarker } from "./idempotency";
 import type { PublishContext, PublishResult, ResumeData } from "./index";
 
 const API = "https://zernio.com/api/v1";
@@ -118,6 +119,9 @@ function postBody(ctx: PublishContext, accountId: string, publicUrl: string, ext
   return {
     // Sin marca [clip:<id>] en el caption (2026-11-23): era visible
     // en público. Solo se garantiza el límite de 2200 caracteres.
+    // V4: la marca propia se rechaza ANTES, en las ramas dryrun y
+    // post de zernioTiktokStep (hasOwnClipMarker): aquí el caption
+    // llega ya validado, nunca con [clip:<id-del-clip>].
     content: ctx.job.caption.slice(0, 2200),
     platforms: [{ platform: "tiktok", accountId }],
     mediaItems: [{ type: "video", url: publicUrl }],
@@ -169,6 +173,13 @@ export async function zernioTiktokStep(ctx: PublishContext, env: Env): Promise<P
 
   // Paso 2: dryRun — pre-chequeo de límites sin crear nada.
   if (step === "dryrun") {
+    // V4 — el caption con la marca propia se rechaza ANTES de
+    // enviarlo a Zernio (el límite de 2200 caracteres no cambia,
+    // ver postBody). Sin este chequeo el dryRun enviaría la marca
+    // a la plataforma aunque no cree nada.
+    if (hasOwnClipMarker(ctx.job.caption, ctx.job.clip_id)) {
+      return { mode: "error", reason: captionMarkerReason(ctx.job.clip_id as number), retryable: false };
+    }
     const r = await httpJson("POST", `${API}/posts`, auth, postBody(ctx, accountId, publicUrl, { dryRun: true }));
     if (r.status === 401 || r.status === 403) {
       return { mode: "draft", reason: `Zernio rechazó la clave (${r.status}): pégala de nuevo en Cuentas.` };
@@ -192,6 +203,13 @@ export async function zernioTiktokStep(ctx: PublishContext, env: Env): Promise<P
 
   // Paso 3: publicar ahora (Idempotency-Key = job id: reintentos seguros).
   if (step === "post") {
+    // V4 — igual que en dryRun: la marca propia no viaja a
+    // Zernio. El chequeo va antes de los topes para fallar rápido
+    // sin tocar D1; un caption marcado es defecto del dato, no
+    // falta de cupo.
+    if (hasOwnClipMarker(ctx.job.caption, ctx.job.clip_id)) {
+      return { mode: "error", reason: captionMarkerReason(ctx.job.clip_id as number), retryable: false };
+    }
     // Topes Zernio desde Ajustes (defaults 15/día y 5 borradores
     // pendientes): se comprueban ANTES de publicar, no después.
     // Son topes de la cuenta Zernio, distintos del tope diario de
