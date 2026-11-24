@@ -1059,7 +1059,7 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
 
 
 def template_gate(clip_path, vcfg, recipe, frames=None, srt_path=None,
-                  face_result=None, out_dir=None):
+                  face_result=None, out_dir=None, sfx_events=None):
     """La receta en el VÍDEO FINAL: montaje + fuentes + subtítulos.
 
     Comprueba en píxeles, sobre los mismos fotogramas muestreados
@@ -1070,6 +1070,11 @@ def template_gate(clip_path, vcfg, recipe, frames=None, srt_path=None,
     La regla "subtítulos sobre el gameplay" es POR PLANTILLA: en
     rubius VAN sobre el gameplay y eso es correcto; en rdjavi y
     willyrex siguen prohibidos.
+
+    ``sfx_events`` es la lista de eventos SFX que apply_sfx
+    decidió mezclar (None = el llamador no la conoce: se exige
+    presencia como antes; [] = no se decidió nada: el chequeo
+    pasa, ver sfx_presente abajo).
 
     Sin SRT, la presencia de subtítulos no se puede verificar y
     queda registrada como débil (nunca se inventa): el resto de
@@ -1117,18 +1122,33 @@ def template_gate(clip_path, vcfg, recipe, frames=None, srt_path=None,
     elif style == "word_white":
         _template_word_white(
             _check, arrays, spans, recipe, face_result, vcfg=vcfg)
-        # SFX del pack en el audio (solo rubius: la receta lleva
-        # SFX por defecto; un render sin SFX no es rubius).
-        sfx = detect_sfx_in_clip(
-            clip_path, min_ncc=float(vcfg["sfx_min_ncc"]))
-        if sfx["found"]:
+        # SFX del pack en el audio (solo rubius). 2026-11-24: la
+        # puerta verifica lo que SE DECIDIÓ poner, no lo que nunca
+        # se decidió. decide_sfx devuelve [] por diseño en clips
+        # hablados sin dip de silencio ni grito ni fail (sin boom,
+        # sin riser, sin fail); exigir SFX entonces rechaza clips
+        # buenos (run 45299157326: 4/5 cortes con sfx []). Si no
+        # se decidió nada (sfx_events == []), el chequeo pasa. Si
+        # se decidió SFX y no aparece en el audio, sigue fallando:
+        # el mezclador roto sigue detectándose (apply_sfx traga
+        # errores y devuelve el vídeo sin tocar, y su early-return
+        # `reused` devuelve events: [] sin mezclar). Sin
+        # sfx_events (None: llamador sin la info), se exige
+        # presencia como antes.
+        if sfx_events is not None and len(sfx_events) == 0:
             _check("sfx_presente", True,
-                   f"{sfx['effect']} (NCC {sfx['corr']:.2f} en "
-                   f"t={sfx['lag_s']:.1f}s)", "")
+                   "sin SFX decididos (decide_sfx vacío)", "")
         else:
-            _check("sfx_presente", False,
-                   f"mejor NCC {sfx['corr']:.2f}",
-                   sfx.get("motivo") or "sin SFX del pack en el audio")
+            sfx = detect_sfx_in_clip(
+                clip_path, min_ncc=float(vcfg["sfx_min_ncc"]))
+            if sfx["found"]:
+                _check("sfx_presente", True,
+                       f"{sfx['effect']} (NCC {sfx['corr']:.2f} en "
+                       f"t={sfx['lag_s']:.1f}s)", "")
+            else:
+                _check("sfx_presente", False,
+                       f"mejor NCC {sfx['corr']:.2f}",
+                       sfx.get("motivo") or "sin SFX del pack en el audio")
     else:
         return {"pasa": False, "checks": checks,
                 "fallos": ["subs_style"],
@@ -1485,15 +1505,27 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     # scooter 2026-11-21: 4/7 fotogramas con texto en ambos
     # bordes; 52h: 0/5). Solo con SRT: sin SRT la presencia no se
     # puede verificar y queda débil, como subtitulos_blancos.
+    # 2026-11-24: UN solo fotograma con ambos bordes no es línea
+    # completa. El juego claro (cielo, carretera) cubre los bordes
+    # con blanco aunque el subtítulo sea una sola palabra centrada
+    # (IlloJuan 45299157326: 1/18 en t=39.0s, palabra "But"). Falla
+    # solo si hay >=2 fotogramas Y >10% de los activos: la línea
+    # completa real es sistemática (scooter 4/7, 57%).
     if spans and active:
         both = 0
+        both_ts = []
         for _ts, a in active:
             left, right = _subs_edge_coverages(a, zy0, zy1, edge_w=edge_w)
             if (left >= edge_cov
                     and right >= edge_cov):
                 both += 1
-        check("subtitulos_una_palabra", both == 0,
-              f"{both} fotogramas con texto en ambos bordes",
+                both_ts.append(_ts)
+        share = both / len(active) if active else 0.0
+        check("subtitulos_una_palabra",
+              not (both >= 2 and share > 0.10),
+              f"{both} fotogramas con texto en ambos bordes "
+              f"({share:.0%} de {len(active)} activos)"
+              + (f" en t={both_ts}" if both_ts else ""),
               "subtítulos de línea completa (no palabra por palabra)")
     else:
         check("subtitulos_una_palabra", True,
@@ -1747,9 +1779,16 @@ def maybe_review_final_clip(clip_path, title, transcript_text="",
 def validate_final_clip(clip_path, title, transcript_text="",
                         srt_path=None, out_dir=None, cfg=None,
                         gemini_fn=None, model=None, plantilla=None,
-                        facecrop_fn=None, edge_fn=None, yunet_fn=None):
+                        facecrop_fn=None, edge_fn=None, yunet_fn=None,
+                        sfx_events=None):
     """Validador final DEFINITIVO (2026-11-19): puerta dura de cara
     + plantilla sobre el VÍDEO FINAL RENDERIZADO.
+
+    ``sfx_events``: eventos SFX decididos por apply_sfx en este
+    clip (None = desconocido, se exige presencia como antes;
+    [] = no se decidió nada, sfx_presente pasa; ver
+    template_gate). Sin él, la puerta dura sigue exigiendo SFX
+    en el audio aunque decide_sfx no haya puesto ninguno.
 
     Tres capas independientes, TODAS sobre el vídeo final, y TODAS
     tienen que pasar:
@@ -1877,7 +1916,7 @@ def validate_final_clip(clip_path, title, transcript_text="",
                      edge_fn=edge_fn, yunet_fn=yunet_fn)
     template = template_gate(clip_path, vcfg, recipe, frames=frames,
                              srt_path=srt_path, face_result=face,
-                             out_dir=out_dir)
+                             out_dir=out_dir, sfx_events=sfx_events)
     # Gemini ANTES de la puerta dura: su lectura del título es la
     # única que distingue un título amarillo sobre negro (170, bueno
     # a mano) de un clip sin título — en píxeles son iguales (5

@@ -771,6 +771,7 @@ class LiveCutterSession(LiveSession):
             review["needs_human_review"] = True
             return review, final_clip, sub
         final2 = burned2 if os.path.isfile(burned2) else raw2
+        _sfx2 = None
         try:
             final2, _sfx2 = apply_sfx(
                 final2, transcript_path=sub2.get("transcript"),
@@ -790,7 +791,8 @@ class LiveCutterSession(LiveSession):
                 srt_path=sub2.get("srt"),
                 out_dir=os.path.join(work_dir, "final_review_r1"),
                 cfg=self.cfg, gemini_fn=self.final_review_fn,
-                plantilla=plantilla)
+                plantilla=plantilla,
+                sfx_events=(_sfx2 or {}).get("events"))
         except ConfigError:
             raise
         except Exception:  # noqa: BLE001 - sin veredicto, no tumba
@@ -1159,7 +1161,8 @@ class LiveCutterSession(LiveSession):
                 srt_path=sub.get("srt"),
                 out_dir=os.path.join(work_dir, "final_review"),
                 cfg=self.cfg, gemini_fn=self.final_review_fn,
-                plantilla=plantilla)
+                plantilla=plantilla,
+                sfx_events=(sfx_info or {}).get("events"))
         except ConfigError:
             raise
         except Exception as exc:  # noqa: BLE001 - sin validación

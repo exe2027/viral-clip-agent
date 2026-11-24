@@ -22,6 +22,21 @@ Calibración en clips reales (runs/calibrate-fp-2026-11-23):
 Sin red, sin D1, sin Gemini real (el rescate usa un gemini_fn
 inyectado). Los clips reales solo se usan en el test de rescate
 del título (170).
+
+2026-11-24 (run 45299157326, 4/5 cortes rechazados solo por la
+plantilla tras el arreglo de visión): dos calibraciones más en
+la puerta de plantilla, ambas con revisión pez dorado:
+5. subtitulos_una_palabra: el juego claro (cielo, carretera)
+cubre los bordes con blanco aunque el subtítulo sea una sola
+palabra centrada (IlloJuan: 1/18 en t=39.0s, palabra "But").
+Un solo fotograma ya no es línea completa: falla solo si hay
+>=2 fotogramas Y >10% de los activos (la línea completa real
+es sistemática: scooter 4/7, 57%).
+6. sfx_presente: decide_sfx devuelve [] por diseño en clips
+hablados sin dip de silencio ni grito ni fail. La puerta ahora
+verifica lo que SE DECIDIÓ poner: si no se decidió nada, pasa;
+si se decidió SFX y no aparece en el audio, sigue fallando
+(el mezclador roto sigue detectándose).
 """
 
 import json
@@ -38,6 +53,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clipagent.final_review import (
     _template_word_white,
     face_gate,
+    template_gate,
     validate_final_clip,
 )
 from clipagent.quality_gate import build_quality_gate
@@ -581,6 +597,131 @@ class TestBannerTitlePresentHelpers(unittest.TestCase):
         self.assertFalse(_subs_white_present(crop))
         crop[40:52, 185:195] = 255  # 120 px: glifo fino de 1 letra
         self.assertTrue(_subs_white_present(crop))
+
+
+def _paint_both_edges(arrays, idxs):
+    """Pinta blanco los dos bordes de la zona de subtítulos
+    (filas 900-1020, cols 0-150 y 930-1080) en los fotogramas
+    indicados: imita un fotograma con texto en ambos bordes."""
+    out = []
+    for i, (ts, a) in enumerate(arrays):
+        a = a.copy()
+        if i in idxs:
+            a[900:1020, 0:150] = 255
+            a[900:1020, 930:1080] = 255
+        out.append((ts, a))
+    return out
+
+
+class TestUnaPalabraTolerancia(unittest.TestCase):
+    """2026-11-24: un solo fotograma con ambos bordes no es
+    línea completa (el juego claro cubre los bordes). Falla
+    solo si hay >=2 fotogramas Y >10% de los activos."""
+
+    def test_un_fotograma_de_18_pasa_caso_illojuan(self):
+        """El caso real: 1/18 en t=39.0s, palabra "But" (el
+        blanco de los bordes era el cielo del juego)."""
+        arrays = _paint_both_edges(_word_white_arrays(n=19), {18})
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
+                        checks["subtitulos_una_palabra"])
+
+    def test_un_fotograma_de_4_pasa_denominador_pequeno(self):
+        """El mismo defecto físico (1 fotograma) no puede pasar
+        o fallar según cuánto habló el streamer."""
+        arrays = _paint_both_edges(_word_white_arrays(n=5), {4})
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertTrue(checks["subtitulos_una_palabra"]["pasa"],
+                        checks["subtitulos_una_palabra"])
+
+    def test_cuatro_de_6_sigue_fallando_caso_scooter(self):
+        """La línea completa real es sistemática (scooter 4/7)."""
+        arrays = _paint_both_edges(
+            _word_white_arrays(n=7), {2, 3, 4, 5})
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertFalse(checks["subtitulos_una_palabra"]["pasa"],
+                         checks["subtitulos_una_palabra"])
+
+    def test_dos_de_19_sigue_fallando(self):
+        """2 fotogramas Y 10.5% > 10%: sigue siendo línea
+        completa, no ruido de un fotograma."""
+        arrays = _paint_both_edges(
+            _word_white_arrays(n=20), {18, 19})
+        checks = _run_word_white(arrays, [(0.0, 100.0)])
+        self.assertFalse(checks["subtitulos_una_palabra"]["pasa"],
+                         checks["subtitulos_una_palabra"])
+
+
+VCFG_TEMPLATE = {
+    "face_sample_every_s": 2.0,
+    "rubius_banner_t0": 0.5,
+    "rubius_banner_t1": 3.5,
+    "rubius_banner_yellow_frac": 0.30,
+    "rubius_subs_edge_w": 150,
+    "rubius_subs_edge_cov": 0.10,
+    "sfx_min_ncc": 0.5,
+}
+
+
+class TestSfxPresenteDecidido(unittest.TestCase):
+    """2026-11-24: sfx_presente verifica lo que SE DECIDIÓ poner,
+    no lo que nunca se decidió (decide_sfx [] en clips hablados)."""
+
+    def _gate(self, tmp_path, sfx_events, detect):
+        frames = _frames(tmp_path, n=4)
+        with mock.patch(
+                "clipagent.final_review.detect_sfx_in_clip",
+                return_value=detect) as det:
+            res = template_gate(
+                "clip.mp4", VCFG_TEMPLATE, RUBIUS_RECIPE,
+                frames=frames, face_result={}, sfx_events=sfx_events)
+        return res, det
+
+    def test_sin_sfx_decididos_pasa_sin_llamar_al_detector(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            res, det = self._gate(
+                d, [], {"found": False, "corr": 0.19,
+                        "motivo": "sin SFX del pack en el audio"})
+            self.assertTrue(res["checks"]["sfx_presente"]["pasa"],
+                            res["checks"]["sfx_presente"])
+            det.assert_not_called()
+
+    def test_sfx_decidido_y_ausente_sigue_fallando(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            res, _det = self._gate(
+                d, [{"effect": "riser", "t": 18.0}],
+                {"found": False, "corr": 0.19,
+                 "motivo": "sin SFX del pack en el audio"})
+            self.assertFalse(res["checks"]["sfx_presente"]["pasa"],
+                             res["checks"]["sfx_presente"])
+
+    def test_sfx_decidido_y_presente_pasa(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            res, _det = self._gate(
+                d, [{"effect": "riser", "t": 18.0}],
+                {"found": True, "effect": "riser", "corr": 0.98,
+                 "lag_s": 18.0})
+            self.assertTrue(res["checks"]["sfx_presente"]["pasa"],
+                            res["checks"]["sfx_presente"])
+
+    def test_sin_info_de_sfx_exige_como_antes(self):
+        """sfx_events=None (llamador sin la info: VOD, workers):
+        el comportamiento viejo, sin cambio."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            res, det = self._gate(
+                d, None, {"found": False, "corr": 0.19,
+                          "motivo": "sin SFX del pack en el audio"})
+            self.assertFalse(res["checks"]["sfx_presente"]["pasa"],
+                             res["checks"]["sfx_presente"])
+            det.assert_called_once()
 
 
 if __name__ == "__main__":
