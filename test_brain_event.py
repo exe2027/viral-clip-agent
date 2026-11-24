@@ -52,6 +52,7 @@ class _RecordingBridge:
         self.clips = list(clips or [])
         self.created = []
         self.uploaded = []
+        self.patched = []
         self.events = []
         self.phases = []
         self.fail_create = fail_create
@@ -72,6 +73,12 @@ class _RecordingBridge:
 
     def upload_video(self, clip_id, video_path):
         self.uploaded.append((clip_id, video_path))
+        return {"ok": True}
+
+    def update_clip(self, clip_id, patch):
+        # auto-seo 2026-11-24: el PATCH de SEO tras crear el clip; si el
+        # puente no lo tuviera, _enqueue_panel reportaria seo_sin_enviar.
+        self.patched.append((clip_id, patch))
         return {"ok": True}
 
     def tracking_step(self, clip_id, step, message, estado="completado"):
