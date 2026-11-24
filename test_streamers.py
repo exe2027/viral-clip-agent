@@ -12,6 +12,52 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clipagent import streamers
 
 
+class TestGetStreamerPorPlataforma(unittest.TestCase):
+    """get_streamer(name, platform) (2026-11-24, corte YouTube):
+    misma persona, dos entradas (Rubius twitch + youtube)."""
+
+    ENTRIES = [
+        {"name": "rubius", "platform": "twitch",
+         "channel_url": "https://www.twitch.tv/rubius",
+         "language": "es", "estado": "concedido", "enabled": True},
+        {"name": "rubius", "platform": "youtube",
+         "channel_url": "https://www.youtube.com/@rubius",
+         "language": "es", "estado": "concedido", "enabled": True},
+    ]
+
+    def test_por_defecto_twitch(self):
+        entry = streamers.get_streamer("rubius", self.ENTRIES)
+        self.assertEqual(entry["platform"], "twitch")
+        entry = streamers.get_streamer(
+            "rubius", self.ENTRIES, platform="twitch")
+        self.assertEqual(entry["platform"], "twitch")
+
+    def test_youtube_devuelve_la_entrada_youtube(self):
+        entry = streamers.get_streamer(
+            "rubius", self.ENTRIES, platform="youtube")
+        self.assertEqual(entry["platform"], "youtube")
+        self.assertEqual(entry["channel_url"],
+                         "https://www.youtube.com/@rubius")
+
+    def test_is_allowed_por_plataforma(self):
+        entries = [
+            dict(self.ENTRIES[0], estado="denegado"),
+            self.ENTRIES[1],
+        ]
+        self.assertFalse(streamers.is_allowed(
+            "rubius", entries, platform="twitch"))
+        self.assertTrue(streamers.is_allowed(
+            "rubius", entries, platform="youtube"))
+
+    def test_sin_entrada_de_esa_plataforma_cae_al_primer_match(self):
+        # Preserva el comportamiento de los llamadores existentes.
+        entry = streamers.get_streamer(
+            "rubius", self.ENTRIES[:1], platform="youtube")
+        self.assertEqual(entry["platform"], "twitch")
+        self.assertIsNone(
+            streamers.get_streamer("coker", self.ENTRIES))
+
+
 class TestSingleList(unittest.TestCase):
     def test_migracion_sin_perdidas(self):
         entries = streamers.load_streamers()

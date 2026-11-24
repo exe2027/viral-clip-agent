@@ -449,7 +449,7 @@ async function loadJobs() {
 async function workerAction(path, okText, btn, loadingText) {
   if (workerBusy) return;
   workerBusy = true;
-  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnStartCfg"), $("btnStopCfg"), $("btnStartHero"), $("btnStopHero")].filter(Boolean);
+  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnRunYoutube"), $("btnStartCfg"), $("btnStopCfg"), $("btnStartHero"), $("btnStopHero")].filter(Boolean);
   const labels = btns.map((b) => b.innerHTML);
   btns.forEach((b) => { b.disabled = true; });
   if (btn) btn.innerHTML = esc(loadingText);
@@ -3578,6 +3578,25 @@ $("btnStop").addEventListener("click", () => {
 });
 $("btnRunOnce").addEventListener("click", () => workerAction("/api/worker/run-once", "Ciclo ejecutado.", $("btnRunOnce"), "Ejecutando ciclo…"));
 $("btnRefreshW").addEventListener("click", refreshWorker);
+// Cortar un video concreto de YouTube (spec 2026-11-24 v8): el campo
+// opcional del control de ejecución despacha POST
+// /api/worker/run-youtube; el programa lo corta solo y lo deja en
+// la Cola. Sin URL no hace nada.
+$("btnRunYoutube").addEventListener("click", async () => {
+  const url = ($("youtubeUrl").value || "").trim();
+  if (!url) { showMsg("Pega primero la URL de un video de YouTube.", "err"); $("youtubeUrl").focus(); return; }
+  if (workerBusy) return;
+  workerBusy = true;
+  const btn = $("btnRunYoutube");
+  setLoading(btn, true, "Despachando…");
+  try {
+    const r = await api("/api/worker/run-youtube", { method: "POST", body: JSON.stringify({ youtube_url: url }) });
+    if (r && r.ok === false) showMsg("No se pudo despachar: " + (r.reason || r.error || "motivo desconocido"), "err");
+    else { showMsg("Video despachado: el programa lo corta solo y lo deja en la Cola.", "info"); $("youtubeUrl").value = ""; }
+    await loadWorker();
+  } catch (e) { showMsg(e.message, "err"); }
+  finally { workerBusy = false; setLoading(btn, false); }
+});
 $("btnPublish").addEventListener("click", publishSelected);
 $("btnUpload").addEventListener("click", uploadSelected);
 // Plan de hoy (reglas 2026-11-19): fecha por defecto = hoy en

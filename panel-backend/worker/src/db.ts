@@ -156,6 +156,11 @@ export interface ClipRow {
   // DOS COLAS SEPARADAS 2026-11-18): "es" | "en". Decide en qué
   // cola aparece y en qué cuentas se puede publicar.
   language: string;
+  // Clave de origen (columna clips.source_key, migración 0044,
+  // spec 2026-11-24): id del video de YouTube para clips de
+  // YouTube (p. ej. "NrNdw_Y6_bI"), "" para Twitch. `source_id`
+  // es entero y un id de YouTube no cabe ahí. No vacío ⟺ YouTube.
+  source_key?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1995,6 +2000,9 @@ export interface NewClip {
   // 2026-11-18 (cortador en vivo): origin='live' para el segmento
   // LIVE de la Cola; cualquier otro valor cae en el segmento VOD.
   origin?: string;
+  // Clave de origen (migración 0044, spec 2026-11-24): id del
+  // video de YouTube, o "" para Twitch (ver ClipRow.source_key).
+  source_key?: string;
   // Puntuación IA (contrato 2026-11-18): JSON de clips.viral ya
   // fusionado (ver mergeViralJson); "" = sin datos (sin medir).
   viral?: string;
@@ -2020,14 +2028,14 @@ export async function createClip(db: D1Database, tenant: Tenant, data: NewClip):
     .prepare(
       "INSERT INTO clips (tenant_id, source_id, influencer_id, title, start_sec, end_sec, score, reason, status, " +
         "subtitle_style, seo_title, seo_description, seo_tags, thumb_text, platforms, scheduled_for, " +
-        "publish_blocked, needs_human_transcription, subtitles_complete, game, origin, viral, language, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "publish_blocked, needs_human_transcription, subtitles_complete, game, origin, viral, language, source_key, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(
       tenant, data.source_id, data.influencer_id, data.title, data.start_sec, data.end_sec,
       data.score, data.reason, "en_carpeta", data.subtitle_style, data.seo_title, data.seo_description,
       data.seo_tags, data.thumb_text, data.platforms, data.scheduled_for,
-      data.publish_blocked, data.needs_human_transcription, data.subtitles_complete, data.game, origin, data.viral ?? "{}", language, now, now,
+      data.publish_blocked, data.needs_human_transcription, data.subtitles_complete, data.game, origin, data.viral ?? "{}", language, data.source_key ?? "", now, now,
     )
     .run();
   const id = Number(res.meta.last_row_id);

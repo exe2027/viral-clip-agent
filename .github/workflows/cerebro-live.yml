@@ -289,7 +289,7 @@ jobs:
   vod-fallback:
     name: Fallback VOD (sin directos en GTA VI)
     needs: detect
-    if: needs.detect.outputs.count == '0'
+    if: needs.detect.outputs.count == '0' && !github.event.client_payload.youtube_url
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -416,9 +416,142 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  youtube-single:
+    name: Cortar video de YouTube (URL única)
+    needs: detect
+    if: github.event.client_payload.youtube_url
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache de pip (sin caché, torch/whisper tarda hasta ~28 min)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: "pip-${{ runner.os }}-py312-${{ hashFiles('pyproject.toml') }}"
+          restore-keys: |
+            pip-${{ runner.os }}-py312-
+      - name: Instalar ffmpeg, TwitchDownloaderCLI y vision
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          TDL_VERSION="1.56.5"
+          curl -sSL -o /tmp/twitchdownloader.zip \
+            "https://github.com/lay295/TwitchDownloader/releases/download/${TDL_VERSION}/TwitchDownloaderCLI-${TDL_VERSION}-Linux-x64.zip"
+          sudo unzip -o -q /tmp/twitchdownloader.zip -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/TwitchDownloaderCLI
+          TwitchDownloaderCLI --help || true
+          # vision obligatoria: mismo motivo que el job `cut`
+          # (2026-11-23: sin cv2 el render pierde la webcam y la
+          # puerta de cara descarta todos los clips).
+          python -m pip install -q -e ".[whisper,vision]"
+          # Arial Black GENUINA (plantilla v2): el quemado de
+          # subtítulos + título (workers.subtitle_clip) usa Arial
+          # Black. Mismo bloque que el job `cut`.
+          # fontTools viene de pyproject (dependencies): la
+          # conversión corre con `python` (nunca `python3`) y SIN
+          # `|| true`; el `|| true` queda SOLO en el curl.
+          # (2026-11-19: apt python3-fonttools no la dejaba en el
+          # intérprete de setup-python -> ModuleNotFoundError.)
+          if ! fc-list | grep -qi "Arial Black"; then
+            mkdir -p ~/.fonts
+            curl -fsSL -o ~/.fonts/ariblk.woff \
+              "https://fonts.cdnfonts.com/s/97850/ariblk%201.woff" || true
+            test -s "$HOME/.fonts/ariblk.woff" || { echo "ERROR: no se descargo ~/.fonts/ariblk.woff (curl fallo)" >&2; exit 1; }
+            python -c "from fontTools.ttLib import TTFont; f=TTFont('$HOME/.fonts/ariblk.woff'); f.flavor=None; f.save('$HOME/.fonts/arial-black.ttf')"
+            test -s "$HOME/.fonts/arial-black.ttf" || { echo "ERROR: fontTools no genero ~/.fonts/arial-black.ttf" >&2; exit 1; }
+            fc-cache -f >/dev/null 2>&1 || true
+          fi
+          fc-list | grep -i "Arial Black" | head -2 || echo "sin Arial Black (libass usara fallback)"
+      # Estado persistente entre corridas (enfriamiento por VOD):
+      # el runner es efímero; se restaura del artefacto de la
+      # corrida anterior y se vuelve a subir al final. El nombre
+      # lleva el tenant: el estado de un tenant no es el de otro.
+      # OJO: actions/download-artifact sin run-id solo busca en la
+      # corrida ACTUAL (donde el artefacto aún no existe), así que
+      # el restore siempre venía vacío y cada corrida reprocesaba
+      # los 2 VODs. Se baja con gh desde la última corrida
+      # completada de este workflow (se prueban las 5 últimas por
+      # si alguna falló antes de subir el estado).
+      - name: Restaurar estado del fallback
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+        run: |
+          mkdir -p runs/vod-fallback
+          for id in $(gh run list --workflow cerebro-live.yml --status completed --limit 5 --json databaseId --jq '.[].databaseId'); do
+            if gh run download "$id" -n "cerebro-live-vod-state-$TENANT" -D runs/vod-fallback 2>/dev/null; then
+              echo "estado restaurado de la corrida $id"
+              break
+            fi
+          done
+          ls runs/vod-fallback/state.json 2>/dev/null || echo "sin estado previo: se empieza vacío"
+      # Sesión del panel: igual que en cut, del artefacto
+      # panel-session que subió detect (ver el paso "Descargar
+      # sesión del panel" de cut: descarga, enmascara y exporta
+      # a $GITHUB_ENV para este job).
+      - name: Descargar sesión del panel (artefacto)
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-session-${{ github.event.client_payload.tenant || inputs.tenant }}-${{ github.run_id }}
+          path: .panel-session
+      - name: Exportar sesión del panel
+        run: |
+          test -s .panel-session/panel-session.txt || { echo "ERROR: artefacto panel-session vacío o ausente" >&2; exit 1; }
+          SESSION_TOKEN="$(cat .panel-session/panel-session.txt)"
+          test -n "$SESSION_TOKEN" || { echo "ERROR: sesión vacía en el artefacto" >&2; exit 1; }
+          echo "::add-mask::$SESSION_TOKEN"
+          echo "PANEL_SESSION_TOKEN=$SESSION_TOKEN" >> "$GITHUB_ENV"
+          # El tenant tambien va a $GITHUB_ENV: el env del paso de
+          # bootstrap es solo de ese paso y el corte lo exige
+          # (require_tenant falla sin PANEL_TENANT).
+          echo "PANEL_TENANT=${{ github.event.client_payload.tenant || inputs.tenant }}" >> "$GITHUB_ENV"
+          rm -f .panel-session/panel-session.txt
+      # Bootstrap: materializa las credenciales del tenant
+      # con la sesión que dejó el paso anterior.
+      - name: Credenciales desde el panel
+        env:
+          PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
+        run: python -m clipagent.panel_credentials
+      - name: Cortar URL única de YouTube -> Cola del panel, sin publicar
+        env:
+          PANEL_URL: https://avc.vikingosfoodspa.workers.dev
+        run: |
+          # 2026-11-24 (spec corte-automatico-youtube v8): URL única
+          # despachada desde el panel (POST /api/worker/run-youtube).
+          # Corre aunque haya directos en vivo (el gate de directos
+          # es del job vod-fallback, no de detect). El manifiesto
+          # queda en runs/vod-fallback/<video_id>/manifest.json
+          # (mismo layout que el barrido) para el paso
+          # "Guardar manifiestos".
+          python -m clipagent vod-fallback \
+            --youtube-url "${{ github.event.client_payload.youtube_url }}" \
+            --max-clips 2 --top-n 2 \
+            ${{ inputs.force == 'true' && '--ignore-cooldown' || '' }}
+      - name: Guardar estado del fallback
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebro-live-vod-state-${{ github.event.client_payload.tenant || inputs.tenant }}
+          path: runs/vod-fallback/state.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Guardar manifiestos (qué picos se cortaron/descartaron)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vod-fallback-${{ github.run_id }}
+          path: |
+            runs/vod-fallback/*/manifest.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   cleanup-session:
     name: Borrar sesión del panel (artefacto)
-    needs: [cut, vod-fallback]
+    needs: [cut, vod-fallback, youtube-single]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

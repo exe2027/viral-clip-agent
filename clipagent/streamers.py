@@ -184,19 +184,38 @@ def load_streamers(path=None, base_dir=None, bridge=None):
     return out
 
 
-def get_streamer(name, streamers=None, base_dir=None):
-    """Una entrada por nombre (minúsculas), o None."""
+def get_streamer(name, streamers=None, base_dir=None, platform="twitch"):
+    """Una entrada por nombre (minúsculas), o None.
+
+    ``platform`` (2026-11-24, corte YouTube): con dos entradas
+    del mismo nombre (p. ej. Rubius en twitch y en youtube), se
+    devuelve la de esa plataforma. El valor por defecto
+    ("twitch") preserva el comportamiento de los llamadores
+    existentes; si no hay entrada con esa plataforma, se cae al
+    PRIMER match por nombre (comportamiento de antes).
+    """
     name = (name or "").strip().lower()
-    for entry in (streamers if streamers is not None
-                  else load_streamers(base_dir=base_dir)):
+    entries = (streamers if streamers is not None
+               else load_streamers(base_dir=base_dir))
+    first = None
+    for entry in entries:
         if entry["name"] == name:
-            return entry
-    return None
+            if first is None:
+                first = entry
+            if (entry.get("platform") or "twitch").strip().lower() \
+                    == platform:
+                return entry
+    return first
 
 
-def is_allowed(name, streamers=None, base_dir=None):
-    """True si está en la lista y su estado no es denegado/revocado."""
-    entry = get_streamer(name, streamers, base_dir)
+def is_allowed(name, streamers=None, base_dir=None, platform="twitch"):
+    """True si está en la lista y su estado no es denegado/revocado.
+
+    ``platform`` se pasa a ``get_streamer`` (misma persona, dos
+    entradas: la de Twitch y la de YouTube se permiten por
+    separado).
+    """
+    entry = get_streamer(name, streamers, base_dir, platform=platform)
     if entry is None:
         return False
     return entry["estado"] not in EXCLUDED_STATES

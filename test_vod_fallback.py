@@ -27,6 +27,7 @@ módulo no tiene ninguna llamada a publicar.
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -35,17 +36,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clipagent.vod_fallback import (  # noqa: E402
     MAX_DUR_S,
     MIN_DUR_S,
+    YOUTUBE_PRIORITY_MIN,
     already_enqueued,
     burn_and_enqueue,
     clip_passes_gates,
+    cross_blocks,
     es_live_gta6,
     fallback_order,
+    influencer_names_by_id,
     latest_vod_for,
     live_gta6,
     load_state,
     panel_score,
     run,
     save_state,
+    title_overlap,
     vod_on_cooldown,
 )
 
@@ -102,6 +107,9 @@ class FakeBridge:
 
     def list_clips(self):
         return list(self.clips)
+
+    def list_influencers(self):
+        return []
 
     def create_clip(self, payload):
         self.created.append(payload)
@@ -439,10 +447,13 @@ class TestBurnAndEnqueue(unittest.TestCase):
 
 
 class TestBurnAndEnqueueSeoPatch(unittest.TestCase):
-    """burn_and_enqueue (2026-11-24, auto-seo): el POST no lleva
-    seo_scores (la puerta SEO del POST tiraría los de máximo < 80);
-    el SEO y el veredicto viajan en un PATCH posterior. Solo
-    plataformas con número medido: nunca 0 por una sin medir."""
+    """burn_and_enqueue (2026-11-24, auto-seo + corte YouTube):
+    el POST lleva el objeto viral (viral_score, seo_scores
+    planos, viral_breakdown, hype_score, priority, score_kind)
+    y el PATCH posterior fusiona el veredicto + SEO (el POST es
+    seguro porque clip_passes_gates ya exige los 4 >= 80, así
+    que la puerta SEO del POST pasa siempre). Solo plataformas
+    con número medido: nunca 0 por una sin medir."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -498,7 +509,7 @@ class TestBurnAndEnqueueSeoPatch(unittest.TestCase):
         clip.update(over)
         return clip
 
-    def test_post_sin_seo_y_patch_con_seo_y_veredicto(self):
+    def test_post_con_viral_y_patch_con_seo_y_veredicto(self):
         self._patch_subtitles()
         self._patch_review()
         bridge = FakeBridge()
@@ -506,7 +517,20 @@ class TestBurnAndEnqueueSeoPatch(unittest.TestCase):
             bridge, "rubius", "2932415021", self.tmp.name,
             self._clip_con_thumb())
         self.assertEqual(panel_id, 101, why)
-        self.assertNotIn("seo_scores", bridge.created[0])
+        # El POST lleva el objeto viral con SEO PLANO por
+        # plataforma (no dicts del manifiesto) y viral_score.
+        payload = bridge.created[0]
+        self.assertEqual(payload["viral"]["seo_scores"], {
+            "youtube_shorts": 94, "tiktok": 94,
+            "instagram_reels": 94, "facebook_reels": 94})
+        self.assertTrue(all(
+            isinstance(v, (int, float))
+            for v in payload["viral"]["seo_scores"].values()))
+        self.assertEqual(payload["viral"]["viral_score"]["total"],
+                         53.8)
+        self.assertEqual(payload["viral"]["priority"],
+                         panel_score(53.8, _seo(94), 1.9))
+        self.assertNotIn("source_key", payload)
         self.assertEqual(len(bridge.patched), 1)
         _cid, fields = bridge.patched[0]
         self.assertEqual(fields["seo_scores"], {
@@ -674,7 +698,9 @@ class TestRun(unittest.TestCase):
     def test_run_youtube_con_flag_encola(self):
         # 2026-11-21: con --youtube, el VOD de YouTube se lista
         # con el latest_vod_for real (sin latest_vod_fn inyectado)
-        # y se encola con lang en.
+        # y se encola con lang en. 2026-11-24: la URL de YouTube
+        # va por el cortador de YouTube (youtube_clips_fn), no
+        # por auto_clips_fn (Twitch/Kick).
         vod = {"vod_id": "OIeLbmyraRQ",
                "url": "https://www.youtube.com/watch?v=OIeLbmyraRQ",
                "title": "🔴 BEATING GTA 6 RIGHT NOW 100% "
@@ -683,9 +709,10 @@ class TestRun(unittest.TestCase):
         manifest = {"vod_id": "OIeLbmyraRQ", "clips": [_clip()]}
         seen = {}
 
-        def _auto(url, out_dir, top_n=2, lang="es"):
+        def _yt(url, out_dir, top_n=2, lang="es", single_url=False):
             seen["lang"] = lang
             seen["url"] = url
+            seen["single_url"] = single_url
             return manifest
 
         def _enqueue(bridge, streamer, vod_id, out_dir, clip,
@@ -709,7 +736,10 @@ class TestRun(unittest.TestCase):
                 state_path=self.state, out_root=self.out,
                 bridge=FakeBridge(),
                 scan_fn=self._scan([]),
-                auto_clips_fn=_auto,
+                youtube_clips_fn=_yt,
+                auto_clips_fn=lambda *a, **k: (_ for _ in ()).throw(
+                    AssertionError(
+                        "una URL de YouTube no va por auto_clips")),
                 enqueue_fn=_enqueue,
                 youtube_enabled=True)
         check.assert_called_once()
@@ -718,6 +748,7 @@ class TestRun(unittest.TestCase):
         self.assertEqual(seen["enqueue_lang"], "en")
         self.assertEqual(seen["streamer"], "ishowspeed")
         self.assertEqual(seen["url"], vod["url"])
+        self.assertIs(seen["single_url"], False)
 
     def test_run_youtube_sin_flag_no_lista(self):
         # 2026-11-21: sin el flag, el streamer de YouTube no se
@@ -885,6 +916,607 @@ class TestState(unittest.TestCase):
                              ["attempted_at"], 5)
             self.assertEqual(load_state(os.path.join(d, "no.json")),
                              {"vods": {}})
+
+
+class TestPanelScoreRounding(unittest.TestCase):
+    """panel_score redondea a entero (§3.5): 55,7 -> 56,
+    50,4 -> 50; crudo 52,5 -> 53 pasa, 52,4 -> 52 no pasa."""
+
+    def test_bueno_55_7_a_56(self):
+        self.assertEqual(panel_score(52, _seo(85), 3.0), 56)
+
+    def test_flojo_50_4_a_50(self):
+        self.assertEqual(panel_score(47, _seo(80), 2.0), 50)
+
+    def test_crudo_52_5_redondea_a_52(self):
+        # OJO: 52,5 crudo NO pasa. Python round() es banker's
+        # rounding: round(52,5) = 52, no 53 (el ejemplo de la spec
+        # asumía redondeo half-up). panel_score usa int(round())
+        # como el resto del código; no se cambia la fórmula.
+        self.assertEqual(panel_score(45, _seo(89), 3.0), 52)
+
+    def test_crudo_52_7_pasa(self):
+        self.assertEqual(panel_score(45, _seo(90), 3.0), 53)
+
+    def test_crudo_52_4_no_pasa(self):
+        self.assertEqual(panel_score(45, _seo(86), 3.3), 52)
+
+
+class TestAlreadyEnqueuedSourceKey(unittest.TestCase):
+    """Dedup ENTRE corridas por (source_key, inicio) (§3.7)."""
+
+    def test_youtube_por_source_key(self):
+        clips = [{"source_id": 0, "source_key": "NrNdw_Y6_bI",
+                  "start_sec": 590}]
+        self.assertTrue(already_enqueued(
+            clips, "NrNdw_Y6_bI", 590, source_key="NrNdw_Y6_bI"))
+        self.assertFalse(already_enqueued(
+            clips, "NrNdw_Y6_bI", 600, source_key="NrNdw_Y6_bI"))
+        self.assertFalse(already_enqueued(
+            clips, "OtroVideo12", 590, source_key="OtroVideo12"))
+
+    def test_source_id_cero_no_colisiona_entre_videos(self):
+        # Sin source_key, dos vídeos de YouTube distintos con
+        # source_id 0 y mismo inicio NO se distinguen (el bug que
+        # corrige §3.7); con source_key sí.
+        clips = [{"source_id": 0, "source_key": "NrNdw_Y6_bI",
+                  "start_sec": 590}]
+        self.assertFalse(already_enqueued(
+            clips, "OtroVideo12", 590, source_key="OtroVideo12"))
+
+    def test_twitch_legacy_por_source_id(self):
+        clips = [{"source_id": 2932415021, "start_sec": 3200}]
+        self.assertTrue(already_enqueued(clips, "2932415021", 3200))
+        self.assertFalse(already_enqueued(clips, "2932415022", 3200))
+
+
+def _yt_clip(total, seo_score, mult, **over):
+    """Clip de YouTube para el umbral: viral_multiple de audio."""
+    base = _clip(
+        viral={"best_title": "Rubius consigue 6 estrellas en GTA 6",
+               "game": "GTA VI",
+               "description": "Rubius consigue las 6 estrellas.",
+               "tags": ["#GTA6"],
+               "viral_multiple": mult},
+        viral_score={"total": total},
+        viral_breakdown={"audio_multiple": mult},
+        seo_scores=_seo(seo_score),
+        source_key="NrNdw_Y6_bI",
+        vod_id="NrNdw_Y6_bI",
+        score_kind="youtube_audio")
+    base.update(over)
+    return base
+
+
+class TestYoutubePriorityThreshold(unittest.TestCase):
+    """Umbral 53 al encolar, solo YouTube (§3.5, OPCIÓN A)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.tmp.name, "clips"), exist_ok=True)
+        self.video = os.path.join(self.tmp.name, "clips", "clip_01.mp4")
+        with open(self.video, "wb") as f:
+            f.write(b"fake-mp4")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _patch_subtitles(self):
+        patcher = mock.patch(
+            "clipagent.workers.subtitle_clip",
+            return_value={"publish_blocked": False, "no_speech": False,
+                          "srt": self.video + ".srt", "burn": self.video,
+                          "transcript": None})
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def _patch_review(self):
+        verdict = {"decision": "aprobado", "pasa": True,
+                   "hard_pasa": True, "needs_rerender": False,
+                   "rerender_reason": "", "hard_failures": [],
+                   "motivo": "", "resumen": "aprobado",
+                   "fallos": [], "scores": {}, "frames_n": 0,
+                   "model": "", "transcript_words": 0,
+                   "observe_only": True,
+                   "face": {"pasa": True}, "template": {"pasa": True},
+                   "gemini": {"decision": "aprobado"}}
+        patcher = mock.patch(
+            "clipagent.final_review.validate_final_clip",
+            return_value=verdict)
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def test_flojo_50_no_se_encola_y_motivo(self):
+        sub_mock = self._patch_subtitles()
+        self._patch_review()
+        bridge = FakeBridge()
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "NrNdw_Y6_bI", self.tmp.name,
+            _yt_clip(47, 80, 2.0))
+        self.assertIsNone(panel_id)
+        self.assertIn("50", why)
+        self.assertIn(str(YOUTUBE_PRIORITY_MIN), why)
+        self.assertEqual(bridge.created, [])
+        # El chequeo va ANTES de subtitle_clip: un clip flojo no
+        # quema nada.
+        sub_mock.assert_not_called()
+
+    def test_bueno_56_se_encola(self):
+        self._patch_subtitles()
+        self._patch_review()
+        bridge = FakeBridge()
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "NrNdw_Y6_bI", self.tmp.name,
+            _yt_clip(52, 85, 3.0))
+        self.assertEqual(panel_id, 101, why)
+        self.assertEqual(len(bridge.created), 1)
+        self.assertEqual(bridge.created[0]["source_key"], "NrNdw_Y6_bI")
+        self.assertEqual(bridge.created[0]["source_id"], 0)
+
+    def test_crudo_52_7_pasa_y_52_4_no(self):
+        self._patch_subtitles()
+        self._patch_review()
+        bridge = FakeBridge()
+        panel_id, _ = burn_and_enqueue(
+            bridge, "rubius", "NrNdw_Y6_bI", self.tmp.name,
+            _yt_clip(45, 90, 3.0))
+        self.assertEqual(panel_id, 101)
+        bridge = FakeBridge()
+        panel_id, _ = burn_and_enqueue(
+            bridge, "rubius", "NrNdw_Y6_bI", self.tmp.name,
+            _yt_clip(45, 86, 3.3))
+        self.assertIsNone(panel_id)
+
+    def test_twitch_50_se_encola_el_umbral_es_solo_youtube(self):
+        self._patch_subtitles()
+        self._patch_review()
+        bridge = FakeBridge()
+        clip = _clip(viral_score={"total": 47.0,
+                                  "chat_multiple": 2.0},
+                     seo_scores=_seo(80))
+        panel_id, why = burn_and_enqueue(
+            bridge, "rubius", "2932415021", self.tmp.name, clip)
+        self.assertEqual(panel_id, 101, why)
+
+
+class TestCrossBlocks(unittest.TestCase):
+    """Cruce con Twitch por solape de título (§3.8)."""
+
+    def setUp(self):
+        self.now_ms = int(time.time() * 1000)
+        self.names = {7: "rubius"}
+        self.panel_title = ("Rubius consigue 6 estrellas en GTA 6 "
+                            "en el aeropuerto")
+
+    def _panel_clip(self, **over):
+        base = {"influencer_id": 7, "created_at": self.now_ms,
+                "title": self.panel_title,
+                "platforms": ["youtube_shorts", "tiktok",
+                              "instagram_reels", "facebook_reels"]}
+        base.update(over)
+        return base
+
+    def test_solape_mayor_0_7_bloquea(self):
+        blocked, why = cross_blocks(
+            "Rubius consigue 6 estrellas en GTA 6", "rubius",
+            [self._panel_clip()], influencer_names=self.names)
+        self.assertTrue(blocked)
+        self.assertIn("0,7", why)
+
+    def test_solape_menor_0_7_pasa(self):
+        blocked, _ = cross_blocks(
+            "Rubius se cae del avión en GTA 6", "rubius",
+            [self._panel_clip()], influencer_names=self.names)
+        self.assertFalse(blocked)
+
+    def test_menos_de_3_tokens_no_bloquea(self):
+        self.assertEqual(title_overlap("GTA 6", self.panel_title), 0.0)
+        blocked, _ = cross_blocks(
+            "GTA 6", "rubius", [self._panel_clip()],
+            influencer_names=self.names)
+        self.assertFalse(blocked)
+
+    def test_sin_condicion_de_idioma(self):
+        # Un clip EN del panel bloquea igual un candidato ES.
+        blocked, _ = cross_blocks(
+            "Rubius consigue 6 estrellas en GTA 6", "rubius",
+            [self._panel_clip(language="en")],
+            influencer_names=self.names)
+        self.assertTrue(blocked)
+
+    def test_otro_dia_no_bloquea(self):
+        blocked, _ = cross_blocks(
+            "Rubius consigue 6 estrellas en GTA 6", "rubius",
+            [self._panel_clip(
+                created_at=self.now_ms - 3 * 86400 * 1000)],
+            influencer_names=self.names)
+        self.assertFalse(blocked)
+
+    def test_influencer_id_resuelto_a_nombre(self):
+        blocked, _ = cross_blocks(
+            "Rubius consigue 6 estrellas en GTA 6", "rubius",
+            [self._panel_clip()], influencer_names={7: "illojuan"})
+        self.assertFalse(blocked)
+        blocked, _ = cross_blocks(
+            "Rubius consigue 6 estrellas en GTA 6", "rubius",
+            [self._panel_clip()], influencer_names={7: "rubius"})
+        self.assertTrue(blocked)
+
+    def test_distinto_streamer_no_bloquea(self):
+        blocked, _ = cross_blocks(
+            "Rubius consigue 6 estrellas en GTA 6", "illojuan",
+            [self._panel_clip()], influencer_names=self.names)
+        self.assertFalse(blocked)
+
+    def test_otra_plataforma_no_bloquea(self):
+        blocked, _ = cross_blocks(
+            "Rubius consigue 6 estrellas en GTA 6", "rubius",
+            [self._panel_clip(platforms=["kick"])],
+            influencer_names=self.names)
+        self.assertFalse(blocked)
+
+    def test_dia_fijo_por_santiago_day_key(self):
+        # created_at fijo: 2026-11-24 15:00 UTC = 12:00 en Chile.
+        from clipagent.vod_fallback import _clip_day
+
+        self.assertEqual(_clip_day(
+            {"created_at": 1795532400000}), "2026-11-24")
+
+    def test_influencer_names_by_id(self):
+        bridge = _ListBridge(influencers=[
+            {"id": 7, "handle": "rubius"},
+            {"id": 9, "name": "IlloJuan"},
+        ])
+        self.assertEqual(influencer_names_by_id(bridge),
+                         {7: "rubius", 9: "illojuan"})
+        broken = mock.Mock()
+        broken.list_influencers.side_effect = RuntimeError("caído")
+        self.assertEqual(influencer_names_by_id(broken), {})
+
+
+class _ListBridge(FakeBridge):
+    """FakeBridge con list_influencers y list_clips programables
+    (para la re-lectura antes de cada encolado)."""
+
+    def __init__(self, clips=None, influencers=None, clips_seq=None):
+        super().__init__(clips=clips)
+        self.influencers = list(influencers or [])
+        self._clips_seq = (list(clips_seq)
+                           if clips_seq is not None else None)
+        self.list_calls = 0
+
+    def list_clips(self):
+        self.list_calls += 1
+        if self._clips_seq is not None and self._clips_seq:
+            return list(self._clips_seq.pop(0))
+        return list(self.clips)
+
+    def list_influencers(self):
+        return list(self.influencers)
+
+
+class TestRunYoutube(unittest.TestCase):
+    """run() con YouTube: dedup entre corridas, cruce
+    mismo-corrida, re-lectura, enfriamiento y URL única."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = os.path.join(self.tmp.name, "state.json")
+        self.out = os.path.join(self.tmp.name, "out")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _scan(self, live):
+        return lambda only=None: {"live": live, "skipped": [],
+                                  "checked": 1, "twitch_mode": "helix"}
+
+    def _yt_manifest(self, start=590, title=None, streamer=None):
+        clip = _yt_clip(52, 85, 3.0, start=start)
+        if title is not None:
+            clip["viral"]["best_title"] = title
+            clip["title_es"] = title
+        return {"vod_id": "NrNdw_Y6_bI", "clips": [clip]}
+
+    def test_dedup_entre_corridas_por_source_key(self):
+        vod = {"vod_id": "NrNdw_Y6_bI",
+               "url": "https://www.youtube.com/watch?v=NrNdw_Y6_bI",
+               "title": "Conseguí 6 Estrellas en GTA 6",
+               "category": "", "live": False}
+        bridge = _ListBridge(clips=[{
+            "source_id": 0, "source_key": "NrNdw_Y6_bI",
+            "start_sec": 590}])
+        called = []
+
+        def _enqueue(*a, **k):
+            called.append(a)
+            return 101, ""
+
+        n, _ = run(
+            max_vods=1, max_clips=2, top_n=2,
+            state_path=self.state, out_root=self.out, bridge=bridge,
+            scan_fn=self._scan([]),
+            latest_vod_fn=lambda entry: vod,
+            youtube_clips_fn=lambda url, out_dir, top_n=2, lang="es",
+            single_url=False: self._yt_manifest(),
+            enqueue_fn=_enqueue)
+        self.assertEqual(n, 0)
+        self.assertEqual(called, [])
+
+    def test_cruce_mismo_corrida_bloquea_y_distinto_no(self):
+        # Dos clips del mismo manifiesto, mismo título y momento,
+        # mismo streamer: el segundo lo bloquea el cruce con el
+        # primero (append en memoria con streamer + title).
+        vod = {"vod_id": "NrNdw_Y6_bI",
+               "url": "https://www.youtube.com/watch?v=NrNdw_Y6_bI",
+               "title": "Conseguí 6 Estrellas en GTA 6",
+               "category": "", "live": False}
+        title = "Rubius consigue 6 estrellas en GTA 6"
+        manifest = {"vod_id": "NrNdw_Y6_bI", "clips": [
+            _yt_clip(52, 85, 3.0, start=590),
+            _yt_clip(52, 85, 3.0, start=650)]}
+        for clip in manifest["clips"]:
+            clip["viral"]["best_title"] = title
+            clip["title_es"] = title
+        enqueued = []
+
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
+            enqueued.append(clip["start"])
+            return 101, ""
+
+        n, _ = run(
+            max_vods=1, max_clips=2, top_n=2,
+            state_path=self.state, out_root=self.out,
+            bridge=_ListBridge(influencers=[{"id": 7,
+                                             "handle": "rubius"}]),
+            scan_fn=self._scan([]),
+            latest_vod_fn=lambda entry: vod,
+            youtube_clips_fn=lambda url, out_dir, top_n=2, lang="es",
+            single_url=False: manifest,
+            enqueue_fn=_enqueue)
+        self.assertEqual(n, 1)
+        self.assertEqual(enqueued, [590])
+
+    def test_cruce_mismo_momento_distinto_streamer_no_bloquea(self):
+        title = "Rubius consigue 6 estrellas en GTA 6"
+
+        def _manifest_for(url, start):
+            manifest = {"vod_id": "x", "clips": [
+                _yt_clip(52, 85, 3.0, start=start)]}
+            manifest["clips"][0]["viral"]["best_title"] = title
+            manifest["clips"][0]["title_es"] = title
+            return manifest
+
+        vods = {"rubius": {"vod_id": "NrNdw_Y6_bI",
+                           "url": "https://www.youtube.com/watch"
+                                  "?v=NrNdw_Y6_bI",
+                           "title": "Conseguí 6 Estrellas en GTA 6",
+                           "category": "", "live": False},
+                "illojuan": {"vod_id": "2932415021",
+                             "url": "https://www.twitch.tv/videos/"
+                                    "2932415021",
+                             "title": "GTA 6", "category": "Grand "
+                             "Theft Auto VI", "live": False}}
+        enqueued = []
+
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
+            enqueued.append(streamer)
+            return 101, ""
+
+        streamers = [
+            {"name": "rubius", "platform": "youtube",
+             "channel_url": "https://www.youtube.com/@rubius",
+             "language": "es", "enabled": True, "estado": "concedido"},
+            {"name": "illojuan", "platform": "twitch",
+             "language": "es", "enabled": True, "estado": "concedido"},
+        ]
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=streamers):
+            n, _ = run(
+                max_vods=2, max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=_ListBridge(),
+                scan_fn=self._scan([]),
+                latest_vod_fn=lambda entry: vods[entry["name"]],
+                youtube_clips_fn=lambda url, out_dir, top_n=2,
+                lang="es", single_url=False: _manifest_for(url, 590),
+                auto_clips_fn=lambda url, out_dir, top_n=2,
+                lang="es": _manifest_for(url, 700),
+                enqueue_fn=_enqueue)
+        self.assertEqual(n, 2)
+        self.assertEqual(enqueued, ["rubius", "illojuan"])
+
+    def test_relectura_antes_de_cada_encolado(self):
+        # cut encola un clip en vivo entre la carga inicial y el
+        # segundo encolado: la re-lectura lo ve y el cruce lo
+        # bloquea. Sin re-lectura, el segundo pasaría.
+        vod = {"vod_id": "NrNdw_Y6_bI",
+               "url": "https://www.youtube.com/watch?v=NrNdw_Y6_bI",
+               "title": "Conseguí 6 Estrellas en GTA 6",
+               "category": "", "live": False}
+        title = "Rubius consigue 6 estrellas en GTA 6"
+        manifest = {"vod_id": "NrNdw_Y6_bI", "clips": [
+            _yt_clip(52, 85, 3.0, start=590),
+            _yt_clip(52, 85, 3.0, start=650)]}
+        for clip in manifest["clips"]:
+            clip["viral"]["best_title"] = title
+            clip["title_es"] = title
+        cut_clip = {"influencer_id": 7,
+                    "created_at": int(time.time() * 1000),
+                    "title": title,
+                    "platforms": ["youtube_shorts", "tiktok",
+                                  "instagram_reels",
+                                  "facebook_reels"]}
+        bridge = _ListBridge(
+            influencers=[{"id": 7, "handle": "rubius"}],
+            clips_seq=[[], [], [cut_clip]])
+        enqueued = []
+
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
+            enqueued.append(clip["start"])
+            return 101, ""
+
+        n, _ = run(
+            max_vods=1, max_clips=2, top_n=2,
+            state_path=self.state, out_root=self.out, bridge=bridge,
+            scan_fn=self._scan([]),
+            latest_vod_fn=lambda entry: vod,
+            youtube_clips_fn=lambda url, out_dir, top_n=2, lang="es",
+            single_url=False: manifest,
+            enqueue_fn=_enqueue)
+        self.assertEqual(n, 1)
+        self.assertEqual(enqueued, [590])
+        # Carga inicial + una re-lectura por clip.
+        self.assertGreaterEqual(bridge.list_calls, 3)
+
+    def test_url_unica_gta_corta_y_salta_directos(self):
+        meta = {"id": "NrNdw_Y6_bI", "duration": 1750,
+                "title": "Conseguí 6 Estrellas en GTA 6 ⭐",
+                "channel_url": "https://www.youtube.com/channel/"
+                               "UCcjIvuxmWlS5IEQ0JdPV4Ng",
+                "channel": "Rubius Z", "description": "",
+                "heatmap": [], "views": 0, "likes": 0,
+                "categories": [], "category": ""}
+        streamers = [
+            {"name": "rubius", "platform": "youtube",
+             "channel_url": "https://www.youtube.com/channel/"
+                            "UCcjIvuxmWlS5IEQ0JdPV4Ng",
+             "language": "es", "enabled": True,
+             "estado": "concedido"},
+        ]
+        seen = {}
+
+        def _yt(url, out_dir, top_n=2, lang="es", single_url=False):
+            seen["url"] = url
+            seen["out_dir"] = out_dir
+            seen["lang"] = lang
+            seen["single_url"] = single_url
+            return self._yt_manifest()
+
+        def _enqueue(bridge, streamer, vod_id, out_dir, clip,
+                     lang="es"):
+            seen["streamer"] = streamer
+            return 101, ""
+
+        def _scan_live(only=None):
+            raise AssertionError(
+                "la URL única salta el chequeo de directos")
+
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=streamers), \
+                mock.patch("clipagent.youtube_cut."
+                           "fetch_youtube_metadata",
+                           return_value=meta):
+            n, summary = run(
+                max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=_ListBridge(),
+                scan_fn=_scan_live,
+                youtube_clips_fn=_yt,
+                enqueue_fn=_enqueue,
+                youtube_url="https://youtu.be/NrNdw_Y6_bI")
+        self.assertEqual(n, 1)
+        self.assertEqual(seen["url"],
+                         "https://youtu.be/NrNdw_Y6_bI")
+        self.assertEqual(seen["out_dir"],
+                         os.path.join(self.out, "NrNdw_Y6_bI"))
+        self.assertEqual(seen["lang"], "es")
+        self.assertIs(seen["single_url"], True)
+        self.assertEqual(seen["streamer"], "rubius")
+        self.assertIn("NrNdw_Y6_bI", summary)
+
+    def test_url_unica_sin_entrada_idioma_es_por_defecto(self):
+        meta = {"id": "NrNdw_Y6_bI", "duration": 1750,
+                "title": "Conseguí 6 Estrellas en GTA 6 ⭐",
+                "channel_url": "https://www.youtube.com/@otro",
+                "channel": "Otro", "description": "",
+                "heatmap": [], "views": 0, "likes": 0,
+                "categories": [], "category": ""}
+        seen = {}
+
+        def _yt(url, out_dir, top_n=2, lang="es", single_url=False):
+            seen["lang"] = lang
+            return self._yt_manifest()
+
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=[]), \
+                mock.patch("clipagent.youtube_cut."
+                           "fetch_youtube_metadata",
+                           return_value=meta):
+            n, _ = run(
+                max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=_ListBridge(),
+                scan_fn=self._scan([]),
+                youtube_clips_fn=_yt,
+                enqueue_fn=lambda *a, **k: (101, ""),
+                youtube_url="https://youtu.be/NrNdw_Y6_bI")
+        self.assertEqual(n, 1)
+        self.assertEqual(seen["lang"], "es")
+
+    def test_url_unica_no_gta_se_salta(self):
+        meta = {"id": "Mine1234567", "duration": 1750,
+                "title": "Minecraft con amigos",
+                "channel_url": "https://www.youtube.com/@otro",
+                "channel": "Otro", "description": "",
+                "heatmap": [], "views": 0, "likes": 0,
+                "categories": ["Minecraft"], "category": "Minecraft"}
+        called = []
+
+        def _yt(url, out_dir, top_n=2, lang="es", single_url=False):
+            called.append(url)
+            return self._yt_manifest()
+
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=[]), \
+                mock.patch("clipagent.youtube_cut."
+                           "fetch_youtube_metadata",
+                           return_value=meta):
+            n, summary = run(
+                max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=_ListBridge(),
+                scan_fn=self._scan([]),
+                youtube_clips_fn=_yt,
+                enqueue_fn=lambda *a, **k: (101, ""),
+                youtube_url="https://youtu.be/Mine1234567")
+        self.assertEqual(n, 0)
+        self.assertEqual(called, [])
+        self.assertIn("GTA VI", summary)
+
+    def test_url_unica_en_enfriamiento_no_corta(self):
+        save_state(self.state, {"vods": {"NrNdw_Y6_bI": {
+            "attempted_at": 9999999999}}})
+        meta = {"id": "NrNdw_Y6_bI", "duration": 1750,
+                "title": "Conseguí 6 Estrellas en GTA 6 ⭐",
+                "channel_url": "https://www.youtube.com/@rubius",
+                "channel": "Rubius Z", "description": "",
+                "heatmap": [], "views": 0, "likes": 0,
+                "categories": [], "category": ""}
+        called = []
+
+        def _yt(url, out_dir, top_n=2, lang="es", single_url=False):
+            called.append(url)
+            return self._yt_manifest()
+
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=[]), \
+                mock.patch("clipagent.youtube_cut."
+                           "fetch_youtube_metadata",
+                           return_value=meta):
+            n, _ = run(
+                max_clips=2, top_n=2,
+                state_path=self.state, out_root=self.out,
+                bridge=_ListBridge(),
+                scan_fn=self._scan([]),
+                youtube_clips_fn=_yt,
+                enqueue_fn=lambda *a, **k: (101, ""),
+                youtube_url="https://youtu.be/NrNdw_Y6_bI")
+        self.assertEqual(n, 0)
+        self.assertEqual(called, [])
 
 
 if __name__ == "__main__":

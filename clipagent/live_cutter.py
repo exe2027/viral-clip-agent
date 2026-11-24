@@ -1551,7 +1551,7 @@ class LiveCutterSession(LiveSession):
         """Sesión en vivo completa: verificar vivo + categoría,
         grabar, escuchar IRC, cortar al detectar picos."""
         from .streamers import is_allowed
-        if not is_allowed(self.streamer):
+        if not is_allowed(self.streamer, platform=self.platform):
             raise RuntimeError(
                 f"{self.streamer!r} no está en streamers.yaml "
                 "(sin permiso: no se sigue)")

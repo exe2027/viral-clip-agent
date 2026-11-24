@@ -264,7 +264,8 @@ def filter_passed(detail, multiple: float, rank=None, score=None):
     via_hype = hype_way_passes(detail, score)
     if (multiple or 0.0) < MIN_MULTIPLE and not via_hype:
         ok = False
-        motivos.append(f"múltiplo {multiple:.1f}x < {MIN_MULTIPLE:.0f}x la mediana")
+        motivos.append(f"múltiplo {(multiple or 0.0):.1f}x < "
+                       f"{MIN_MULTIPLE:.0f}x la mediana")
         if score is not None:
             motivos.append(
                 "sin ráfaga hype "

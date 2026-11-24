@@ -13,11 +13,13 @@ import {
   effectiveSettings,
   getApiAccountByPlatform,
   getClip,
+  getInfluencer,
   getSettings,
   isGtaViGame,
   isRestDayEffective,
   isWithinPublishSlot,
   languageName,
+  logWorkerEvent,
   maturityOut,
   panelPlatformLabel,
   parseViralJson,
@@ -404,6 +406,33 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
   const db = env.DB;
   const clip = job.clip_id ? await getClip(db, job.clip_id, job.tenant_id) : null;
   if (!clip) return "clip no encontrado";
+  // CHEQUEO DE INFLUENCER ACTIVO (spec 2026-11-24, §3.5): en
+  // producción no había ningún chequeo de influencer activo al
+  // publicar — desactivar una entrada NO frenaba lo ya encolado.
+  // Ahora se resuelve clip.influencer_id → fila de influencers;
+  // si permission=0 o active=0, el job queda bloqueado/retenido
+  // con el motivo (a draft con retryable=0, vía markDraft en
+  // jobs.ts; al reactivar, el clip se re-encola a mano). Aplica a
+  // todos los clips, no solo a los de YouTube. Va ANTES del resto
+  // de puertas para que el motivo sea este y no otro (p. ej. la
+  // falta de cuenta). Clip sin influencer_id (columna admite
+  // null, clips viejos existen) → el chequeo PASA (fail-open con
+  // log), nunca bloquea. Fila borrada → también fail-open.
+  let streamerAllowed = true;
+  if (clip.influencer_id !== null && clip.influencer_id !== undefined) {
+    const inf = await getInfluencer(db, clip.influencer_id, job.tenant_id).catch(() => null);
+    if (inf) {
+      streamerAllowed = inf.permission === 1 && inf.active === 1;
+      if (!streamerAllowed) return "streamer desactivado en el panel";
+    }
+  } else {
+    await logWorkerEvent(
+      db,
+      "gate",
+      `Clip #${clip.id} sin influencer_id: el chequeo de streamer desactivado pasa (fail-open, clips viejos).`,
+      job.tenant_id,
+    ).catch(() => {});
+  }
   const lang = clipLanguage(clip);
   const settings = await getSettings(db, job.tenant_id);
   const eff = effectiveSettings(settings);
@@ -491,7 +520,7 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
     seoOverride: seo.override,
     publishedToday,
     lastPublishedAtMs,
-    streamerAllowed: true, // el permiso se verifica en el puente con streamers.yaml
+    streamerAllowed, // el permiso se verifica arriba, contra la fila del influencer del clip
     settings,
     accountDailyLimit: mat?.effective_daily_limit ?? null,
     accountDailyPlan: mat?.effective_daily_plan ?? null,

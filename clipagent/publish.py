@@ -1926,9 +1926,23 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
         return {"action": "retained", "reason": decision["reason"]}
     # 6.2: streamer desactivado en el panel: no se publican sus
     # clips nuevos (el permiso no se revoca, solo se pausa).
+    # La plataforma de ORIGEN no está en el ítem de la cola (su
+    # "platform" es la de publicación, p. ej. tiktok): se alcanza
+    # por el manifiesto con load_clip_package -> source_key (id de
+    # YouTube -> youtube, si no twitch). Con dos entradas del
+    # mismo nombre (Rubius twitch + youtube), la desactivada es la
+    # que frena sus clips, no la otra.
     if item.get("streamer"):
         from .streamers import get_streamer
-        entry = get_streamer(item["streamer"])
+        origin_platform = "twitch"
+        try:
+            _pkg, _manifest = load_clip_package(item["clip"])
+            if (_pkg or {}).get("source_key"):
+                origin_platform = "youtube"
+        except Exception:  # noqa: BLE001 - sin manifiesto, twitch
+            pass
+        entry = get_streamer(item["streamer"],
+                             platform=origin_platform)
         if entry is not None and not entry.get("enabled", True):
             reason = (f"streamer {item['streamer']} desactivado "
                       "en el panel")

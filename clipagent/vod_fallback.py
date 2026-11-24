@@ -84,6 +84,16 @@ MAX_CLIPS_PER_RUN = 2
 TOP_N_PER_VOD = 2
 VOD_COOLDOWN_H = 6
 AUTO_CLIPS_TIMEOUT_S = 1200  # 20 min por VOD
+# Umbral de prioridad al encolar, solo clips de YouTube (sin chat)
+# (§3.5, OPCIÓN A, spec 2026-11-24): un clip de YouTube con
+# panel_score < 53 no se encola (el bueno 55,7 -> 56 sí; el flojo
+# 50,4 -> 50 y el mínimo 49,3 -> 49 no). El chequeo va AL INICIO
+# de burn_and_enqueue, ANTES de subtitle_clip: los tres inputs
+# ya están a la entrada y un clip flojo no quema nada. En
+# producción no existe el archivo a los 3 días (publica el
+# Worker desde D1), así que el umbral NO va en publish.py /
+# order_queue / should_auto_archive (legacy local, sin efecto).
+YOUTUBE_PRIORITY_MIN = 53
 DEFAULT_STATE_PATH = os.path.join("runs", "vod-fallback", "state.json")
 DEFAULT_OUT_DIR = os.path.join("runs", "vod-fallback")
 
@@ -259,21 +269,32 @@ def clip_passes_gates(clip, vod_id):
     return (not reasons), reasons
 
 
-def already_enqueued(panel_clips, vod_id, start_sec):
+def already_enqueued(panel_clips, vod_id, start_sec, source_key=None):
     """¿Ese (VOD, inicio) ya está en la Cola del panel?
 
     panel_clips: lo que devuelve PanelBridge.list_clips() (cada clip
-    trae source_id y start_sec). La comparación es por entero de
-    inicio: el panel guarda start_sec entero.
+    trae source_id y start_sec) o la lista en memoria de la corrida.
+    Con ``source_key`` no vacío (id de vídeo de YouTube) la
+    comparación es por (source_key, start_sec): ``source_id`` es
+    entero y un id de YouTube no cabe en él (``int()`` falla y
+    queda en 0 para TODOS los clips de YouTube, así que comparar
+    por source_id nunca detectaría el duplicado ENTRE corridas).
+    Sin source_key, (source_id, start_sec) como hoy (Twitch/Kick).
+    La comparación es por entero de inicio: el panel guarda
+    start_sec entero.
     """
     try:
         want_start = int(start_sec)
     except (TypeError, ValueError):
         return False
+    key = (source_key or "").strip()
     for c in (panel_clips or []):
         try:
-            same_vod = str(c.get("source_id")) == str(vod_id)
             same_start = int(c.get("start_sec")) == want_start
+            if key:
+                same_vod = str(c.get("source_key") or "") == key
+            else:
+                same_vod = str(c.get("source_id")) == str(vod_id)
         except (TypeError, ValueError):
             continue
         if same_vod and same_start:
@@ -288,6 +309,152 @@ def panel_score(viral_total, seo_scores, chat_multiple):
     seo_yt = (seo_scores or {}).get("youtube_shorts") or {}
     p = priority_fn(viral_total, seo_yt.get("score", 0), chat_multiple)
     return int(round(p["priority"]))
+
+
+# ---------------------------------------------------------------------------
+# Cruce con Twitch: mismo momento, mismo día, misma plataforma (§3.8)
+# ---------------------------------------------------------------------------
+
+def _title_tokens(title):
+    """Tokens normalizados de un título: minúsculas, sin puntuación
+    ni emoji (solo caracteres alfanuméricos Unicode)."""
+    import re as _re
+
+    return set(_re.findall(r"\w+", (title or "").lower(),
+                           flags=_re.UNICODE))
+
+
+def title_overlap(title_a, title_b):
+    """Solape de tokens entre dos títulos: |A∩B| / min(|A|,|B|).
+
+    0,0 si alguno tiene menos de 3 tokens: con menos no hay
+    bloqueo (un título de 2 palabras no identifica un momento).
+    """
+    a = _title_tokens(title_a)
+    b = _title_tokens(title_b)
+    if min(len(a), len(b)) < 3:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+def _clip_day(entry):
+    """Día Chile (YYYY-MM-DD) de un clip del panel.
+
+    ``created_at`` es epoch en ms y se convierte con
+    ``santiago_day_key`` (``_now_chile`` NO sirve: no admite
+    argumentos y devuelve la hora actual). Sin ``created_at``
+    (entrada en memoria de esta misma corrida), el día es hoy.
+    """
+    from .retry import santiago_day_key
+
+    created = (entry or {}).get("created_at")
+    if created is None:
+        return santiago_day_key()
+    try:
+        return santiago_day_key(int(created))
+    except (TypeError, ValueError):
+        return santiago_day_key()
+
+
+def _entry_platforms(entry):
+    """Plataformas de publicación de un clip del panel.
+
+    Sin campo de plataforma, se asume que publica en las 4 (el
+    candidato también): la condición de «misma plataforma» no
+    puede vetar por falta de dato.
+    """
+    platforms = (entry or {}).get("platforms")
+    if isinstance(platforms, (list, tuple)) and platforms:
+        return {str(p).strip().lower() for p in platforms}
+    single = (entry or {}).get("platform")
+    if single:
+        return {str(single).strip().lower()}
+    return set(PLATFORMS)
+
+
+def influencer_names_by_id(bridge):
+    """influencer_id -> nombre, desde GET /api/influencers (la
+    lista que el puente ya consulta).
+
+    Los clips del panel llevan ``influencer_id`` (entero) y el
+    candidato lleva un nombre: sin esta resolución el cruce no
+    puede comprobar «mismo streamer». {} si el puente no la da.
+    """
+    if bridge is None:
+        return {}
+    try:
+        rows = bridge.list_influencers()
+    except Exception:  # noqa: BLE001 - sin lista no hay cruce por id
+        return {}
+    out = {}
+    for row in (rows or []):
+        if not isinstance(row, dict):
+            continue
+        try:
+            ident = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        name = str(row.get("handle") or row.get("name") or ""
+                   ).strip().lower()
+        if name:
+            out[ident] = name
+    return out
+
+
+def _entry_streamer_name(entry, influencer_names):
+    """Nombre del streamer de un clip del panel (o en memoria).
+
+    La entrada en memoria lleva ``streamer`` directo; la del
+    panel lleva ``influencer_id`` y se resuelve por la lista de
+    influencers. Sin nombre resoluble, None (fail-open: sin
+    streamer no se puede afirmar «mismo streamer» y no bloquea).
+    """
+    entry = entry or {}
+    direct = str(entry.get("streamer") or "").strip().lower()
+    if direct:
+        return direct
+    ident = entry.get("influencer_id")
+    if ident is None:
+        return None
+    try:
+        return (influencer_names or {}).get(int(ident))
+    except (TypeError, ValueError):
+        return None
+
+
+def cross_blocks(candidate_title, streamer_name, panel_clips,
+                 influencer_names=None):
+    """¿El cruce con Twitch bloquea el encolado? (§3.8)
+
+    Bloquea si un clip del panel (o encolado en esta misma
+    corrida) es del MISMO streamer (por nombre, con
+    ``influencer_id`` resuelto a nombre), del MISMO DÍA Chile
+    (fecha Chile de ``created_at``) y de la MISMA plataforma, con
+    título normalizado con solape de tokens >= 0,7 con el del
+    candidato. SIN condición de idioma: un clip ES no deja de
+    bloquear uno EN del mismo momento. Devuelve
+    (bloquea, motivo).
+    """
+    name = (streamer_name or "").strip().lower()
+    if not name:
+        return False, ""
+    today = _clip_day({})
+    for entry in (panel_clips or []):
+        other_name = _entry_streamer_name(entry, influencer_names)
+        if other_name != name:
+            continue
+        if _clip_day(entry) != today:
+            continue
+        if not (_entry_platforms(entry) & set(PLATFORMS)):
+            continue
+        overlap = title_overlap(
+            candidate_title, (entry or {}).get("title") or "")
+        if overlap >= 0.7:
+            return True, (f"cruce con Twitch: mismo momento el "
+                          f"mismo día ({today}) en la misma "
+                          f"plataforma (solape de título "
+                          f"{overlap:.2f} >= 0,7)")
+    return False, ""
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +805,42 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
     # Texto de miniatura del paquete del manifiesto (2026-11-19):
     # viaja al panel (columna thumb_text); sin él queda vacía.
     thumbnail_text = (viral.get("thumbnail_text") or "").strip()
+    # Scores del manifiesto (disponibles a la entrada, antes de
+    # quemar nada): viralidad, SEO y múltiplo (de chat en Twitch,
+    # de audio en YouTube: viral.viral_multiple).
+    viral_score = clip.get("viral_score") or {}
+    total = viral_score.get("total") or 0
+    seo = clip.get("seo_scores") or {}
+    chat_multiple = (viral_score.get("chat_multiple")
+                     or (viral or {}).get("viral_multiple") or 1.0)
+    # SEO plano por plataforma ({plataforma: número}), como lo
+    # exige parseSeoScoresInput (db.ts:264): el manifiesto lleva
+    # {plataforma: {score: n}} y mandar el dict tal cual daría 400.
+    _flat_seo = {}
+    for _p in PLATFORMS:
+        _entry = (seo or {}).get(_p)
+        if isinstance(_entry, (int, float)):
+            _value = _entry
+        elif isinstance(_entry, dict):
+            _value = _entry.get("score")
+        else:
+            _value = None
+        if isinstance(_value, (int, float)):
+            _flat_seo[_p] = _value
+    # Umbral de prioridad al encolar (§3.5, OPCIÓN A): solo clips
+    # de YouTube (source_key no vacío — los de Twitch llevan
+    # source_key '' por construcción). Si panel_score < 53, NO se
+    # encola: se descarta con el motivo en el log y como evento
+    # clip_descartado (lo reporta run(), rama else — NO se añade
+    # otro reporte aquí). Va AL INICIO, ANTES de subtitle_clip:
+    # un clip flojo retorna antes de quemar nada.
+    source_key = (clip.get("source_key") or "").strip()
+    if source_key:
+        _prio = panel_score(total, seo, chat_multiple)
+        if _prio < YOUTUBE_PRIORITY_MIN:
+            return None, (f"prioridad {_prio} < "
+                          f"{YOUTUBE_PRIORITY_MIN} (clip de YouTube "
+                          "sin chat): no se encola")
     video = os.path.join(out_dir, clip.get("file", ""))
     if not os.path.isfile(video):
         return None, f"falta el MP4 {video}"
@@ -655,9 +858,6 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
     # correcta también si se la llama directa: sin voz + bajo
     # puertas sigue fuera, como antes. No se confía en
     # sub["publish_blocked"]: subtitle_clip ya no lo marca.
-    viral_score = clip.get("viral_score") or {}
-    total = viral_score.get("total") or 0
-    seo = clip.get("seo_scores") or {}
     from .policy import no_speech_blocked
     no_speech = bool(sub.get("no_speech"))
     if no_speech_blocked(no_speech, total, seo, cfg):
@@ -713,8 +913,6 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
         return None, (f"validación final: "
                       f"{final_review.get('motivo') or ''}: "
                       f"{'revisión humana' if human else 'no se encola'}")
-    chat_multiple = (viral_score.get("chat_multiple")
-                     or (viral or {}).get("viral_multiple") or 1.0)
     start = int(clip.get("start", 0))
     end = int(start + (clip.get("duration") or 0))
     seo_txt = ", ".join(
@@ -723,6 +921,27 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
         vod_id_int = int(vod_id)
     except (TypeError, ValueError):
         vod_id_int = 0
+    # Objeto viral del POST (§3.8): SOLO los campos que sobreviven
+    # en parseViralInput (db.ts:324) — viral_score, seo_scores,
+    # viral_breakdown, hype_score, priority, score_kind. Cualquier
+    # otro campo (chat_multiple, components, source, ...) lo
+    # descartaría en silencio. seo_scores como NÚMEROS PLANOS por
+    # plataforma (el manifiesto lleva {score: n} y el POST con
+    # dicts daría 400).
+    viral_payload = {}
+    if isinstance(viral_score, dict) and viral_score:
+        viral_payload["viral_score"] = viral_score
+    if _flat_seo:
+        viral_payload["seo_scores"] = dict(_flat_seo)
+    breakdown = clip.get("viral_breakdown")
+    if isinstance(breakdown, dict) and breakdown:
+        viral_payload["viral_breakdown"] = breakdown
+    if isinstance(clip.get("hype_score"), (int, float)):
+        viral_payload["hype_score"] = clip.get("hype_score")
+    viral_payload["priority"] = panel_score(
+        total, seo, chat_multiple)
+    if clip.get("score_kind"):
+        viral_payload["score_kind"] = clip.get("score_kind")
     payload = {
         "title": title,
         "start_sec": start,
@@ -758,6 +977,14 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
     # con 400.
     if thumbnail_text:
         payload["thumbnail_text"] = thumbnail_text
+    # source_key = id del vídeo de YouTube (§3.7, migración 0044):
+    # source_id queda en 0 (int() no cabe un id de YouTube) y el
+    # dedup ENTRE corridas se hace por (source_key, start_sec).
+    # Para Twitch no cambia nada (source_key '' no se manda).
+    if source_key:
+        payload["source_key"] = source_key
+    if viral_payload:
+        payload["viral"] = viral_payload
     try:
         created = bridge.create_clip(payload)
         panel_id = created.get("id")
@@ -771,26 +998,21 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
                 pass
     except Exception as e:  # noqa: BLE001 - el panel no tumba la corrida
         return None, f"panel: no se pudo encolar ({e})"
-    # SEO + veredicto al panel por PATCH (2026-11-24, auto-seo): el
-    # POST no lleva seo_scores (la puerta SEO del POST tiraría los
-    # de máximo < 80); el PATCH no tiene puerta. Solo plataformas
-    # con número medido: nunca 0 por una sin medir (0 es un bloque
-    # medido, no "sin medir"). El veredicto se construye DESPUÉS
-    # del posible re-render (final_review ya es el definitivo). Si
-    # el PATCH falla, el clip ya está en la Cola y se sigue.
+    # SEO + veredicto al panel por PATCH (2026-11-24, auto-seo,
+    # reconciliado con §3.8): el POST YA lleva viral_score,
+    # viral_breakdown, priority y seo_scores planos (es seguro
+    # porque clip_passes_gates ya exige los 4 >= 80 antes de
+    # encolar, así que el máximo es >= 80 y la puerta SEO del POST
+    # pasa siempre); el PATCH no tiene puerta y fusiona
+    # (mergeViralJson) el quality_gate + seo_source sin borrar lo
+    # del POST. Solo plataformas con número medido: nunca 0 por
+    # una sin medir (0 es un bloque medido, no "sin medir"). El
+    # veredicto se construye DESPUÉS del posible re-render
+    # (final_review ya es el definitivo). Si el PATCH falla, el
+    # clip ya está en la Cola y se sigue.
     try:
         from .quality_gate import build_quality_gate
-        _scores = {}
-        for _p in PLATFORMS:
-            _entry = (seo or {}).get(_p)
-            if isinstance(_entry, (int, float)):
-                _value = _entry
-            elif isinstance(_entry, dict):
-                _value = _entry.get("score")
-            else:
-                _value = None
-            if isinstance(_value, (int, float)):
-                _scores[_p] = _value
+        _scores = dict(_flat_seo)
         _fields = {"viral": {
             "quality_gate": build_quality_gate(
                 final_review, thumbnail_text=thumbnail_text,
@@ -809,17 +1031,254 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
 # Orquestación
 # ---------------------------------------------------------------------------
 
+def _refresh_panel_clips(bridge, current):
+    """Re-lee la lista del panel justo antes de cada encolado.
+
+    Mitigación de la carrera con el job ``cut`` (que corre en
+    paralelo y puede encolar un clip en vivo después de la carga
+    inicial): sin esta re-lectura, el cruce de §3.8 no lo vería.
+    Ventana residual (TOCTOU): entre la re-lectura y el POST
+    sigue habiendo ventana, sin enforcement en el servidor — el
+    cruce es solo del cerebro; riesgo aceptado (§3.8, H8).
+    """
+    if bridge is None:
+        return current
+    try:
+        return bridge.list_clips() or []
+    except Exception as e:  # noqa: BLE001 - sin lista se sigue con la vieja
+        _log(f"No se pudo re-leer la Cola del panel ({e}); se sigue "
+             "con la lista anterior.")
+        return current
+
+
+def _process_manifest_clips(bridge, streamer_name, vod_id, out_dir,
+                            manifest, panel_clips, session_clips,
+                            lang, top_n, remaining, enqueue_fn,
+                            dry_run, influencer_names):
+    """Puertas + dedup + cruce + encolado de los clips de un
+    manifiesto (barrido y URL única comparten este camino).
+
+    ``panel_clips`` es la lista fresca del panel (se re-lee antes
+    de cada encolado); ``session_clips`` son los encolados en
+    ESTA corrida (append en memoria con los 5 campos de §3.7/§3.8:
+    source_id, start_sec, source_key, title, streamer). Devuelve
+    (n_enqueued, enqueued_starts).
+    """
+    enqueued = 0
+    enqueued_here = []
+    for clip in (manifest.get("clips") or [])[:top_n]:
+        if enqueued >= remaining:
+            break
+        start = clip.get("start", 0)
+        ok, reasons = clip_passes_gates(clip, vod_id)
+        if not ok:
+            _log(f"  pico {clip.get('peak')}: descartado "
+                 f"({'; '.join(reasons)})")
+            _report_event(
+                "clip_descartado",
+                f"{streamer_name}: «{_clip_title(clip, lang)}» "
+                f"descartado — {'; '.join(reasons)} "
+                f"(VOD {vod_id})",
+                bridge=bridge, dry_run=dry_run)
+            continue
+        panel_clips[:] = _refresh_panel_clips(bridge, panel_clips)
+        combined = list(panel_clips) + list(session_clips)
+        source_key = (clip.get("source_key") or "").strip()
+        if already_enqueued(combined, vod_id, start,
+                            source_key=source_key):
+            _log(f"  pico {clip.get('peak')}: ya en la Cola del "
+                 "panel; se salta.")
+            continue
+        blocked, why = cross_blocks(
+            _clip_title(clip, lang), streamer_name, combined,
+            influencer_names=influencer_names)
+        if blocked:
+            _log(f"  pico {clip.get('peak')}: bloqueado por cruce "
+                 f"({why}); se salta.")
+            _report_event(
+                "clip_descartado",
+                f"{streamer_name}: «{_clip_title(clip, lang)}» "
+                f"descartado — {why} (VOD {vod_id})",
+                bridge=bridge, dry_run=dry_run)
+            continue
+        panel_id, why = (enqueue_fn or burn_and_enqueue)(
+            bridge, streamer_name, vod_id, out_dir, clip, lang=lang)
+        if panel_id:
+            _log(f"  pico {clip.get('peak')}: en Cola del panel "
+                 f"como clip #{panel_id} (VOD, sin publicar).")
+            _report_event(
+                "clip_encolado",
+                f"{streamer_name}: «{_clip_title(clip, lang)}» "
+                f"encolado (VOD {vod_id}; viralidad "
+                f"{(clip.get('viral_score') or {}).get('total')}; "
+                f"SEO {_seo_summary(clip.get('seo_scores'))})",
+                bridge=bridge, dry_run=dry_run)
+            enqueued += 1
+            enqueued_here.append(int(start))
+            session_clips.append({
+                "source_id": vod_id,
+                "start_sec": int(start),
+                "source_key": source_key,
+                "title": _clip_title(clip, lang),
+                "streamer": streamer_name})
+        else:
+            _log(f"  pico {clip.get('peak')}: no encolado ({why})")
+            _report_event(
+                "clip_descartado",
+                f"{streamer_name}: «{_clip_title(clip, lang)}» "
+                f"descartado — {why} (VOD {vod_id})",
+                bridge=bridge, dry_run=dry_run)
+    return enqueued, enqueued_here
+
+
+def _youtube_channel_key(url):
+    """Clave comparable de un canal de YouTube: el handle
+    (``@rubius``) o el id de canal (``UC...``), en minúsculas."""
+    raw = (url or "").strip().lower().rstrip("/")
+    if not raw:
+        return ""
+    if "/@" in raw:
+        return raw.split("/@", 1)[1].split("/")[0].split("?")[0]
+    if "/channel/" in raw:
+        return raw.split("/channel/", 1)[1].split("/")[0].split("?")[0]
+    return raw.split("/")[-1].split("?")[0].lstrip("@")
+
+
+def _resolve_single_youtube_influencer(meta, streamers):
+    """Idioma e influencer de una URL única (§3.5): lookup por
+    channel_url contra las entradas platform=youtube. Si no casa
+    con ninguna, idioma es por defecto + log, influencer = handle
+    del canal. Devuelve (lang, name)."""
+    channel_url = (meta or {}).get("channel_url") or ""
+    key = _youtube_channel_key(channel_url)
+    for entry in (streamers or []):
+        if (entry.get("platform") or "") != "youtube":
+            continue
+        if _youtube_channel_key(entry.get("channel_url") or "") == key \
+                and key:
+            lang = (entry.get("language") or "es").lower()
+            return (lang if lang in ("es", "en") else "es",
+                    entry["name"])
+    handle = _youtube_channel_key(channel_url) or (
+        (meta or {}).get("channel") or "").strip().lower()
+    _log(f"URL única: canal {channel_url or handle!r} sin entrada "
+         "platform=youtube; idioma es por defecto, influencer = "
+         f"handle del canal ({handle}).")
+    return "es", handle or "desconocido"
+
+
+def _run_single_youtube(youtube_url, max_clips, top_n, state_path,
+                        out_root, dry_run, bridge, enqueue_fn,
+                        youtube_clips_fn, ignore_cooldown):
+    """Rama de URL única (§3.6): procesa ESA URL (pre-chequeo de
+    título, dedup, cortador, puertas, encolado) y retorna,
+    saltando el barrido Y el chequeo de directos. Una URL
+    despachada corta aunque alguien esté en vivo (petición
+    explícita del usuario)."""
+    from .streamers import load_streamers
+    from .youtube import is_youtube_url
+    from .youtube_cut import (
+        fetch_youtube_metadata,
+        run_youtube_clips,
+        video_id_from_url,
+    )
+
+    if not is_youtube_url(youtube_url):
+        _log(f"youtube_url no es de YouTube: {youtube_url}")
+        return 0, "youtube_url no es de YouTube"
+    try:
+        meta = fetch_youtube_metadata(youtube_url)
+    except Exception as e:  # noqa: BLE001 - sin metadatos no hay corte
+        _log(f"URL única sin metadatos ({e}); se salta.")
+        return 0, f"sin metadatos de la URL ({e})"
+    video_id = str(meta.get("id") or video_id_from_url(youtube_url)
+                   or "")
+    if not video_id:
+        return 0, "sin id de vídeo en la URL"
+    skip_reason = vod_clearly_not_gta6({
+        "title": meta.get("title") or "",
+        "category": meta.get("category") or ""})
+    if skip_reason:
+        _log(f"URL única {video_id} se salta ({skip_reason}).")
+        return 0, f"no es GTA VI: {skip_reason}"
+    try:
+        streamers = load_streamers()
+    except Exception as e:  # noqa: BLE001 - sin lista, idioma es
+        _log(f"URL única: sin lista de influencers ({e}); idioma "
+             "es por defecto.")
+        streamers = []
+    lang, name = _resolve_single_youtube_influencer(meta, streamers)
+    _log(f"URL única: vídeo {video_id} "
+         f"({(meta.get('title') or '')[:60]!r}, idioma {lang}, "
+         f"influencer {name})")
+    state = load_state(state_path)
+    if vod_on_cooldown(state, video_id) and not ignore_cooldown:
+        _log(f"URL única: vídeo {video_id} en enfriamiento "
+             "(intentado hace <6 h); se salta.")
+        return 0, f"vídeo {video_id} en enfriamiento"
+    if bridge is None and not dry_run:
+        from .panel_bridge import PanelBridge
+        bridge = PanelBridge.from_env()
+        if bridge is None:
+            _log("Sin PANEL_USERNAME/PANEL_PASSWORD: no se puede "
+                 "encolar en el panel; sin fallback.")
+            return 0, "sin credenciales del panel"
+    panel_clips = []
+    if bridge is not None:
+        try:
+            panel_clips = bridge.list_clips() or []
+        except Exception as e:  # noqa: BLE001
+            _log(f"No se pudo listar la Cola del panel ({e}); se "
+                 "sigue sin dedup contra el panel.")
+            panel_clips = []
+    if dry_run:
+        _log("URL única: dry-run, no se corta ni se encola.")
+        mark_vod_attempted(state, video_id)
+        save_state(state_path, state)
+        return 0, "dry-run URL única"
+    out_dir = os.path.join(out_root, str(video_id))
+    manifest = (youtube_clips_fn or run_youtube_clips)(
+        youtube_url, out_dir, top_n=top_n, lang=lang, single_url=True)
+    if not manifest:
+        mark_vod_attempted(state, video_id)
+        save_state(state_path, state)
+        return 0, "el cortador de YouTube no dejó manifiesto"
+    influencer_names = influencer_names_by_id(bridge)
+    session_clips = []
+    n, starts = _process_manifest_clips(
+        bridge, name, video_id, out_dir, manifest, panel_clips,
+        session_clips, lang, top_n, max_clips, enqueue_fn, dry_run,
+        influencer_names)
+    mark_vod_attempted(state, video_id, starts)
+    save_state(state_path, state)
+    summary = (f"URL única {video_id}: {n} clip(s) en la Cola del "
+               "panel (sin publicar)")
+    _log(summary)
+    return n, summary
+
+
 def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         top_n=TOP_N_PER_VOD, only=None, state_path=DEFAULT_STATE_PATH,
         out_root=DEFAULT_OUT_DIR, dry_run=False, bridge=None,
         scan_fn=None, latest_vod_fn=None, auto_clips_fn=None,
-        enqueue_fn=None, ignore_cooldown=False, youtube_enabled=False):
+        enqueue_fn=None, ignore_cooldown=False, youtube_enabled=False,
+        youtube_url=None, youtube_clips_fn=None):
     """Una corrida del fallback. Devuelve (n_enqueued, resumen).
 
     Las funciones *_fn existen para los tests (sin red ni panel).
     ``youtube_enabled`` (CLI ``--youtube``) activa la fuente
     YouTube en ``latest_vod_for``; apagado por defecto.
+    ``youtube_url`` (CLI ``--youtube-url``) se atiende ANTES del
+    chequeo de directos: procesa ESA URL y retorna, saltando el
+    barrido Y el chequeo de directos.
     """
+    # 0. URL única (antes del chequeo de directos): corta aunque
+    # haya directos en vivo (petición explícita del usuario).
+    if youtube_url:
+        return _run_single_youtube(
+            youtube_url, max_clips, top_n, state_path, out_root,
+            dry_run, bridge, enqueue_fn, youtube_clips_fn,
+            ignore_cooldown)
     from .live_scan import scan_live
     from .streamers import load_streamers
     # 1. ¿Hay alguien en directo en GTA VI (ES o EN)? Si sí, no hay
@@ -858,6 +1317,8 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             _log(f"No se pudo listar la Cola del panel ({e}); se "
                  "sigue sin dedup contra el panel.")
             panel_clips = []
+    influencer_names = influencer_names_by_id(bridge)
+    session_clips = []
     # Fase en vivo: entrando en modo VOD (ES primero, luego EN).
     _report_phase("modo_vod", ", ".join(e["name"] for e in order),
                   bridge=bridge, dry_run=dry_run)
@@ -920,8 +1381,16 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
             mark_vod_attempted(state, vod_id)
             continue
         out_dir = os.path.join(out_root, str(vod_id))
-        manifest = (auto_clips_fn or run_auto_clips)(
-            vod.get("url") or "", out_dir, top_n=top_n, lang=lang)
+        vod_url = vod.get("url") or ""
+        from .youtube import is_youtube_url
+        if is_youtube_url(vod_url):
+            from .youtube_cut import run_youtube_clips
+            manifest = (youtube_clips_fn or run_youtube_clips)(
+                vod_url, out_dir, top_n=top_n, lang=lang,
+                single_url=False)
+        else:
+            manifest = (auto_clips_fn or run_auto_clips)(
+                vod_url, out_dir, top_n=top_n, lang=lang)
         if not manifest:
             mark_vod_attempted(state, vod_id)
             continue
@@ -935,49 +1404,11 @@ def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
                  f"(mejor grupo {_vl.get('hits', 0)}/"
                  f"{_vl.get('samples', 0)} muestras); cada clip decide "
                  "su layout solo.")
-        enqueued_here = []
-        for clip in (manifest.get("clips") or [])[:top_n]:
-            if enqueued >= max_clips:
-                break
-            start = clip.get("start", 0)
-            ok, reasons = clip_passes_gates(clip, vod_id)
-            if not ok:
-                _log(f"  pico {clip.get('peak')}: descartado "
-                     f"({'; '.join(reasons)})")
-                _report_event(
-                    "clip_descartado",
-                    f"{name}: «{_clip_title(clip, lang)}» "
-                    f"descartado — {'; '.join(reasons)} "
-                    f"(VOD {vod_id})",
-                    bridge=bridge, dry_run=dry_run)
-                continue
-            if already_enqueued(panel_clips, vod_id, start):
-                _log(f"  pico {clip.get('peak')}: ya en la Cola del "
-                     "panel; se salta.")
-                continue
-            panel_id, why = (enqueue_fn or burn_and_enqueue)(
-                bridge, name, vod_id, out_dir, clip, lang=lang)
-            if panel_id:
-                _log(f"  pico {clip.get('peak')}: en Cola del panel "
-                     f"como clip #{panel_id} (VOD, sin publicar).")
-                _report_event(
-                    "clip_encolado",
-                    f"{name}: «{_clip_title(clip, lang)}» encolado "
-                    f"(VOD {vod_id}; viralidad "
-                    f"{(clip.get('viral_score') or {}).get('total')}; "
-                    f"SEO {_seo_summary(clip.get('seo_scores'))})",
-                    bridge=bridge, dry_run=dry_run)
-                enqueued += 1
-                enqueued_here.append(int(start))
-                panel_clips.append({"source_id": vod_id,
-                                    "start_sec": int(start)})
-            else:
-                _log(f"  pico {clip.get('peak')}: no encolado ({why})")
-                _report_event(
-                    "clip_descartado",
-                    f"{name}: «{_clip_title(clip, lang)}» descartado — "
-                    f"{why} (VOD {vod_id})",
-                    bridge=bridge, dry_run=dry_run)
+        n_here, enqueued_here = _process_manifest_clips(
+            bridge, name, vod_id, out_dir, manifest, panel_clips,
+            session_clips, lang, top_n, max_clips - enqueued,
+            enqueue_fn, dry_run, influencer_names)
+        enqueued += n_here
         mark_vod_attempted(state, vod_id, enqueued_here)
     save_state(state_path, state)
     summary = (f"modo VOD: {vods_tried} VOD(s) procesado(s), "
@@ -1015,6 +1446,10 @@ def main(argv=None):
                         "--flat-playlist, sin API key, $0): sin este "
                         "flag los streamers de YouTube se saltan "
                         "como antes")
+    p.add_argument("--youtube-url", default="",
+                   help="URL única de YouTube a cortar (se atiende "
+                        "ANTES del chequeo de directos: corta aunque "
+                        "haya directos en vivo; salta el barrido)")
     args = p.parse_args(argv)
     only = [s for s in args.streamers.split(",") if s.strip()] \
         or None
@@ -1023,7 +1458,8 @@ def main(argv=None):
         top_n=args.top_n, only=only, state_path=args.state,
         out_root=args.out_dir, dry_run=args.dry_run,
         ignore_cooldown=args.ignore_cooldown,
-        youtube_enabled=args.youtube)
+        youtube_enabled=args.youtube,
+        youtube_url=args.youtube_url or None)
     return 0
 
 

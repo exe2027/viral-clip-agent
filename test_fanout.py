@@ -55,7 +55,10 @@ def _manifest(tmp, clips):
                       "platforms": platforms_pkg},
             "title_es": c.get("title", "título"),
             "desc_es": c.get("caption", "caption #GTA6"),
-            "hashtags_es": "#GTA6", "visible": True})
+            "hashtags_es": "#GTA6", "visible": True,
+            # Origen del clip (id de YouTube si lo es): lo lee
+            # publish_one para resolver el streamer por plataforma.
+            "source_key": c.get("source_key", "")})
     with open(os.path.join(run_dir, "manifest.json"), "w",
               encoding="utf-8") as f:
         json.dump({"vod_id": "v1", "streamer": "illojuan",
@@ -249,10 +252,6 @@ class TestReintentoTransitorio(unittest.TestCase):
             self.assertEqual(item["state"], "failed")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestFanOutLoop(unittest.TestCase):
     def _setup_loop(self, tmp, blocked=None):
         """Cola con un ítem de YouTube + puente falso al Worker.
@@ -372,6 +371,58 @@ class TestFanOutLoop(unittest.TestCase):
             self.assertEqual(stats["published"], 0, stats)
             self.assertEqual(stats["fanout"], 0, stats)
             self.assertEqual(len(q.data["items"]), 1)
+
+
+class TestPublishResuelveStreamerPorPlataforma(unittest.TestCase):
+    """publish.py:1931 (2026-11-24, corte YouTube): con dos Rubius
+    (twitch desactivado + youtube activo), el chequeo 6.2 resuelve
+    por (nombre, plataforma de origen) vía el manifiesto
+    (source_key = id de YouTube -> youtube, si no twitch)."""
+
+    STREAMERS = [
+        {"name": "rubius", "platform": "twitch", "language": "es",
+         "enabled": False, "estado": "concedido"},
+        {"name": "rubius", "platform": "youtube", "language": "es",
+         "enabled": True, "estado": "concedido"},
+    ]
+
+    def _clip_src(self, tmp, source_key=None):
+        clips = [{"file": "c1.mp4", "virality": 80,
+                  "seo": {"tiktok": 95, "youtube_shorts": 95,
+                          "instagram_reels": 95,
+                          "facebook_reels": 95},
+                  "source_key": source_key}]
+        clips_dir = _manifest(tmp, clips)
+        q = PublishQueue(os.path.join(tmp, "pq.json"))
+        item = q.enqueue(os.path.join(clips_dir, "c1.mp4"), "tiktok",
+                         streamer="rubius", vod_id="v1",
+                         moment_key=["v1", 8], panel_clip_id=123)
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["autopublish"]["mode"] = "full"
+        return q, item, cfg
+
+    def _run_one(self, tmp, source_key):
+        q, item, cfg = self._clip_src(tmp, source_key)
+        bridge = _FakeBridge()
+        for p in _patches():
+            p.start()
+            self.addCleanup(p.stop)
+        with mock.patch("clipagent.streamers.load_streamers",
+                        return_value=self.STREAMERS):
+            return publish_one(q, item, cfg=cfg, live=True,
+                               bridge=bridge), bridge
+
+    def test_clip_twitch_con_twitch_desactivado_retiene(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, _bridge = self._run_one(tmp, None)
+            self.assertEqual(r["action"], "retained", r)
+            self.assertIn("desactivado", r["reason"])
+
+    def test_clip_youtube_con_youtube_activo_publica(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, bridge = self._run_one(tmp, "NrNdw_Y6_bI")
+            self.assertEqual(r["action"], "published", r)
+            self.assertEqual(bridge.published, [123])
 
 
 if __name__ == "__main__":

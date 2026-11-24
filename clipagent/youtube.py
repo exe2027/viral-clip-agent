@@ -103,6 +103,24 @@ class YoutubeError(Exception):
     en aviso y el fallback salta el VOD."""
 
 
+def is_youtube_url(url):
+    """¿Es una URL de YouTube (vídeo o canal)?
+
+    Host en (youtube.com, www.youtube.com, m.youtube.com,
+    youtu.be). Es el predicado del dispatch de ``run()`` en
+    vod_fallback: una URL de YouTube va por el cortador de
+    YouTube, cualquier otra por run_auto_clips (Twitch/Kick).
+    """
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url or "").hostname or "").lower()
+    except (TypeError, ValueError):
+        return False
+    return host in ("youtube.com", "www.youtube.com",
+                    "m.youtube.com", "youtu.be")
+
+
 def format_hms(seconds):
     """Segundos -> 'HH:MM:SS' (el formato de --download-sections).
     Acepta horas > 24 (un VOD de YouTube puede durar 24 h)."""

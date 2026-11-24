@@ -466,7 +466,20 @@ function oauthReturn(provider: string, ok: boolean, message: string): Response {
 // GitHub solo queda registrado. Devuelve true solo si GitHub
 // aceptó el dispatch (2xx); false si no había token, no se pudo
 // emitir el token del cerebro o GitHub lo rechazó.
-async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant): Promise<boolean> {
+/** ¿Es una URL de YouTube? (spec 2026-11-24, §3.1/§3.6: mismo
+ *  chequeo de host que `is_youtube_url` del cerebro: youtube.com,
+ *  www.youtube.com, m.youtube.com, youtu.be.) Lo usa el endpoint
+ *  POST /api/worker/run-youtube; exportado para tests. */
+export function isYoutubeUrl(url: string): boolean {
+  try {
+    const host = new URL(url.trim()).hostname.toLowerCase();
+    return host === "youtube.com" || host === "www.youtube.com" || host === "m.youtube.com" || host === "youtu.be";
+  } catch {
+    return false;
+  }
+}
+
+async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, youtubeUrl?: string): Promise<boolean> {
   // Un Worker = un tenant: nunca se dispara (ni se emite token del
   // cerebro) para otro tenant. Falla en voz alta: el único llamador
   // de producción es el cron con env.TENANT.
@@ -491,8 +504,14 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant): Pro
   // que falló sin emitir token no engancha el throttle de 15 min
   // de abajo, así que este freno (backoff 1/5/15 + tope 3/día) es
   // el que impide reintentarlo cada minuto.
+  // EXENCIÓN URL EXPLÍCITA (spec 2026-11-24, §3.6): un dispatch
+  // panel-live con youtube_url es una petición explícita del
+  // usuario (misma regla que panel-start: «NUNCA se frenan aquí»):
+  // salta el freno de reintentos, el freno de presupuesto y el
+  // throttle de 15 min de abajo. Sin youtube_url no cambia nada.
+  const explicitYoutube = eventType === "panel-live" && !!youtubeUrl;
   const automatic = eventType === "panel-live" || eventType === "panel-watchdog";
-  if (automatic && !dispatchRetryAllowed(eventType, Date.now())) return false;
+  if (automatic && !explicitYoutube && !dispatchRetryAllowed(eventType, Date.now())) return false;
   // Freno de presupuesto (A1, 2026-11-20): con el consumo por
   // encima del 70% del tope operativo, los dispatches
   // automáticos frecuentes (panel-live, panel-watchdog) no se
@@ -501,7 +520,7 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant): Pro
   // panel-daily (1/día) NUNCA se frenan aquí (misma regla que el
   // throttle de 15 min: ver skill d1-write-discipline). Sin
   // guardián vigente (o viejo), se dispara como siempre.
-  if (eventType === "panel-live" || eventType === "panel-watchdog") {
+  if ((eventType === "panel-live" || eventType === "panel-watchdog") && !explicitYoutube) {
     const guard = currentBudgetGuard();
     if (guard && !guard.shouldWrite("dispatch")) return false;
   }
@@ -515,7 +534,7 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant): Pro
   // throttles por escritura no persisten cuando la cuota se agota.
   // panel-start (el usuario pulsa Iniciar / el vigilante reinicia)
   // y panel-daily (1/día) NUNCA se frenan aquí.
-  if (eventType === "panel-live" || eventType === "panel-watchdog") {
+  if ((eventType === "panel-live" || eventType === "panel-watchdog") && !explicitYoutube) {
     if (await hasRecentBrainToken(env.DB, tenant, LIVE_DISPATCH_MIN_INTERVAL_MS, Date.now())) {
       await logWorkerEvent(env.DB, "github_dispatch",
         `Dispatch ${eventType} omitido para ${tenant}: ya se emitió un token del cerebro hace menos de 15 min (su corrida está en curso o en cola).`, tenant).catch(() => {});
@@ -554,7 +573,10 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant): Pro
         "Content-Type": "application/json",
         "User-Agent": "clips-worker",
       },
-      body: JSON.stringify({ event_type: effectiveEventType, client_payload: { tenant, brain_token: brainToken } }),
+      body: JSON.stringify({
+        event_type: effectiveEventType,
+        client_payload: { tenant, brain_token: brainToken, ...(youtubeUrl ? { youtube_url: youtubeUrl } : {}) },
+      }),
     });
     await logWorkerEvent(env.DB, "github_dispatch",
       res.ok
@@ -967,6 +989,7 @@ function clipOut(c: ClipRow) {
   const viral = parseViralJson(c.viral);
   return {
     ...c,
+    source_key: c.source_key ?? "",
     viral,
     thumb_text: c.thumb_text ?? "",
     score_kind: viral.score_kind ?? null,
@@ -1311,6 +1334,14 @@ export function parseClipInput(body: Record<string, unknown>, rawSettings: Recor
   if (typeof sourceId === "string") return sourceId;
   const influencerId = optIntId("influencer_id");
   if (typeof influencerId === "string") return influencerId;
+  // source_key (migración 0044, spec 2026-11-24): id del video de
+  // YouTube, opcional, string ≤ 64. Sin él, "" (clip de Twitch).
+  let sourceKey = "";
+  if (body.source_key !== undefined && body.source_key !== null) {
+    if (typeof body.source_key !== "string") return "source_key debe ser texto.";
+    sourceKey = body.source_key.trim();
+    if (sourceKey.length > 64) return "source_key no puede superar 64 caracteres.";
+  }
   // Puntuación IA (contrato 2026-11-18): seo_scores, viral_score,
   // viral_breakdown, hype_score, priority, score_kind o el objeto
   // `viral` entero. Sin estos campos el clip nace sin medir. Se
@@ -1401,6 +1432,7 @@ export function parseClipInput(body: Record<string, unknown>, rawSettings: Recor
   return {
     source_id: sourceId,
     influencer_id: influencerId,
+    source_key: sourceKey,
     title,
     start_sec: startSec,
     end_sec: endSec,
@@ -2561,6 +2593,30 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       _ctx.waitUntil(dispatchCerebro(env, "panel-start", tenant));
       return json({ ok: true, running: true });
     }
+    // Corte automático desde una URL de YouTube (spec 2026-11-24,
+    // §3.6): con sesión, como /api/worker/start. Recibe
+    // {youtube_url}, valida que sea YouTube (400 si no) y dispara
+    // panel-live con la URL en el client_payload (el job
+    // youtube-single la corta aunque haya directos en vivo). Si
+    // dispatchCerebro devuelve false, responde ok:false CON el
+    // motivo: nunca éxito falso. El dispatch explícito salta el
+    // throttle de 15 min, el freno de presupuesto y el freno de
+    // reintentos (misma regla que panel-start).
+    if (path === "/api/worker/run-youtube" && method === "POST") {
+      const body = await readJson(req);
+      const youtubeUrl = typeof body.youtube_url === "string" ? body.youtube_url.trim() : "";
+      if (!youtubeUrl || !isYoutubeUrl(youtubeUrl)) {
+        return err("youtube_url debe ser una URL de YouTube (youtube.com o youtu.be).", 400);
+      }
+      const ok = await dispatchCerebro(env, "panel-live", tenant, youtubeUrl);
+      if (!ok) {
+        return json(
+          { ok: false, error: "No se pudo disparar el cerebro para cortar el video de YouTube (sin token del cerebro, cuota D1 alta, o GitHub rechazó el dispatch). Vuelve a intentarlo." },
+          502,
+        );
+      }
+      return json({ ok: true, youtube_url: youtubeUrl });
+    }
     if (path === "/api/worker/stop" && method === "POST") {
       await setWorkerRunning(env.DB, tenant, false, "Worker parado desde el panel: la cola queda en pausa (nada se pierde).");
       // Sin dispatch: el flag D1 es la fuente de verdad y el
@@ -2785,7 +2841,21 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       // inventado ni un null silencioso.
       if (typeof body.influencer_id === "string" && !/^\d+$/.test(body.influencer_id.trim())) {
         const handle = body.influencer_id.trim();
-        const found = (await listInfluencers(env.DB, tenant)).find((r) => normalizeHandle(r.name) === normalizeHandle(handle));
+        // Resolución POR PLATAFORMA (spec 2026-11-24, §3.5): con
+        // dos Rubius (Twitch + YouTube), el primer match por nombre
+        // (ORDER BY id ASC) ganaba siempre la entrada Twitch y todo
+        // clip de YouTube quedaba con su id. Si body.source_key es
+        // un id de YouTube no vacío → entre las entradas
+        // platform=youtube; si no, entre las de Twitch. Si en la
+        // plataforma preferida no hay match, se cae al primer match
+        // por nombre en cualquier plataforma (compat: un streamer
+        // con una sola entrada sigue resolviendo igual); solo si no
+        // existe en ninguna es 400.
+        const rows = await listInfluencers(env.DB, tenant);
+        const sourceKey = typeof body.source_key === "string" ? body.source_key.trim() : "";
+        const wantPlatform = sourceKey ? "youtube" : "twitch";
+        const found = rows.find((r) => r.platform === wantPlatform && normalizeHandle(r.name) === normalizeHandle(handle))
+          ?? rows.find((r) => normalizeHandle(r.name) === normalizeHandle(handle));
         if (!found) return err(`influencer_id: no hay ningún influencer con el handle "${handle}" en este panel.`, 400);
         body.influencer_id = found.id;
       }
@@ -3643,6 +3713,16 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
           `Solo los 10 del lanzamiento + los 4 virales de campaña famosos pueden estar activos con permiso (lanzamiento: Rubius, IlloJuan, AuronPlay, Ibai, TheGrefg, Xokas, DjMaRiiO, Knekro, RDJavi, Westcol; campaña: Dasgasd3m, ArthurTV, Dylan Page, BenDaDonnn; Bobby Van Riper queda fuera por fama: 734 seguidores, regla 2026-11-23 18:50): "${parsed.name}" no se puede activar. Se puede crear desactivado.`,
           400,
         );
+      }
+      // Duplicado por (name, platform) (spec 2026-11-24, §5(4)):
+      // sin este chequeo, dos entradas platform=youtube con el
+      // mismo nombre reintroducen la ambigüedad de primer match
+      // DENTRO de la plataforma y la resolución por plataforma de
+      // POST /api/clips quedaría a medias. La comparación es por
+      // handle normalizado (sin espacios/@, minúsculas) + platform.
+      const existing = await listInfluencers(env.DB, tenant);
+      if (existing.some((r) => r.platform === parsed.platform && normalizeHandle(r.name) === normalizeHandle(parsed.name))) {
+        return err(`Ya existe un influencer "${parsed.name}" en la plataforma ${parsed.platform}.`, 400);
       }
       const row = await createInfluencer(env.DB, tenant, parsed);
       return json({ ok: true, influencer: influencerOut(row) }, 201);

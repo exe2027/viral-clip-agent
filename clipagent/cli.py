@@ -120,6 +120,11 @@ def build_parser():
     p_vodfb.add_argument("--youtube", action="store_true",
                          help="Activa la fuente YouTube (yt-dlp "
                               "--flat-playlist, sin API key, $0)")
+    p_vodfb.add_argument("--youtube-url", default="",
+                         help="URL única de YouTube a cortar "
+                              "(se atiende antes del chequeo de "
+                              "directos: corta aunque haya directos "
+                              "en vivo; salta el barrido)")
     p_replay = sub.add_parser(
         "live-replay",
         help="Replay de un VOD como si fuera en vivo (mismo cutter)")
@@ -414,6 +419,7 @@ def main(argv=None):
             "dry_run": args.dry_run,
             "ignore_cooldown": args.ignore_cooldown,
             "youtube_enabled": args.youtube,
+            "youtube_url": args.youtube_url or None,
         }
         if args.state:
             kwargs["state_path"] = args.state
