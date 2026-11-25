@@ -1085,6 +1085,11 @@ export const PUBLISH_SLOT_WINDOWS: PublishSlotWindow[] = [
   { label: "mañana", startMin: 12 * 60, endMin: 14 * 60 },
   { label: "tarde", startMin: 18 * 60, endMin: 20 * 60 },
   { label: "noche", startMin: 21 * 60, endMin: 23 * 60 },
+  // Madrugada (F0, spec 2026-11-24): la franja nocturna 00:00-01:00
+  // cubre el slot YT de las 00:00; el techo automático sube a 37/día.
+  // Va al final: slotWindowsForCount desestructura los 3 primeros
+  // (mañana/tarde/noche) y slotTimeFor nunca la elige.
+  { label: "madrugada", startMin: 0, endMin: 1 * 60 },
 ];
 
 /** Hash FNV-1a (32 bits) de una cadena: semilla determinista. */

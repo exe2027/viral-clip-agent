@@ -33,6 +33,7 @@ import {
   getTelegramLinkByTenant,
   isRestDayEffective,
   listClipStats,
+  listPublishedClips,
   listQueueClips,
   boostBonusByClip,
   EVENT_DEDUPE_WINDOW_MS,
@@ -98,8 +99,8 @@ import { cycleGate, idleCycleGate, markCycleReview, type CycleGateDecision } fro
 // gate.ts desde 2026-11-18 (hallazgo M1) para que el dispatch
 // pueda re-chequear sin importación circular. Se re-exportan para
 // que index.ts y los tests sigan importando desde aquí.
-import { releasePublishSlot, santiagoDayKey, publishGate, rateLimitGate, seoForPlatform } from "./gate";
-export { publishGate, rateLimitGate, santiagoDayKey, seoForPlatform, type GateContext } from "./gate";
+import { classifyGateBlock, recheckPublishGate, releasePublishSlot, santiagoDayKey, publishGate, rateLimitGate, seoForPlatform } from "./gate";
+export { classifyGateBlock, publishGate, rateLimitGate, santiagoDayKey, seoForPlatform, type GateContext } from "./gate";
 // Puerta de calidad B4 (2026-11-20): los umbrales y el veredicto
 // viven en quality-gate.ts (única fuente); aquí solo se aplica.
 import {
@@ -532,6 +533,11 @@ export async function enqueuePublishJobs(
   // colisionen como deben (dedup) y una republicación use el
   // sufijo |repubN del día correcto.
   dayKey?: string,
+  // Salida opcional de motivos bloqueados (F1.4, spec 2026-11-24):
+  // si un revive se niega por tope de reintentos, el motivo se
+  // añade aquí (sin el prefijo "<platform>: ", que lo pone el
+  // llamador al volcarlo a `blocked`).
+  blockedOut?: string[],
 ): Promise<JobRow[]> {
   const created: JobRow[] = [];
   const day = dayKey ?? santiagoDayKey();
@@ -580,9 +586,19 @@ export async function enqueuePublishJobs(
       // insertar un duplicado con el mismo idempotency_key (eso
       // reventaba POST /publish con 500 por la UNIQUE).
       if (existing.state === "draft" || existing.state === "failed") {
+        // F1.4 (spec 2026-11-24): el revive NO toca `attempts`
+        // (conserva el valor guardado: el UPDATE anterior lo
+        // ponía a 0 y borraba el conteo de reintentos del día,
+        // burlando el tope de F2.5). Y si el job ya agotó sus 3
+        // reintentos hoy, no se revive: queda en draft y el
+        // llamador lo cuenta como bloqueado con el motivo de tope.
+        if (retriesToday(existing, day) >= MAX_RETRIES_PER_DAY) {
+          blockedOut?.push(`tope de reintentos por hoy: ${retriesToday(existing, day)}/${MAX_RETRIES_PER_DAY}`);
+          continue;
+        }
         await db
           .prepare(
-            "UPDATE jobs SET state = 'scheduled', api_account_id = ?, title = ?, caption = ?, r2_key = ?, attempts = 0, retryable = 1, last_error = NULL, next_run_at = ?, updated_at = ?, run_token = ?, slot_day = ?, manual = ? WHERE id = ? AND tenant_id = ?",
+            "UPDATE jobs SET state = 'scheduled', api_account_id = ?, title = ?, caption = ?, r2_key = ?, retryable = 1, last_error = NULL, next_run_at = ?, updated_at = ?, run_token = ?, slot_day = ?, manual = ? WHERE id = ? AND tenant_id = ?",
           )
           .bind(accountId || null, title, caption, r2Key, nowMs(), nowMs(), null, null, manual ? 1 : 0, existing.id, clip.tenant_id)
           .run();
@@ -722,12 +738,6 @@ export async function tryEnqueueClipPublish(
     if (opts.logToWorkerEvents) await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado: ${reason}.`, tenant);
     return { jobs: [], blocked: [reason], warnings: [] };
   }
-  if (clip.status === "publicado") {
-    const reason = "clip ya publicado";
-    await logClipEvent(db, clip.id, "publicado", actor, `Publicación frenada: ${reason}.`, true, tenant);
-    if (opts.logToWorkerEvents) await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado: ${reason}.`, tenant);
-    return { jobs: [], blocked: [reason], warnings: [] };
-  }
   const settings = await getSettings(db, tenant);
   const eff = effectiveSettings(settings);
   // DOS COLAS (0019): la cuenta se resuelve POR PLATAFORMA +
@@ -752,9 +762,26 @@ export async function tryEnqueueClipPublish(
   // motivo por el gate (nunca se publica en el canal de otro
   // idioma ni se auto-crea cuenta).
   const linked = await linkedPlatforms(db, tenant, clipLang);
-  const targetPlatforms = opts.platforms
+  let targetPlatforms = opts.platforms
     ? opts.platforms.filter((p): p is PanelPlatform => (PANEL_PLATFORMS as readonly string[]).includes(p))
     : [...new Set([...parsePlatforms(clip.platforms), ...linked])];
+  // F1b.1 (spec 2026-11-24): un clip sellado como `publicado`
+  // vuelve a evaluarse para las plataformas vinculadas que le
+  // faltan respecto a su lista (linked − listed): se sigue
+  // adelante SOLO con esas. Si no le falta ninguna, "clip ya
+  // publicado" como hoy.
+  if (clip.status === "publicado") {
+    const listed = parsePlatforms(clip.platforms);
+    const missing = linked.filter((p) => !listed.includes(p));
+    const wanted = opts.platforms ? opts.platforms.filter((p) => missing.includes(p)) : missing;
+    if (wanted.length === 0) {
+      const reason = "clip ya publicado";
+      await logClipEvent(db, clip.id, "publicado", actor, `Publicación frenada: ${reason}.`, true, tenant);
+      if (opts.logToWorkerEvents) await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado: ${reason}.`, tenant);
+      return { jobs: [], blocked: [reason], warnings: [] };
+    }
+    targetPlatforms = wanted;
+  }
   // Escalado de topes (0017): recálculo diario (no-op si ya se
   // hizo hoy); el gate usa el estado guardado de cada cuenta.
   await refreshAccountMaturity(db, tenant, eff).catch(() => undefined);
@@ -827,9 +854,24 @@ export async function tryEnqueueClipPublish(
       )
       .bind(tenant, clip.id, platform, refDayKey)
       .first<{ n: number }>();
+    // POSTED-EVER (F1, spec 2026-11-24): el mismo clip ya salió
+    // en ESTA plataforma otro día (sin filtro de día): el gate
+    // solo miraba posted_day=hoy y por eso el 102 se duplicó en
+    // TikTok. El `posted_day` del posted más reciente va al motivo.
+    const clipEver = await db
+      .prepare(
+        "SELECT posted_day FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform = ? AND state = 'posted' ORDER BY updated_at DESC LIMIT 1",
+      )
+      .bind(tenant, clip.id, platform)
+      .first<{ posted_day: string | null }>();
+    // MISMO CLIP EN OTRA PLATAFORMA (F2b, spec 2026-11-24):
+    // `state IN ('posted','processing')`, no solo posted: un
+    // hermano en `processing` cuenta como última subida del clip
+    // en otra plataforma (los grupos del ciclo se despachan en
+    // paralelo y cada uno reclama antes de re-chequear).
     const clipOther = await db
       .prepare(
-        "SELECT updated_at FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform <> ? AND state = 'posted' ORDER BY updated_at DESC LIMIT 1",
+        "SELECT updated_at FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform <> ? AND state IN ('posted','processing') ORDER BY updated_at DESC LIMIT 1",
       )
       .bind(tenant, clip.id, platform)
       .first<{ updated_at: number }>();
@@ -881,6 +923,8 @@ export async function tryEnqueueClipPublish(
       warmupDailyLimit: mat && mat.stage !== "establecida" ? mat.plan : null,
       publishedLast24h: last24h?.n ?? 0,
       clipPublishedTodayOnPlatform: (clipToday?.n ?? 0) > 0,
+      clipPublishedEverOnPlatform: clipEver !== null,
+      clipLastPublishedOnPlatformDay: clipEver?.posted_day ?? null,
       republish: opts.republish === true,
       clipLastPublishedOtherPlatformMs: clipOther?.updated_at ?? null,
       publishedThisSlot,
@@ -940,12 +984,24 @@ export async function tryEnqueueClipPublish(
     // next_run_at = el instante pedido (el ciclo lo toma cuando
     // llegue la hora, y el re-chequeo vuelve a aplicar todo al
     // ejecutar).
+    // F1.3 (spec 2026-11-24): escalonado de 15 min al crear
+    // varios jobs del mismo clip en una sola llamada (sobre la
+    // base de nextPlatformHourMs por plataforma): el primero a
+    // su hora de hueco, los siguientes +15/+30/+45 min. YT e IG
+    // comparten hueco y nextPlatformHourMs devuelve nowMs dentro
+    // de la ventana de 60 min, así que sin escalonado dos
+    // plataformas del mismo clip vencerían en el mismo ciclo.
     // Solo se encola ESTA plataforma (la que pasó el gate):
     // enqueuePublishJobs ya no re-encola todas las del clip.
     const nextRunAt = scheduledForMs !== null && scheduledForMs > now
       ? scheduledForMs
-      : manual ? null : nextPlatformHourMs(platform, now);
-    jobs.push(...(await enqueuePublishJobs(db, clip, accountIdByPlatform, title, caption, r2Key?.r2_key ?? null, manual, nextRunAt, [platform], opts.republish === true, refDayKey)));
+      : manual ? null : nextPlatformHourMs(platform, now) + jobs.length * 15 * 60 * 1000;
+    const blockedOut: string[] = [];
+    jobs.push(...(await enqueuePublishJobs(db, clip, accountIdByPlatform, title, caption, r2Key?.r2_key ?? null, manual, nextRunAt, [platform], opts.republish === true, refDayKey, blockedOut)));
+    // F1.4: un revive negado por tope de reintentos cuenta como
+    // bloqueado con el motivo de tope (con el prefijo de la
+    // plataforma, como los frenos del gate).
+    for (const b of blockedOut) blocked.push(`${platform}: ${b}`);
   }
   // Cada plataforma que pasó el gate encoló solo su job (ya no hay
   // duplicados por re-encolar todas en cada llamada); el dedup
@@ -979,7 +1035,13 @@ export interface AutoEnqueueResult {
   qualityBlocked?: number;
 }
 
-const AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE = 3;
+const AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE = 5;
+
+/** Máx. clips escaneados por ciclo (60, F4, spec 2026-11-24):
+ *  clips visitados, incluidos los saltados por hasVigente o por
+ *  A4; acota las lecturas D1 por ciclo aunque los saltos sean
+ *  gratis (no consuman `evaluated`). */
+const AUTO_ENQUEUE_MAX_SCANNED_PER_CYCLE = 60;
 
 /** Máx. clips evaluados por ciclo (10): el freno A4 deja SALTAR
  *  clips frenados sin consumir el tope de 3 intentos, así que el
@@ -1074,22 +1136,14 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
     let blocked = 0;
     let qualityBlocked = 0;
     let evaluated = 0;
-    for (const clip of queue) {
-      if (considered >= AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE || evaluated >= AUTO_ENQUEUE_MAX_EVALUATED_PER_CYCLE) break;
-      evaluated++;
-      // Job publish vigente: scheduled/processing, o posted hoy.
-      // (Un posted de otro día no bloquea: el clip puede salir por
-      // las plataformas que le falten, con el gate de cada una.)
-      const vigente = await env.DB.prepare(
-        "SELECT id, state, posted_day FROM jobs WHERE tenant_id = ? AND kind = 'publish' AND clip_id = ?",
-      )
-        .bind(tenant, clip.id)
-        .all<{ id: number; state: string; posted_day: string | null }>()
-        .catch(() => ({ results: [] as Array<{ id: number; state: string; posted_day: string | null }> }));
-      const hasVigente = vigente.results.some(
-        (j) => j.state === "scheduled" || j.state === "processing" || (j.state === "posted" && j.posted_day === today),
-      );
-      if (hasVigente) continue;
+    let scanned = 0;
+    // Intenta encolar un clip (F1/F1b/F3/F4): calcula las
+    // plataformas que aún necesitan trabajo, respeta el freno A4
+    // y llama a tryEnqueueClipPublish con ese conjunto como
+    // override. Devuelve true si encoló al menos un job.
+    const attemptClip = async (clip: ClipRow, countEvaluated: boolean): Promise<boolean> => {
+      const need = await platformsNeedingWork(env.DB, tenant, clip);
+      if (need.length === 0) return false;
       // Freno A4 por clip (memoria + siembra por lectura): un clip
       // que ya falló hoy no se reintenta cada minuto. Sin escribir
       // nada: el salto no deja evento (el motivo ya quedó en
@@ -1099,9 +1153,19 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
         getAutoEnqueueState(clip.id, today) ?? { attemptsToday: 0, lastAttemptMs: null },
         Date.now(),
       );
-      if (!verdict.allowed) continue;
+      if (!verdict.allowed) return false;
+      // F4: solo los clips que llegan a tryEnqueueClipPublish
+      // consumen presupuesto de evaluación (los saltos por
+      // hasVigente y por A4 son gratis).
       considered++;
-      const r = await tryEnqueueClipPublish(env, tenant, clip, { actor: "worker", logToWorkerEvents: true });
+      if (countEvaluated) evaluated++;
+      const r = await tryEnqueueClipPublish(env, tenant, clip, { actor: "worker", logToWorkerEvents: true, platforms: need });
+      blocked += r.blocked.length;
+      // Puerta de calidad B4: los bloqueos por calidad cuentan
+      // aparte; si hubo al menos uno, se revisa la tasa del día
+      // (solo lecturas + aviso si supera el 30%, nunca tumba el
+      // ciclo: maybeAlertQualityDiscards nunca levanta).
+      qualityBlocked += r.blocked.filter((b) => b.includes(": calidad:")).length;
       if (r.jobs.length > 0) {
         clearAutoEnqueueState(clip.id);
         enqueued += r.jobs.length;
@@ -1111,16 +1175,34 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
           `Auto-enqueue: clip #${clip.id} encolado en ${r.jobs.map((j) => j.platform).join(", ")} (top de la Cola con boost).`,
           tenant,
         ).catch(() => {});
-      } else {
-        // 0 jobs = todas las plataformas frenaron: intento fallido.
-        recordAutoEnqueueAttempt(clip.id, Date.now(), today);
+        return true;
       }
-      blocked += r.blocked.length;
-      // Puerta de calidad B4: los bloqueos por calidad cuentan
-      // aparte; si hubo al menos uno, se revisa la tasa del día
-      // (solo lecturas + aviso si supera el 30%, nunca tumba el
-      // ciclo: maybeAlertQualityDiscards nunca levanta).
-      qualityBlocked += r.blocked.filter((b) => b.includes(": calidad:")).length;
+      // F3: 0 jobs = todas las plataformas frenaron: intento
+      // fallido A4 SOLO si al menos un motivo es duro (los
+      // transitorios — espaciamiento, 15 min, 1-por-franja, fuera
+      // de franja — no aparcan el clip: se re-evalúa en el
+      // siguiente ciclo).
+      if (hasHardBlock(r.blocked)) recordAutoEnqueueAttempt(clip.id, Date.now(), today);
+      return false;
+    };
+    for (const clip of queue) {
+      if (considered >= AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE || evaluated >= AUTO_ENQUEUE_MAX_EVALUATED_PER_CYCLE || scanned >= AUTO_ENQUEUE_MAX_SCANNED_PER_CYCLE) break;
+      scanned++;
+      await attemptClip(clip, true);
+    }
+    // F1b.2 (spec 2026-11-24): clips sellados como `publicado`
+    // con plataformas que les faltan (seba 15, 173; kaez 4).
+    // Después del bucle principal y solo si `considered` no llegó
+    // al tope: se escanean los 5 más recientes con la misma
+    // lógica por plataforma de F1, acotado a 2 clips sellados
+    // por ciclo.
+    if (considered < AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE) {
+      const sealed = await listPublishedClips(env.DB, tenant, 5).catch(() => [] as ClipRow[]);
+      let sealedDone = 0;
+      for (const clip of sealed) {
+        if (considered >= AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE || sealedDone >= 2) break;
+        if (await attemptClip(clip, false)) sealedDone++;
+      }
     }
     if (qualityBlocked > 0) {
       await maybeAlertQualityDiscards(env.DB, tenant, env).catch(() => "failed" as const);
@@ -1136,6 +1218,44 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
     ).catch(() => {});
     return { enabled: true, considered: 0, enqueued: 0, blocked: 0 };
   }
+}
+
+/** Plataformas que aún necesitan trabajo para un clip (F1, spec
+ *  2026-11-24): la unión de las del clip y sus cuentas vinculadas,
+ *  menos las que ya tienen un job `scheduled`/`processing` o un
+ *  `posted` (de hoy o de otro día: posted-ever). Vacío = el clip
+ *  se salta sin consumir presupuesto (ver F4). */
+async function platformsNeedingWork(
+  db: D1Database,
+  tenant: Tenant,
+  clip: ClipRow,
+): Promise<PanelPlatform[]> {
+  const vigente = await db.prepare(
+    "SELECT id, platform, state, posted_day FROM jobs WHERE tenant_id = ? AND kind = 'publish' AND clip_id = ?",
+  )
+    .bind(tenant, clip.id)
+    .all<{ id: number; platform: string; state: string; posted_day: string | null }>()
+    .catch(() => ({ results: [] as Array<{ id: number; platform: string; state: string; posted_day: string | null }> }));
+  const linked = await linkedPlatforms(db, tenant, clipLanguage(clip));
+  const listed = parsePlatforms(clip.platforms);
+  return [...new Set([...listed, ...linked])].filter(
+    (p) => !vigente.results.some(
+      (j) => j.platform === p && (j.state === "scheduled" || j.state === "processing" || j.state === "posted"),
+    ),
+  );
+}
+
+/** ¿Hay al menos un bloqueo DURO en `blocked`? (F3, spec
+ *  2026-11-24): las entradas son "<platform>: <motivo>"; se quita
+ *  el prefijo de la plataforma y se clasifica con la tabla única
+ *  de gate.ts. Solo un bloqueo duro cuenta como intento fallido
+ *  A4; los transitorios (espaciamiento, 15 min, 1-por-franja,
+ *  fuera de franja) no aparcan el clip. */
+function hasHardBlock(blocked: string[]): boolean {
+  return blocked.some((b) => {
+    const reason = b.includes(": ") ? b.slice(b.indexOf(": ") + 2) : b;
+    return !classifyGateBlock(reason).transient;
+  });
 }
 
 /** Jobs listos para correr (scheduled y vencidos, o reintentos vencidos).
@@ -1221,6 +1341,53 @@ export async function detectStalledJobs(db: D1Database, tenant: Tenant, env?: En
     await notify(db, { kind: "stall", clipId: job.clip_id, message: msg }, tenant, env);
   }
   return stalled;
+}
+
+/** Barrido de drafts transitorios (F6, spec 2026-11-24). Hasta 5
+ *  jobs en `draft` de HOY cuyo `last_error` clasifique como
+ *  transitorio se re-evalúan con el re-chequeo de ejecución; si
+ *  pasa, vuelven a `scheduled` con `next_run_at=now` (escalonados
+ *  15 min por clip, como en F1.3) y solo si no agotaron sus 3
+ *  reintentos hoy. Si siguen frenando, no se tocan. Nunca toca
+ *  motivos duros (calidad, sin cuenta, streamer desactivado,
+ *  spam) ni jobs de días anteriores (esos los re-encola el
+ *  auto-enqueue mañana si procede). No revive un job cuyo clip
+ *  ya publicó hoy en esa plataforma: el propio re-chequeo lo
+ *  frena con "ya se publicó hoy" (duro). Devuelve cuántos revivió. */
+export async function sweepTransientDrafts(env: Env, tenant: Tenant, now: number): Promise<number> {
+  const db = env.DB;
+  const today = santiagoDayKeyMs(now);
+  const dayStart = santiagoDayStartMs(now);
+  const res = await db
+    .prepare("SELECT * FROM jobs WHERE tenant_id = ? AND kind = 'publish' AND state = 'draft' AND updated_at >= ? ORDER BY updated_at ASC LIMIT 5")
+    .bind(tenant, dayStart)
+    .all<JobRow>()
+    .catch(() => ({ results: [] as JobRow[] }));
+  let revived = 0;
+  const staggerByClip = new Map<number, number>();
+  for (const job of res.results) {
+    const raw = typeof job.last_error === "string" ? job.last_error : "";
+    // El prefijo lo añade dispatchPublishStep (publish/index.ts):
+    // se quita antes de clasificar.
+    const reason = raw.startsWith("gate de publicación: ") ? raw.slice("gate de publicación: ".length) : raw;
+    if (!classifyGateBlock(reason).transient) continue;
+    // Tope de F2.5: si ya agotó sus 3 reintentos hoy, el barrido
+    // no lo reviviría en bucle.
+    if (retriesToday(job, today) >= MAX_RETRIES_PER_DAY) continue;
+    const gate = await recheckPublishGate(env, job).catch(() => "sweep: re-chequeo no disponible");
+    if (gate) continue;
+    const clipId = job.clip_id ?? 0;
+    const idx = staggerByClip.get(clipId) ?? 0;
+    staggerByClip.set(clipId, idx + 1);
+    const changed = await fencedJobUpdate(
+      db,
+      job,
+      "state = 'scheduled', next_run_at = ?, retryable = 1, last_error = ?, updated_at = ?, run_token = ?, slot_day = ?",
+      [now + idx * 15 * 60 * 1000, null, now, null, null],
+    ).catch(() => false);
+    if (changed) revived++;
+  }
+  return revived;
 }
 
 // ---------------------------------------------------------------------------
@@ -1565,6 +1732,18 @@ export async function runWorkerCycle(
       throw e;
     }
   }
+  // F6 (spec 2026-11-24): barrido de drafts transitorios. En cada
+  // ciclo (no en cada tick del cron), hasta 5 jobs en `draft` de
+  // HOY cuyo `last_error` clasifique como transitorio se
+  // re-evalúan con el re-chequeo de ejecución; si pasa, vuelven a
+  // `scheduled` con `next_run_at=now` (escalonados 15 min por
+  // clip, como en F1.3) y solo si no agotaron sus 3 reintentos
+  // hoy. Si siguen frenando, no se tocan. Nunca toca motivos
+  // duros (calidad, sin cuenta, streamer desactivado, spam) ni
+  // jobs de días anteriores (esos los re-encola el auto-enqueue
+  // mañana si procede). Cura los drafts creados antes del
+  // despliegue de F2 y cualquier draft transitorio futuro.
+  await sweepTransientDrafts(env, tenant, nowMs()).catch(() => undefined);
   const jobs = await dueJobs(db, tenant, 5);
   let processed = 0;
   // Paralelismo POR GRUPO (0022, NEEDS-VALIDATION §4): grupos
@@ -1695,6 +1874,36 @@ async function applyPublishResult(env: Env, db: D1Database, job: JobRow, r: Publ
       await releasePublishSlot(db, job);
       await markDraft(db, job, r.reason ?? "sin motivo", env);
       break;
+    case "retry": {
+      // Freno TRANSITORIO en ejecución (F2, spec 2026-11-24): el
+      // job no va a draft, se reprograma a `retryAtMs`. El cupo se
+      // suelta ANTES de la transición (como el caso "draft") y se
+      // limpian run_token/slot_day (como markDraft). `attempts` se
+      // escribe con el valor absoluto correcto:
+      // `retriesToday(job, todayKey) + 1` — no `job.attempts + 1`:
+      // `attempts` arrastra el conteo de ayer y solo
+      // `retriesToday` resetea por día. Si ya se agotaron los 3
+      // reintentos de hoy, en vez de reprogramar va a markDraft
+      // (draft terminal, como hoy). El caso "draft" queda solo
+      // para frenos duros.
+      await releasePublishSlot(db, job);
+      const todayKey = santiagoDayKey();
+      if (retriesToday(job, todayKey) >= MAX_RETRIES_PER_DAY) {
+        await markDraft(db, job, `gate de publicación: ${r.reason} (tope de reintentos por hoy: ${MAX_RETRIES_PER_DAY}/día)`, env);
+        break;
+      }
+      const changed = await fencedJobUpdate(
+        db,
+        job,
+        "state = 'scheduled', next_run_at = ?, retryable = 1, last_error = ?, attempts = ?, updated_at = ?, run_token = ?, slot_day = ?",
+        [r.retryAtMs, `gate de publicación: ${r.reason}`, retriesToday(job, todayKey) + 1, nowMs(), null, null],
+      );
+      if (!changed) break;
+      // Sin notify: un reintento transitorio es rutinario (como
+      // markFailed); el motivo queda en last_error y el job en
+      // scheduled con su próximo intento.
+      break;
+    }
     case "awaiting_captcha": {
       await releasePublishSlot(db, job);
       const changed = await fencedJobUpdate(

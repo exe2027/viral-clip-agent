@@ -518,7 +518,7 @@ function slotRow(db: FakeD1, platform: string): Row | undefined {
 // §4 — dos jobs del mismo grupo en un ciclo, plan 1
 // ---------------------------------------------------------------------------
 describe("§4 reserva de cupo: mismo grupo, plan 1", () => {
-  test("dos jobs tiktok/es con plan 1 → solo 1 posted, el 2º draft por tope/plan/espaciamiento", async () => {
+  test("dos jobs tiktok/es con plan 1 → solo 1 posted, el 2º se reprograma (retry) por tope/plan/espaciamiento [F2]", async () => {
     stubFetch();
     const db = new FakeD1();
     await seedAccount(db, "tiktok", 10);
@@ -536,10 +536,16 @@ describe("§4 reserva de cupo: mismo grupo, plan 1", () => {
     expect(r.ran).toBe(true);
     expect(r.processed).toBe(2);
     const posted = (db.tables["jobs"] ?? []).filter((j) => j.state === "posted");
-    const drafts = (db.tables["jobs"] ?? []).filter((j) => j.state === "draft");
+    const retried = (db.tables["jobs"] ?? []).filter((j) => j.state === "scheduled");
     expect(posted).toHaveLength(1);
-    expect(drafts).toHaveLength(1);
-    expect(String(drafts[0]?.last_error ?? "")).toMatch(/plan del día cubierto|tope diario|espaciamiento|1 por plataforma y franja/);
+    // F2 (spec 2026-11-24): el perdedor ya no va a draft: queda
+    // scheduled con next_run_at futuro (mañana, por plan cubierto)
+    // y 1 intento usado; no publica.
+    expect(retried).toHaveLength(1);
+    expect(String(retried[0]?.last_error ?? "")).toMatch(/plan del día cubierto|tope diario|espaciamiento|1 por plataforma y franja/);
+    expect(typeof retried[0]?.next_run_at).toBe("number");
+    expect((retried[0]?.next_run_at as number) > Date.now()).toBe(true);
+    expect(retried[0]?.retryable).toBe(1);
     // Un solo published_count: el perdedor no contó como publicado.
     expect(accountRow(db, 10).published_count).toBe(21);
     // El cupo se soltó tras publicar: no queda reserva colgada.

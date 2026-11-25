@@ -169,6 +169,15 @@ class FakeD1 {
     if (cols === "*") return rows;
     const countMatch = /^COUNT\(\*\) AS (\w+)$/i.exec(cols);
     if (countMatch) return [{ [countMatch[1] as string]: rows.length }];
+    // Agregados MAX/MIN (retryAtForGateBlock, F2): la subida más
+    // reciente / más vieja de una ventana. Sin filas, null.
+    const aggMatch = /^(MAX|MIN)\((\w+)\) AS (\w+)$/i.exec(cols);
+    if (aggMatch) {
+      const [, fn, col, alias] = aggMatch as [string, string, string, string];
+      const vals = rows.map((r) => r[col]).filter((v): v is number => typeof v === "number");
+      const value = vals.length === 0 ? null : fn.toUpperCase() === "MAX" ? Math.max(...vals) : Math.min(...vals);
+      return [{ [alias as string]: value }];
+    }
     const wanted = cols.split(",").map((c) => c.trim());
     return rows.map((r) => {
       const out: Row = {};
@@ -494,29 +503,34 @@ const EVIL = "https://evil.example";
 // M1 — el gate se re-evalúa en ejecución
 // ---------------------------------------------------------------------------
 describe("M1 gate re-check en ejecución (dispatchPublishStep)", () => {
-  test("4º clip resto con 3/día ya cubierto → draft, no publica", async () => {
+  test("4º clip resto con 3/día ya cubierto → retry (reprogramado), no publica [F2]", async () => {
     const db = new FakeD1();
     seedAccount(db);
     db.seed("clips", clipRow({ id: 1 }));
     // 3 publicados hoy hace 3 h (espaciamiento 2 h ya cumplido):
     // el freno es el plan, no el espaciamiento.
     const today = santiagoDayKey();
+    const postedAt = Date.now() - 3 * 3600_000;
     for (let i = 0; i < 3; i++) {
       db.seed("jobs", {
         id: 90 + i, tenant_id: "sebastian", clip_id: 900 + i, platform: "tiktok",
         api_account_id: 10, state: "posted", language: "es", posted_day: today,
-        updated_at: Date.now() - 3 * 3600_000, created_at: Date.now() - 3 * 3600_000,
+        updated_at: postedAt, created_at: postedAt,
       });
     }
     const bucket = new FakeR2();
     bucket.store.set("clips/sebastian/1/aaa_x.mp4", MP4_FAKE);
     const env = makeEnv(db, bucket);
     const result = await dispatchPublishStep(env, dispatchJob());
-    expect(result.mode).toBe("draft");
+    // F2 (spec 2026-11-24): el freno transitorio (rolling) ya no
+    // manda a draft: reprograma al momento en que la ventana de
+    // 24 h libera (el posted más viejo + 24 h).
+    expect(result.mode).toBe("retry");
     // Plan 3 = rolling 3: el rolling se chequea antes que el plan (gate.ts:258),
-    // así que el que frena es el rolling. El comportamiento (draft, no publica) es el mismo.
+    // así que el que frena es el rolling. El comportamiento (no publica) es el mismo.
     expect(String((result as { reason?: string }).reason ?? "")).toContain("tope rolling 24 h alcanzado");
     expect(String((result as { reason?: string }).reason ?? "")).toContain("3/3");
+    expect((result as { retryAtMs?: number }).retryAtMs).toBe(postedAt + 24 * 3600_000);
   });
 
   test("clip archivado después de encolar → draft, no publica", async () => {
@@ -546,7 +560,7 @@ describe("M1 gate re-check en ejecución (dispatchPublishStep)", () => {
 });
 
 describe("M1 gate re-check en runWorkerCycle", () => {
-  test("3 clips resto encolados con 3/día cubierto: los 3 quedan en draft, ninguno publica", async () => {
+  test("3 clips resto encolados con 3/día cubierto: los 3 se reprograman (retry), ninguno publica [F2]", async () => {
     const db = new FakeD1();
     seedAccount(db);
     db.seed("worker_state", { tenant_id: "sebastian", running: 1, started_at: 1, last_note: "", updated_at: 1 });
@@ -555,11 +569,12 @@ describe("M1 gate re-check en runWorkerCycle", () => {
       seedJob(db, { id: i, clip_id: i, created_at: 1000 + i });
     }
     const today = santiagoDayKey();
+    const postedAt = Date.now() - 3 * 3600_000;
     for (let i = 0; i < 3; i++) {
       db.seed("jobs", {
         id: 90 + i, tenant_id: "sebastian", clip_id: 900 + i, platform: "tiktok",
         api_account_id: 10, state: "posted", language: "es", posted_day: today,
-        updated_at: Date.now() - 3 * 3600_000, created_at: Date.now() - 3 * 3600_000,
+        updated_at: postedAt, created_at: postedAt,
       });
     }
     const bucket = new FakeR2();
@@ -571,7 +586,13 @@ describe("M1 gate re-check en runWorkerCycle", () => {
     const jobs = db.tables["jobs"] ?? [];
     for (let i = 1; i <= 3; i++) {
       const j = jobs.find((x) => x.id === i);
-      expect(j?.state).toBe("draft");
+      // F2 (spec 2026-11-24): el freno transitorio (rolling) ya no
+      // manda a draft: el job queda scheduled con next_run_at = el
+      // posted más viejo + 24 h, retryable=1 y 1 intento usado.
+      expect(j?.state).toBe("scheduled");
+      expect(j?.retryable).toBe(1);
+      expect(j?.attempts).toBe(1);
+      expect(j?.next_run_at).toBe(postedAt + 24 * 3600_000);
       expect(String(j?.last_error ?? "")).toContain("tope rolling 24 h alcanzado");
     }
     expect(jobs.filter((j) => j.state === "posted")).toHaveLength(3);

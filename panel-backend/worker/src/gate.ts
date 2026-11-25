@@ -21,10 +21,15 @@ import {
   languageName,
   logWorkerEvent,
   maturityOut,
+  nextPlatformHourMs,
+  nextSlotStartMs,
   panelPlatformLabel,
   parseViralJson,
   platformMax,
   platformPlan,
+  PLATFORM_SCHEDULE,
+  santiagoDayKeyMs,
+  santiagoWallToUtcMs,
   slotWindowBoundsMs,
   spacingHoursFor,
   toApiPlatform,
@@ -33,6 +38,7 @@ import {
   type PanelPlatform,
 } from "./db";
 import { qualityGateForClip } from "./quality-gate";
+import { nextRetryDelayMs, retriesToday } from "./retry";
 
 export type { ClipLanguage };
 
@@ -81,6 +87,15 @@ export interface GateContext {
    *  168 en FB) esta puerta se salta y el resto sigue frenando
    *  igual; el job nuevo lleva key |repubN (ver jobs.ts). */
   clipPublishedTodayOnPlatform?: boolean;
+  /** El mismo clip ya se publicó en ESTA plataforma EN OTRO DÍA
+   *  (F1, spec 2026-11-24): el gate solo miraba posted_day=hoy
+   *  y por eso el 102 se duplicó en TikTok (jobs 132/133 en el
+   *  mismo día, y un posted de otro día tampoco frenaba nada).
+   *  Con `republish=true` se salta igual que la puerta de hoy.
+   *  `clipLastPublishedOnPlatformDay` es el `posted_day` del
+   *  posted más reciente en esa plataforma (para el motivo). */
+  clipPublishedEverOnPlatform?: boolean;
+  clipLastPublishedOnPlatformDay?: string | null;
   /** Republicación explícita (P0 #5, auditoría #11): el usuario
    *  (o el cerebro) pide publicar DE NUEVO el mismo clip en la
    *  misma plataforma el mismo día porque la plataforma borró
@@ -184,7 +199,7 @@ export function publishGate(platform: PanelPlatform, g: GateContext): string | n
   // Ajustes del usuario (Ajustes → CONFIGURACIÓN, D1): duración,
   // SEO mínimo y topes diarios se leen de aquí, no de valores fijos.
   // Defaults: 1–60 s (sin mínimo desde 2026-11-21), puerta única
-  // 45/80 (P0 #3), techo YT 5 / resto 3.
+  // 45/80 (P0 #3), techo YT 6 / resto 3 (YT 6/día desde 2026-11-23).
   const s = effectiveSettings(g.settings ?? {});
   if (g.accountLanguage !== undefined) {
     const label = panelPlatformLabel(platform);
@@ -271,6 +286,15 @@ export function publishGate(platform: PanelPlatform, g: GateContext): string | n
   if (g.clipPublishedTodayOnPlatform && !g.republish) {
     return `este clip ya se publicó hoy en ${platform}: no se repite el mismo clip en la misma cuenta el mismo día`;
   }
+  // POSTED-EVER (F1, spec 2026-11-24): el mismo clip ya salió
+  // en ESTA plataforma otro día. Frena siempre, también a mano,
+  // salvo republicación explícita (la plataforma borró el vídeo).
+  // Sin esto, el auto-enqueue re-creaba el job de TikTok del 102
+  // y la manual también podía duplicarlo.
+  if (g.clipPublishedEverOnPlatform && !g.republish) {
+    const day = g.clipLastPublishedOnPlatformDay ?? "otro día";
+    return `este clip ya se publicó en ${platform} el ${day}: no se repite en la misma cuenta (usa republicar si la plataforma borró el vídeo)`;
+  }
   // CALENTAMIENTO (reglas 2026-11-19): el tope de la etapa (1/día
   // en semana 1/2, plan en semana 3) NO lo salta "Publicar ahora":
   // desde la orden 09:25 la manual no salta ningún freno.
@@ -355,6 +379,188 @@ export function rateLimitGate(platform: PanelPlatform, g: GateContext): string |
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Clasificación transitorio/duro de los motivos del gate (F2, spec
+// 2026-11-24). ÚNICA FUENTE: publishGate, rateLimitGate,
+// recheckPublishGate, qualityGateForClip y reservePublishSlot
+// siguen devolviendo `string | null`; la clasificación vive solo
+// aquí, en esta tabla. Un motivo no reconocido es DURO
+// (fail-closed): un freno que no sabemos clasificar va a draft,
+// nunca se reprograma solo. La tabla se consulta en orden, de más
+// específica a menos específica (el "cupo no reservado" va antes
+// que el "tope diario" genérico, porque empieza igual).
+// ---------------------------------------------------------------------------
+
+/** Cómo se reprograma un job frenado por un motivo transitorio. */
+export type GateBlockRetryKind = "spacing" | "cross15" | "slotEnd" | "nextSlot" | "rolling" | "tomorrow" | "backoff" | null;
+
+export interface GateBlockRule {
+  /** Regex que casa el motivo (sin `$` = prefijo: el motivo puede
+   *  llevar variables después; con `$` = cadena completa). */
+  match: RegExp;
+  /** true = el tiempo lo resuelve solo (reprogramar); false =
+   *  necesita acción humana o cambio del sistema (draft). */
+  transient: boolean;
+  retry: GateBlockRetryKind;
+}
+
+export const GATE_BLOCKS: GateBlockRule[] = [
+  // --- Transitorios (el tiempo los resuelve solo) ---
+  // El "cupo no reservado" VA ANTES que el "tope diario" genérico:
+  // empieza igual y es más específico (backoff, no mañana).
+  { match: /^tope diario alcanzado: cupo no reservado en \S+ tras 3 intentos$/, transient: true, retry: "backoff" },
+  { match: /^reserva de cupo perdida: el job cambió de manos antes de publicar$/, transient: true, retry: "backoff" },
+  { match: /^tope de reintentos por hoy:/, transient: true, retry: "backoff" },
+  { match: /^espaciamiento: menos de \d+ h desde la última subida en esta plataforma$/, transient: true, retry: "spacing" },
+  { match: /^espaciamiento: menos de \d+ min desde la última subida en esta plataforma$/, transient: true, retry: "spacing" },
+  { match: /^mismo clip en otra plataforma hace \d+ min: mínimo \d+ min entre plataformas$/, transient: true, retry: "cross15" },
+  { match: /^ya se publicó 1 en \S+ en esta franja: como mucho 1 por plataforma y franja$/, transient: true, retry: "slotEnd" },
+  { match: /^fuera de franja:/, transient: true, retry: "nextSlot" },
+  { match: /^tope rolling 24 h alcanzado: \d+\/\d+ en \S+ \(últimas 24 h\)$/, transient: true, retry: "rolling" },
+  { match: /^tope diario alcanzado: \d+\/\d+ en \S+$/, transient: true, retry: "tomorrow" },
+  { match: /^plan del día cubierto: \d+\/\d+ en \S+ \(techo \d+\)$/, transient: true, retry: "tomorrow" },
+  { match: /^calentamiento: \d+\/\d+ hoy en \S+ \(cuenta nueva: ni a mano se supera el tope de su etapa\)$/, transient: true, retry: "tomorrow" },
+  { match: /^día libre de la cuenta en \S+: hoy no publica \(1 día libre por semana, rotativo\)$/, transient: true, retry: "tomorrow" },
+  // --- Duros (acción humana o cambio del sistema; van a draft) ---
+  { match: /^clip archivado$/, transient: false, retry: null },
+  { match: /^clip ya publicado$/, transient: false, retry: null },
+  { match: /^clip no encontrado$/, transient: false, retry: null },
+  { match: /^el clip no tiene MP4 en R2: súbelo desde el Editor antes de publicar\.$/, transient: false, retry: null },
+  { match: /^el job apunta a una cuenta que ya no existe: vuelve a encolar el clip desde Publicar\.$/, transient: false, retry: null },
+  { match: /^sin cuenta /, transient: false, retry: null },
+  { match: /^idioma: el clip es en /, transient: false, retry: null },
+  { match: /^cuenta .+ sin credencial verificada: pega la credencial en Cuentas y verifícala$/, transient: false, retry: null },
+  { match: /^rescatado por gritos \(viralidad /, transient: false, retry: null },
+  { match: /^sin subtítulos completos: necesita transcripción humana$/, transient: false, retry: null },
+  { match: /^calidad:/, transient: false, retry: null },
+  { match: /^falta ver el preview en el Editor$/, transient: false, retry: null },
+  { match: /^duración \d+s fuera de \d+–\d+ s$/, transient: false, retry: null },
+  { match: /^categoría: solo GTA VI/, transient: false, retry: null },
+  { match: /^categoría: sin categoría GTA VI declarada$/, transient: false, retry: null },
+  { match: /^el streamer no tiene permiso marcado$/, transient: false, retry: null },
+  { match: /^streamer desactivado en el panel$/, transient: false, retry: null },
+  { match: /^SEO \d+: bajo la puerta de \d+ en \S+$/, transient: false, retry: null },
+  { match: /^cuenta en pausa por spam\/límite hasta /, transient: false, retry: null },
+  { match: /^este clip ya se publicó hoy en /, transient: false, retry: null },
+  { match: /^este clip ya se publicó en /, transient: false, retry: null },
+];
+
+/** Clasifica un motivo del gate. Motivo no reconocido = duro
+ *  (fail-closed): nunca se reprograma solo algo que no sabemos
+ *  que el tiempo resuelve. */
+export function classifyGateBlock(reason: string): { transient: boolean; retry: GateBlockRetryKind } {
+  for (const rule of GATE_BLOCKS) {
+    if (rule.match.test(reason)) return { transient: rule.transient, retry: rule.retry };
+  }
+  return { transient: false, retry: null };
+}
+
+/** Calcula el `next_run_at` al que reprogramar un job frenado por
+ *  un motivo transitorio (F2). Re-consulta lo que necesita (la
+ *  función recibe `env`+`job`, no depende de que el re-chequeo le
+ *  pase los contadores — el re-chequeo los descarta tras llamar a
+ *  `publishGate`). Solo lee subidas `posted` reales, NUNCA reservas
+ *  de cupo: `lastPublishedAtMs` del re-chequeo está contaminado por
+ *  `max(lastPosted, slot.updated_at)` y una reserva que nunca
+ *  publicó no es una subida. Fallbacks si no se puede calcular:
+ *  las reglas de hora (`nextSlot`, `slotEnd`, `tomorrow`) se
+ *  calculan solo con el horario (sin lecturas D1); las de contador
+ *  (`spacing`, `cross15`, `rolling`) caen a
+ *  `now + nextRetryDelayMs(retriesUsedToday)`. */
+export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string, now: number): Promise<number> {
+  const { retry } = classifyGateBlock(reason);
+  const db = env.DB;
+  const platform = job.platform;
+  // Idioma del job (para contar por plataforma+idioma): el de la
+  // fila si viene, si no el del clip.
+  let language = job.language ?? null;
+  if (!language && job.clip_id) {
+    const clip = await getClip(db, job.clip_id, job.tenant_id).catch(() => null);
+    language = clip ? clipLanguage(clip) : "es";
+  }
+  language ??= "es";
+  const backoffFallback = async (): Promise<number> => {
+    let used = 0;
+    try {
+      const row = await db.prepare("SELECT attempts, updated_at FROM jobs WHERE id = ? AND tenant_id = ?")
+        .bind(job.id, job.tenant_id)
+        .first<{ attempts: number; updated_at: number }>();
+      if (row) used = retriesToday(row, santiagoDayKeyMs(now));
+    } catch {
+      // Sin fila legible: 0 usados (el peldaño más corto).
+    }
+    return now + (nextRetryDelayMs(used) ?? 60_000);
+  };
+  switch (retry) {
+    case "spacing": {
+      const lastPosted = await db.prepare(
+        "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted'",
+      )
+        .bind(job.tenant_id, platform, language)
+        .first<{ last_at: number | null }>()
+        .catch(() => null);
+      if (!lastPosted?.last_at) return backoffFallback();
+      const settings = await getSettings(db, job.tenant_id).catch(() => ({} as Record<string, unknown>));
+      const eff = effectiveSettings(settings);
+      // "menos de {h} h" o "menos de {min} min": el motivo lleva
+      // el espaciamiento vigente; si no se lee, el de Ajustes.
+      const hMatch = /^espaciamiento: menos de (\d+) h /.exec(reason);
+      const mMatch = /^espaciamiento: menos de (\d+) min /.exec(reason);
+      const spacingMs = hMatch
+        ? Number(hMatch[1]) * 3600 * 1000
+        : mMatch
+          ? Number(mMatch[1]) * 60 * 1000
+          : (platform ? spacingHoursFor(eff, toApiPlatform(platform)) * 3600 * 1000 : eff.min_spacing_minutes * 60 * 1000);
+      return lastPosted.last_at + spacingMs;
+    }
+    case "cross15": {
+      if (!job.clip_id) return backoffFallback();
+      const lastOther = await db.prepare(
+        "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform <> ? AND state IN ('posted','processing')",
+      )
+        .bind(job.tenant_id, job.clip_id, platform)
+        .first<{ last_at: number | null }>()
+        .catch(() => null);
+      if (!lastOther?.last_at) return backoffFallback();
+      const settings = await getSettings(db, job.tenant_id).catch(() => ({} as Record<string, unknown>));
+      const eff = effectiveSettings(settings);
+      const crossMatch = /mínimo (\d+) min entre plataformas/.exec(reason);
+      const crossMin = crossMatch ? Number(crossMatch[1]) : eff.cross_platform_spacing_minutes;
+      return lastOther.last_at + crossMin * 60 * 1000;
+    }
+    case "slotEnd": {
+      const bounds = slotWindowBoundsMs(now);
+      if (bounds) return bounds.endMs;
+      // Sin franja actual: próxima hora de hueco con now + 61 min
+      // (no nextPlatformHourMs(now): dentro de la ventana de 60
+      // min devuelve nowMs y el job re-vencería de inmediato).
+      return platform ? nextPlatformHourMs(platform, now + 61 * 60 * 1000) : nextSlotStartMs(now);
+    }
+    case "nextSlot": {
+      return nextSlotStartMs(now);
+    }
+    case "rolling": {
+      const oldest = await db.prepare(
+        "SELECT MIN(updated_at) AS oldest_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ?",
+      )
+        .bind(job.tenant_id, platform, language, now - 24 * 3600 * 1000)
+        .first<{ oldest_at: number | null }>()
+        .catch(() => null);
+      if (!oldest?.oldest_at) return backoffFallback();
+      return oldest.oldest_at + 24 * 3600 * 1000;
+    }
+    case "tomorrow": {
+      const hours = platform ? (PLATFORM_SCHEDULE[platform] ?? PLATFORM_SCHEDULE.youtube_shorts!) : PLATFORM_SCHEDULE.youtube_shorts!;
+      const tomorrow = santiagoDayKeyMs(now + 24 * 3600 * 1000);
+      return santiagoWallToUtcMs(tomorrow, hours[0]!);
+    }
+    case "backoff":
+    default: {
+      return backoffFallback();
+    }
+  }
+}
+
 /** SEO por plataforma desde clips.viral / seo_overrides (JSON del panel).
  *  Se lee viral.platforms[platform].score (forma legacy) y, si no
  *  está, viral.seo_scores[platform] (contrato IA 2026-11-18).
@@ -378,11 +584,16 @@ export function seoForPlatform(clip: ClipRow, platform: PanelPlatform): { score:
 
 /** Job mínimo que necesita el re-chequeo (JobRow lo satisface). */
 export interface GateJob {
+  id?: number;
   kind: string;
   clip_id: number | null;
   platform: PanelPlatform | null;
   api_account_id: number | null;
   tenant_id: Tenant;
+  /** Idioma del job (jobs.language, DOS COLAS 0019): para contar
+   *  por plataforma+idioma en retryAtForGateBlock. Si no viene,
+   *  se resuelve del clip. */
+  language?: string | null;
   // Cupo que el job ya tiene (jobs.slot_day, migración 0022): si
   // es el día de hoy, su propia reserva no cuenta como publicada
   // por otro job ni como última subida (ver recheckPublishGate).
@@ -484,11 +695,26 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
   )
     .bind(job.tenant_id, job.clip_id, job.platform, day)
     .first<{ n: number }>();
+  // MISMO CLIP EN OTRA PLATAFORMA (F2b, spec 2026-11-24): `state
+  // IN ('posted','processing')`, no solo posted. Los jobs del
+  // ciclo se despachan en paralelo por grupo y cada grupo reclama
+  // su job (state='processing' + run_token) ANTES de re-chequear:
+  // un hermano en `processing` cuenta como "última subida del
+  // clip en otra plataforma" a su `updated_at`, o dos plataformas
+  // del mismo clip publicarían a la vez violando los 15 min.
   const clipOtherRow = await db.prepare(
-    "SELECT updated_at FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform <> ? AND state = 'posted' ORDER BY updated_at DESC LIMIT 1",
+    "SELECT updated_at FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform <> ? AND state IN ('posted','processing') ORDER BY updated_at DESC LIMIT 1",
   )
     .bind(job.tenant_id, job.clip_id, job.platform)
     .first<{ updated_at: number }>();
+  // POSTED-EVER (F1, spec 2026-11-24): el mismo clip ya salió en
+  // ESTA plataforma otro día. Sin filtro de día: el `posted_day`
+  // del posted más reciente, para el motivo del gate.
+  const clipEverRow = await db.prepare(
+    "SELECT posted_day FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform = ? AND state = 'posted' ORDER BY updated_at DESC LIMIT 1",
+  )
+    .bind(job.tenant_id, job.clip_id, job.platform)
+    .first<{ posted_day: string | null }>();
   // 1 POR PLATAFORMA Y FRANJA (orden 09:25, SIN AMONTONAR):
   // publicadas en ESTA plataforma+idioma dentro de la franja
   // actual. Se lee fresco justo antes del adaptador, así que un
@@ -529,6 +755,8 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
     warmupDailyLimit: mat && mat.stage !== "establecida" ? mat.effective_daily_plan : null,
     publishedLast24h: last24hRow?.n ?? 0,
     clipPublishedTodayOnPlatform: (clipTodayRow?.n ?? 0) > 0,
+    clipPublishedEverOnPlatform: clipEverRow !== null,
+    clipLastPublishedOnPlatformDay: clipEverRow?.posted_day ?? null,
     clipLastPublishedOtherPlatformMs: clipOtherRow?.updated_at ?? null,
     publishedThisSlot,
     pausedUntilMs,

@@ -23,7 +23,7 @@ import type { Env } from "../cloudflare";
 import type { Tenant } from "../auth";
 import { decryptCredential } from "../crypto";
 import { clipLanguage, evidenceUrl, getApiAccount, getClip, languageName, listApiAccounts, listSocialAccounts, panelPlatformLabel, type ClipLanguage, type PanelPlatform } from "../db";
-import { recheckPublishGate, reservePublishSlot } from "../gate";
+import { classifyGateBlock, recheckPublishGate, reservePublishSlot, retryAtForGateBlock } from "../gate";
 import type { JobRow } from "../jobs";
 import { facebookStep } from "./facebook";
 import { instagramStep } from "./instagram";
@@ -67,7 +67,11 @@ export type PublishResult =
   | { mode: "processing"; resumeData: ResumeData; reason?: string }
   | { mode: "draft"; reason: string }
   | { mode: "awaiting_captcha"; reason: string }
-  | { mode: "error"; reason: string; retryable: boolean };
+  | { mode: "error"; reason: string; retryable: boolean }
+  /** Freno TRANSITORIO en ejecución (F2, spec 2026-11-24): el job
+   *  no va a draft, se reprograma a `retryAtMs` (ver
+   *  applyPublishResult, caso "retry"). */
+  | { mode: "retry"; reason: string; retryAtMs: number };
 
 function parseJson(text: string): Record<string, unknown> {
   try {
@@ -197,10 +201,19 @@ export async function dispatchPublishStep(env: Env, job: JobRow): Promise<Publis
   const head = await env.CLIPS_BUCKET.head(job.r2_key).catch(() => null);
   // RE-CHEQUEO DEL GATE EN EJECUCIÓN (M1, 2026-11-18): el gate de
   // enqueue ya no decide solo. Con el clip actual y los contadores
-  // frescos, si frena el job va a draft con el motivo y NO se
-  // publica (ni se toca el adaptador de la plataforma).
+  // frescos, si frena por un motivo TRANSITORIO (F2, spec
+  // 2026-11-24: espaciamiento, 15 min, 1-por-franja, rolling,
+  // tope) el job se REPROGRAMA a retryAtMs, no va a draft. Si
+  // frena por un motivo DURO (calidad, sin cuenta, streamer
+  // desactivado), va a draft como hoy. Los retornos directos que
+  // no pasan por el gate (sin MP4, cuenta inexistente o en otro
+  // idioma) siguen devolviendo "draft" sin cambio.
   const gateReason = await recheckPublishGate(env, job);
   if (gateReason) {
+    if (classifyGateBlock(gateReason).transient) {
+      const retryAtMs = await retryAtForGateBlock(env, job, gateReason, Date.now());
+      return { mode: "retry", reason: gateReason, retryAtMs };
+    }
     return { mode: "draft", reason: `gate de publicación: ${gateReason}` };
   }
   // RESERVA ATÓMICA DEL CUPO (0022, NEEDS-VALIDATION §4): entre
@@ -209,6 +222,10 @@ export async function dispatchPublishStep(env: Env, job: JobRow): Promise<Publis
   // D1 hace visible este cupo al siguiente job antes de subir.
   const reserve = await reservePublishSlot(env.DB, job);
   if (!reserve.ok) {
+    if (classifyGateBlock(reserve.reason).transient) {
+      const retryAtMs = await retryAtForGateBlock(env, job, reserve.reason, Date.now());
+      return { mode: "retry", reason: reserve.reason, retryAtMs };
+    }
     return { mode: "draft", reason: `gate de publicación: ${reserve.reason}` };
   }
   const creds = await resolveCreds(env, job.platform, job.tenant_id, lang, job.api_account_id ?? undefined);

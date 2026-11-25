@@ -251,9 +251,9 @@ class TestRevalidate(unittest.TestCase):
         self.assertEqual(bridge.patched, [])
         self.assertEqual(bridge.downloaded, [])
 
-    def test_tope_10_y_anti_atasco_24h(self):
+    def test_tope_15_y_anti_atasco_24h(self):
         clips = []
-        for i in range(1, 13):
+        for i in range(1, 18):
             clips.append(_clip(i, viral={
                 "quality_gate": {"decision": "aprobado", "pasa": True,
                                  "criterios": {}, "fallos": [],
@@ -267,10 +267,12 @@ class TestRevalidate(unittest.TestCase):
                           validate_fn=lambda *a, **k: _review_aprobado(),
                           transcribe_fn=lambda *a, **k: None)
         self.assertEqual(summary["saltados"], 1)
-        self.assertEqual(summary["revisados"], 10)
-        self.assertEqual(summary["seo_rellenados"], 10 * 4)
+        self.assertEqual(summary["revisados"], 15)
+        self.assertEqual(summary["seo_rellenados"], 15 * 4)
         patched_ids = [cid for cid, _f in bridge.patched]
         self.assertNotIn(1, patched_ids)
+        self.assertNotIn(17, patched_ids)
+        self.assertEqual(len(patched_ids), 15)
 
 
 class TestSeoInputsFromPackage(unittest.TestCase):
@@ -295,6 +297,134 @@ class TestSeoInputsFromPackage(unittest.TestCase):
         self.assertEqual(inputs["hashtags"], ["#GTA6"])
         self.assertIs(inputs["game_verified"], True)
         self.assertEqual(inputs["lang"], "en")
+
+
+def _clip_listo(clip_id, **over):
+    """Clip listo salvo SEO (F5): MP4 en R2, subtítulos completos,
+    no publicado, score >= 45, con veredicto aprobado (solo le
+    falta el SEO)."""
+    base = {"video_r2_key": f"clips/t/{clip_id}/x.mp4",
+            "subtitles_complete": 1,
+            "score": 60,
+            "origin": "vod",
+            "viral": {"quality_gate": _gate_aprobado()}}
+    base.update(over)
+    return _clip(clip_id, **base)
+
+
+class TestF5OrdenYTope(unittest.TestCase):
+    """F5 (spec 2026-11-24, §F5 y §5-F5): listos primero, orden de
+    la Cola dentro de cada grupo, tope 15, anti-atasco sin consumir
+    el tope, y un solo-SEO consume un hueco como un veredicto."""
+
+    def test_orden_listos_primero_y_cola(self):
+        t0 = 1795400000000
+        viejo_sin_mp4 = _clip(1, created_at=t0, video_r2_key=None,
+                              subtitles_complete=0, score=80,
+                              origin="vod",
+                              viral={"quality_gate": _gate_aprobado()})
+        nuevo_listo_live = _clip_listo(
+            2, created_at=t0 + 3 * 86400 * 1000, score=60,
+            origin="live")
+        viejo_listo_vod = _clip_listo(
+            3, created_at=t0 + 86400 * 1000, score=70, origin="vod")
+        bridge = FakeBridge([viejo_sin_mp4, nuevo_listo_live,
+                             viejo_listo_vod])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run(bridge, cfg={}, limit=10, workdir=tmp,
+                          now_ms=1795500000000)
+        # Listos primero; dentro de los listos, la Cola: LIVE antes
+        # que VOD (clave §F5: LIVE, manual_rank, score desc,
+        # created_at asc — la misma que queueClipCompare sin el
+        # boost). El viejo sin MP4 va último aunque sea el más
+        # antiguo y tenga el score más alto.
+        # NOTA: §5-F5 escribe el orden [3, 2, 1] para este fixture,
+        # pero eso contradice la clave §F5 (y la Cola real): un LIVE
+        # va antes que un VOD con más score. Este test fija la clave
+        # definida, no el ejemplo.
+        self.assertEqual([d["id"] for d in summary["clips"]],
+                         [2, 3, 1])
+
+    def test_score_desc_dentro_del_mismo_origen(self):
+        t0 = 1795400000000
+        viejo_55 = _clip_listo(1, created_at=t0, score=55,
+                               origin="vod")
+        nuevo_70 = _clip_listo(2, created_at=t0 + 86400 * 1000,
+                               score=70, origin="vod")
+        bridge = FakeBridge([viejo_55, nuevo_70])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run(bridge, cfg={}, limit=10, workdir=tmp,
+                          now_ms=1795500000000)
+        # Mismo origen: manda el score, no la antigüedad.
+        self.assertEqual([d["id"] for d in summary["clips"]], [2, 1])
+
+    def test_manual_rank_null_al_final(self):
+        t0 = 1795400000000
+        sin_rank = _clip_listo(1, created_at=t0, origin="live")
+        rank_5 = _clip_listo(2, created_at=t0 + 1000, origin="live",
+                             manual_rank=5)
+        rank_1 = _clip_listo(3, created_at=t0 + 2000, origin="live",
+                             manual_rank=1)
+        bridge = FakeBridge([sin_rank, rank_5, rank_1])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run(bridge, cfg={}, limit=10, workdir=tmp,
+                          now_ms=1795500000000)
+        # Mismo segmento LIVE y mismo score: rank asc, NULL último.
+        self.assertEqual([d["id"] for d in summary["clips"]],
+                         [3, 2, 1])
+
+    def test_tope_15_se_respeta(self):
+        self.assertEqual(MAX_CLIPS_PER_RUN, 15)
+        clips = [_clip(i, viral={"quality_gate": _gate_aprobado()})
+                 for i in range(1, 19)]
+        bridge = FakeBridge(clips)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run(bridge, cfg={}, limit=MAX_CLIPS_PER_RUN,
+                          workdir=tmp, now_ms=1795500000000)
+        self.assertEqual(summary["revisados"], 15)
+        self.assertEqual(summary["seo_rellenados"], 15 * 4)
+        patched_ids = [cid for cid, _f in bridge.patched]
+        self.assertEqual(patched_ids, list(range(1, 16)))
+
+    def test_anti_atasco_no_consume_tope(self):
+        clips = [_clip(i, viral={"quality_gate": _gate_aprobado()})
+                 for i in range(1, 19)]
+        events = {i: [{"step": "revalidado",
+                       "at": 1795500000000 - 3600 * 1000}]
+                  for i in (1, 2, 3)}
+        bridge = FakeBridge(clips, events=events)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run(bridge, cfg={}, limit=MAX_CLIPS_PER_RUN,
+                          workdir=tmp, now_ms=1795500000000)
+        # Los 3 reintentados se saltan SIN consumir el tope: con 18
+        # candidatos y tope 15 se revisan 15 (todos los restantes).
+        self.assertEqual(summary["saltados"], 3)
+        self.assertEqual(summary["revisados"], 15)
+        self.assertEqual(summary["seo_rellenados"], 15 * 4)
+        patched_ids = [cid for cid, _f in bridge.patched]
+        self.assertEqual(patched_ids, list(range(4, 19)))
+
+    def test_solo_seo_consume_hueco_como_veredicto(self):
+        clips = [_clip(i, viral={"quality_gate": _gate_aprobado()})
+                 for i in range(1, 12)]
+        clips.append(_clip(12, viral={
+            "seo_scores": {p: 90 for p in PLATFORMS},
+            "quality_gate": {"decision": "pendiente_revision",
+                             "pasa": False, "criterios": {},
+                             "fallos": [], "fallos_duros": [],
+                             "motivo": "Gemini no disponible"}}))
+        bridge = FakeBridge(clips)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run(
+                bridge, cfg={}, limit=MAX_CLIPS_PER_RUN, workdir=tmp,
+                now_ms=1795500000000,
+                validate_fn=lambda *a, **k: _review_aprobado(),
+                transcribe_fn=lambda *a, **k: None)
+        # 11 solo-SEO + 1 solo-veredicto: los 12 consumen hueco.
+        self.assertEqual(summary["revisados"], 12)
+        self.assertEqual(summary["veredictos"], 1)
+        self.assertEqual(summary["seo_rellenados"], 11 * 4)
+        self.assertEqual(bridge.downloaded, [12])
 
 
 if __name__ == "__main__":

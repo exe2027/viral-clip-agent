@@ -9,7 +9,9 @@ mandaba antes de este cambio). Escribe de vuelta a D1 con PATCH;
 nunca publica ni encola (eso lo hace el ciclo del Worker con
 `auto_publish_top`).
 
-Por corrida (tope 10, los más antiguos primero):
+Por corrida (tope 15, listos salvo SEO/veredicto primero; dentro
+de cada grupo, orden de la Cola: LIVE, manual_rank, score desc,
+created_at asc):
 1. Candidatos: clips con `quality_gate` en (None, pendiente_revision)
    O sin `seo_scores` en alguna plataforma. Los `rechazado` NO se
    tocan. Un clip con `seo_scores` ya puesto NO se re-puntúa y un
@@ -55,7 +57,7 @@ from .validate_all import transcribe_clip_to_srt
 
 PLATFORMS = ["youtube_shorts", "tiktok", "instagram_reels",
              "facebook_reels"]
-MAX_CLIPS_PER_RUN = 10
+MAX_CLIPS_PER_RUN = 15
 RETRY_COOLDOWN_S = 24 * 3600
 STEP_REVALIDADO = "revalidado"
 
@@ -90,6 +92,49 @@ def _needs_work(clip):
     if _missing_seo_platforms(clip):
         return True
     return _gate_decision(clip) in (None, "pendiente_revision")
+
+
+def _numeric(value):
+    """El número o None (los booleanos no son score/rank)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _is_ready(clip):
+    """True si el clip está listo salvo SEO/veredicto (F5): tiene
+    MP4 en R2 (`video_r2_key` no vacío), subtítulos completos, no
+    está publicado, `score >= 45` y necesita SEO o veredicto según
+    `_needs_work`."""
+    if not clip.get("video_r2_key"):
+        return False
+    if clip.get("subtitles_complete") != 1:
+        return False
+    if clip.get("status") == "publicado":
+        return False
+    score = _numeric(clip.get("score"))
+    if score is None or score < 45:
+        return False
+    return _needs_work(clip)
+
+
+def _candidate_key(clip):
+    """Orden F5: listos primero; dentro de cada grupo, el orden de
+    la Cola en la aproximación disponible en Python (listQueueClips,
+    db.ts:1675, SIN el boost de clip_stats que el endpoint no
+    expone): LIVE primero, luego `manual_rank` (NULL al final),
+    luego `score` descendente, luego `created_at` ascendente."""
+    ready = 0 if _is_ready(clip) else 1
+    live = 0 if clip.get("origin") == "live" else 1
+    rank = _numeric(clip.get("manual_rank"))
+    rank_key = (0, rank) if rank is not None else (1, 0)
+    score = _numeric(clip.get("score"))
+    score_key = -score if score is not None else float("inf")
+    created = _numeric(clip.get("created_at"))
+    clip_id = _numeric(clip.get("id"))
+    return (ready, live, rank_key, score_key,
+            created if created is not None else 0,
+            clip_id if clip_id is not None else 0)
 
 
 def _recently_attempted(bridge, clip_id, now_ms):
@@ -229,8 +274,7 @@ def run(bridge, cfg=None, limit=MAX_CLIPS_PER_RUN, workdir=None,
     workdir = workdir or tempfile.mkdtemp(prefix="revalidate-")
     clips = bridge.list_clips() or []
     candidates = [c for c in clips if _needs_work(c)]
-    candidates.sort(key=lambda c: (c.get("created_at") or 0,
-                                   c.get("id") or 0))
+    candidates.sort(key=_candidate_key)
     summary = {"revisados": 0, "seo_rellenados": 0, "veredictos": 0,
                "saltados": 0, "errores": [], "clips": []}
     for clip in candidates:

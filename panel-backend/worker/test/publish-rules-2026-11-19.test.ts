@@ -195,6 +195,21 @@ describe("franjas horarias Chile (revoca 'sin franja' 2026-11-18)", () => {
     expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: outSlot, manual: true }))).toContain("fuera de franja");
     expect(publishGate("tiktok", gateCtx({ nowMs: outSlot }))).toBeNull(); // sin checkSlot no se comprueba
   });
+  test("F0 (spec 2026-11-24): la madrugada 00:00-01:00 es franja — el hueco YT 00:00 es alcanzable", () => {
+    // 00:30 dentro; 01:00 ya fuera (la ventana es [00:00, 01:00));
+    // 02:00 fuera.
+    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "00:30"))).toBe(true);
+    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "00:00"))).toBe(true);
+    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "01:00"))).toBe(false);
+    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "02:00"))).toBe(false);
+    // El gate con checkSlot pasa a las 00:30 (antes: "fuera de franja").
+    expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: santiagoWallToUtcMs(day, "00:30") }))).toBeNull();
+    // nextPlatformHourMs(YT, 00:30) = ahora: es el next_run_at con
+    // el que nace un job YT encolado a las 00:30 (dentro de la hora
+    // 00:00, vence inmediato).
+    const now = santiagoWallToUtcMs(day, "00:30");
+    expect(nextPlatformHourMs("youtube_shorts", now)).toBe(now);
+  });
 });
 
 describe("horario por plataforma (orden usuario 2026-11-22 01:11; YouTube 6/día 2026-11-23)", () => {
@@ -202,10 +217,11 @@ describe("horario por plataforma (orden usuario 2026-11-22 01:11; YouTube 6/día
   // Las horas del horario son "no antes de": el ciclo las recoge
   // en la siguiente pasada del cron. Las franjas del cron son
   // 12:00-16:00 y 18:00-01:00 (Chile); la franja de publicación
-  // (12-14, 18-20, 21-23) es más estrecha y solo se comprueba al
-  // encolar, no al ejecutar, así que las horas no tienen que caer
-  // dentro de ella. Lo que sí se exige: 6 huecos YouTube / 3 el
-  // resto, todos dentro de franja de cron y con ≥2 h entre ellos.
+  // (00-01, 12-14, 18-20, 21-23, con F0) es más estrecha y solo
+  // se comprueba al encolar, no al ejecutar, así que las horas no
+  // tienen que caer dentro de ella. Lo que sí se exige: 6 huecos
+  // YouTube / 3 el resto, todos dentro de franja de cron y con
+  // ≥2 h entre ellos.
   const inCronWindow = (hhmm: string): boolean => {
     const [h, m] = hhmm.split(":").map(Number);
     const mins = h * 60 + m;
