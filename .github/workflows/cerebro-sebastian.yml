@@ -34,12 +34,6 @@ name: Cerebro — Sebastián
 # de "configurar cuentas", ANTES de Iniciar; después no hay terminal.
 
 on:
-  # 09:00 America/Santiago en horario de verano chileno (UTC-3, nov-mar).
-  # En invierno (UTC-4, abr-sep) corre a las 08:00 locales; si se quiere
-  # 09:00 exacto todo el año, cambiar a '0 13 * * *' en abril y volver
-  # a '0 12 * * *' en septiembre.
-  schedule:
-    - cron: "0 12 * * *"
   repository_dispatch:
     types: [panel-start-sebastian, panel-stop-sebastian]
   workflow_dispatch:
