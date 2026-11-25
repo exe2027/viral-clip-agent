@@ -479,7 +479,29 @@ export function isYoutubeUrl(url: string): boolean {
   }
 }
 
-async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, youtubeUrl?: string): Promise<boolean> {
+// isFacebookUrl (spec 2026-11-25 entrada Facebook, §3.1/§3.4): el
+// MISMO predicado que is_facebook_url del cerebro. Host
+// facebook.com / www.facebook.com / m.facebook.com / fb.watch; ruta
+// con /reel/, /share/r/ o /watch/ (con v=), O fb.watch con cualquier
+// ruta (un enlace fb.watch/<código> tiene ruta /<código> y no pasaría
+// la regla de rutas: el host manda en ese caso). Lo usa el endpoint
+// POST /api/worker/run-facebook; exportado para tests.
+export function isFacebookUrl(url: string): boolean {
+  try {
+    const u = new URL(url.trim());
+    const host = u.hostname.toLowerCase();
+    if (host === "fb.watch") return true;
+    if (host !== "facebook.com" && host !== "www.facebook.com" && host !== "m.facebook.com") return false;
+    const path = u.pathname;
+    if (path.includes("/reel/") || path.includes("/share/r/")) return true;
+    if (path.includes("/watch/") && u.searchParams.has("v")) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, youtubeUrl?: string, facebookUrl?: string): Promise<boolean> {
   // Un Worker = un tenant: nunca se dispara (ni se emite token del
   // cerebro) para otro tenant. Falla en voz alta: el único llamador
   // de producción es el cron con env.TENANT.
@@ -504,14 +526,15 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, yout
   // que falló sin emitir token no engancha el throttle de 15 min
   // de abajo, así que este freno (backoff 1/5/15 + tope 3/día) es
   // el que impide reintentarlo cada minuto.
-  // EXENCIÓN URL EXPLÍCITA (spec 2026-11-24, §3.6): un dispatch
-  // panel-live con youtube_url es una petición explícita del
+  // EXENCIÓN URL EXPLÍCITA (spec 2026-11-24, §3.6; generalizada
+  // a Facebook en la spec 2026-11-25, §3.4): un dispatch panel-live
+  // con youtube_url o facebook_url es una petición explícita del
   // usuario (misma regla que panel-start: «NUNCA se frenan aquí»):
   // salta el freno de reintentos, el freno de presupuesto y el
-  // throttle de 15 min de abajo. Sin youtube_url no cambia nada.
-  const explicitYoutube = eventType === "panel-live" && !!youtubeUrl;
+  // throttle de 15 min de abajo. Sin URL no cambia nada.
+  const explicitUrl = eventType === "panel-live" && (!!youtubeUrl || !!facebookUrl);
   const automatic = eventType === "panel-live" || eventType === "panel-watchdog";
-  if (automatic && !explicitYoutube && !dispatchRetryAllowed(eventType, Date.now())) return false;
+  if (automatic && !explicitUrl && !dispatchRetryAllowed(eventType, Date.now())) return false;
   // Freno de presupuesto (A1, 2026-11-20): con el consumo por
   // encima del 70% del tope operativo, los dispatches
   // automáticos frecuentes (panel-live, panel-watchdog) no se
@@ -520,7 +543,7 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, yout
   // panel-daily (1/día) NUNCA se frenan aquí (misma regla que el
   // throttle de 15 min: ver skill d1-write-discipline). Sin
   // guardián vigente (o viejo), se dispara como siempre.
-  if ((eventType === "panel-live" || eventType === "panel-watchdog") && !explicitYoutube) {
+  if ((eventType === "panel-live" || eventType === "panel-watchdog") && !explicitUrl) {
     const guard = currentBudgetGuard();
     if (guard && !guard.shouldWrite("dispatch")) return false;
   }
@@ -534,7 +557,7 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, yout
   // throttles por escritura no persisten cuando la cuota se agota.
   // panel-start (el usuario pulsa Iniciar / el vigilante reinicia)
   // y panel-daily (1/día) NUNCA se frenan aquí.
-  if ((eventType === "panel-live" || eventType === "panel-watchdog") && !explicitYoutube) {
+  if ((eventType === "panel-live" || eventType === "panel-watchdog") && !explicitUrl) {
     if (await hasRecentBrainToken(env.DB, tenant, LIVE_DISPATCH_MIN_INTERVAL_MS, Date.now())) {
       await logWorkerEvent(env.DB, "github_dispatch",
         `Dispatch ${eventType} omitido para ${tenant}: ya se emitió un token del cerebro hace menos de 15 min (su corrida está en curso o en cola).`, tenant).catch(() => {});
@@ -575,7 +598,7 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, yout
       },
       body: JSON.stringify({
         event_type: effectiveEventType,
-        client_payload: { tenant, brain_token: brainToken, ...(youtubeUrl ? { youtube_url: youtubeUrl } : {}) },
+        client_payload: { tenant, brain_token: brainToken, ...(youtubeUrl ? { youtube_url: youtubeUrl } : {}), ...(facebookUrl ? { facebook_url: facebookUrl } : {}) },
       }),
     });
     await logWorkerEvent(env.DB, "github_dispatch",
@@ -2618,6 +2641,30 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       }
       return json({ ok: true, youtube_url: youtubeUrl });
     }
+    // Corte automático desde una URL de Facebook (spec 2026-11-25,
+    // §3.4): espejo exacto de run-youtube. Recibe {facebook_url},
+    // valida que sea Facebook (400 si no) y dispara panel-live con
+    // la URL en el client_payload (el job facebook-single la corta
+    // aunque haya directos en vivo). Si dispatchCerebro devuelve
+    // false, responde ok:false CON el motivo: nunca éxito falso.
+    // El dispatch explícito salta el throttle de 15 min, el freno
+    // de presupuesto y el freno de reintentos (misma regla que
+    // panel-start).
+    if (path === "/api/worker/run-facebook" && method === "POST") {
+      const body = await readJson(req);
+      const facebookUrl = typeof body.facebook_url === "string" ? body.facebook_url.trim() : "";
+      if (!facebookUrl || !isFacebookUrl(facebookUrl)) {
+        return err("facebook_url debe ser una URL de Facebook (facebook.com/reel, /share/r/, /watch/?v= o fb.watch).", 400);
+      }
+      const ok = await dispatchCerebro(env, "panel-live", tenant, undefined, facebookUrl);
+      if (!ok) {
+        return json(
+          { ok: false, error: "No se pudo disparar el cerebro para cortar el reel de Facebook (sin token del cerebro, cuota D1 alta, o GitHub rechazó el dispatch). Vuelve a intentarlo." },
+          502,
+        );
+      }
+      return json({ ok: true, facebook_url: facebookUrl });
+    }
     if (path === "/api/worker/stop" && method === "POST") {
       await setWorkerRunning(env.DB, tenant, false, "Worker parado desde el panel: la cola queda en pausa (nada se pierde).");
       // Sin dispatch: el flag D1 es la fuente de verdad y el
@@ -2842,21 +2889,28 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       // inventado ni un null silencioso.
       if (typeof body.influencer_id === "string" && !/^\d+$/.test(body.influencer_id.trim())) {
         const handle = body.influencer_id.trim();
-        // Resolución POR PLATAFORMA (spec 2026-11-24, §3.5): con
-        // dos Rubius (Twitch + YouTube), el primer match por nombre
+        // Resolución POR PLATAFORMA (spec 2026-11-24, §3.5;
+        // Facebook en la spec 2026-11-25, §3.3): con dos Rubius
+        // (Twitch + YouTube), el primer match por nombre
         // (ORDER BY id ASC) ganaba siempre la entrada Twitch y todo
         // clip de YouTube quedaba con su id. Si body.source_key es
         // un id de YouTube no vacío → entre las entradas
-        // platform=youtube; si no, entre las de Twitch. Si en la
+        // platform=youtube; si empieza por "fb:" → entre las de
+        // platform=facebook; si no, entre las de Twitch. Si en la
         // plataforma preferida no hay match, se cae al primer match
         // por nombre en cualquier plataforma (compat: un streamer
-        // con una sola entrada sigue resolviendo igual); solo si no
-        // existe en ninguna es 400.
+        // con una sola entrada sigue resolviendo igual) — EXCEPTO
+        // para "fb:", que es estricto: sin entrada facebook es 400
+        // sin fallback (la entrada de Twitch del mismo nombre NO
+        // autoriza un clip de Facebook). Solo si no existe en
+        // ninguna es 400.
         const rows = await listInfluencers(env.DB, tenant);
         const sourceKey = typeof body.source_key === "string" ? body.source_key.trim() : "";
-        const wantPlatform = sourceKey ? "youtube" : "twitch";
-        const found = rows.find((r) => r.platform === wantPlatform && normalizeHandle(r.name) === normalizeHandle(handle))
-          ?? rows.find((r) => normalizeHandle(r.name) === normalizeHandle(handle));
+        const wantPlatform = sourceKey.startsWith("fb:") ? "facebook" : sourceKey ? "youtube" : "twitch";
+        const preferred = rows.find((r) => r.platform === wantPlatform && normalizeHandle(r.name) === normalizeHandle(handle));
+        const found = preferred ?? (wantPlatform === "facebook"
+          ? undefined
+          : rows.find((r) => normalizeHandle(r.name) === normalizeHandle(handle)));
         if (!found) return err(`influencer_id: no hay ningún influencer con el handle "${handle}" en este panel.`, 400);
         body.influencer_id = found.id;
       }

@@ -25,7 +25,11 @@ Reglas duras (las del usuario, no se tocan salvo orden suya):
     auto_clips.py, que ya lo hace así con TwitchDownloaderCLI).
   * Filtros (2026-11-19, orden del usuario: listones bajados de
     50/90 a 45/80): viralidad >= 45, SEO >= 80 en las 4
-    plataformas, clip de 40 a 60 s, juego GTA VI, subtítulos
+    plataformas, clip de 15 a 60 s (2026-11-25, spec entrada
+    Facebook §3.2: el suelo era 40 s y bajó a 15 s, el
+    min_duration_s de viral_source en config.yaml; el cortador
+    de YouTube sigue sin dar clips de < 40 s por su propia banda),
+    juego GTA VI, subtítulos
     completos verificados (nada inventado, nada sin voz). Sin
     rescate por gritos: la puerta es 45/80 tal cual.
   * Pre-chequeo de VOD (2026-11-19): un VOD que claramente no es
@@ -75,7 +79,7 @@ FALLBACK_PRIORITY = ["rubius", "illojuan"]
 # bajados de 50/90 a 45/80).
 MIN_VIRALITY = 45
 MIN_SEO = 80
-MIN_DUR_S = 40
+MIN_DUR_S = 15
 MAX_DUR_S = 60
 PLATFORMS = ["youtube_shorts", "tiktok", "instagram_reels",
              "facebook_reels"]
@@ -84,16 +88,19 @@ MAX_CLIPS_PER_RUN = 2
 TOP_N_PER_VOD = 2
 VOD_COOLDOWN_H = 6
 AUTO_CLIPS_TIMEOUT_S = 1200  # 20 min por VOD
-# Umbral de prioridad al encolar, solo clips de YouTube (sin chat)
-# (§3.5, OPCIÓN A, spec 2026-11-24): un clip de YouTube con
-# panel_score < 53 no se encola (el bueno 55,7 -> 56 sí; el flojo
-# 50,4 -> 50 y el mínimo 49,3 -> 49 no). El chequeo va AL INICIO
-# de burn_and_enqueue, ANTES de subtitle_clip: los tres inputs
-# ya están a la entrada y un clip flojo no quema nada. En
-# producción no existe el archivo a los 3 días (publica el
-# Worker desde D1), así que el umbral NO va en publish.py /
-# order_queue / should_auto_archive (legacy local, sin efecto).
-YOUTUBE_PRIORITY_MIN = 53
+# Umbral de prioridad al encolar, solo clips de URL única
+# (YouTube/Facebook, sin chat) (§3.5, OPCIÓN A, spec 2026-11-24;
+# extendido a Facebook en la spec 2026-11-25 §3.3, que renombra
+# la constante: el nombre viejo mentía al cubrir Facebook): un
+# clip de URL única con panel_score < 53 no se encola (el bueno
+# 55,7 -> 56 sí; el flojo 50,4 -> 50 y el mínimo 49,3 -> 49 no).
+# El chequeo va AL INICIO de burn_and_enqueue, ANTES de
+# subtitle_clip: los tres inputs ya están a la entrada y un clip
+# flojo no quema nada. En producción no existe el archivo a los
+# 3 días (publica el Worker desde D1), así que el umbral NO va en
+# publish.py / order_queue / should_auto_archive (legacy local,
+# sin efecto).
+URL_CUT_PRIORITY_MIN = 53
 DEFAULT_STATE_PATH = os.path.join("runs", "vod-fallback", "state.json")
 DEFAULT_OUT_DIR = os.path.join("runs", "vod-fallback")
 
@@ -828,7 +835,7 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
         if isinstance(_value, (int, float)):
             _flat_seo[_p] = _value
     # Umbral de prioridad al encolar (§3.5, OPCIÓN A): solo clips
-    # de YouTube (source_key no vacío — los de Twitch llevan
+    # de URL única (source_key no vacío — los de Twitch llevan
     # source_key '' por construcción). Si panel_score < 53, NO se
     # encola: se descarta con el motivo en el log y como evento
     # clip_descartado (lo reporta run(), rama else — NO se añade
@@ -837,10 +844,10 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
     source_key = (clip.get("source_key") or "").strip()
     if source_key:
         _prio = panel_score(total, seo, chat_multiple)
-        if _prio < YOUTUBE_PRIORITY_MIN:
+        if _prio < URL_CUT_PRIORITY_MIN:
             return None, (f"prioridad {_prio} < "
-                          f"{YOUTUBE_PRIORITY_MIN} (clip de YouTube "
-                          "sin chat): no se encola")
+                          f"{URL_CUT_PRIORITY_MIN} (clip de URL "
+                          "única sin chat): no se encola")
     video = os.path.join(out_dir, clip.get("file", ""))
     if not os.path.isfile(video):
         return None, f"falta el MP4 {video}"
@@ -1257,23 +1264,153 @@ def _run_single_youtube(youtube_url, max_clips, top_n, state_path,
     return n, summary
 
 
+def _run_single_facebook(facebook_url, max_clips, top_n, state_path,
+                         out_root, dry_run, bridge, enqueue_fn,
+                         facebook_clips_fn, ignore_cooldown):
+    """Rama de URL única de Facebook (§3.1.1, spec 2026-11-25):
+    procesa ESE reel (pre-chequeo GTA, resolución del autor con
+    fail closed, dedup, cortador, puertas, encolado) y retorna,
+    saltando el barrido Y el chequeo de directos. Una URL
+    despachada corta aunque alguien esté en vivo (petición
+    explícita del usuario). Espejo paso a paso de
+    ``_run_single_youtube``, con el puente ANTES de la resolución
+    del autor (reorden frente a YouTube: el puente se crea aquí
+    para poder reportar el fail-closed del autor como evento
+    ``clip_descartado``)."""
+    from .facebook_cut import (
+        facebook_clearly_not_gta6,
+        fetch_facebook_metadata,
+        is_facebook_url,
+        run_facebook_clips,
+        _resolve_single_facebook_influencer,
+    )
+    from .streamers import load_streamers
+
+    # (1) ¿Es URL de Facebook?
+    if not is_facebook_url(facebook_url):
+        _log(f"facebook_url no es de Facebook: {facebook_url}")
+        return 0, "facebook_url no es de Facebook"
+    # (2) Metadatos (con reintento en JSON vacío/inválido).
+    try:
+        meta = fetch_facebook_metadata(facebook_url)
+    except Exception as e:  # noqa: BLE001 - sin metadatos no hay corte
+        _log(f"URL única sin metadatos ({e}); se salta.")
+        return 0, f"sin metadatos de la URL ({e})"
+    # (3) Id del reel: del `id` del -J, sin parseo de la URL (el
+    # /share/r/ no trae el id).
+    reel_id = str(meta.get("id") or "")
+    if not reel_id:
+        return 0, "sin id de reel en la URL"
+    # (4) Pre-chequeo GTA por hashtags de la descripción.
+    skip_reason = facebook_clearly_not_gta6(meta)
+    if skip_reason:
+        _log(f"URL única {reel_id} se salta ({skip_reason}).")
+        return 0, f"no es GTA VI: {skip_reason}"
+    # (5) Puente ANTES de la resolución del autor (para poder
+    # reportar el fail-closed).
+    if bridge is None and not dry_run:
+        from .panel_bridge import PanelBridge
+        bridge = PanelBridge.from_env()
+        if bridge is None:
+            _log("Sin PANEL_USERNAME/PANEL_PASSWORD: no se puede "
+                 "encolar en el panel; sin fallback.")
+            return 0, "sin credenciales del panel"
+    # (6) Autor: fail closed si no tiene entrada
+    # platform=facebook en el panel (la de Twitch del mismo
+    # nombre no autoriza Facebook).
+    try:
+        streamers = load_streamers()
+    except Exception as e:  # noqa: BLE001 - sin lista, fail closed
+        _log(f"URL única: sin lista de influencers ({e}); fail "
+             "closed (autor sin entrada facebook).")
+        streamers = []
+    lang, name = _resolve_single_facebook_influencer(meta, streamers)
+    if lang is None:
+        _report_event(
+            "clip_descartado",
+            f"{name}: autor sin entrada facebook en el panel — "
+            f"reel {reel_id}",
+            bridge=bridge, dry_run=dry_run)
+        _log(f"URL única: autor {name} sin entrada facebook en el "
+             "panel; no se encola.")
+        return 0, "autor sin entrada facebook en el panel"
+    _log(f"URL única: reel {reel_id} "
+         f"({(meta.get('description') or '')[:60]!r}, idioma {lang}, "
+         f"influencer {name})")
+    # (7) Enfriamiento por id del reel (str(vod_id)).
+    state = load_state(state_path)
+    if vod_on_cooldown(state, reel_id) and not ignore_cooldown:
+        _log(f"URL única: reel {reel_id} en enfriamiento "
+             "(intentado hace <6 h); se salta.")
+        return 0, f"reel {reel_id} en enfriamiento"
+    # (8) Lista del panel (si falla, se sigue sin dedup contra
+    # el panel, con log).
+    panel_clips = []
+    if bridge is not None:
+        try:
+            panel_clips = bridge.list_clips() or []
+        except Exception as e:  # noqa: BLE001
+            _log(f"No se pudo listar la Cola del panel ({e}); se "
+                 "sigue sin dedup contra el panel.")
+            panel_clips = []
+    # (9) Dry-run: marca el intento y no corta ni encola.
+    if dry_run:
+        _log("URL única: dry-run, no se corta ni se encola.")
+        mark_vod_attempted(state, reel_id)
+        save_state(state_path, state)
+        return 0, "dry-run URL única"
+    # (10) Cortador (out_dir = out_root/<reel_id>, mismo layout
+    # que YouTube, sin prefijo fb_: la fuente se distingue por
+    # source_key, no por el directorio).
+    out_dir = os.path.join(out_root, str(reel_id))
+    manifest = (facebook_clips_fn or run_facebook_clips)(
+        facebook_url, out_dir, top_n=top_n, lang=lang,
+        single_url=True)
+    if not manifest:
+        mark_vod_attempted(state, reel_id)
+        save_state(state_path, state)
+        return 0, "el cortador de Facebook no dejó manifiesto"
+    # (11) Puertas + dedup + cruce + encolado (vod_id = id
+    # numérico del reel en todas partes).
+    influencer_names = influencer_names_by_id(bridge)
+    session_clips = []
+    n, starts = _process_manifest_clips(
+        bridge, name, reel_id, out_dir, manifest, panel_clips,
+        session_clips, lang, top_n, max_clips, enqueue_fn, dry_run,
+        influencer_names)
+    # (12) Enfriamiento + estado.
+    mark_vod_attempted(state, reel_id, starts)
+    save_state(state_path, state)
+    summary = (f"URL única {reel_id}: {n} clip(s) en la Cola del "
+               "panel (sin publicar)")
+    _log(summary)
+    return n, summary
+
+
 def run(max_vods=MAX_VODS_PER_RUN, max_clips=MAX_CLIPS_PER_RUN,
         top_n=TOP_N_PER_VOD, only=None, state_path=DEFAULT_STATE_PATH,
         out_root=DEFAULT_OUT_DIR, dry_run=False, bridge=None,
         scan_fn=None, latest_vod_fn=None, auto_clips_fn=None,
         enqueue_fn=None, ignore_cooldown=False, youtube_enabled=False,
-        youtube_url=None, youtube_clips_fn=None):
+        youtube_url=None, youtube_clips_fn=None,
+        facebook_url=None, facebook_clips_fn=None):
     """Una corrida del fallback. Devuelve (n_enqueued, resumen).
 
     Las funciones *_fn existen para los tests (sin red ni panel).
     ``youtube_enabled`` (CLI ``--youtube``) activa la fuente
     YouTube en ``latest_vod_for``; apagado por defecto.
-    ``youtube_url`` (CLI ``--youtube-url``) se atiende ANTES del
-    chequeo de directos: procesa ESA URL y retorna, saltando el
-    barrido Y el chequeo de directos.
+    ``youtube_url`` (CLI ``--youtube-url``) y ``facebook_url``
+    (CLI ``--facebook-url``) se atienden ANTES del chequeo de
+    directos: procesan ESA URL y retornan, saltando el barrido Y
+    el chequeo de directos.
     """
     # 0. URL única (antes del chequeo de directos): corta aunque
     # haya directos en vivo (petición explícita del usuario).
+    if facebook_url:
+        return _run_single_facebook(
+            facebook_url, max_clips, top_n, state_path, out_root,
+            dry_run, bridge, enqueue_fn, facebook_clips_fn,
+            ignore_cooldown)
     if youtube_url:
         return _run_single_youtube(
             youtube_url, max_clips, top_n, state_path, out_root,
@@ -1450,6 +1587,10 @@ def main(argv=None):
                    help="URL única de YouTube a cortar (se atiende "
                         "ANTES del chequeo de directos: corta aunque "
                         "haya directos en vivo; salta el barrido)")
+    p.add_argument("--facebook-url", default="",
+                   help="URL única de Facebook a cortar (se atiende "
+                        "ANTES del chequeo de directos: corta aunque "
+                        "haya directos en vivo; salta el barrido)")
     args = p.parse_args(argv)
     only = [s for s in args.streamers.split(",") if s.strip()] \
         or None
@@ -1459,7 +1600,8 @@ def main(argv=None):
         out_root=args.out_dir, dry_run=args.dry_run,
         ignore_cooldown=args.ignore_cooldown,
         youtube_enabled=args.youtube,
-        youtube_url=args.youtube_url or None)
+        youtube_url=args.youtube_url or None,
+        facebook_url=args.facebook_url or None)
     return 0
 
 

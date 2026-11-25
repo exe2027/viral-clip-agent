@@ -126,6 +126,10 @@
           <input id="youtubeUrl" type="url" inputmode="url" placeholder="URL de YouTube (opcional) — pega un video para cortarlo solo" aria-label="URL de YouTube para cortar">
           <button id="btnRunYoutube" type="button" class="ghost">Cortar de YouTube</button>
         </div>
+        <div class="row row-fill">
+          <input id="facebookUrl" type="url" inputmode="url" placeholder="URL de Facebook (opcional) — pega un reel para cortarlo solo" aria-label="URL de Facebook para cortar">
+          <button id="btnRunFacebook" type="button" class="ghost">Cortar de Facebook</button>
+        </div>
         <p class="dim">Al iniciar, el Worker dispara el cerebro en GitHub Actions y el cron cada 5 min avanza la cola solo. Parado, la cola queda en pausa y nada se pierde. El loop sigue aunque cierres sesión, cierres el navegador o apagues el teléfono: Iniciar guarda el estado en el Worker y el cron trabaja solo desde ahí.</p>
         <div id="onboardingBanner" class="hidden" role="status">
           <p><b>Te falta completar el asistente de onboarding.</b> Copia la configuración base y conecta tus cuentas antes de iniciar el Worker.</p>

@@ -449,7 +449,7 @@ async function loadJobs() {
 async function workerAction(path, okText, btn, loadingText) {
   if (workerBusy) return;
   workerBusy = true;
-  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnRunYoutube"), $("btnStartCfg"), $("btnStopCfg"), $("btnStartHero"), $("btnStopHero")].filter(Boolean);
+  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnRunYoutube"), $("btnRunFacebook"), $("btnStartCfg"), $("btnStopCfg"), $("btnStartHero"), $("btnStopHero")].filter(Boolean);
   const labels = btns.map((b) => b.innerHTML);
   btns.forEach((b) => { b.disabled = true; });
   if (btn) btn.innerHTML = esc(loadingText);
@@ -3593,6 +3593,24 @@ $("btnRunYoutube").addEventListener("click", async () => {
     const r = await api("/api/worker/run-youtube", { method: "POST", body: JSON.stringify({ youtube_url: url }) });
     if (r && r.ok === false) showMsg("No se pudo despachar: " + (r.reason || r.error || "motivo desconocido"), "err");
     else { showMsg("Video despachado: el programa lo corta solo y lo deja en la Cola.", "info"); $("youtubeUrl").value = ""; }
+    await loadWorker();
+  } catch (e) { showMsg(e.message, "err"); }
+  finally { workerBusy = false; setLoading(btn, false); }
+});
+// Cortar un reel concreto de Facebook (spec 2026-11-25, §3.4):
+// espejo de btnRunYoutube; despacha POST /api/worker/run-facebook;
+// el programa lo corta solo y lo deja en la Cola. Sin URL no hace nada.
+$("btnRunFacebook").addEventListener("click", async () => {
+  const url = ($("facebookUrl").value || "").trim();
+  if (!url) { showMsg("Pega primero la URL de un reel de Facebook.", "err"); $("facebookUrl").focus(); return; }
+  if (workerBusy) return;
+  workerBusy = true;
+  const btn = $("btnRunFacebook");
+  setLoading(btn, true, "Despachando…");
+  try {
+    const r = await api("/api/worker/run-facebook", { method: "POST", body: JSON.stringify({ facebook_url: url }) });
+    if (r && r.ok === false) showMsg("No se pudo despachar: " + (r.reason || r.error || "motivo desconocido"), "err");
+    else { showMsg("Reel despachado: el programa lo corta solo y lo deja en la Cola.", "info"); $("facebookUrl").value = ""; }
     await loadWorker();
   } catch (e) { showMsg(e.message, "err"); }
   finally { workerBusy = false; setLoading(btn, false); }

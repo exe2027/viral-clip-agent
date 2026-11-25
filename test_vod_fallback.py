@@ -13,7 +13,7 @@ módulo no tiene ninguna llamada a publicar.
 - fallback_order: Rubius, IlloJuan, resto ES en orden de yaml,
   después EN en orden de yaml.
 - clip_passes_gates: viralidad >= 45, SEO >= 80 en las 4
-  plataformas, 40-60 s, juego GTA VI; falla cerrado sin datos
+  plataformas, 15-60 s, juego GTA VI; falla cerrado sin datos
   (2026-11-19, orden del usuario: listones bajados de 50/90).
 - already_enqueued: dedup contra el panel por (VOD, inicio).
 - burn_and_enqueue: subtítulos completos, o sin voz + pasa
@@ -22,6 +22,8 @@ módulo no tiene ninguna llamada a publicar.
   a publicar; el payload lleva language ("es"/"en").
 - run: sin directos en GTA VI -> modo VOD (ES y EN); con directos
   (ES o EN) -> no hace nada.
+- clip_passes_gates: duración 15-60 s (2026-11-25, spec entrada
+  Facebook §3.2).
 """
 
 import os
@@ -36,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clipagent.vod_fallback import (  # noqa: E402
     MAX_DUR_S,
     MIN_DUR_S,
-    YOUTUBE_PRIORITY_MIN,
+    URL_CUT_PRIORITY_MIN,
     already_enqueued,
     burn_and_enqueue,
     clip_passes_gates,
@@ -239,15 +241,27 @@ class TestClipPassesGates(unittest.TestCase):
         ok, _ = clip_passes_gates(_clip(seo_scores=seo), "2932415021")
         self.assertFalse(ok)
 
-    def test_duracion_30_no_pasa(self):
-        ok, _ = clip_passes_gates(_clip(duration=30), "2932415021")
+    def test_duracion_10_no_pasa(self):
+        ok, _ = clip_passes_gates(_clip(duration=10), "2932415021")
         self.assertFalse(ok)
+
+    def test_duracion_18_pasa(self):
+        # 2026-11-25 (spec entrada Facebook §3.2): el suelo bajó
+        # de 40 s a 15 s; un clip de 18 s pasa la puerta.
+        ok, reasons = clip_passes_gates(_clip(duration=18),
+                                        "2932415021")
+        self.assertTrue(ok, reasons)
+
+    def test_duracion_45_twitch_pasa(self):
+        ok, reasons = clip_passes_gates(_clip(duration=45),
+                                        "2932415021")
+        self.assertTrue(ok, reasons)
 
     def test_duracion_61_no_pasa(self):
         ok, _ = clip_passes_gates(_clip(duration=61), "2932415021")
         self.assertFalse(ok)
 
-    def test_limites_40_y_60_pasan(self):
+    def test_limites_15_y_60_pasan(self):
         for d in (MIN_DUR_S, MAX_DUR_S):
             ok, r = clip_passes_gates(_clip(duration=d), "2932415021")
             self.assertTrue(ok, r)
@@ -1035,7 +1049,7 @@ class TestYoutubePriorityThreshold(unittest.TestCase):
             _yt_clip(47, 80, 2.0))
         self.assertIsNone(panel_id)
         self.assertIn("50", why)
-        self.assertIn(str(YOUTUBE_PRIORITY_MIN), why)
+        self.assertIn(str(URL_CUT_PRIORITY_MIN), why)
         self.assertEqual(bridge.created, [])
         # El chequeo va ANTES de subtitle_clip: un clip flojo no
         # quema nada.

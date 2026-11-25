@@ -301,12 +301,19 @@ class TestSingleList(unittest.TestCase):
             self.assertFalse(ok)  # no se duplica
             self.assertIn("ya está", msg)
             ok, msg = streamers.add_streamer(
-                {"name": "malo", "platform": "facebook"}, path=path,
+                {"name": "bueno", "platform": "facebook"}, path=path,
+                base_dir=tmp)
+            # 2026-11-25 (spec entrada Facebook §3.3): "facebook"
+            # es plataforma válida de streamer (antes se rechazaba).
+            self.assertTrue(ok, msg)
+            ok, msg = streamers.add_streamer(
+                {"name": "malo", "platform": "tiktok"}, path=path,
                 base_dir=tmp)
             self.assertFalse(ok)
-            self.assertIn("twitch, kick o youtube", msg)
+            self.assertIn("twitch, kick, youtube o facebook", msg)
             self.assertTrue(streamers.remove_streamer("nuevo", path, tmp))
             self.assertFalse(streamers.remove_streamer("nuevo", path, tmp))
+            self.assertTrue(streamers.remove_streamer("bueno", path, tmp))
             self.assertEqual(streamers.load_streamers(path, tmp), [])
 
     def test_denegado_excluye(self):

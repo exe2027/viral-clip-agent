@@ -1928,16 +1928,20 @@ def publish_one(queue, item, cfg=None, live=False, mode="full",
     # clips nuevos (el permiso no se revoca, solo se pausa).
     # La plataforma de ORIGEN no está en el ítem de la cola (su
     # "platform" es la de publicación, p. ej. tiktok): se alcanza
-    # por el manifiesto con load_clip_package -> source_key (id de
-    # YouTube -> youtube, si no twitch). Con dos entradas del
-    # mismo nombre (Rubius twitch + youtube), la desactivada es la
-    # que frena sus clips, no la otra.
+    # por el manifiesto con load_clip_package -> source_key
+    # ("fb:..." -> facebook, otro source_key -> youtube, si no
+    # twitch). Con dos entradas del mismo nombre (Rubius twitch +
+    # youtube), la desactivada es la que frena sus clips, no la
+    # otra.
     if item.get("streamer"):
         from .streamers import get_streamer
         origin_platform = "twitch"
         try:
             _pkg, _manifest = load_clip_package(item["clip"])
-            if (_pkg or {}).get("source_key"):
+            _source_key = (_pkg or {}).get("source_key") or ""
+            if _source_key.startswith("fb:"):
+                origin_platform = "facebook"
+            elif _source_key:
                 origin_platform = "youtube"
         except Exception:  # noqa: BLE001 - sin manifiesto, twitch
             pass
