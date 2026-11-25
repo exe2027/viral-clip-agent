@@ -52,7 +52,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 PANEL_URL="${PANEL_URL:-https://avc-em9.pages.dev}"
-PANEL_DIR="independencia/panel-backend"
+PANEL_DIR="panel-backend"
 FAILED=0
 
 health_check() {
