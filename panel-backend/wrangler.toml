@@ -30,7 +30,7 @@ workers_dev = true
 # Avanza la cola SOLO si el tenant inició su Worker (botón Iniciar).
 # Un tenant parado no frena al otro.
 [triggers]
-crons = ["*/5 15-18 * * *", "*/5 21-23,0-3 * * *"]
+crons = ["*/5 15-18 * * *", "*/5 21-23,0-3 * * *", "0 12,13 * * *", "0 6,7 * * *"]
 
 [[d1_databases]]
 binding = "DB"

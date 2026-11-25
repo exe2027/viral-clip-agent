@@ -14,10 +14,6 @@
 # Vía principal (decisión 17 nov 2026 "Todo automático"): Cloudflare
 # + GitHub Actions. El panel se despliega aquí (wrangler); el cerebro
 # va por git push (los workflows corren desde la rama por defecto).
-# Este script VERIFICA que los workflows del cerebro existen y son
-# YAML válido, pero no los despliega: el push a GitHub está bloqueado
-# por 403 (permiso Contents: Write) hasta que se resuelva; sin push,
-# los workflows no llegan al repo y el cerebro no corre.
 #
 # Uso:
 #   ./deploy-all.sh [--check-only] [--commit <sha>]
