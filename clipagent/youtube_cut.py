@@ -1018,11 +1018,11 @@ def run_youtube_clips(vod_url, out_dir, top_n=2, lang="es",
         # descartados con el motivo, nunca con título de reglas).
         if viral.get("needs_human_review") or not viral.get(
                 "best_title"):
-            _log(f"clip {idx}: sin título honesto: retención para "
-                 f"revisión")
+            _reason = viral.get("hold_reason") or (
+                "sin título honesto: retención para revisión")
+            _log(f"clip {idx}: {_reason}")
             manifest["descartados"].append({
-                "reason": "sin título honesto: retención para "
-                          "revisión",
+                "reason": _reason,
                 "start": start, "vod_id": video_id})
             _write_manifest(out_dir, manifest)
             continue

@@ -792,6 +792,7 @@ def vod_package_from_transcript(transcript_txt, streamer, lang, risas,
                  "viral_multiple": round(float(audio_multiple_value), 2),
                  "needs_human_review": True,
                  "dedupe_verified": dedupe_verified,
+                "hold_reason": pkg.get("hold_reason"),
                  "pkg_source": pkg.get("pkg_source") or "held"}
         if game:
             viral["game"] = game
@@ -811,6 +812,7 @@ def vod_package_from_transcript(transcript_txt, streamer, lang, risas,
              "viral_multiple": round(float(audio_multiple_value), 2),
              "needs_human_review": bool(pkg.get("needs_human_review")),
              "dedupe_verified": dedupe_verified,
+            "hold_reason": pkg.get("hold_reason"),
              "pkg_source": pkg.get("pkg_source")}
     if game:
         viral["game"] = game

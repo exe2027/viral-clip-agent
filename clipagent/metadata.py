@@ -2680,6 +2680,33 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     # validadas al paquete, nunca cambia best_title ni la descripción.
     # reel_patterns puede ser el dict de patrones o el informe
     # completo (con clave "patterns").
+    # Humanizador (adopción 1, 2026-11-26; COMPARACION.md §3): el
+    # paquete ya validado (R1–R4) pasa por humanize + detect ANTES de
+    # publicarse. El título y la miniatura solo se limpian en
+    # invisible+tipográfico (no cambian palabras: no invalidan la
+    # validación ni la cita literal I3); la descripción y los hashtags
+    # pasan los 3 pases. FLAGGED en cualquier campo = retención
+    # (best None, needs_human_review True), igual que un título sin
+    # verdad (R3.4). El título humanizado ES el best_title: el título
+    # quemado en el vídeo es el publicado (invariante R1.3).
+    detection = None
+    hold_reason = None
+    if gemini_pkg and best:
+        from .humanize import (HOLD_REASON_HUMANIZE,
+                               detect_package_texts, humanize,
+                               humanize_title)
+        best = humanize_title(best) or None
+        thumb = humanize_title(thumb)
+        desc = humanize(desc)[0].strip()
+        # Los hashtags se humanizan como una sola línea (el lexicón
+        # borra los de relleno: #viral, #fyp...) y se vuelven a
+        # separar; #Shorts no está en la lista y sobrevive.
+        hashtags = humanize(" ".join(hashtags))[0].split()
+        hook = _hook_from_description(desc)
+        detection = detect_package_texts(best, desc, hashtags)
+        if detection["verdict"] == "FLAGGED":
+            best = None
+            hold_reason = HOLD_REASON_HUMANIZE
     # Dedupe verificado (R4.1): solo si hubo título Gemini y el
     # llamador verificó el dedupe (lista reciente disponible).
     pkg_dedupe_verified = bool(gemini_pkg) and bool(dedupe_verified) \
@@ -2696,10 +2723,18 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "hashtags": hashtags,  # hashtags de Gemini (o [] en retención)
         # Gemini o retención (enmienda 2026-11-26): "gemini" si el
         # paquete lo escribió la IA, "retained" si no hubo paquete
-        # Gemini válido y verificado tras los reintentos.
-        "pkg_source": "gemini" if gemini_pkg else "retained",
-        "title_issues": _check_title_lint(best) if best else ["sin título Gemini válido y verificado: retención para revisión"],
+        # Gemini válido y verificado tras los reintentos, o si el
+        # humanizador lo marcó FLAGGED.
+        "pkg_source": "retained" if (not gemini_pkg or hold_reason)
+        else "gemini",
+        "title_issues": _check_title_lint(best) if best else [
+            hold_reason or "sin título Gemini válido y verificado: "
+            "retención para revisión"],
         "needs_human_review": best is None,
+        # Humanizador: motivo de retención propio (None si no hubo
+        # FLAGGED) + veredictos por campo, para trazabilidad.
+        "hold_reason": hold_reason,
+        "humanize": detection,
         # R4.1: el dedupe solo está verificado si llegó la lista de
         # títulos recientes del panel y hubo título que verificar.
         "dedupe_verified": pkg_dedupe_verified,

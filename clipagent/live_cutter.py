@@ -1150,9 +1150,14 @@ class LiveCutterSession(LiveSession):
         needs_human_review = bool(
             transcription_failed or not best_title
             or (pub_pkg or {}).get("needs_human_review"))
+        # Humanizador (adopción 1, 2026-11-26): si el paquete trae su
+        # propio motivo de retención (FLAGGED por marca de IA), ese es
+        # el hold_reason que viaja al panel; si no, el genérico R3.4.
+        hold_reason = ((pub_pkg or {}).get("hold_reason")
+                       if needs_human_review else None) or HOLD_REASON
         if needs_human_review:
             print(f"RETENIDO {self.streamer} pico {peak_ts:.0f}s: "
-                  f"{HOLD_REASON}", flush=True)
+                  f"{hold_reason}", flush=True)
             title = HELD_TITLE
             burned_title = ""
             pkg_source = "held"
@@ -1355,7 +1360,7 @@ class LiveCutterSession(LiveSession):
             "needs_human_review": needs_human_review,
             "dedupe_verified": dedupe_verified,
             "viral": {"dedupe_verified": dedupe_verified,
-                      **({"hold_reason": HOLD_REASON}
+                      **({"hold_reason": hold_reason}
                          if needs_human_review else {})},
             "seo": seo, "publish_status": {
                 p: {"status": s[0], "reason": s[1]}
@@ -1643,7 +1648,9 @@ class LiveCutterSession(LiveSession):
             if record.get("quality_gate"):
                 _viral["quality_gate"] = record["quality_gate"]
             if record.get("needs_human_review"):
-                _viral["hold_reason"] = HOLD_REASON
+                _viral["hold_reason"] = (
+                    (record.get("viral") or {}).get("hold_reason")
+                    or HOLD_REASON)
             if _viral:
                 payload["viral"] = _viral
             clip = self.bridge.create_clip(payload)
@@ -1700,7 +1707,9 @@ class LiveCutterSession(LiveSession):
                     f"{self.streamer}: «{record['title']}» encolado "
                     f"(viralidad {record.get('viral_total')}; SEO "
                     f"{_seo_summary(record.get('seo'))})"
-                    + (" — RETENIDO: " + HOLD_REASON
+                    + (" — RETENIDO: " + (
+                        (record.get("viral") or {}).get("hold_reason")
+                        or HOLD_REASON)
                        if record.get("needs_human_review") else ""))
             for step, msg in (
                     ("detectado", f"LIVE {self.streamer}: pico a "

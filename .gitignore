@@ -2,6 +2,7 @@
 *.json
 !test_chat.json
 !reel_patterns.json
+!clipagent/slop.json
 clips/
 runs/
 __pycache__/
