@@ -55,6 +55,7 @@ from datetime import datetime, timezone
 from .config import load_config
 from .final_review import find_facecam_box_in_source, validate_final_clip
 from .jobs import PLATFORMS
+from .hook_formulas import formula_name
 from .hookscore import WEAK_BELOW, score_hook
 from .metadata import caption_first_line, game_hashtags_tags
 from .rubius import (
@@ -622,6 +623,9 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
     # el clip ni elige "el mejor" (el propio repo mide que no elige
     # ganadores, AUC 0.56); el score queda en el manifiesto.
     hook_score, hook_weakest, hook_dealbreaker = score_hook(title)
+    # Fórmula del gancho (2026-11-26, adopción 3/5): solo se nombra
+    # en el report, como el score; no es una puerta ni elige nada.
+    hook_formula = formula_name(title)
     report = {
         "video_id": video_id, "streamer": streamer,
         "language": lang, "url": candidate.get("url"),
@@ -634,6 +638,7 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
         "hook_weakest": hook_weakest,
         "hook_dealbreaker": hook_dealbreaker,
         "hook_weak": bool(hook_score < WEAK_BELOW),
+        "hook_formula": hook_formula,
         "duration_s": duration, "title": title,
     }
     if not video_id or not title or duration <= 0:

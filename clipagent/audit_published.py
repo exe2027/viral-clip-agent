@@ -45,6 +45,7 @@ import sys
 from datetime import datetime, timezone
 
 from .d1_client import D1Client
+from .hook_formulas import UNCLASSIFIED, formula_name
 from .hookscore import score_hook
 from .youtube import (
     MAX_ATTEMPTS,
@@ -225,6 +226,20 @@ def diagnose(clip):
     return "normal"
 
 
+def _formula_counts(group):
+    """Conteos de fórmulas de gancho en un grupo de clips.
+
+    Por título (la misma fuente que el hook score). Devuelve un
+    dict {fórmula: n} ordenado por nº desc y luego por nombre.
+    """
+    counts = {}
+    for clip in group or []:
+        name = formula_name(str(clip.get("title") or ""))
+        counts[name] = counts.get(name, 0) + 1
+    return dict(sorted(counts.items(),
+                       key=lambda kv: (-kv[1], kv[0])))
+
+
 def _avg_hook_score(clips):
     """Hook score medio de un grupo de clips (por su título)."""
     scores = []
@@ -256,6 +271,11 @@ def build_report(clips, median, tenant, platform):
     bottom = ranked[-5:][::-1] if ranked else []
     top_hook = _avg_hook_score(top)
     bottom_hook = _avg_hook_score(bottom)
+    formula_top = _formula_counts(top)
+    formula_bottom = _formula_counts(bottom)
+    n_unclassified = sum(
+        1 for c in ranked
+        if formula_name(str(c.get("title") or "")) == UNCLASSIFIED)
 
     def _avg_duration(group):
         durs = [int(c.get("duration_s") or 0) for c in group
@@ -317,6 +337,23 @@ def build_report(clips, median, tenant, platform):
             f"Solo {len(ranked)} clips con outlier: con 6 no se ve "
             "un patrón, y decirlo es mejor que inventarlo.")
 
+    # Qué fórmula funcionó (descriptivo, no una puerta: la fórmula
+    # nombra el gancho, no elige ganadores — ver hook_formulas.py).
+    if ranked:
+        top_only = [name for name, n in formula_top.items()
+                    if n >= 2 and name not in formula_bottom
+                    and name != UNCLASSIFIED]
+        for name in top_only:
+            reading.append(
+                f"La fórmula {name} aparece arriba "
+                f"({formula_top[name]}) y no abajo.")
+        if n_unclassified > len(ranked) / 2:
+            reading.append(
+                f"Más de la mitad sin fórmula ({n_unclassified} de "
+                f"{len(ranked)}): la mayoría de títulos no sigue "
+                "ninguna de las 26 fórmulas (o son títulos nuestros, "
+                "no ganchos hablados).")
+
     def _row(clip):
         return {
             "title": clip.get("title") or "",
@@ -326,6 +363,8 @@ def build_report(clips, median, tenant, platform):
             "duration_s": clip.get("duration_s"),
             "posted_day": clip.get("posted_day") or "",
             "diagnosis": diagnose(clip),
+            "hook_formula": formula_name(
+                str(clip.get("title") or "")),
         }
 
     return {
@@ -339,6 +378,9 @@ def build_report(clips, median, tenant, platform):
         "bottom5": [_row(c) for c in bottom],
         "hook_score_top": top_hook,
         "hook_score_bottom": bottom_hook,
+        "formula_top": formula_top,
+        "formula_bottom": formula_bottom,
+        "n_unclassified": n_unclassified,
         "reading": reading,
         "has_follows_data": has_follows,
         "gaps": [
@@ -368,13 +410,25 @@ def render_text(report):
     for row in report["top5"]:
         lines.append(
             f"  {row['outlier']}x  {row['views']} views  "
-            f"{row['title'][:70]}  [{row['diagnosis']}]")
+            f"{row['title'][:70]}  [{row['diagnosis']}]  "
+            f"({row.get('hook_formula') or UNCLASSIFIED})")
     lines.append("")
     lines.append("BOTTOM 5 POR OUTLIER")
     for row in report["bottom5"]:
         lines.append(
             f"  {row['outlier']}x  {row['views']} views  "
-            f"{row['title'][:70]}  [{row['diagnosis']}]")
+            f"{row['title'][:70]}  [{row['diagnosis']}]  "
+            f"({row.get('hook_formula') or UNCLASSIFIED})")
+    if report["n_ranked"]:
+        def _fmt(counts):
+            return ", ".join(f"{name} ({n})"
+                             for name, n in counts.items()) or "—"
+        lines.append("")
+        lines.append("FÓRMULAS")
+        lines.append(f"  arriba: {_fmt(report['formula_top'])}")
+        lines.append(f"  abajo: {_fmt(report['formula_bottom'])}")
+        lines.append(f"  sin clasificar: {report['n_unclassified']} "
+                     f"de {report['n_ranked']}")
     if report["n_sin_datos"]:
         lines.append("")
         lines.append(f"Sin datos: {report['n_sin_datos']} clip(s) "
