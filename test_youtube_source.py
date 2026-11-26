@@ -135,17 +135,18 @@ class _Runner:
     """Runner falso de yt-dlp: devuelve los resultados en orden y
     registra los comandos y los sleeps."""
 
-    def __init__(self, results, touch_out=False):
+    def __init__(self, results, touch_out=False, touch_suffix=""):
         self.results = list(results)
         self.cmds = []
         self.sleeps = []
         self.touch_out = touch_out
+        self.touch_suffix = touch_suffix
 
     def __call__(self, cmd):
         self.cmds.append(list(cmd))
         if self.touch_out and "-o" in cmd:
             out = cmd[cmd.index("-o") + 1]
-            open(out, "wb").close()
+            open(out + self.touch_suffix, "wb").close()
         if len(self.results) > 1:
             return self.results.pop(0)
         return self.results[0]
@@ -590,6 +591,30 @@ class TestDownloadSegment(unittest.TestCase):
             )
         self.assertEqual(len(runner.cmds), 3)
         self.assertFalse(os.path.isfile(self.out))
+
+    def test_formato_webm_devuelve_ruta_real(self):
+        # 2026-11-26: los Shorts de Speed bajan en webm (396+251):
+        # yt-dlp escribe segment.mp4.webm y el isfile de
+        # segment.mp4 fallaba con código 0 aunque la descarga
+        # estaba completa. La función devuelve la ruta real.
+        runner = _Runner([_Proc(0, "")], touch_out=True,
+                         touch_suffix=".webm")
+        got = download_youtube_segment(
+            self.url, 0, 34, self.out, runner=runner, sleep=runner.sleep
+        )
+        self.assertEqual(got, self.out + ".webm")
+        self.assertTrue(os.path.isfile(self.out + ".webm"))
+        self.assertFalse(os.path.isfile(self.out))
+
+    def test_codigo_0_sin_archivo_falla(self):
+        # Código 0 pero sin archivo (ni con otra extensión):
+        # sigue siendo fallo, no se devuelve una ruta fantasma.
+        runner = _Runner([_Proc(0, "")])
+        with self.assertRaises(YoutubeError):
+            download_youtube_segment(
+                self.url, 0, 34, self.out, runner=runner,
+                sleep=runner.sleep,
+            )
 
     def test_segmento_invalido(self):
         runner = _Runner([_Proc(0, "")])

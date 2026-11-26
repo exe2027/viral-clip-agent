@@ -59,6 +59,7 @@ watch``). Sin el flag, el comportamiento es el de hoy: aviso
 visible y se salta el influencer.
 """
 
+import glob
 import json
 import os
 import shutil
@@ -574,6 +575,17 @@ def youtube_game_from_title(title, games=None):
     return None
 
 
+def _downloaded_with_real_extension(out_path):
+    """Archivo real cuando yt-dlp añadió la extensión del formato
+    al ``-o``: ``segment.mp4`` -> ``segment.mp4.webm``. Devuelve
+    la ruta o None. Ignora ``.part`` (descarga incompleta)."""
+    candidates = sorted(
+        p for p in glob.glob(str(out_path) + ".*")
+        if os.path.isfile(p) and not p.endswith(".part")
+    )
+    return candidates[0] if candidates else None
+
+
 def download_youtube_segment(
     video_url,
     start_s,
@@ -612,11 +624,26 @@ def download_youtube_segment(
     proc = _run_with_retries(
         cmd, runner or _default_runner, sleep, retries=retries
     )
-    if proc.returncode != 0 or not os.path.isfile(out_path):
+    if proc.returncode != 0:
         tail = ((proc.stderr or "") + (proc.stdout or "")).strip()
         raise YoutubeError(
             f"yt-dlp --download-sections falló sobre {video_url} "
             f"({sections}, código {proc.returncode}): "
             f"{tail[-300:]}"
         )
-    return str(out_path)
+    if os.path.isfile(out_path):
+        return str(out_path)
+    # yt-dlp añade la extensión real al -o cuando el formato
+    # elegido no es mp4 (2026-11-26: los 2 Shorts de Speed del
+    # dry-run bajaron como segment.mp4.webm con 396+251 y el
+    # chequeo isfile fallaba con código 0 aunque la descarga
+    # estaba completa): devolver la ruta real.
+    actual = _downloaded_with_real_extension(out_path)
+    if actual is not None:
+        return actual
+    tail = ((proc.stderr or "") + (proc.stdout or "")).strip()
+    raise YoutubeError(
+        f"yt-dlp --download-sections falló sobre {video_url} "
+        f"({sections}, código {proc.returncode}): "
+        f"{tail[-300:]}"
+    )

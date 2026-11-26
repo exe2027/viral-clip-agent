@@ -885,14 +885,20 @@ tenant_watchdog:
 # falta uno.
 viral_source:
   enabled: true
-  min_views: 100000      # un Short tiene que tener >=100k vistas para ser candidato
-  min_likes: 5000        # ...y >=5k likes (se verifica con la metadata completa)
+  min_views: 300000      # viral = más de 300k vistas (bajado de 800k el 2026-11-26: con 800k salían cero candidatos)
+  min_likes: 0           # likes y comentarios ya NO filtran (varían mucho; quedan en 0, la llave se mantiene)
+  min_comments: 0        # ...igual comentarios: no filtran, solo se registran en el candidato
   # Outlier multiple (2026-11-21, ig-viral): vistas / mediana de
   # ESA cuenta. >3x es señal; <1,5x es su día normal y no enseña
   # nada. Los likes crudos no son evidencia: un clip de 400k
   # vistas en una cuenta de 2M fue un martes flojo; el mismo en
   # una de 4k encontró algo.
   min_outlier_multiple: 3.0  # un candidato tiene que superar 3x la mediana de su canal
+  # Excepción absoluta (2026-11-26, decisión del usuario: "si tú
+  # te sabes la lógica hazlo tú"): un Short con >=3M vistas es
+  # viral sin importar la mediana de su canal (Speed: mediana
+  # 6,05M, 3x = 18M; sus Shorts de 7,2M y 5,6M caían fuera).
+  absolute_viral_views: 3000000
   max_age_days: 30       # solo vídeos de los últimos 30 días
   max_candidates: 5      # candidatos a enriquecer por corrida
   max_per_run: 2         # re-makes como mucho por corrida (cuentas nuevas: 1/día por plataforma)

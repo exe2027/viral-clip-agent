@@ -170,7 +170,10 @@
   usuario, del repo instagram-agent-skill, MIT): la fuente viral
   rankea por vistas / mediana de ESA cuenta, no por likes crudos.
   `viral_source.min_outlier_multiple: 3.0` en config.yaml (clave
-  obligatoria, falla fuerte si falta). La mediana sale de los
+  obligatoria, falla fuerte si falta). Excepción absoluta
+  (2026-11-26): `absolute_viral_views: 3000000` — con >=3M vistas
+  el candidato pasa sin outlier (Speed: mediana 6,05M, 3x = 18M;
+  sus Shorts de 7,2M y 5,6M caían fuera). La mediana sale de los
   últimos 12 Shorts del canal (del mismo listado de yt-dlp, sin
   re-llamar); sin al menos 3 Shorts no hay mediana y el candidato
   pasa por fallback (vistas >= min_views y likes >= min_likes)

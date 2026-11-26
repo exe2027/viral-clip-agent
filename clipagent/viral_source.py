@@ -87,7 +87,8 @@ MAX_TITLE_CHARS = 100
 PAYOFF_S = 20.0
 
 _VIRAL_REQUIRED = (
-    "enabled", "min_views", "min_likes", "min_outlier_multiple",
+    "enabled", "min_views", "min_likes", "min_comments",
+    "min_outlier_multiple", "absolute_viral_views",
     "max_age_days", "max_candidates", "max_per_run", "shorts_only",
     "min_duration_s", "max_duration_s", "cooldown_days",
     "youtube_channels", "state_file",
@@ -129,7 +130,9 @@ def load_viral_config(cfg=None):
         "enabled": bool(section["enabled"]),
         "min_views": int(section["min_views"]),
         "min_likes": int(section["min_likes"]),
+        "min_comments": int(section["min_comments"]),
         "min_outlier_multiple": float(section["min_outlier_multiple"]),
+        "absolute_viral_views": int(section["absolute_viral_views"]),
         "max_age_days": int(section["max_age_days"]),
         "max_candidates": int(section["max_candidates"]),
         "max_per_run": int(section["max_per_run"]),
@@ -147,8 +150,12 @@ def load_viral_config(cfg=None):
         problems.append("min_views debe ser > 0")
     if out["min_likes"] < 0:
         problems.append("min_likes debe ser >= 0")
+    if out["min_comments"] < 0:
+        problems.append("min_comments debe ser >= 0")
     if out["min_outlier_multiple"] <= 0:
         problems.append("min_outlier_multiple debe ser > 0")
+    if out["absolute_viral_views"] <= 0:
+        problems.append("absolute_viral_views debe ser > 0")
     if out["max_age_days"] <= 0:
         problems.append("max_age_days debe ser > 0")
     if out["max_candidates"] < 1:
@@ -264,11 +271,14 @@ def discover_candidates(yt_streamers, vcfg, runner=None, rejected=None):
     -> solo >= min_views -> solo outlier >= min_outlier_multiple
     (vistas / mediana de ESA cuenta; sin mediana no se inventa:
     el candidato pasa por el fallback de vistas+likes, con
-    ``outlier_status`` = "sin-mediana"). La pestaña /shorts no
-    trae duración: sus entradas (``from_shorts_tab``) son Shorts
-    por construcción y saltan el filtro de duración aquí; la
-    duración real se verifica en ``enrich_candidate`` con la
-    metadata completa. Sin fecha en las entradas del
+    ``outlier_status`` = "sin-mediana"). Excepción absoluta
+    (2026-11-26): con vistas >= absolute_viral_views el candidato
+    pasa sin outlier (``outlier_status`` = "absoluto"): un Short
+    con millones de vistas es viral aunque sea un día normal
+    para su canal. La pestaña /shorts no trae duración: sus
+    entradas (``from_shorts_tab``) son Shorts por construcción
+    y saltan el filtro de duración aquí; la duración real se
+    verifica en ``enrich_candidate`` con la metadata completa. Sin fecha en las entradas del
     --flat-playlist no se filtra por edad aquí (el orden del
     listado es reciente-primero); la edad se verifica en
     ``enrich_candidate`` con la metadata completa.
@@ -307,7 +317,12 @@ def discover_candidates(yt_streamers, vcfg, runner=None, rejected=None):
             if views < vcfg["min_views"]:
                 continue
             outlier = outlier_multiple(views, median)
-            if outlier is None:
+            if views >= vcfg["absolute_viral_views"]:
+                # Viral absoluto: millones de vistas mandan sobre
+                # la mediana del canal (Speed: 7,2M con mediana
+                # 6,05M es viral aunque sea 1,19x).
+                outlier_status = "absoluto"
+            elif outlier is None:
                 # Sin mediana no se inventa: pasa por el fallback
                 # (vistas ya >= min_views; likes se verifican en
                 # enrich_candidate). Queda marcado para el informe.
@@ -398,12 +413,12 @@ def _parse_upload_date(value):
 
 
 def enrich_candidate(candidate, vcfg, runner=None, now=None, sleep=None):
-    """Verifica likes y edad con la metadata completa.
+    """Verifica likes, comentarios y edad con la metadata completa.
 
-    Devuelve el candidato enriquecido (likes, upload_date,
-    duration real, description, tags) o None si no pasa
-    min_likes / max_age_days / duración. Sin metadata no hay
-    candidato (nunca se encola a ciegas).
+    Devuelve el candidato enriquecido (likes, comentarios,
+    upload_date, duration real, description, tags) o None si no pasa
+    min_likes / min_comments / max_age_days / duración. Sin metadata
+    no hay candidato (nunca se encola a ciegas).
     """
     meta = fetch_video_metadata(candidate["url"], runner=runner,
                                 sleep=sleep)
@@ -415,6 +430,13 @@ def enrich_candidate(candidate, vcfg, runner=None, now=None, sleep=None):
     except (TypeError, ValueError):
         likes = 0
     if likes < vcfg["min_likes"]:
+        return None
+    comments = meta.get("comment_count")
+    try:
+        comments = int(comments) if comments is not None else 0
+    except (TypeError, ValueError):
+        comments = 0
+    if comments < vcfg.get("min_comments", 0):
         return None
     uploaded = _parse_upload_date(meta.get("upload_date"))
     if uploaded is not None:
@@ -432,6 +454,7 @@ def enrich_candidate(candidate, vcfg, runner=None, now=None, sleep=None):
     enriched = dict(candidate)
     enriched.update({
         "likes": likes,
+        "comments": comments,
         "duration_s": dur,
         "upload_date": meta.get("upload_date"),
         "description": str(meta.get("description") or ""),
@@ -619,8 +642,12 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
     os.makedirs(cdir, exist_ok=True)
     try:
         segment = os.path.join(cdir, "segment.mp4")
-        download_youtube_segment(candidate["url"], 0, duration,
-                                 segment)
+        # download_youtube_segment devuelve la ruta REAL: si el
+        # formato es webm escribe segment.mp4.webm (2026-11-26:
+        # los 2 Shorts de Speed fallaban en ffmpeg por usar la
+        # ruta pedida en vez de la devuelta).
+        segment = download_youtube_segment(
+            candidate["url"], 0, duration, segment)
         transcript, _info = transcribe_audio(
             segment, language=lang, cfg=cfg)
         no_speech = bool((transcript or {}).get("no_speech"))
@@ -862,8 +889,8 @@ def run_viral_source(bridge, cfg, out_dir, tenant, video_url=None,
         if enriched is None:
             report["saltados"].append({
                 "video_id": candidates[0]["video_id"],
-                "motivo": ("no pasa min_likes / max_age_days / "
-                           "duración de Short")})
+                "motivo": ("no pasa min_likes / min_comments / "
+                           "max_age_days / duración de Short")})
             return report
         candidates = [enriched]
         report["enriquecidos"] = 1

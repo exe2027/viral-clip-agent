@@ -3,7 +3,7 @@
 2026-11-21: la fuente viral es parte permanente del sistema
 (orden del usuario 12:31). Estos tests cubren la config (única
 fuente, falla fuerte), el descubrimiento/ranking, el
-enriquecimiento (likes/edad), los claims (un vídeo, UNA sola
+enriquecimiento (likes/comentarios/edad), los claims (un vídeo, UNA sola
 cuenta) y el re-make + encolado (con el pipeline real mockeado
 en sus costuras: yt-dlp, Whisper, ffmpeg y el panel).
 """
@@ -32,7 +32,9 @@ def _cfg(**over):
             "enabled": True,
             "min_views": 100000,
             "min_likes": 5000,
+            "min_comments": 1000,
             "min_outlier_multiple": 3.0,
+            "absolute_viral_views": 3000000,
             "max_age_days": 30,
             "max_candidates": 5,
             "max_per_run": 2,
@@ -71,12 +73,13 @@ def _vod(vid, title, views, duration, live=False, channel="@IShowSpeed",
 
 
 def _meta(vid="abc123", likes=9000, views=500000, duration=45,
-          upload_date="20261120"):
+          upload_date="20261120", comments=1500):
     return {
         "id": vid, "title": "GTA 6: Speed steals a scooter",
         "channel": "IShowSpeed", "uploader": "IShowSpeed",
         "uploader_id": "@IShowSpeed", "channel_id": "UC123",
         "view_count": views, "like_count": likes,
+        "comment_count": comments,
         "upload_date": upload_date, "duration": duration,
         "description": "Speed plays GTA 6.\nSecond line.",
         "tags": ["GTA 6", "Speed"],
@@ -95,8 +98,12 @@ class TestLoadViralConfig(unittest.TestCase):
     def test_config_del_repo(self):
         vcfg = vs.load_viral_config(load_config())
         self.assertTrue(vcfg["enabled"])
-        self.assertEqual(vcfg["min_views"], 100000)
-        self.assertEqual(vcfg["min_likes"], 5000)
+        # Umbrales 2026-11-26 11:48 (enmienda spec v3): piso 300k
+        # vistas; likes y comentarios ya no filtran (en 0).
+        self.assertEqual(vcfg["min_views"], 300000)
+        self.assertEqual(vcfg["min_likes"], 0)
+        self.assertEqual(vcfg["min_comments"], 0)
+        self.assertEqual(vcfg["absolute_viral_views"], 3000000)
         self.assertEqual(vcfg["max_age_days"], 30)
         self.assertEqual(vcfg["max_per_run"], 2)
         self.assertTrue(vcfg["shorts_only"])
@@ -114,6 +121,12 @@ class TestLoadViralConfig(unittest.TestCase):
         with self.assertRaises(ConfigError):
             vs.load_viral_config(cfg)
 
+    def test_min_comments_faltante_falla_fuerte(self):
+        cfg = _cfg()
+        del cfg["viral_source"]["min_comments"]
+        with self.assertRaises(ConfigError):
+            vs.load_viral_config(cfg)
+
     def test_sin_scoring_falla_fuerte(self):
         cfg = _cfg()
         del cfg["scoring"]
@@ -123,7 +136,7 @@ class TestLoadViralConfig(unittest.TestCase):
     def test_valores_invalidos_fallan_fuerte(self):
         for over in ({"min_views": 0}, {"max_per_run": 0},
                      {"max_duration_s": 15, "min_duration_s": 15},
-                     {"cooldown_days": -1}):
+                     {"cooldown_days": -1}, {"min_comments": -1}):
             with self.assertRaises(ConfigError, msg=str(over)):
                 vs.load_viral_config(_cfg(**over))
 
@@ -315,6 +328,69 @@ class TestOutlier(unittest.TestCase):
         with self.assertRaises(ConfigError):
             vs.load_viral_config(_cfg(min_outlier_multiple=0))
 
+    def test_7m_con_mediana_6m_pasa_por_absoluto(self):
+        # Caso real Speed 2026-11-26: mediana 6,05M, candidato
+        # 7,2M = 1,19x < 3,0x. Con >=3M vistas es viral absoluto:
+        # pasa sin outlier, marcado "absoluto". (Los 3 Shorts de
+        # la mediana también pasan: 6,05M >= 3M, también absoluto;
+        # el override no distingue "el breakout" del "canal
+        # grande": a ese nivel de vistas, ambos son virales.)
+        vods = (self._shorts_listing(6050000, n=3)
+                + [_vod("big", "GTA 6: gran momento", 7200000, 40,
+                        from_shorts_tab=True)])
+        vcfg = vs.load_viral_config(_cfg(max_candidates=5))
+        rejected = []
+
+        def fake_check(url, runner=None, **kwargs):
+            return None, list(vods)
+
+        with mock.patch.object(vs, "youtube_check", fake_check):
+            out = vs.discover_candidates(
+                [{"name": "speed", "language": "en",
+                  "channel_url": "https://www.youtube.com/@IShowSpeed"}],
+                vcfg, rejected=rejected)
+        self.assertEqual([c["video_id"] for c in out],
+                         ["big", "s0", "s1", "s2"])
+        self.assertEqual(out[0]["outlier"], 1.19)
+        self.assertEqual(out[0]["outlier_status"], "absoluto")
+        self.assertTrue(all(c["outlier_status"] == "absoluto"
+                            for c in out))
+
+    def test_2m_con_mediana_6m_sigue_fuera(self):
+        # Por debajo del absoluto (2M < 3M) el outlier sigue
+        # mandando: 0,33x < 3,0x -> fuera, con motivo. (Los 3
+        # Shorts de la mediana pasan por absoluto, 6,05M >= 3M;
+        # el que se rechaza es solo "big".)
+        vods = (self._shorts_listing(6050000, n=3)
+                + [_vod("big", "GTA 6: gran momento", 2000000, 40,
+                        from_shorts_tab=True)])
+        vcfg = vs.load_viral_config(_cfg(max_candidates=5))
+        rejected = []
+
+        def fake_check(url, runner=None, **kwargs):
+            return None, list(vods)
+
+        with mock.patch.object(vs, "youtube_check", fake_check):
+            out = vs.discover_candidates(
+                [{"name": "speed", "language": "en",
+                  "channel_url": "https://www.youtube.com/@IShowSpeed"}],
+                vcfg, rejected=rejected)
+        self.assertEqual([c["video_id"] for c in out],
+                         ["s0", "s1", "s2"])
+        self.assertNotIn("big", [c["video_id"] for c in out])
+        big = [r for r in rejected if r["video_id"] == "big"][0]
+        self.assertIn("0.33x", big["motivo"])
+
+    def test_absolute_viral_views_faltante_falla_fuerte(self):
+        cfg = _cfg()
+        del cfg["viral_source"]["absolute_viral_views"]
+        with self.assertRaises(ConfigError):
+            vs.load_viral_config(cfg)
+
+    def test_absolute_viral_views_invalido_falla_fuerte(self):
+        with self.assertRaises(ConfigError):
+            vs.load_viral_config(_cfg(absolute_viral_views=0))
+
 
 class TestEnrich(unittest.TestCase):
     def test_enriquece_con_likes_tags_y_descripcion(self):
@@ -330,8 +406,20 @@ class TestEnrich(unittest.TestCase):
             cand, vcfg, runner=_runner_for(_meta()), now=now)
         self.assertIsNotNone(out)
         self.assertEqual(out["likes"], 9000)
+        self.assertEqual(out["comments"], 1500)
         self.assertEqual(out["tags"], ["GTA 6", "Speed"])
         self.assertIn("Speed plays GTA 6", out["description"])
+
+    def test_pocos_comentarios_fuera(self):
+        cand = {"video_id": "abc123",
+                "url": "https://www.youtube.com/watch?v=abc123",
+                "title": "t", "views": 500000, "likes": None,
+                "duration_s": 45, "channel": "", "streamer": "s",
+                "language": "en"}
+        vcfg = vs.load_viral_config(_cfg())
+        out = vs.enrich_candidate(
+            cand, vcfg, runner=_runner_for(_meta(comments=50)))
+        self.assertIsNone(out)
 
     def test_pocos_likes_fuera(self):
         cand = {"video_id": "abc123",
@@ -526,6 +614,21 @@ class TestProcessCandidate(unittest.TestCase):
         self.cfg = load_config()
         self.vcfg = vs.load_viral_config(self.cfg)
 
+    def test_usa_la_ruta_real_que_devuelve_la_descarga(self):
+        # 2026-11-26: con formato webm la descarga escribe
+        # segment.mp4.webm; seguir usando la ruta pedida rompía
+        # ffmpeg (exit 254) en los 2 Shorts de Speed del dry-run.
+        bridge = _patch_pipeline(self)
+        mock.patch.object(
+            vs, "download_youtube_segment",
+            return_value="/tmp/segment.mp4.webm").start()
+        tr = mock.patch.object(
+            vs, "transcribe_audio",
+            return_value=({"segments": []}, {})).start()
+        vs.process_candidate(bridge, _candidate(), self.tmp.name,
+                             self.cfg, self.vcfg, "sebastian")
+        self.assertEqual(tr.call_args[0][0], "/tmp/segment.mp4.webm")
+
     def test_encola_con_el_payload_del_camino_vod(self):
         bridge = _patch_pipeline(self)
         panel_id, motivo, report = vs.process_candidate(
@@ -533,7 +636,10 @@ class TestProcessCandidate(unittest.TestCase):
             "sebastian")
         self.assertEqual(panel_id, 1001)
         self.assertEqual(motivo, "")
-        self.assertEqual(report["viral_total"], 65)
+        # viral_total ancla en min_views (300k desde la enmienda
+        # 2026-11-26 11:48): el candidato tiene 500k vistas ->
+        # 55 + 15*log10(500/300) = 58.
+        self.assertEqual(report["viral_total"], 58)
         self.assertEqual(len(bridge.created), 1)
         payload = bridge.created[0]
         self.assertEqual(payload["origin"], "viral")
