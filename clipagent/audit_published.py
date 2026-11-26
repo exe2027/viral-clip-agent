@@ -479,11 +479,14 @@ def _median_hook_words(clips):
 def build_report(clips, median, tenant, platform):
     """Informe: ranking por outlier + lectura (formato swipe file).
 
-    Como ``swipe.py`` del origen: el análisis «qué funciona» usa
-    el TERCIO superior vs el tercio inferior por outlier
-    (``third = max(1, n // 3)``), no el top 5; hook score y
-    palabras del gancho se comparan en MEDIANA, no en media. El
-    top 5 / bottom 5 se mantiene en el JSON por compatibilidad.
+    Como ``swipe.py`` del origen: las medianas (hook score,
+    palabras del gancho, duración) usan el TERCIO superior vs el
+    tercio inferior por outlier (``third = max(1, n // 3)``);
+    los conteos de fórmulas ``formula_top``/``formula_bottom``
+    siguen sobre el top 5 / bottom 5 como antes de v2 (incluido
+    «unclassified») y ``top_formulas`` lista las del tercio
+    superior. El top 5 / bottom 5 se mantiene en el JSON por
+    compatibilidad.
     La lectura compara qué separa el tercio de arriba del de
     abajo (hook score mediano, duración media, longitud del
     título, retención media y shares por vista cuando hay dato)
@@ -507,9 +510,14 @@ def build_report(clips, median, tenant, platform):
     bottom_hook = _median_hook_score(bottom_third)
     top_words = _median_hook_words(top_third)
     bottom_words = _median_hook_words(bottom_third)
-    formula_top = _formula_counts(top_third)
-    formula_bottom = _formula_counts(bottom_third)
-    top_formulas = sorted(formula_top.items(),
+    formula_top = _formula_counts(top)
+    formula_bottom = _formula_counts(bottom)
+    # top_formulas es la lista swipe v2: fórmulas del tercio
+    # superior. formula_top/bottom, en cambio, siguen contando
+    # sobre top 5 / bottom 5 como antes de v2 (incluido
+    # «unclassified»): la lectura «aparece arriba y no abajo»
+    # los compara y el test preexistente los fija así.
+    top_formulas = sorted(_formula_counts(top_third).items(),
                           key=lambda kv: (-kv[1], kv[0]))
     n_unclassified = sum(
         1 for c in ranked
@@ -752,7 +760,8 @@ def render_text(report):
         lines.append(
             f"  {mult:>7}  hook {score:>3}  {label[:26]:<26} "
             f"{views:>9} views  {row['title'][:64]}  "
-            f"[{row['diagnosis']}]")
+            f"[{row['diagnosis']}]  "
+            f"({row.get('hook_formula') or UNCLASSIFIED})")
     lines.append("-" * max(len(head), 78))
     lines.append("WHAT IS WORKING IN THIS BATCH")
     if report["top_formulas"]:
@@ -803,6 +812,19 @@ def render_text(report):
         lines.append("")
         lines.append(f"Sin datos: {report['n_sin_datos']} clip(s) "
                      "(sin vistas o sin mediana).")
+    # Sección FÓRMULAS (v1): conteos arriba/abajo y nº sin
+    # clasificar. Solo con clips rankeados; sin ellos no hay
+    # sección (lo fija test_sin_clips_ranked_no_hay_seccion...).
+    if report["n_ranked"]:
+        def _fmt(counts):
+            return ", ".join(f"{name} ({n})"
+                             for name, n in counts.items()) or "—"
+        lines.append("")
+        lines.append("FÓRMULAS")
+        lines.append(f"  arriba: {_fmt(report['formula_top'])}")
+        lines.append(f"  abajo: {_fmt(report['formula_bottom'])}")
+        lines.append(f"  sin clasificar: {report['n_unclassified']} "
+                     f"de {report['n_ranked']}")
     lines.append("")
     lines.append("LECTURA")
     for item in report["reading"]:
