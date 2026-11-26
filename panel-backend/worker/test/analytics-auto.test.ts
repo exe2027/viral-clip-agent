@@ -847,20 +847,20 @@ describe("auto-enqueue de tops (runWorkerCycle)", () => {
     expect(jobs[0]?.state).toBe("draft");
   });
 
-  test("encendido pero fuera de franja: no encola (el gate frena la automática fuera de 12-14/18-20/21-23)", async () => {
+  test("encendido a las 10:00 (fuera de la vieja franja): encola igual (sin franjas desde 2026-11-26)", async () => {
     const db = new FakeD1();
     seedAccount(db);
     seedRunning(db);
     seedSettings(db, { auto_publish_top: true });
     db.seed("clips", clipRow({ id: 1 }));
     const env = makeEnv(db, new FakeR2());
-    // 10:00 en Santiago: fuera de franja.
+    // 10:00 en Santiago: fuera de la vieja franja, hoy hora válida.
     const r = await withFrozenDate("2026-11-19T13:00:00.000Z", () => runWorkerCycle(env, "sebastian"));
     expect(r.ran).toBe(true);
-    expect(r.autoEnqueued).toBe(0);
-    expect(db.tables["jobs"] ?? []).toHaveLength(0);
+    expect(r.autoEnqueued).toBe(1);
+    expect(db.tables["jobs"] ?? []).toHaveLength(1);
     const events = db.tables["worker_events"] ?? [];
-    expect(events.some((e) => String(e.message ?? "").includes("fuera de franja"))).toBe(true);
+    expect(events.some((e) => String(e.message ?? "").includes("fuera de franja"))).toBe(false);
   });
 
   test("encendido pero el gate frena (SEO 79 < 80): no encola y el freno queda en clip_events con el motivo literal", async () => {

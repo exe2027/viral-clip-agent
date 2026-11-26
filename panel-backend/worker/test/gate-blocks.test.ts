@@ -16,17 +16,23 @@ import { classifyGateBlock, type GateBlockRetryKind } from "../src/gate";
 type Case = { reason: string; transient: boolean; retry: GateBlockRetryKind };
 
 const TRANSIENT: Case[] = [
-  // Espaciamiento (rateLimitGate): por horas y por minutos.
-  { reason: "espaciamiento: menos de 2 h desde la última subida en esta plataforma", transient: true, retry: "spacing" },
-  { reason: "espaciamiento: menos de 3 h desde la última subida en esta plataforma", transient: true, retry: "spacing" },
+  // Piso de 90 min (SPEC quitar-franjas v2): el motivo nuevo.
+  { reason: "menos de 90 min desde la última subida en esta plataforma", transient: true, retry: "min90" },
+  // Espaciamiento viejo por horas: el gate ya no lo produce, pero
+  // se mantiene UNA versión como transitorio → min90 (un job viejo
+  // frenado por "menos de 2 h" se reprograma a última + azar
+  // 90–180, no va a draft; en la versión siguiente se retira).
+  { reason: "espaciamiento: menos de 2 h desde la última subida en esta plataforma", transient: true, retry: "min90" },
+  { reason: "espaciamiento: menos de 3 h desde la última subida en esta plataforma", transient: true, retry: "min90" },
+  // Piso de 5 min (sigue vivo como defensa).
   { reason: "espaciamiento: menos de 15 min desde la última subida en esta plataforma", transient: true, retry: "spacing" },
   // Mismo clip en otra plataforma (15 min).
   { reason: "mismo clip en otra plataforma hace 0 min: mínimo 15 min entre plataformas", transient: true, retry: "cross15" },
   { reason: "mismo clip en otra plataforma hace 14 min: mínimo 15 min entre plataformas", transient: true, retry: "cross15" },
-  // 1 por plataforma y franja.
-  { reason: "ya se publicó 1 en tiktok en esta franja: como mucho 1 por plataforma y franja", transient: true, retry: "slotEnd" },
-  // Fuera de franja.
-  { reason: "fuera de franja: la publicación solo sale 12:00–14:00, 18:00–20:00 o 21:00–23:00 (hora de Chile)", transient: true, retry: "nextSlot" },
+  // 1 por plataforma y franja (retirado; transitorio una versión → min90).
+  { reason: "ya se publicó 1 en tiktok en esta franja: como mucho 1 por plataforma y franja", transient: true, retry: "min90" },
+  // Fuera de franja (retirado; transitorio una versión → min90).
+  { reason: "fuera de franja: la publicación solo sale 12:00–14:00, 18:00–20:00 o 21:00–23:00 (hora de Chile)", transient: true, retry: "min90" },
   // Tope rolling 24 h.
   { reason: "tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)", transient: true, retry: "rolling" },
   { reason: "tope rolling 24 h alcanzado: 6/6 en youtube_shorts (últimas 24 h)", transient: true, retry: "rolling" },

@@ -41,14 +41,14 @@ import {
   logClipEvent,
   logWorkerEvent,
   maturityOut,
-  nextPlatformHourMs,
   parsePlatforms,
   queueClipCompare,
+  randomPublishDelayMs,
+  MIN_PUBLISH_SPACING_MS,
   recordEventCounter,
   refreshAccountMaturity,
   santiagoDayKeyMs,
   saveSettings,
-  slotWindowBoundsMs,
   stampCampaignSubmissionPosted,
   updateClipPublishState,
   updateClipPublishStates,
@@ -499,16 +499,15 @@ export async function enqueuePublishJobs(
   // Manual (2026-11-19, migración 0029): el job nace marcado
   // manual=1 cuando lo encola "Publicar ahora" (desde la orden
   // 09:25, 2026-11-21, el re-chequeo y la reserva aplican tope,
-  // espaciamiento y 1-por-franja TAMBIÉN a manuales); 0 si es
+  // piso 90 min y rolling TAMBIÉN a manuales); 0 si es
   // automático.
   manual = false,
-  // next_run_at del job nuevo (reglas 2026-11-19 + orden 09:25):
-  // en automático es el instante de encolado, que ya está dentro
-  // de una franja (el gate con checkSlot lo comprobó, también en
-  // manual desde la orden 09:25); en manual es null (corre en
-  // cuanto el ciclo lo toma, dentro de la franja); en manual
-  // PROGRAMADO es el instante pedido (el ciclo lo toma al llegar
-  // la hora).
+  // next_run_at del job nuevo (SPEC quitar-franjas v2,
+  // 2026-11-26): lo calcula tryEnqueueClipPublish — en
+  // automático es la última publicación + azar(90–180 min); en
+  // manual es null (corre en cuanto el ciclo lo toma); en manual
+  // PROGRAMADO es el instante pedido (ajustado al piso de 90 min
+  // si hace falta).
   nextRunAtMs: number | null = null,
   // Plataformas a encolar (regla 14:10 + programación): solo
   // estas, no todas las del clip. Por defecto (sin pasarla),
@@ -529,9 +528,9 @@ export async function enqueuePublishJobs(
   // defecto, hoy. tryEnqueueClipPublish pasa el día del instante
   // de referencia (el programado, si se agenda a futuro): la key
   // pertenece al día de la PUBLICACIÓN, no al del enqueue, para
-  // que dos enqueues del mismo clip para el mismo día/franja
-  // colisionen como deben (dedup) y una republicación use el
-  // sufijo |repubN del día correcto.
+  // que dos enqueues del mismo clip para el mismo día colisionen
+  // como deben (dedup) y una republicación use el sufijo |repubN
+  // del día correcto.
   dayKey?: string,
   // Salida opcional de motivos bloqueados (F1.4, spec 2026-11-24):
   // si un revive se niega por tope de reintentos, el motivo se
@@ -688,6 +687,11 @@ export interface EnqueuePublishResult {
    *  "espaciamiento..."). Vacío si no se saltó nada o si el
    *  enqueue fue automático. El front lo muestra como aviso. */
   warnings: string[];
+  /** Instante programado EFECTIVO (ms epoch): el pedido, o el
+   *  ajustado hacia adelante si violaba el piso de 90 min (SPEC
+   *  quitar-franjas v2). null si no se programó a futuro. El
+   *  endpoint lo devuelve para informar el ajuste. */
+  scheduledForMs?: number | null;
 }
 
 export async function tryEnqueueClipPublish(
@@ -706,11 +710,12 @@ export async function tryEnqueueClipPublish(
     platforms?: PanelPlatform[];
     /** Instante programado (ms epoch, ISO 8601 en el endpoint):
      *  si viene y es futuro, los jobs nacen con next_run_at =
-     *  ese instante y el gate se evalúa EN ESE INSTANTE (franja,
-     *  tope diario, calentamiento, espaciamiento y 1-por-franja
-     *  para ese día/franja, lo mejor que se pueda calcular al
-     *  agendar; el re-chequeo del ciclo vuelve a aplicar todo al
-     *  ejecutar). Si no viene, publicación inmediata (ahora). */
+     *  ese instante (ajustado al piso de 90 min si hace falta, ver
+     *  más abajo) y el gate se evalúa EN ESE INSTANTE (tope
+     *  diario, calentamiento y piso 90 min para ese día, lo mejor
+     *  que se pueda calcular al agendar; el re-chequeo del ciclo
+     *  vuelve a aplicar todo al ejecutar). Si no viene,
+     *  publicación inmediata (ahora). */
     scheduledForMs?: number | null;
     /** Republicación explícita (P0 #5, auditoría #11): publicar
      *  DE NUEVO el mismo clip en la misma plataforma el mismo
@@ -718,16 +723,10 @@ export async function tryEnqueueClipPublish(
      *  "mismo clip hoy"; el resto sigue frenando igual y el job
      *  nuevo lleva la key con sufijo |repubN. */
     republish?: boolean;
-    /** Publicar AHORA fuera de franja (orden del usuario
-     *  2026-11-22 01:07, "sube vídeos ahora"): salta SOLO la
-     *  puerta de franja horaria. Todo lo demás sigue frenando
-     *  igual (tope diario, calentamiento, espaciamiento, rolling
-     *  24 h, 1 por plataforma y franja, veredicto de calidad,
-     *  SEO): es una decisión humana explícita de adelantar la
-     *  hora, no de saltarse las reglas anti-baneo. Solo lo pone
-     *  el endpoint /publish con force_now=true; el ciclo y el
-     *  auto-enqueue nunca lo usan. */
-    forceNow?: boolean;
+    /** Generador de azar para el retardo 90–180 min (SPEC
+     *  quitar-franjas v2): Math.random() por defecto; los tests
+     *  pasan un RNG falso para probar determinísticamente. */
+    rng?: () => number;
   } = {},
 ): Promise<EnqueuePublishResult> {
   const db = env.DB;
@@ -748,12 +747,12 @@ export async function tryEnqueueClipPublish(
   // idioma y NUNCA se auto-crea una cuenta aquí.
   const clipLang = clipLanguage(clip);
   // Instante de referencia para el gate: si se programa a futuro,
-  // el gate se evalúa EN EL INSTANTE PROGRAMADO (franja, tope,
-  // espaciamiento, 1-por-franja de ESE día/franja); si no, ahora.
+  // el gate se evalúa EN EL INSTANTE PROGRAMADO (tope diario,
+  // calentamiento y piso 90 min de ESE día); si no, ahora.
   const now = nowMs();
   const scheduledForMs = opts.scheduledForMs ?? null;
-  const refMs = scheduledForMs !== null && scheduledForMs > now ? scheduledForMs : now;
-  const refDayKey = santiagoDayKeyMs(refMs);
+  let refMs = scheduledForMs !== null && scheduledForMs > now ? scheduledForMs : now;
+  let refDayKey = santiagoDayKeyMs(refMs);
   // PLATAFORMAS DESTINO (regla 14:10, 2026-11-21): por defecto la
   // UNIÓN de las del clip y las de sus cuentas vinculadas en el
   // idioma del clip (una cuenta vinculada que el clip no listaba
@@ -807,6 +806,31 @@ export async function tryEnqueueClipPublish(
       const m = maturityOut(acc, eff);
       maturityByPlatform[p] = { limit: m.effective_daily_limit, plan: m.effective_daily_plan, stage: m.stage };
     }
+  }
+  // MANUAL PROGRAMADO (SPEC quitar-franjas v2): sin franjas, se
+  // acepta cualquier hora futura. Si la hora pedida viola el piso
+  // de 90 min de alguna plataforma (contra su última publicación
+  // o contra otro job ya agendado de la misma plataforma+idioma),
+  // se mueve hacia adelante al primer instante válido para TODAS
+  // las plataformas y se informa el ajuste en el resultado
+  // (scheduledForMs). Sin esto, el gate frenaría esa plataforma
+  // en refMs y la dejaría fuera.
+  let effectiveScheduledForMs = scheduledForMs;
+  if (scheduledForMs !== null && scheduledForMs > now) {
+    let floor = scheduledForMs;
+    for (const p of targetPlatforms) {
+      const lastP = await db.prepare(
+        "SELECT updated_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' ORDER BY updated_at DESC LIMIT 1",
+      ).bind(tenant, p, clipLang).first<{ updated_at: number }>();
+      if (lastP?.updated_at) floor = Math.max(floor, lastP.updated_at + MIN_PUBLISH_SPACING_MS);
+      const pendP = await db.prepare(
+        "SELECT MAX(next_run_at) AS max_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'scheduled' AND next_run_at IS NOT NULL",
+      ).bind(tenant, p, clipLang).first<{ max_at: number | null }>();
+      if (pendP?.max_at) floor = Math.max(floor, pendP.max_at + MIN_PUBLISH_SPACING_MS);
+    }
+    effectiveScheduledForMs = floor;
+    refMs = effectiveScheduledForMs;
+    refDayKey = santiagoDayKeyMs(refMs);
   }
   // Gates por plataforma: la que frena queda pendiente con motivo.
   const jobs: JobRow[] = [];
@@ -877,37 +901,6 @@ export async function tryEnqueueClipPublish(
       .first<{ updated_at: number }>();
     const accRow = accountRowByPlatform[platform];
     const mat = maturityByPlatform[platform];
-    // 1 POR PLATAFORMA Y FRANJA (orden 09:25, SIN AMONTONAR):
-    // publicadas en esta plataforma+idioma dentro de la franja
-    // de referencia (la actual, o la del instante programado).
-    // Al programar a futuro, también cuentan los jobs YA
-    // AGENDADOS con next_run_at dentro de esa franja: si otro
-    // clip ya reservó la franja, este no la puede tomar (el
-    // re-chequeo del ciclo lo volvería a frenar al ejecutar, pero
-    // al agendar ya se ve).
-    const slotBounds = slotWindowBoundsMs(refMs);
-    let publishedThisSlot = 0;
-    if (slotBounds) {
-      // `>` en vez de `>=` (ver recheckPublishGate en gate.ts):
-      // los mocks de D1 de los tests no soportan `>=`; con
-      // timestamps enteros en ms, `> startMs - 1` es `>= startMs`.
-      const slotRow = await db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ? AND updated_at < ?",
-        )
-        .bind(tenant, platform, clipLang, slotBounds.startMs - 1, slotBounds.endMs)
-        .first<{ n: number }>();
-      publishedThisSlot = slotRow?.n ?? 0;
-      if (scheduledForMs !== null && scheduledForMs > now) {
-        const scheduledRow = await db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'scheduled' AND next_run_at > ? AND next_run_at < ?",
-          )
-          .bind(tenant, platform, clipLang, slotBounds.startMs - 1, slotBounds.endMs)
-          .first<{ n: number }>();
-        publishedThisSlot += scheduledRow?.n ?? 0;
-      }
-    }
     const gateCtx = {
       clip,
       seoScore: seo.score,
@@ -927,28 +920,18 @@ export async function tryEnqueueClipPublish(
       clipLastPublishedOnPlatformDay: clipEver?.posted_day ?? null,
       republish: opts.republish === true,
       clipLastPublishedOtherPlatformMs: clipOther?.updated_at ?? null,
-      publishedThisSlot,
       // Pausa por spam (48 h, settings account_pauses) y día
       // libre semanal (determinista por cuenta+semana). Al
       // programar a futuro, el día libre es el del instante
       // programado.
       pausedUntilMs: accRow ? accountPausedUntilMs(settings, accRow.id) : null,
       isRestDay: accRow ? isRestDayEffective(`acc-${accRow.id}`, refMs, settings, accRow.id) : false,
-      // Franja (reglas 2026-11-19 + orden 09:25 SIN AMONTONAR):
-      // la comprueba TAMBIÉN la manual. "Publicar ahora" fuera
-      // de franja queda frenado, no encola. Al programar a
-      // futuro, la franja que se comprueba es la del instante
-      // programado (nowMs = refMs): no se está publicando ahora,
-      // solo agendando. EXCEPCIÓN (orden del usuario 2026-11-22
-      // 01:07, forceNow): publicar AHORA fuera de franja salta
-      // SOLO esta puerta; el resto sigue frenando igual.
-      checkSlot: !opts.forceNow,
       nowMs: refMs,
       accountLanguage: accountLanguageByPlatform[platform],
       accountReady: accountReadyByPlatform[platform],
       // Manual (2026-11-19 + orden 09:25 SIN AMONTONAR): ya NO
-      // salta tope, espaciamiento ni franja; respeta todas las
-      // reglas anti-baneo igual que la automática.
+      // salta tope ni piso 90 min; respeta todas las reglas
+      // anti-baneo igual que la automática.
       manual,
     };
     const gate = publishGate(platform, gateCtx);
@@ -972,30 +955,46 @@ export async function tryEnqueueClipPublish(
           .prepare("SELECT r2_key FROM jobs WHERE clip_id = ? AND tenant_id = ? AND r2_key IS NOT NULL LIMIT 1")
           .bind(clip.id, tenant)
           .first<{ r2_key: string }>();
-    // next_run_at (reglas 2026-11-19 + programación 2026-11-21 +
-    // HORARIO POR PLATAFORMA 2026-11-22 01:11): el job automático
-    // nace con next_run_at = la próxima hora de SU plataforma
-    // (YouTube/IG 12:00, 18:00, 21:00; TikTok/FB 13:00, 19:00,
-    // 22:00, hora Chile), no "ahora": así cada plataforma sube
-    // a su hora aunque el ciclo corra cada 5 min. El gate con
-    // checkSlot ya comprobó la franja (las horas están dentro
-    // de franja). El manual inmediato, sin fecha (corre en
-    // cuanto el ciclo lo toma); el manual PROGRAMADO, con
-    // next_run_at = el instante pedido (el ciclo lo toma cuando
-    // llegue la hora, y el re-chequeo vuelve a aplicar todo al
-    // ejecutar).
-    // F1.3 (spec 2026-11-24): escalonado de 15 min al crear
-    // varios jobs del mismo clip en una sola llamada (sobre la
-    // base de nextPlatformHourMs por plataforma): el primero a
-    // su hora de hueco, los siguientes +15/+30/+45 min. YT e IG
-    // comparten hueco y nextPlatformHourMs devuelve nowMs dentro
-    // de la ventana de 60 min, así que sin escalonado dos
-    // plataformas del mismo clip vencerían en el mismo ciclo.
+    // next_run_at (SPEC quitar-franjas v2, opción A, 2026-11-26):
+    // el job automático nace en última_publicación + azar(90–180
+    // min) de SU plataforma+idioma (nunca antes de ahora), así
+    // cada plataforma sube a su hora aunque el ciclo corra cada
+    // 5 min. Dos invariantes del programador: (1) ningún job
+    // pendiente de la misma plataforma+idioma con next_run_at a
+    // menos de 90 min de otro pendiente; (2) los jobs de este
+    // mismo clip creados en esta llamada se escalonan ≥15 min
+    // entre plataformas (reemplazo del escalonado F1.3, spec
+    // 2026-11-24, que era sobre nextPlatformHourMs). El manual
+    // inmediato nace con null (corre en cuanto el ciclo lo toma);
+    // el manual PROGRAMADO, con el instante pedido (ya ajustado
+    // al piso de 90 min arriba; el ciclo lo toma cuando llegue la
+    // hora, y el re-chequeo vuelve a aplicar todo al ejecutar).
     // Solo se encola ESTA plataforma (la que pasó el gate):
     // enqueuePublishJobs ya no re-encola todas las del clip.
-    const nextRunAt = scheduledForMs !== null && scheduledForMs > now
-      ? scheduledForMs
-      : manual ? null : nextPlatformHourMs(platform, now) + jobs.length * 15 * 60 * 1000;
+    let nextRunAt: number | null;
+    if (effectiveScheduledForMs !== null && effectiveScheduledForMs > now) {
+      nextRunAt = effectiveScheduledForMs;
+    } else if (manual) {
+      nextRunAt = null;
+    } else {
+      const rng = opts.rng ?? Math.random;
+      let candidate = lastPosted?.updated_at
+        ? lastPosted.updated_at + randomPublishDelayMs(rng)
+        : now;
+      candidate = Math.max(candidate, now);
+      // (1) Invariante del programador: no crear un job pendiente
+      // a menos de 90 min de otro pendiente de la misma
+      // plataforma+idioma.
+      const pending = await db.prepare(
+        "SELECT MAX(next_run_at) AS max_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'scheduled' AND next_run_at IS NOT NULL",
+      ).bind(tenant, platform, clipLang).first<{ max_at: number | null }>();
+      if (pending?.max_at) candidate = Math.max(candidate, pending.max_at + MIN_PUBLISH_SPACING_MS);
+      // (2) Escalonado entre plataformas del mismo clip en esta
+      // llamada: ≥15 min desde el último job creado aquí.
+      const lastCreatedAt = jobs.length > 0 ? jobs[jobs.length - 1]!.next_run_at : null;
+      if (lastCreatedAt) candidate = Math.max(candidate, lastCreatedAt + 15 * 60 * 1000);
+      nextRunAt = candidate;
+    }
     const blockedOut: string[] = [];
     jobs.push(...(await enqueuePublishJobs(db, clip, accountIdByPlatform, title, caption, r2Key?.r2_key ?? null, manual, nextRunAt, [platform], opts.republish === true, refDayKey, blockedOut)));
     // F1.4: un revive negado por tope de reintentos cuenta como
@@ -1008,7 +1007,7 @@ export async function tryEnqueueClipPublish(
   // queda por seguridad.
   const seen = new Set<number>();
   const uniqueJobs = jobs.filter((j) => (seen.has(j.id) ? false : (seen.add(j.id), true)));
-  return { jobs: uniqueJobs, blocked, warnings };
+  return { jobs: uniqueJobs, blocked, warnings, scheduledForMs: effectiveScheduledForMs };
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,20 +1051,26 @@ const AUTO_ENQUEUE_MAX_EVALUATED_PER_CYCLE = 10;
 
 // ---------------------------------------------------------------------------
 // Freno del auto-enqueue por clip (A4, 2026-11-20).
-// Estado en MEMORIA del Worker (nunca una escritura D1: el freno
-// debe sobrevivir a la cuota agotada) + siembra por LECTURA tras
-// un reinicio. Un "intento fallido" es un ciclo en el que el clip
-// no encoló ningún job (todas sus plataformas frenaron). Tras 3
-// intentos fallidos en el día, el clip no se vuelve a intentar
-// hasta mañana; entre intentos, el backoff 1/5/15 min (ver
-// autoEnqueueAllowed en retry.ts). Un intento que encola jobs
-// limpia el contador: el clip progresó.
-// Siembra: tras un reinicio (memoria vacía), el último intento de
-// hoy se lee de clip_events (MAX(at), paso 'publicado', actor
-// 'worker') y se asume 1 intento ya hecho — aproximación
-// documentada: tras un reinicio el clip puede sumar como mucho 2
-// intentos más ese día (hasta el tope de 3), cada uno con su
-// backoff, y la dedupe de eventos de 6 h acota sus escrituras.
+// Freno del auto-enqueue por clip (A4, 2026-11-20; persistencia
+// D1 2026-11-26, migración 0045).
+// Estado en MEMORIA del Worker (rápido, sobrevive a la cuota
+// agotada) + PERSISTENCIA en D1 (tabla auto_enqueue_attempts):
+// cada intento fallido hace upsert (attempts + 1) y la siembra tras
+// un reinicio lee el valor REAL, no 1. Antes de 0045 el contador
+// vivía solo en memoria y la siembra asumía 1 desde clip_events:
+// al reciclarse el isolate, los mismos clips con bloqueo duro se
+// re-evaluaban eternamente sin llegar nunca a 3 y el escaneo no
+// avanzaba (seba 2026-11-26: 0 jobs creados en el día).
+// Un "intento fallido" es un ciclo en el que el clip no encoló
+// ningún job (todas sus plataformas frenaron). Tras 3 intentos
+// fallidos en el día, el clip no se vuelve a intentar hasta mañana;
+// entre intentos, el backoff 1/5/15 min (ver autoEnqueueAllowed en
+// retry.ts). Un intento que encola jobs limpia el contador (memoria
+// + fila D1): el clip progresó.
+// La escritura D1 es best-effort (try/catch, nunca levanta): si D1
+// falla (p. ej. cuota 7500), el freno en memoria sigue valiendo
+// ese ciclo. Coste: 1 escritura por clip frenado y ciclo (máx
+// 5/ciclo).
 // ---------------------------------------------------------------------------
 const autoEnqueueState = new Map<number, { dayKey: string; attemptsToday: number; lastAttemptMs: number | null }>();
 
@@ -1075,14 +1080,78 @@ export function getAutoEnqueueState(clipId: number, todayKey: string): AutoEnque
   return { attemptsToday: st.attemptsToday, lastAttemptMs: st.lastAttemptMs };
 }
 
-export function recordAutoEnqueueAttempt(clipId: number, now: number, todayKey: string): void {
+/** Registra un intento fallido: memoria + upsert en D1
+ *  (auto_enqueue_attempts, migración 0045). UPDATE primero y, si
+ *  no hay fila, INSERT (se evita ON CONFLICT: mismo patrón que
+ *  db.ts). Si otro ciclo insertó la fila entre medias, el INSERT
+ *  falla por la PK y se reintenta el UPDATE una vez. Nunca levanta:
+ *  si D1 falla, el freno en memoria sigue vigente este ciclo. */
+export async function recordAutoEnqueueAttempt(
+  db: D1Database,
+  tenant: Tenant,
+  clipId: number,
+  now: number,
+  todayKey: string,
+): Promise<void> {
   const prev = autoEnqueueState.get(clipId);
   const attemptsToday = prev && prev.dayKey === todayKey ? prev.attemptsToday + 1 : 1;
   autoEnqueueState.set(clipId, { dayKey: todayKey, attemptsToday, lastAttemptMs: now });
+  try {
+    const updated = await db
+      .prepare(
+        "UPDATE auto_enqueue_attempts SET attempts = attempts + 1, last_at = ? WHERE tenant_id = ? AND clip_id = ? AND day = ?",
+      )
+      .bind(now, tenant, clipId, todayKey)
+      .run();
+    if ((updated.meta?.changes ?? 0) === 0) {
+      try {
+        await db
+          .prepare(
+            "INSERT INTO auto_enqueue_attempts (tenant_id, clip_id, day, attempts, last_at) VALUES (?, ?, ?, 1, ?)",
+          )
+          .bind(tenant, clipId, todayKey, now)
+          .run();
+      } catch {
+        // Carrera: otro ciclo insertó la fila entre el UPDATE y el
+        // INSERT; el intento cuenta igual.
+        await db
+          .prepare(
+            "UPDATE auto_enqueue_attempts SET attempts = attempts + 1, last_at = ? WHERE tenant_id = ? AND clip_id = ? AND day = ?",
+          )
+          .bind(now, tenant, clipId, todayKey)
+          .run()
+          .catch(() => {});
+      }
+    }
+  } catch {
+    // Sin persistencia: el freno en memoria sigue vigente.
+  }
 }
 
 export function clearAutoEnqueueState(clipId: number): void {
   autoEnqueueState.delete(clipId);
+}
+
+/** Limpieza persistida del contador (éxito: el clip progresó).
+ *  Borra la fila de hoy en auto_enqueue_attempts para que una
+ *  siembra posterior no resucite intentos ya limpiados. Nunca
+ *  levanta (best-effort, como el registro). */
+export async function clearAutoEnqueueAttemptPersisted(
+  db: D1Database,
+  tenant: Tenant,
+  clipId: number,
+  todayKey: string,
+): Promise<void> {
+  try {
+    await db
+      .prepare("DELETE FROM auto_enqueue_attempts WHERE tenant_id = ? AND clip_id = ? AND day = ?")
+      .bind(tenant, clipId, todayKey)
+      .run();
+  } catch {
+    // Sin limpieza persistida: la memoria ya está limpia y la
+    // siembra de un contador viejo es conservadora (1 intento
+    // menos ese día), nunca un bloqueo nuevo.
+  }
 }
 
 /** Solo para tests: vacía el estado en memoria del auto-enqueue. */
@@ -1090,29 +1159,30 @@ export function resetAutoEnqueueStateForTests(): void {
   autoEnqueueState.clear();
 }
 
-/** Siembra el estado de un clip desde clip_events (lectura). Sin
- *  estado en memoria para hoy y con un intento hoy en D1, deja
- *  { attemptsToday: 1, lastAttemptMs: último intento }. Sin intento
- *  hoy, no deja nada (el clip se intenta sin freno). Nunca levanta:
- *  si la lectura falla, el freno en memoria empieza de cero. */
+/** Siembra el estado de un clip desde auto_enqueue_attempts
+ *  (migración 0045). Sin estado en memoria para hoy y con fila hoy
+ *  en D1, deja { attemptsToday: valor real, lastAttemptMs }. Sin
+ *  fila hoy, no deja nada (el clip se intenta sin freno). Nunca
+ *  levanta: si la lectura falla, el freno en memoria empieza de
+ *  cero. */
 export async function seedAutoEnqueueStateFromReads(
   db: D1Database,
   tenant: Tenant,
   clipId: number,
   todayKey: string,
-  now: number,
+  _now: number,
 ): Promise<void> {
   const prev = autoEnqueueState.get(clipId);
   if (prev && prev.dayKey === todayKey) return;
   try {
     const row = await db
       .prepare(
-        "SELECT MAX(at) AS last_at FROM clip_events WHERE tenant_id = ? AND clip_id = ? AND step = 'publicado' AND actor = 'worker' AND at >= ?",
+        "SELECT attempts, last_at FROM auto_enqueue_attempts WHERE tenant_id = ? AND clip_id = ? AND day = ?",
       )
-      .bind(tenant, clipId, santiagoDayStartMs(now))
-      .first<{ last_at: number | null }>();
-    if (row?.last_at) {
-      autoEnqueueState.set(clipId, { dayKey: todayKey, attemptsToday: 1, lastAttemptMs: row.last_at });
+      .bind(tenant, clipId, todayKey)
+      .first<{ attempts: number; last_at: number | null }>();
+    if (row && row.attempts > 0) {
+      autoEnqueueState.set(clipId, { dayKey: todayKey, attemptsToday: row.attempts, lastAttemptMs: row.last_at });
     }
   } catch {
     // Sin siembra: el freno en memoria empieza de cero.
@@ -1168,6 +1238,7 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
       qualityBlocked += r.blocked.filter((b) => b.includes(": calidad:")).length;
       if (r.jobs.length > 0) {
         clearAutoEnqueueState(clip.id);
+        await clearAutoEnqueueAttemptPersisted(env.DB, tenant, clip.id, today);
         enqueued += r.jobs.length;
         await logWorkerEvent(
           env.DB,
@@ -1182,7 +1253,7 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
       // transitorios — espaciamiento, 15 min, 1-por-franja, fuera
       // de franja — no aparcan el clip: se re-evalúa en el
       // siguiente ciclo).
-      if (hasHardBlock(r.blocked)) recordAutoEnqueueAttempt(clip.id, Date.now(), today);
+      if (hasHardBlock(r.blocked)) await recordAutoEnqueueAttempt(env.DB, tenant, clip.id, Date.now(), today);
       return false;
     };
     for (const clip of queue) {

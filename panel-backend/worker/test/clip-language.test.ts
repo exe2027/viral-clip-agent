@@ -738,9 +738,8 @@ describe("dispatchPublishStep — guarda del Worker (0019)", () => {
 // ---------------------------------------------------------------------------
 // Reglas 14:10 y 14:17 (2026-11-21): POST /api/clips/:id/publish con
 // scheduled_for y platforms. La hora se congela al sábado 2026-11-21
-// 12:30 Santiago (dentro de la franja 12:00-14:00; las cuentas ES 1,
-// 2 y 3 no descansan ese día). La franja programada es 18:30 del
-// mismo día ("2026-11-21T18:30:00-03:00").
+// 12:30 Santiago (las cuentas ES 1, 2 y 3 no descansan ese día). La
+// hora programada es 18:30 del mismo día ("2026-11-21T18:30:00-03:00").
 // ---------------------------------------------------------------------------
 describe("POST /api/clips/:id/publish — programación y cuentas vinculadas (14:10/14:17)", () => {
   const NOW_MS = SLOT_NOW_MS; // sábado 2026-11-21 12:30 Santiago, dentro de franja
@@ -752,7 +751,7 @@ describe("POST /api/clips/:id/publish — programación y cuentas vinculadas (14
     return setupUnblockedClip(db, env, token, clipBody());
   }
 
-  test("scheduled_for en franja futura → 200, jobs con ese next_run_at y scheduled_for guardado", async () => {
+  test("scheduled_for en hora futura → 200, jobs con ese next_run_at y scheduled_for guardado", async () => {
     const db = new FakeD1();
     const env = makeEnv(db, new FakeR2());
     const token = await tokenFor("seba", "sebastian");
@@ -774,7 +773,7 @@ describe("POST /api/clips/:id/publish — programación y cuentas vinculadas (14
     } finally { restore(); }
   });
 
-  test("scheduled_for fuera de franja → 400", async () => {
+  test("scheduled_for fuera de la vieja franja → 200 (sin franjas desde 2026-11-26)", async () => {
     const db = new FakeD1();
     const env = makeEnv(db, new FakeR2());
     const token = await tokenFor("seba", "sebastian");
@@ -784,8 +783,20 @@ describe("POST /api/clips/:id/publish — programación y cuentas vinculadas (14
       const r = await call(env, "POST", `/api/clips/${id}/publish`, {
         token, body: { scheduled_for: "2026-11-21T15:30:00-03:00" },
       });
-      expect(r.status).toBe(400);
-      expect(String(r.json.error)).toMatch(/franja válida/);
+      expect(r.status).toBe(200);
+      // Unión 14:10: 4 jobs ES, todos a la hora pedida (15:30).
+      // El escalonado ≥15 min entre plataformas del mismo clip NO
+      // se aplica al crear un manual programado: el re-chequeo lo
+      // aplica al ejecutar (la 2.ª sale 15 min después de que la
+      // 1.ª publique, y así). Ver el comentario de next_run_at en
+      // jobs.ts (SPEC quitar-franjas v2).
+      const jobs = (r.json.jobs as Row[]).map((j) => j.next_run_at as number).sort((a, b) => a - b);
+      expect(jobs).toEqual([
+        Date.UTC(2026, 10, 21, 18, 30, 0),
+        Date.UTC(2026, 10, 21, 18, 30, 0),
+        Date.UTC(2026, 10, 21, 18, 30, 0),
+        Date.UTC(2026, 10, 21, 18, 30, 0),
+      ]);
     } finally { restore(); }
   });
 

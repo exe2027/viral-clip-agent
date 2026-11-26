@@ -762,7 +762,7 @@ describe("GET /api/daily-plan", () => {
     expect(Array.isArray(r.json.alertas)).toBe(true);
   });
 
-  test("con cuenta TikTok establecida y un clip en Cola: el plan programa 1 publicación en franja", async () => {
+  test("con cuenta TikTok establecida y un clip en Cola: el plan programa 1 publicación (sin franjas: cualquier hora vale)", async () => {
     const db = new FakeD1();
     db.seed("api_accounts", {
       id: 10, tenant_id: "sebastian", platform: "tiktok", language: "es", label: "TikTok ES",
@@ -779,10 +779,37 @@ describe("GET /api/daily-plan", () => {
     expect(pubs).toHaveLength(1);
     expect(pubs[0]?.clip_id).toBe(1);
     expect(pubs[0]?.plataforma).toBe("tiktok");
-    // Hora dentro de una franja (12-14, 18-20 o 21-23).
-    const [h] = String(pubs[0]?.hora_local ?? "").split(":").map(Number);
-    expect([12, 13, 18, 19, 21, 22].includes(h ?? -1)).toBe(true);
+    // Hora válida HH:MM, sin franja que cumplir (SPEC
+    // quitar-franjas v2: la hora es la cadena aleatoria 90–180 min,
+    // no una hora de franja).
+    expect(String(pubs[0]?.hora_local ?? "")).toMatch(/^\d{2}:\d{2}$/);
     expect(r.json.en_cola).toEqual([]);
+  });
+
+  test("con 2 clips en Cola: el plan los separa 90–180 min (cadena aleatoria, SPEC quitar-franjas v2)", async () => {
+    const db = new FakeD1();
+    db.seed("api_accounts", {
+      id: 10, tenant_id: "sebastian", platform: "tiktok", language: "es", label: "TikTok ES",
+      credential: "", credential_enc: "v1:xxx", extra: "", extra_enc: "", status: "conectada",
+      note: "", created_at: 1, verified_at: 2000, verify_ok: 1, verify_message: "ok",
+      first_published_at: Date.now() - 40 * 86400_000, published_count: 20, strikes: 0,
+      maturity: "establecida", maturity_checked_day: null,
+    });
+    db.seed("clips", clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]), score: 90 }));
+    db.seed("clips", clipRow({ id: 2, platforms: JSON.stringify(["tiktok"]), score: 80 }));
+    const env = makeEnv(db);
+    const r = await call(env, "GET", "/api/daily-plan", { token: await tokenFor("seba", "sebastian") });
+    expect(r.status).toBe(200);
+    const pubs = r.json.publicaciones as Row[];
+    expect(pubs).toHaveLength(2);
+    const toMin = (hhmm: string): number => {
+      const [h, m] = hhmm.split(":").map(Number);
+      return h * 60 + m;
+    };
+    const hours = pubs.map((p) => toMin(String(p.hora_local))).sort((a, b) => a - b);
+    const gap = hours[1] - hours[0];
+    expect(gap).toBeGreaterThanOrEqual(90);
+    expect(gap).toBeLessThanOrEqual(180);
   });
 });
 

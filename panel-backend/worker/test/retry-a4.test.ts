@@ -30,6 +30,7 @@ import {
 } from "../src/retry";
 import {
   alertQuotaExhausted,
+  clearAutoEnqueueAttemptPersisted,
   clearAutoEnqueueState,
   getAutoEnqueueState,
   markFailed,
@@ -101,6 +102,12 @@ function makeDb(): { d1: D1Database; raw: Database } {
       "id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, " +
       "kind TEXT NOT NULL, clip_id INTEGER, message TEXT NOT NULL, " +
       "created_at INTEGER NOT NULL)",
+  );
+  raw.exec(
+    "CREATE TABLE auto_enqueue_attempts (" +
+      "tenant_id TEXT NOT NULL, clip_id INTEGER NOT NULL, " +
+      "day TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, " +
+      "last_at INTEGER, PRIMARY KEY (tenant_id, clip_id, day))",
   );
   const d1 = { prepare: (sql: string) => new SqliteStmt(raw, sql) } as unknown as D1Database;
   return { d1, raw };
@@ -222,8 +229,11 @@ describe("circuito 7500 (memoria + lectura)", () => {
     expect(count(raw, "notifications")).toBe(1);
     expect(await alertQuotaExhausted(d1, "sebastian", undefined, NOW)).toBe("already");
     expect(count(raw, "notifications")).toBe(1);
-    // Al día siguiente vuelve a tocar.
-    const tomorrow = Date.parse("2026-11-21T12:00:00-03:00");
+    // Al día siguiente vuelve a tocar (NOW + 24 h: la fecha
+    // "2026-11-21" hardcodeada era el mañana del 2026-11-20,
+    // cuando se escribió el test; hoy ya es pasado y
+    // quotaAlertDue la rechazaba por el reintento de 1 h).
+    const tomorrow = NOW + 24 * 60 * MIN;
     expect(quotaAlertDue(tomorrow, santiagoDayKeyOf(tomorrow))).toBe(true);
   });
   test("alerta fallida (sin canal): no se repite antes de 1 h, sí después", () => {
@@ -339,35 +349,58 @@ describe("freno del auto-enqueue por clip", () => {
     expect(capped.allowed).toBe(false);
     expect(capped.reason).toContain("tope");
   });
-  test("record/limpieza del estado en memoria", () => {
+  test("record/limpieza del estado en memoria + D1 (0045)", async () => {
     resetAutoEnqueueStateForTests();
+    const { d1, raw } = makeDb();
     const today = santiagoDayKeyOf(NOW);
     expect(getAutoEnqueueState(102, today)).toBeNull();
-    recordAutoEnqueueAttempt(102, NOW - 1000, today);
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW - 1000, today);
     expect(getAutoEnqueueState(102, today)).toEqual({ attemptsToday: 1, lastAttemptMs: NOW - 1000 });
-    recordAutoEnqueueAttempt(102, NOW, today);
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW, today);
     expect(getAutoEnqueueState(102, today)?.attemptsToday).toBe(2);
+    // La fila D1 lleva el mismo contador.
+    const row = raw.query("SELECT attempts, last_at FROM auto_enqueue_attempts WHERE tenant_id = 'sebastian' AND clip_id = 102 AND day = ?").get(today) as { attempts: number; last_at: number };
+    expect(row.attempts).toBe(2);
+    expect(row.last_at).toBe(NOW);
     clearAutoEnqueueState(102);
+    await clearAutoEnqueueAttemptPersisted(d1, "sebastian", 102, today);
     expect(getAutoEnqueueState(102, today)).toBeNull();
+    expect(count(raw, "auto_enqueue_attempts")).toBe(0);
     // Otro día: el estado viejo no vale.
-    recordAutoEnqueueAttempt(102, NOW, today);
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW, today);
     expect(getAutoEnqueueState(102, "2026-11-21")).toBeNull();
   });
-  test("siembra por lectura: con intento hoy asume 1; sin intento, nada", async () => {
+  test("siembra por lectura: lee el valor REAL de auto_enqueue_attempts", async () => {
     resetAutoEnqueueStateForTests();
     const { d1, raw } = makeDb();
     const today = santiagoDayKeyOf(NOW);
     const attemptAt = santiagoDayStartMs(NOW) + 60 * MIN;
-    raw.query("INSERT INTO clip_events (clip_id, tenant_id, at, step, actor, message, failed) VALUES (102, 'sebastian', ?, 'publicado', 'worker', 'Publicación frenada en tiktok: tope diario.', 1)").run(attemptAt);
+    raw.query("INSERT INTO auto_enqueue_attempts (tenant_id, clip_id, day, attempts, last_at) VALUES ('sebastian', 102, ?, 2, ?)").run(today, attemptAt);
     await seedAutoEnqueueStateFromReads(d1, "sebastian", 102, today, NOW);
-    expect(getAutoEnqueueState(102, today)).toEqual({ attemptsToday: 1, lastAttemptMs: attemptAt });
-    // Clip sin intentos hoy: sin estado.
+    expect(getAutoEnqueueState(102, today)).toEqual({ attemptsToday: 2, lastAttemptMs: attemptAt });
+    // Clip sin fila hoy: sin estado.
     await seedAutoEnqueueStateFromReads(d1, "sebastian", 103, today, NOW);
     expect(getAutoEnqueueState(103, today)).toBeNull();
-    // Un intento de AYER no siembra.
-    const yesterdayAt = santiagoDayStartMs(NOW) - 60 * MIN;
-    raw.query("INSERT INTO clip_events (clip_id, tenant_id, at, step, actor, message, failed) VALUES (104, 'sebastian', ?, 'publicado', 'worker', 'Publicación frenada.', 1)").run(yesterdayAt);
+    // Una fila de AYER no siembra.
+    raw.query("INSERT INTO auto_enqueue_attempts (tenant_id, clip_id, day, attempts, last_at) VALUES ('sebastian', 104, '2026-11-19', 3, ?)").run(attemptAt);
     await seedAutoEnqueueStateFromReads(d1, "sebastian", 104, today, NOW);
     expect(getAutoEnqueueState(104, today)).toBeNull();
+  });
+  test("persistencia entre reinicios del isolate: 2 intentos + siembra + 3.º = tope", async () => {
+    resetAutoEnqueueStateForTests();
+    const { d1 } = makeDb();
+    const today = santiagoDayKeyOf(NOW);
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW - 10 * MIN, today);
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW - 5 * MIN, today);
+    expect(getAutoEnqueueState(102, today)?.attemptsToday).toBe(2);
+    // Reciclaje del isolate: la memoria se vacía, la D1 no.
+    resetAutoEnqueueStateForTests();
+    expect(getAutoEnqueueState(102, today)).toBeNull();
+    await seedAutoEnqueueStateFromReads(d1, "sebastian", 102, today, NOW);
+    expect(getAutoEnqueueState(102, today)).toEqual({ attemptsToday: 2, lastAttemptMs: NOW - 5 * MIN });
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW, today);
+    const st = getAutoEnqueueState(102, today);
+    expect(st?.attemptsToday).toBe(3);
+    expect(autoEnqueueAllowed(st ?? { attemptsToday: 0, lastAttemptMs: null }, NOW + 60 * MIN).allowed).toBe(false);
   });
 });

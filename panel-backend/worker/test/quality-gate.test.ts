@@ -30,8 +30,7 @@ import {
 import { resetQuotaBreakerState } from "../src/retry";
 
 const TENANT = "sebastian";
-/** Mediodía en Santiago (12:30 -03): dentro de la franja de
- *  publicación automática. Se parchea Date.now en los tests de
+/** Mediodía en Santiago (12:30 -03). Se parchea Date.now en los tests de
  *  auto-enqueue; el resto usa la hora real. */
 const SLOT_MS = Date.UTC(2026, 10, 20, 15, 30, 0);
 
@@ -379,7 +378,7 @@ function seedClip(db: FakeD1, c: ClipRow): void {
   db.seed("clips", { ...c });
 }
 
-/** Parchea Date.now a la franja de mediodía; devuelve restaurar. */
+/** Parchea Date.now al mediodía; devuelve restaurar. */
 function patchNow(ms: number): () => void {
   const real = Date.now;
   Date.now = () => ms;
@@ -519,25 +518,42 @@ describe("tryEnqueueClipPublish + auto-enqueue B4 (D1 falso)", () => {
     expect(db.rows("jobs")).toEqual([]);
   });
 
-  test("forceNow fuera de franja → encola (salta SOLO la franja); sin forceNow → frena", async () => {
-    // Orden del usuario 2026-11-22 01:07 ("sube vídeos ahora"):
-    // forceNow salta solo la puerta de franja; el resto de
-    // puertas anti-baneo sigue frenando igual.
-    const FUERA_MS = Date.UTC(2026, 10, 20, 18, 30, 0); // 15:30 Santiago, fuera de franja
+  test("manual fuera de la vieja franja → encola (sin franjas desde 2026-11-26); con última publicación hace 30 min → frena por el piso de 90 min", async () => {
+    // SPEC quitar-franjas v2: forceNow murió con las franjas (ya no
+    // hay puerta de franja que saltar). La manual a cualquier hora
+    // encola; solo el piso de 90 min entre publicaciones frena.
+    const FUERA_MS = Date.UTC(2026, 10, 20, 18, 30, 0); // 15:30 Santiago, fuera de la vieja franja
     const db = new FakeD1();
     seedSettings(db);
     seedAccount(db, FUERA_MS);
     seedClip(db, clip({ id: 13, viral: approvedGate() }));
     const restore = patchNow(FUERA_MS);
     try {
-      const sinForce = await tryEnqueueClipPublish(makeEnv(db), TENANT, db.rows("clips")[0] as unknown as ClipRow, { manual: true });
-      expect(sinForce.jobs).toEqual([]);
-      expect(sinForce.blocked.join(" ")).toMatch(/fuera de franja/);
-      const conForce = await tryEnqueueClipPublish(makeEnv(db), TENANT, db.rows("clips")[0] as unknown as ClipRow, { manual: true, forceNow: true });
-      expect(conForce.jobs.length).toBeGreaterThan(0);
-      expect(conForce.blocked.join(" ")).not.toMatch(/fuera de franja/);
+      const r = await tryEnqueueClipPublish(makeEnv(db), TENANT, db.rows("clips")[0] as unknown as ClipRow, { manual: true });
+      expect(r.jobs.length).toBeGreaterThan(0);
+      expect(r.blocked).toEqual([]);
     } finally {
       restore();
+    }
+    // Con una subida posted hace 30 min en YT ES, la misma manual
+    // frena por el piso de 90 min.
+    const db2 = new FakeD1();
+    seedSettings(db2);
+    const accId = seedAccount(db2, FUERA_MS);
+    seedClip(db2, clip({ id: 13, viral: approvedGate() }));
+    db2.seed("jobs", {
+      id: 90, tenant_id: TENANT, kind: "publish", clip_id: 99, platform: "youtube_shorts",
+      api_account_id: accId, state: "posted", platform_id: "YT9", evidence_url: "https://example.com/yt9",
+      language: "es", posted_day: "2026-11-20", attempts: 0, last_error: null, retryable: 1,
+      next_run_at: null, created_at: FUERA_MS - 30 * 60_000, updated_at: FUERA_MS - 30 * 60_000,
+    });
+    const restore2 = patchNow(FUERA_MS);
+    try {
+      const r2 = await tryEnqueueClipPublish(makeEnv(db2), TENANT, db2.rows("clips")[0] as unknown as ClipRow, { manual: true });
+      expect(r2.jobs).toEqual([]);
+      expect(r2.blocked.join(" ")).toMatch(/menos de 90 min/);
+    } finally {
+      restore2();
     }
   });
 
@@ -619,9 +635,9 @@ describe("alerta del 30% de descartes (B4)", () => {
 // Reglas 14:10 y 14:17 (2026-11-21).
 // ---------------------------------------------------------------------------
 describe("reglas 14:10 (todas las cuentas vinculadas) y 14:17 (programación en el panel)", () => {
-  // Franja 18:00-20:00 de Santiago del 20-nov-2026 (21:30 UTC).
+  // Hora programada 18:30 de Santiago del 20-nov-2026 (21:30 UTC).
   const SLOT_18H_MS = Date.UTC(2026, 10, 20, 21, 30, 0);
-  // Fuera de franja: 15:30 Santiago (18:30 UTC).
+  // 15:30 Santiago (18:30 UTC): antes fuera de franja, hoy hora válida.
   const NO_SLOT_MS = Date.UTC(2026, 10, 20, 18, 30, 0);
 
   // Cuentas ES vinculadas. Ids 1, 3 y 4: el id 2 descansa el
@@ -710,13 +726,13 @@ describe("reglas 14:10 (todas las cuentas vinculadas) y 14:17 (programación en 
     } finally { restore(); }
   });
 
-  test("programación 14:17: scheduled_for en franja futura → jobs con ese next_run_at", async () => {
+  test("programación 14:17: scheduled_for en hora futura → jobs con ese next_run_at", async () => {
     const db = new FakeD1();
     seedSettings(db);
     seedAllEs(db);
     const c = clip({ platforms: '["youtube_shorts"]' });
     seedClip(db, c);
-    const restore = patchNow(SLOT_MS); // 12:30 Santiago, dentro de franja
+    const restore = patchNow(SLOT_MS); // 12:30 Santiago
     try {
       const { jobs, blocked } = await tryEnqueueClipPublish(makeEnv(db), TENANT, c, {
         actor: "t", manual: true, platforms: ["youtube_shorts"] as PanelPlatform[], scheduledForMs: SLOT_18H_MS,
@@ -728,7 +744,7 @@ describe("reglas 14:10 (todas las cuentas vinculadas) y 14:17 (programación en 
     } finally { restore(); }
   });
 
-  test("programación 14:17: scheduled_for fuera de franja → frena (no agenda)", async () => {
+  test("programación 14:17: scheduled_for fuera de la vieja franja → agenda (sin franjas desde 2026-11-26)", async () => {
     const db = new FakeD1();
     seedSettings(db);
     seedAllEs(db);
@@ -739,18 +755,20 @@ describe("reglas 14:10 (todas las cuentas vinculadas) y 14:17 (programación en 
       const { jobs, blocked } = await tryEnqueueClipPublish(makeEnv(db), TENANT, c, {
         actor: "t", manual: true, platforms: ["youtube_shorts"] as PanelPlatform[], scheduledForMs: NO_SLOT_MS,
       });
-      expect(jobs).toEqual([]);
-      expect(blocked.join(" ")).toMatch(/fuera de franja/);
+      expect(blocked).toEqual([]);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.next_run_at).toBe(NO_SLOT_MS);
+      expect(jobs[0]?.state).toBe("scheduled");
     } finally { restore(); }
   });
 
-  test("programación 14:17: franja ya ocupada por otro job programado → frena por 1-por-franja", async () => {
+  test("programación 14:17: misma hora que otro job programado → se adelanta 90 min (piso entre publicaciones, sin 1-por-franja)", async () => {
     const db = new FakeD1();
     seedSettings(db);
     seedAllEs(db);
     const c = clip({ platforms: '["youtube_shorts"]' });
     seedClip(db, c);
-    // Otro clip ya programado en la franja 18:00-20:00 para YT ES.
+    // Otro clip ya programado a las 18:30 para YT ES.
     db.seed("jobs", {
       id: 1, clip_id: 99, tenant_id: TENANT, kind: "publish", platform: "youtube_shorts",
       api_account_id: 1, language: "es", state: "scheduled", next_run_at: SLOT_18H_MS,
@@ -761,8 +779,11 @@ describe("reglas 14:10 (todas las cuentas vinculadas) y 14:17 (programación en 
       const { jobs, blocked } = await tryEnqueueClipPublish(makeEnv(db), TENANT, c, {
         actor: "t", manual: true, platforms: ["youtube_shorts"] as PanelPlatform[], scheduledForMs: SLOT_18H_MS,
       });
-      expect(jobs).toEqual([]);
-      expect(blocked.join(" ")).toMatch(/ya se publicó 1 en youtube_shorts en esta franja/);
+      expect(blocked).toEqual([]);
+      expect(jobs).toHaveLength(1);
+      // 18:30 + 90 min (piso desde el job programado pendiente).
+      expect(jobs[0]?.next_run_at).toBe(SLOT_18H_MS + 90 * 60_000);
+      expect(jobs[0]?.state).toBe("scheduled");
     } finally { restore(); }
   });
 
@@ -782,7 +803,7 @@ describe("reglas 14:10 (todas las cuentas vinculadas) y 14:17 (programación en 
       posted_day: "2026-11-20", created_at: SLOT_MS, updated_at: SLOT_MS,
       caption: "", r2_key: "",
     });
-    const restore = patchNow(SLOT_18H_MS); // 18:30, otra franja (6 h después, espaciamiento 2 h OK)
+    const restore = patchNow(SLOT_18H_MS); // 18:30, 6 h después (piso 90 min OK)
     try {
       const { jobs, blocked } = await tryEnqueueClipPublish(makeEnv(db), TENANT, c, {
         actor: "t", manual: true, platforms: ["tiktok"] as PanelPlatform[],

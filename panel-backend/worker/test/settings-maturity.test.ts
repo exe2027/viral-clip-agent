@@ -142,10 +142,12 @@ describe("publishGate lee Ajustes y madurez", () => {
     expect(publishGate("youtube_shorts", gateCtx({ publishedToday: 0, accountDailyLimit: 2, accountDailyPlan: 1 }))).toBeNull();
     expect(publishGate("youtube_shorts", gateCtx({ publishedToday: 1, accountDailyLimit: 2, accountDailyPlan: 1 }))).toContain("plan del día cubierto");
   });
-  test("espaciamiento desde settings: 0 h no frena, 2 h sí (TikTok usa spacing_hours)", () => {
+  test("piso de 90 min: spacing_hours ya no manda (inerte desde 2026-11-26)", () => {
     const last = Date.now() - 30 * 60 * 1000; // hace 30 min
-    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last, settings: { spacing_hours: 0 } }))).toBeNull();
-    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last, settings: { spacing_hours: 2 } }))).toContain("espaciamiento");
+    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last, settings: { spacing_hours: 0 } }))).toContain("menos de 90 min");
+    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last, settings: { spacing_hours: 2 } }))).toContain("menos de 90 min");
+    const old = Date.now() - 100 * 60 * 1000; // hace 100 min: fuera del piso
+    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: old, settings: { spacing_hours: 2 } }))).toBeNull();
   });
   test("viralidad/SEO mínimos desde settings", () => {
     expect(publishGate("youtube_shorts", gateCtx({ seoScore: 89, settings: { min_seo: 90 } }))).toContain("bajo la puerta");

@@ -99,6 +99,8 @@ import {
   maturityOut,
   mergeViralJson,
   moveQueueClip,
+  MAX_PUBLISH_SPACING_MINUTES,
+  MIN_PUBLISH_SPACING_MINUTES,
   normalizeHandle,
   parsePlatforms,
   parsePublishStates,
@@ -114,7 +116,6 @@ import {
   revokeToken,
   santiagoWeekKey,
   saveSettings,
-  spacingHoursFor,
   daysPerWeekFor,
   tiktokHandleFromEvidence,
   toApiPlatform,
@@ -130,8 +131,6 @@ import {
   validateSettingsInput,
   accountPausedUntilMs,
   isRestDayEffective,
-  isWithinPublishSlot,
-  PUBLISH_SLOT_WINDOWS,
   WEEKDAY_NAMES_ES,
   PANEL_PLATFORMS,
   type ClipRow,
@@ -948,15 +947,12 @@ const API_TO_PANEL: Record<PlatformKey, PanelPlatform> = {
 // Topes diarios y plan (2026-11-19): YA NO son constantes fijas.
 // Viven en Ajustes (D1 settings por tenant, defaults por
 // plataforma TikTok 2/3, Instagram 1/2, YouTube 1/2, Facebook 1/2,
-// calentamiento 1/día, 3 h entre subidas — 4 h en YouTube) y el
-// Worker los lee con effectiveSettings en publishGate, /api/channels
-// y /api/bridge/settings. La madurez de la cuenta (0017, reglas
-// 2026-11-19: nueva si <14 días o <20 publicaciones) puede
-// bajarlos a 1/día. FRANJAS HORARIAS (reglas 2026-11-19, hora
-// Chile): la publicación automática solo sale 12:00-14:00,
-// 18:00-20:00 o 21:00-23:00. La decisión 2026-11-18 "sin franja
-// horaria, se publica a cualquier hora" queda REVOCADA.
-const PUBLISH_WINDOW = "franjas Chile 12:00–14:00, 18:00–20:00, 21:00–23:00";
+// calentamiento 1/día) y el Worker los lee con effectiveSettings
+// en publishGate, /api/channels y /api/bridge/settings. La madurez
+// de la cuenta (0017, reglas 2026-11-19: nueva si <14 días o <20
+// publicaciones) puede bajarlos a 1/día. Sin franjas desde
+// 2026-11-26 (SPEC quitar-franjas v2): entre dos publicaciones
+// de la misma cuenta+plataforma pasan 90–180 min, sorteados.
 
 /** Normaliza la plataforma de una medición a clave API
  *  (youtube | tiktok | instagram | facebook); acepta también los
@@ -3338,13 +3334,12 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
           remaining_today: Math.max(0, cap - usedToday),
           published_total: publishedTotal,
           published_last_7d: publishedLast7d,
-          publish_window: PUBLISH_WINDOW,
-          publish_window_fixed: false,
-          // Franjas 2026-11-19 (hora Chile): la automática solo
-          // sale en estas ventanas; el espaciamiento es 3 h (4 h
-          // YouTube) y el rolling 24 h nunca pasa de 3 por cuenta.
-          publish_slots: PUBLISH_SLOT_WINDOWS,
-          min_spacing_hours: spacingHoursFor(eff, p),
+          // Sin franjas desde 2026-11-26 (SPEC quitar-franjas v2):
+          // entre dos publicaciones de la misma cuenta+plataforma
+          // pasan 90–180 min, sorteados; el rolling 24 h nunca
+          // pasa de 3 por cuenta (6 en YouTube).
+          min_spacing_minutes: MIN_PUBLISH_SPACING_MINUTES,
+          max_spacing_minutes: MAX_PUBLISH_SPACING_MINUTES,
           rolling_24h_max: eff.rolling_24h_max,
           days_per_week: daysPerWeekFor(eff, p),
           health: "sin_datos",
@@ -3372,11 +3367,11 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
     // PROGRAMACIÓN (regla 2026-11-21 14:17: "la programación vive
     // en el panel, no en mis crons"): el body acepta `scheduled_for`
     // (ISO 8601) y `platforms` (opcional). Con `scheduled_for`
-    // futuro, los jobs nacen con next_run_at = ese instante y el
-    // gate se evalúa EN ESE INSTANTE (la franja que se comprueba
-    // es la del instante pedido, no la actual); el ciclo los toma
-    // cuando llegue la hora y el re-chequeo vuelve a aplicar todo
-    // al ejecutar. Sin `platforms`, las plataformas son la unión
+    // futuro, los jobs nacen con next_run_at = ese instante (o el
+    // ajustado al piso de 90 min, ver tryEnqueueClipPublish) y el
+    // gate se evalúa EN ESE INSTANTE; el ciclo los toma cuando
+    // llegue la hora y el re-chequeo vuelve a aplicar todo al
+    // ejecutar. Sin `platforms`, las plataformas son la unión
     // de las del clip y las de sus cuentas vinculadas (regla
     // 14:10); con `platforms`, solo esas. El `scheduled_for` del
     // clip se guarda como registro visible de lo programado; la
@@ -3403,9 +3398,12 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
         }
         platforms = list as PanelPlatform[];
       }
-      // Instante programado (opcional): ISO 8601, futuro y dentro
-      // de una franja válida (12:00-14:00, 18:00-20:00, 21:00-23:00
-      // hora Chile). Sin él, publicación inmediata.
+      // Instante programado (opcional): ISO 8601 y futuro. Sin
+      // franjas desde 2026-11-26 (SPEC quitar-franjas v2): se
+      // acepta cualquier hora futura; si viola el piso de 90 min
+      // de alguna plataforma, tryEnqueueClipPublish la mueve
+      // hacia adelante y el resultado trae el instante efectivo.
+      // Sin él, publicación inmediata.
       let scheduledForMs: number | null = null;
       let scheduledForIso: string | null = null;
       if (pubBody.scheduled_for !== undefined && pubBody.scheduled_for !== null && pubBody.scheduled_for !== "") {
@@ -3413,7 +3411,6 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
         const ms = Date.parse(pubBody.scheduled_for.trim());
         if (!Number.isFinite(ms)) return err("scheduled_for debe ser una fecha válida (ISO 8601).", 400);
         if (ms <= Date.now()) return err("scheduled_for debe ser una fecha futura.", 400);
-        if (!isWithinPublishSlot(ms)) return err("scheduled_for debe caer dentro de una franja válida (12:00–14:00, 18:00–20:00 o 21:00–23:00, hora de Chile).", 400);
         scheduledForMs = ms;
         scheduledForIso = new Date(ms).toISOString();
       }
@@ -3425,24 +3422,31 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       // |repubN. Sin este flag, un clip ya publicado hoy en esa
       // plataforma se devuelve tal cual (dedup).
       const republish = pubBody.republish === true;
-      // Publicar AHORA fuera de franja (orden del usuario
-      // 2026-11-22 01:07, "sube vídeos ahora"): force_now=true
-      // salta SOLO la puerta de franja; el resto de puertas
-      // anti-baneo (tope, calentamiento, espaciamiento, rolling,
-      // 1 por plataforma, calidad, SEO) sigue frenando igual.
-      const forceNow = pubBody.force_now === true;
-      const { jobs, blocked, warnings } = await tryEnqueueClipPublish(env, tenant, clip, { actor: session.sub, manual: true, platforms, scheduledForMs, republish, forceNow });
+      // force_now (orden del usuario 2026-11-22 01:07, "sube
+      // vídeos ahora"): antes saltaba SOLO la puerta de franja.
+      // Sin franjas desde 2026-11-26 ya no tiene efecto y se
+      // ignora (se sigue aceptando en el body por compatibilidad
+      // con el panel); "Publicar ahora" encola con next_run_at
+      // null y el ciclo lo toma de inmediato, con el resto de
+      // puertas anti-baneo (tope, calentamiento, piso 90 min,
+      // rolling, calidad, SEO) frenando igual.
+      const { jobs, blocked, warnings, scheduledForMs: effectiveScheduledForMs } = await tryEnqueueClipPublish(env, tenant, clip, { actor: session.sub, manual: true, platforms, scheduledForMs, republish });
       if (jobs.length === 0) {
         return err(`Ninguna plataforma pudo encolarse: ${blocked.join(" · ")}`, 400);
       }
       // El scheduled_for del clip es el registro visible de lo
       // programado (la ejecución la manda el next_run_at del job).
-      if (scheduledForIso !== null) {
+      // Se guarda el instante EFECTIVO (el pedido, o el ajustado
+      // al piso de 90 min) y se informa si hubo ajuste.
+      const effectiveScheduledForIso = effectiveScheduledForMs !== null && effectiveScheduledForMs !== undefined
+        ? new Date(effectiveScheduledForMs).toISOString()
+        : scheduledForIso;
+      if (effectiveScheduledForIso !== null) {
         await env.DB.prepare("UPDATE clips SET scheduled_for = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
-          .bind(scheduledForIso, Date.now(), clipId, tenant)
+          .bind(effectiveScheduledForIso, Date.now(), clipId, tenant)
           .run();
       }
-      return json({ ok: true, jobs: jobs.map((j) => ({ id: j.id, platform: j.platform, state: j.state, next_run_at: j.next_run_at })), blocked, warnings, manual: true, scheduled_for: scheduledForIso, republish });
+      return json({ ok: true, jobs: jobs.map((j) => ({ id: j.id, platform: j.platform, state: j.state, next_run_at: j.next_run_at })), blocked, warnings, manual: true, scheduled_for: effectiveScheduledForIso, scheduled_for_adjusted: scheduledForIso !== null && effectiveScheduledForIso !== scheduledForIso, republish });
     }
 
     // --- Subida del MP4 a R2 ---

@@ -542,7 +542,7 @@ describe("§4 reserva de cupo: mismo grupo, plan 1", () => {
     // scheduled con next_run_at futuro (mañana, por plan cubierto)
     // y 1 intento usado; no publica.
     expect(retried).toHaveLength(1);
-    expect(String(retried[0]?.last_error ?? "")).toMatch(/plan del día cubierto|tope diario|espaciamiento|1 por plataforma y franja/);
+    expect(String(retried[0]?.last_error ?? "")).toMatch(/plan del día cubierto|tope diario|espaciamiento|menos de 90 min/);
     expect(typeof retried[0]?.next_run_at).toBe("number");
     expect((retried[0]?.next_run_at as number) > Date.now()).toBe(true);
     expect(retried[0]?.retryable).toBe(1);

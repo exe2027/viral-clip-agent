@@ -592,8 +592,8 @@ describe("F1: hasVigente por plataforma + posted-ever en el gate", () => {
     seedRunning(db);
     seedSettings(db, { auto_publish_top: true });
     db.seed("clips", clipRow({ id: 1 }));
-    // Posted hoy en YT a las 11:30 (fuera de la franja 12:00-14:00,
-    // para que el freno sea posted-ever, no 1-por-franja).
+    // Posted hoy en YT a las 11:30: el freno es posted-ever (el
+    // mismo clip no se repite en YT hoy), no el piso de 90 min.
     db.seed("jobs", {
       id: 90, tenant_id: "sebastian", kind: "publish", clip_id: 1, platform: "youtube_shorts",
       api_account_id: 11, state: "posted", platform_id: "YT1", evidence_url: "https://www.youtube.com/shorts/YT1",
@@ -606,13 +606,12 @@ describe("F1: hasVigente por plataforma + posted-ever en el gate", () => {
     expect(r.enqueued).toBe(3);
     const jobs = jobsForClip(db, 1).filter((j) => j.state === "scheduled");
     expect(jobs.map((j) => j.platform).sort()).toEqual(["facebook_reels", "instagram_reels", "tiktok"]);
-    // Escalonado F1.3: la base es nextPlatformHourMs (por
-    // plataforma, no nowMs): a las 13:00 TT y FB tienen hueco a
-    // las 13:00, pero IG lo tiene a las 18:00 (YT frena y no crea
-    // job). jobs.length suma +0/+15/+30 min en orden TT, IG, FB.
+    // Escalonado F1.3 (SPEC quitar-franjas v2): sin última subida
+    // en TT/IG/FB, la base es ahora (13:00) y el escalonado entre
+    // plataformas del mismo clip es +0/+15/+30 min en orden TT, IG, FB.
     const byPlatform = new Map(jobs.map((j) => [j.platform as string, j.next_run_at as number]));
     expect(byPlatform.get("tiktok")).toBe(FROZEN_MS);
-    expect(byPlatform.get("instagram_reels")).toBe(FROZEN_MS + 315 * 60_000);
+    expect(byPlatform.get("instagram_reels")).toBe(FROZEN_MS + 15 * 60_000);
     expect(byPlatform.get("facebook_reels")).toBe(FROZEN_MS + 30 * 60_000);
   });
 
@@ -700,12 +699,15 @@ describe("F1b: clips sellados como publicado vuelven a evaluarse", () => {
 // F2 — el freno transitorio en ejecución reprograma, no manda a draft
 // ---------------------------------------------------------------------------
 describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", () => {
-  test("(a) job frenado por espaciamiento → scheduled con next_run_at = última subida posted + spacing (no la marca de la reserva)", async () => {
+  test("(a) job frenado por el piso de 90 min → scheduled con next_run_at = última subida posted + azar 90–180 (no la marca de la reserva)", async () => {
     const db = new FakeD1();
     await seedAccount(db, "youtube", 11);
     seedRunning(db);
     db.seed("clips", clipRow({ id: 1, platforms: JSON.stringify(["youtube_shorts"]) }));
-    // Subida posted en YT a las 11:30 (hace 90 min < 2 h de spacing).
+    // Subida posted en YT a las 11:30. La reserva de cupo tiene
+    // marca MÁS RECIENTE (12:50): el re-chequeo frena por el piso
+    // (hueco 10 min < 90 min) pero el retryAt se calcula desde la
+    // subida posted (11:30), no desde la marca de la reserva.
     const lastPostedAt = FROZEN_MS - 90 * 60_000;
     db.seed("jobs", {
       id: 90, tenant_id: "sebastian", kind: "publish", clip_id: 900, platform: "youtube_shorts",
@@ -730,9 +732,12 @@ describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", 
     expect(j?.state).toBe("scheduled");
     expect(j?.retryable).toBe(1);
     expect(j?.attempts).toBe(1);
-    // 11:30 + 2 h = 13:30 (no 12:50 + 2 h = 14:50, la reserva).
-    expect(j?.next_run_at).toBe(lastPostedAt + 2 * 3600_000);
-    expect(String(j?.last_error ?? "")).toContain("espaciamiento: menos de 2 h");
+    // 11:30 + azar(90–180 min) (no 12:50 + azar, la reserva; el
+    // retry min90 solo lee jobs posted). Rango, no valor exacto:
+    // el azar es Math.random en el ciclo.
+    expect(j?.next_run_at).toBeGreaterThanOrEqual(lastPostedAt + 90 * 60_000);
+    expect(j?.next_run_at).toBeLessThanOrEqual(lastPostedAt + 180 * 60_000);
+    expect(String(j?.last_error ?? "")).toContain("menos de 90 min");
   });
 
   test("(b) job frenado por calidad → draft con retryable=0 (sin cambio)", async () => {
@@ -757,12 +762,14 @@ describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", 
     expect(String(j?.last_error ?? "")).toContain("calidad: sin cara visible");
   });
 
-  test("(c) job con 3 intentos hoy frenado por espaciamiento → draft (tope de intentos)", async () => {
+  test("(c) job con 3 intentos hoy frenado por el piso de 90 min → draft (tope de intentos)", async () => {
     const db = new FakeD1();
     await seedAccount(db, "youtube", 11);
     seedRunning(db);
     db.seed("clips", clipRow({ id: 1, platforms: JSON.stringify(["youtube_shorts"]) }));
-    const lastPostedAt = FROZEN_MS - 90 * 60_000;
+    // Subida posted en YT hace 30 min (< 90 min de piso): el
+    // re-chequeo frena y, con 3 intentos ya usados, va a draft.
+    const lastPostedAt = FROZEN_MS - 30 * 60_000;
     db.seed("jobs", {
       id: 90, tenant_id: "sebastian", kind: "publish", clip_id: 900, platform: "youtube_shorts",
       api_account_id: 11, state: "posted", platform_id: "YT9", evidence_url: "https://www.youtube.com/shorts/YT9",
@@ -829,21 +836,21 @@ describe("F2b: el 15 min también ve a los hermanos en processing", () => {
 // F3 — el freno A4 solo cuenta bloqueos duros
 // ---------------------------------------------------------------------------
 describe("F3: el freno A4 solo cuenta bloqueos duros", () => {
-  test("todas las plataformas frenadas solo por espaciamiento durante 3 ciclos → al 4.º sigue permitiendo (0 intentos A4)", async () => {
+  test("todas las plataformas frenadas solo por el piso de 90 min durante 3 ciclos → al 4.º sigue permitiendo (0 intentos A4)", async () => {
     const db = new FakeD1();
     await seedAllAccounts(db);
     seedRunning(db);
     seedSettings(db, { auto_publish_top: true });
     db.seed("clips", clipRow({ id: 1 }));
-    // Una subida posted en cada plataforma a las 11:30 (hace 90
-    // min: < 2 h YT y < 3 h resto) y fuera de la franja actual
-    // (para que el freno sea espaciamiento, no 1-por-franja).
+    // Una subida posted en cada plataforma hace 30 min (< 90 min
+    // de piso en los 4 ciclos: T, T+1, T+6 y T+21 min). El freno
+    // es el piso de 90 min, no un bloqueo duro: no consume A4.
     for (let i = 0; i < ALL_PLATFORMS.length; i++) {
       db.seed("jobs", {
         id: 90 + i, tenant_id: "sebastian", kind: "publish", clip_id: 900 + i, platform: ALL_PLATFORMS[i] as string,
         api_account_id: 10, state: "posted", platform_id: `P${i}`, evidence_url: `https://example.com/${i}`,
         language: "es", posted_day: FROZEN_DAY, attempts: 0, last_error: null, retryable: 1,
-        next_run_at: null, created_at: FROZEN_MS - 90 * 60_000, updated_at: FROZEN_MS - 90 * 60_000,
+        next_run_at: null, created_at: FROZEN_MS - 30 * 60_000, updated_at: FROZEN_MS - 30 * 60_000,
       });
     }
     const env = makeEnv(db, new FakeR2());
@@ -858,14 +865,13 @@ describe("F3: el freno A4 solo cuenta bloqueos duros", () => {
     }
     expect(jobsForClip(db, 1)).toHaveLength(0);
     // Invariante F3: el clip NUNCA se aparca por frenos
-    // transitorios. El contador puede quedar en 1 (no en 0): la
-    // siembra pre-existente (seedAutoEnqueueStateFromReads) lee
-    // los eventos clip_events "Publicación frenada" del ciclo 1
-    // (step 'publicado', actor 'worker') y asume 1 intento ya
-    // hecho — aproximación documentada que capa en 1 (la siembra
-    // no se repite con estado en memoria) y nunca llega a 3.
+    // transitorios. Con persistencia D1 (0045) la siembra ya no lee
+    // clip_events: sin intento duro no hay fila en
+    // auto_enqueue_attempts y el contador queda en 0 en los 4
+    // ciclos (antes de 0045 la siembra asumía 1 desde los eventos
+    // "Publicación frenada").
     const st = getAutoEnqueueState(1, FROZEN_DAY);
-    expect(st?.attemptsToday ?? 0).toBeLessThanOrEqual(1);
+    expect(st?.attemptsToday ?? 0).toBe(0);
     expect(autoEnqueueAllowed(st ?? { attemptsToday: 0, lastAttemptMs: null }, FROZEN_MS + 21 * 60_000).allowed).toBe(true);
   });
 

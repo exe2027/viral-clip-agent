@@ -1,11 +1,14 @@
 // Tests de publicación MANUAL (2026-11-19, botón "Publicar ahora"),
-// actualizados a la orden 09:25 del 2026-11-21 (SIN AMONTONAR) y al
-// refuerzo del validador (2026-11-21): la manual YA NO salta ningún
-// freno anti-baneo (franja, tope diario, espaciamiento,
-// cross-platform, 1-por-franja, calentamiento, rolling) ni el
-// veredicto de calidad BLANDO (sin veredicto válido: un clip sin
-// validar no se publica por ningún camino). Solo sigue saltando el
-// día libre (planificación, no freno de seguridad). La calidad
+// actualizados a la orden 09:25 del 2026-11-21 (SIN AMONTONAR), al
+// refuerzo del validador (2026-11-21) y a la SPEC quitar-franjas v2
+// (2026-11-26): la manual YA NO salta ningún freno anti-baneo
+// (tope diario, piso de 90 min, cross-platform, calentamiento,
+// rolling) ni el veredicto de calidad BLANDO (sin veredicto válido:
+// un clip sin validar no se publica por ningún camino). Las franjas
+// y el "1 por plataforma y franja" ya no existen: a cualquier hora
+// se puede publicar a mano, solo manda el piso de 90 min entre
+// publicaciones de la misma cuenta+plataforma. Solo sigue saltando
+// el día libre (planificación, no freno de seguridad). La calidad
 // (idioma, subtítulos, duración, categoría, SEO, cuenta) sigue
 // frenando igual.
 import { describe, expect, test } from "bun:test";
@@ -13,10 +16,14 @@ import { publishGate, rateLimitGate, type GateContext } from "../src/jobs";
 import type { ClipRow } from "../src/db";
 
 // Instantes fijos en noviembre 2026 (Chile en horario de verano,
-// UTC-3): 10:00 Santiago = 13:00 UTC (fuera de franja);
-// 13:00 Santiago = 16:00 UTC (dentro de la franja de mañana).
+// UTC-3): 10:00 Santiago = 13:00 UTC (fuera de la VIEJA franja);
+// 13:00 Santiago = 16:00 UTC (dentro de la VIEJA franja de mañana);
+// 03:00 Santiago = 06:00 UTC (madrugada, antes sin hueco).
+// Desde la SPEC quitar-franjas v2 (2026-11-26) no hay franjas: los
+// tres instantes son horas válidas para publicar.
 const FUERA_DE_FRANJA_MS = Date.UTC(2026, 10, 21, 13, 0, 0);
 const DENTRO_DE_FRANJA_MS = Date.UTC(2026, 10, 21, 16, 0, 0);
+const MADRUGADA_MS = Date.UTC(2026, 10, 21, 6, 0, 0);
 
 function clip(over: Partial<ClipRow> = {}): ClipRow {
   return {
@@ -50,23 +57,24 @@ describe("publicación manual: los frenos TAMBIÉN frenan (orden 09:25, SIN AMON
     expect(publishGate("youtube_shorts", gateCtx({ publishedToday: 3, settings: { youtube_plan: 3, youtube_max: 6 } }))).toMatch(/plan del día cubierto/);
   });
 
-  test("espaciamiento reciente + manual → FRENA", () => {
-    const last = Date.now() - 30 * 60 * 1000; // hace 30 min, menos de 4 h en YouTube
-    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last, manual: true }))).toMatch(/espaciamiento/);
-    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toMatch(/espaciamiento/);
+  test("piso de 90 min + manual → FRENA (SPEC quitar-franjas v2: el espaciamiento fijo 2 h/3 h murió)", () => {
+    const last = Date.now() - 30 * 60 * 1000; // hace 30 min, menos de 90 min de piso
+    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last, manual: true }))).toMatch(/menos de 90 min/);
+    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toMatch(/menos de 90 min/);
   });
 
-  test("fuera de franja + manual → FRENA (checkSlot también en manual)", () => {
-    const ctx = gateCtx({ manual: true, checkSlot: true, nowMs: FUERA_DE_FRANJA_MS });
-    expect(publishGate("youtube_shorts", ctx)).toMatch(/fuera de franja/);
-    const dentro = gateCtx({ manual: true, checkSlot: true, nowMs: DENTRO_DE_FRANJA_MS });
-    expect(publishGate("youtube_shorts", dentro)).toBeNull();
+  test("cualquier hora + manual → NO frena por franja (sin franjas desde 2026-11-26)", () => {
+    // 10:00 (fuera de la vieja franja), 13:00 (dentro) y 03:00
+    // (madrugada, antes sin hueco): las tres pasan el gate.
+    expect(publishGate("youtube_shorts", gateCtx({ manual: true, nowMs: FUERA_DE_FRANJA_MS }))).toBeNull();
+    expect(publishGate("youtube_shorts", gateCtx({ manual: true, nowMs: DENTRO_DE_FRANJA_MS }))).toBeNull();
+    expect(publishGate("youtube_shorts", gateCtx({ manual: true, nowMs: MADRUGADA_MS }))).toBeNull();
   });
 
-  test("1 por plataforma y franja + manual → FRENA si ya se publicó 1 en esta franja", () => {
-    expect(publishGate("youtube_shorts", gateCtx({ manual: true, publishedThisSlot: 1 }))).toMatch(/1 por plataforma y franja/);
-    expect(publishGate("youtube_shorts", gateCtx({ manual: true, publishedThisSlot: 0 }))).toBeNull();
-    expect(publishGate("youtube_shorts", gateCtx({ publishedThisSlot: 1 }))).toMatch(/1 por plataforma y franja/);
+  test("piso de 90 min: a los 100 min + manual → PASA (el piso es 90, no 2 h)", () => {
+    const last = Date.now() - 100 * 60 * 1000; // hace 100 min: fuera del piso
+    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last, manual: true }))).toBeNull();
+    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toBeNull();
   });
 
   test("mismo clip en otra plataforma hace 5 min + manual → FRENA (cross-platform 15 min)", () => {
@@ -106,9 +114,9 @@ describe("rateLimitGate: el aviso del freno saltado", () => {
     expect(reason).toMatch(/plan del día cubierto: 3\/3 en youtube_shorts \(techo 6\)/);
   });
 
-  test("espaciamiento reciente → motivo; 0 h → null (TikTok usa spacing_hours)", () => {
+  test("piso de 90 min → motivo; sin última publicación → null (el piso ya no depende de spacing_hours)", () => {
     const last = Date.now() - 30 * 60 * 1000;
-    expect(rateLimitGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toMatch(/espaciamiento/);
-    expect(rateLimitGate("tiktok", gateCtx({ lastPublishedAtMs: last, settings: { spacing_hours: 0 } }))).toBeNull();
+    expect(rateLimitGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toMatch(/menos de 90 min/);
+    expect(rateLimitGate("tiktok", gateCtx({ lastPublishedAtMs: null }))).toBeNull();
   });
 });

@@ -25,11 +25,13 @@ import {
   listApiAccounts,
   listQueueClips,
   maturityOut,
+  MIN_PUBLISH_SPACING_MINUTES,
   parsePlatforms,
+  randomPublishDelayMs,
   restWeekdayEffective,
   santiagoDayKeyMs,
+  santiagoWallToUtcMs,
   santiagoWeekKey,
-  slotTimeFor,
   WEEKDAY_NAMES_ES,
   type EffectiveSettings,
   type PanelPlatform,
@@ -59,6 +61,10 @@ export interface DailyPlanAccountInput {
   restWeekday: number;
   /** Regla 6: >30 días sin restricción + cola viral alta. */
   canEscalate: boolean;
+  /** Última publicación real de esta plataforma+idioma (ms
+   *  epoch, null si no hay): el plan encadena desde ahí con
+   *  azar(90–180 min) (SPEC quitar-franjas v2). */
+  lastPublishedAtMs: number | null;
 }
 
 export interface DailyPlanClipInput {
@@ -101,6 +107,9 @@ export interface DailyPlanInput {
   queue: DailyPlanClipInput[];
   eff: EffectiveSettings;
   nowMs: number;
+  /** Generador de azar para las horas (SPEC quitar-franjas v2):
+   *  Math.random() por defecto; los tests pasan uno falso. */
+  rng?: () => number;
 }
 
 function hhmmToMinutes(hhmm: string): number {
@@ -108,8 +117,15 @@ function hhmmToMinutes(hhmm: string): number {
   return (h ?? 0) * 60 + (m ?? 0);
 }
 
+function minutesToHhmm(minutes: number): string {
+  const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
+  const mm = String(Math.floor(minutes % 60)).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
   const { fecha, accounts, queue, eff, nowMs } = input;
+  const rng = input.rng ?? Math.random;
   const alertas: string[] = [];
   const publicaciones: DailyPlanPublication[] = [];
   const plannedClipPlatform = new Map<string, number>(); // `${clipId}|${panelPlatform}` -> minutos
@@ -176,6 +192,16 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
     const pct = eff.campaign_priority_share_pct ?? 60;
     const campaignReserve = Math.max(0, Math.min(capacity, Math.round((capacity * pct) / 100)));
     let campaignAssigned = 0;
+    // CURSOR DE HORAS (SPEC quitar-franjas v2): el plan encadena
+    // las publicaciones de esta cuenta con azar(90–180 min) desde
+    // su última publicación real (o desde las 00:00 si no hay).
+    // El plan es una vista, no el programador — el auto-enqueue
+    // es quien pone el next_run_at real — pero las horas que
+    // muestra siguen la misma regla.
+    const dayStartMs = santiagoWallToUtcMs(fecha, "00:00");
+    let cursorMin = acc.lastPublishedAtMs !== null && acc.lastPublishedAtMs !== undefined
+      ? Math.max(0, Math.ceil((acc.lastPublishedAtMs + randomPublishDelayMs(rng) - dayStartMs) / 60000))
+      : 0;
     const tryAssign = (clip: DailyPlanClipInput, campaignPass: boolean): boolean => {
       if (assigned >= capacity) return false;
       if (plannedIds.has(clip.id)) return false;
@@ -183,19 +209,22 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
       if (!clip.platforms.includes(acc.platform)) return false;
       if (usedClipAccount.has(`${clip.id}|${acc.id}`)) return false;
       if (plannedClipPlatform.has(`${clip.id}|${acc.platform}`)) return false;
-      const hora = slotTimeFor(fecha, `acc-${acc.id}`, assigned, capacity);
-      const minutes = hhmmToMinutes(hora);
+      // Hora aleatoria (SPEC quitar-franjas v2): el cursor avanza
+      // 90–180 min por publicación. Si la hora cae fuera del día,
+      // el clip pasa a la cola.
+      const minutes = cursorMin;
+      if (minutes >= 24 * 60) return false;
+      const hora = minutesToHhmm(minutes);
       // Mismo clip en distintas plataformas: mínimo 15 min entre
-      // una y otra (regla 4). Las franjas lo separan por horas,
-      // pero se verifica igual antes de devolver el plan.
+      // una y otra (regla 4). Se verifica igual antes de devolver
+      // el plan.
       const otherTimes = plannedClipTimes.get(clip.id) ?? [];
       if (otherTimes.some((t) => Math.abs(t - minutes) < eff.cross_platform_spacing_minutes)) return false;
-      // Espaciamiento en la misma cuenta: 3 h (4 h YouTube). Las
-      // ventanas elegidas (mediodía+noche, o las 3) lo cumplen;
-      // si no, el clip pasa a la cola.
-      const spacingMin = (acc.apiPlatform === "youtube" ? eff.youtube_spacing_hours : eff.spacing_hours) * 60;
+      // Piso 90 min en la misma cuenta (SPEC quitar-franjas v2):
+      // el cursor ya lo garantiza (cada paso es ≥90 min), pero se
+      // verifica igual antes de devolver el plan.
       const myTimes = publicaciones.filter((p) => p.cuenta === label).map((p) => hhmmToMinutes(p.hora_local));
-      if (myTimes.some((t) => Math.abs(t - minutes) < spacingMin)) return false;
+      if (myTimes.some((t) => Math.abs(t - minutes) < MIN_PUBLISH_SPACING_MINUTES)) return false;
       publicaciones.push({
         clip_id: clip.id,
         plataforma: acc.apiPlatform,
@@ -204,8 +233,11 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
         titulo: clip.title,
         descripcion: clip.description,
         hashtags: capHashtags(clip.hashtags, acc.apiPlatform, eff),
-        motivo: `${campaignPass ? `Campaña ${clip.streamer ?? ""} (prioridad ${pct}%) · ` : ""}Top de la Cola (score ${clip.score}) · ${label} · franja ${hora} · ${acc.stage === "establecida" ? (target === acc.max && acc.max > acc.plan ? `ritmo máximo ${target}/día` : `ritmo normal ${target}/día`) : `calentamiento ${acc.stage} (${target}/día)`}`,
+        motivo: `${campaignPass ? `Campaña ${clip.streamer ?? ""} (prioridad ${pct}%) · ` : ""}Top de la Cola (score ${clip.score}) · ${label} · ${hora} · ${acc.stage === "establecida" ? (target === acc.max && acc.max > acc.plan ? `ritmo máximo ${target}/día` : `ritmo normal ${target}/día`) : `calentamiento ${acc.stage} (${target}/día)`}`,
       });
+      // La próxima publicación de esta cuenta sale 90–180 min
+      // después de esta (azar por publicación).
+      cursorMin = minutes + Math.round(randomPublishDelayMs(rng) / 60000);
       plannedClipPlatform.set(`${clip.id}|${acc.platform}`, minutes);
       plannedClipTimes.set(clip.id, [...otherTimes, minutes]);
       usedClipAccount.add(`${clip.id}|${acc.id}`);
@@ -280,6 +312,12 @@ export async function buildDailyPlanForTenant(
         .bind(tenant, panel, acc.language === "en" ? "en" : "es", nowMs - 24 * 3600 * 1000)
         .first<{ n: number }>()
         .catch(() => null);
+      const lastPublishedRow = await db.prepare(
+        "SELECT updated_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' ORDER BY updated_at DESC LIMIT 1",
+      )
+        .bind(tenant, panel, acc.language === "en" ? "en" : "es")
+        .first<{ updated_at: number }>()
+        .catch(() => null);
       const seed = `acc-${acc.id}`;
       accounts.push({
         id: acc.id,
@@ -294,6 +332,7 @@ export async function buildDailyPlanForTenant(
         strikes: mat.strikes,
         publishedToday: publishedTodayRow?.n ?? 0,
         publishedLast24h: publishedLast24hRow?.n ?? 0,
+        lastPublishedAtMs: lastPublishedRow?.updated_at ?? null,
         hasCredential: acc.verify_ok === 1 && !!(acc.credential_enc || acc.credential),
         pausedUntilMs: accountPausedUntilMs(settings, acc.id),
         restDay: isRestDayEffective(seed, nowMs, settings, acc.id),

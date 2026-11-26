@@ -3,10 +3,16 @@
 // Facebook 3/3; orden usuario 2026-11-21 21:09: IG/FB a 3 y
 // YouTube a 6), calentamiento nuevo (<14 días o <20 publicaciones;
 // semana 1/2: plan de calentamiento, semana 3: plan, establecida: plan+máx),
-// espaciamiento 3 h (2 h YouTube, orden 2026-11-23), rolling 24 h máx 3 (6 YouTube), franjas
-// Chile 12:00-14:00 / 18:00-20:00 / 21:00-23:00 con jitter
-// determinista, día libre semanal determinista, backoff 1/5/15/60
-// (máx 3 reintentos/día, A4) y spam -> pausa 48 h sin reintento, y plan diario JSON.
+// rolling 24 h máx 3 (6 YouTube), día libre semanal determinista,
+// backoff 1/5/15/60 (máx 3 reintentos/día, A4) y spam -> pausa 48 h
+// sin reintento, y plan diario JSON.
+// REVOCADO 2026-11-26 (SPEC quitar-franjas v2, orden del usuario):
+// el espaciamiento fijo 3 h (2 h YouTube) y las franjas Chile
+// 12:00-14:00 / 18:00-20:00 / 21:00-23:00 con jitter determinista
+// mueren. En su lugar: azar 90–180 min entre publicaciones de la
+// misma cuenta+plataforma (next_run_at) y piso de 90 min en el
+// re-chequeo. spacing_hours / youtube_spacing_hours quedan en
+// Ajustes como inertes (compatibilidad) y el gate ya no los lee.
 import { describe, expect, test } from "bun:test";
 import {
   computeMaturity,
@@ -14,16 +20,14 @@ import {
   getRestDayOverrides,
   isRestDay,
   isRestDayEffective,
-  isWithinPublishSlot,
-  jitterMinutes,
-  nextPlatformHourMs,
-  PLATFORM_SCHEDULE,
+  MAX_PUBLISH_SPACING_MINUTES,
+  MIN_PUBLISH_SPACING_MINUTES,
+  randomPublishDelayMs,
   restWeekday,
   restWeekdayEffective,
   santiagoDayKeyMs,
   santiagoWallToUtcMs,
   santiagoWeekKey,
-  slotTimeFor,
   validateSettingsInput,
   warmupStage,
   withRestDayOverride,
@@ -154,18 +158,20 @@ describe("calentamiento nuevo (<14 días o <20 publicaciones)", () => {
   });
 });
 
-describe("espaciamiento 3 h / 2 h YouTube y cross-platform 15 min (YouTube 2 h: orden 2026-11-23)", () => {
-  test("hace 2,5 h: TikTok frena (3 h), YouTube pasa (2 h)", () => {
-    const last = Date.now() - 2.5 * 3600 * 1000;
-    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toContain("espaciamiento");
+describe("piso de 90 min y cross-platform 15 min (SPEC quitar-franjas v2, 2026-11-26)", () => {
+  test("hace 30 min: TikTok y YouTube frenan (piso 90 min, igual para todas)", () => {
+    const last = Date.now() - 30 * 60 * 1000;
+    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toContain("menos de 90 min");
+    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toContain("menos de 90 min");
+  });
+  test("hace 100 min: TikTok y YouTube pasan (antes frenaban: 3 h y 2 h)", () => {
+    const last = Date.now() - 100 * 60 * 1000;
+    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toBeNull();
     expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toBeNull();
   });
-  test("hace 1,5 h: YouTube frena (2 h)", () => {
-    const last = Date.now() - 1.5 * 3600 * 1000;
-    expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toContain("espaciamiento");
-  });
-  test("hace 4,5 h: YouTube también pasa", () => {
-    const last = Date.now() - 4.5 * 3600 * 1000;
+  test("hace 2,5 h: pasa en todas (antes TikTok frenaba con 3 h)", () => {
+    const last = Date.now() - 2.5 * 3600 * 1000;
+    expect(publishGate("tiktok", gateCtx({ lastPublishedAtMs: last }))).toBeNull();
     expect(publishGate("youtube_shorts", gateCtx({ lastPublishedAtMs: last }))).toBeNull();
   });
   test("mismo clip en otra plataforma hace 10 min: frena; hace 20 min: pasa", () => {
@@ -178,110 +184,46 @@ describe("espaciamiento 3 h / 2 h YouTube y cross-platform 15 min (YouTube 2 h: 
   });
 });
 
-describe("franjas horarias Chile (revoca 'sin franja' 2026-11-18)", () => {
+describe("sin franjas (SPEC quitar-franjas v2, 2026-11-26: revoca las franjas 2026-11-19)", () => {
   const day = "2026-11-19";
-  test("13:00 (mañana) y 19:00 (tarde) y 22:00 (noche) están dentro; 10:00 y 16:00 fuera", () => {
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "13:00"))).toBe(true);
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "19:00"))).toBe(true);
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "22:00"))).toBe(true);
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "10:00"))).toBe(false);
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "16:00"))).toBe(false);
-  });
-  test("automática fuera de franja frena; dentro pasa; manual TAMBIÉN comprueba franja (orden 09:25, SIN AMONTONAR)", () => {
-    const inSlot = santiagoWallToUtcMs(day, "13:00");
-    const outSlot = santiagoWallToUtcMs(day, "10:00");
-    expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: outSlot }))).toContain("fuera de franja");
-    expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: inSlot }))).toBeNull();
-    expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: outSlot, manual: true }))).toContain("fuera de franja");
-    expect(publishGate("tiktok", gateCtx({ nowMs: outSlot }))).toBeNull(); // sin checkSlot no se comprueba
-  });
-  test("F0 (spec 2026-11-24): la madrugada 00:00-01:00 es franja — el hueco YT 00:00 es alcanzable", () => {
-    // 00:30 dentro; 01:00 ya fuera (la ventana es [00:00, 01:00));
-    // 02:00 fuera.
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "00:30"))).toBe(true);
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "00:00"))).toBe(true);
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "01:00"))).toBe(false);
-    expect(isWithinPublishSlot(santiagoWallToUtcMs(day, "02:00"))).toBe(false);
-    // El gate con checkSlot pasa a las 00:30 (antes: "fuera de franja").
-    expect(publishGate("tiktok", gateCtx({ checkSlot: true, nowMs: santiagoWallToUtcMs(day, "00:30") }))).toBeNull();
-    // nextPlatformHourMs(YT, 00:30) = ahora: es el next_run_at con
-    // el que nace un job YT encolado a las 00:30 (dentro de la hora
-    // 00:00, vence inmediato).
-    const now = santiagoWallToUtcMs(day, "00:30");
-    expect(nextPlatformHourMs("youtube_shorts", now)).toBe(now);
-  });
-});
-
-describe("horario por plataforma (orden usuario 2026-11-22 01:11; YouTube 6/día 2026-11-23)", () => {
-  const day = "2026-11-19";
-  // Las horas del horario son "no antes de": el ciclo las recoge
-  // en la siguiente pasada del cron. Las franjas del cron son
-  // 12:00-16:00 y 18:00-01:00 (Chile); la franja de publicación
-  // (00-01, 12-14, 18-20, 21-23, con F0) es más estrecha y solo
-  // se comprueba al encolar, no al ejecutar, así que las horas no
-  // tienen que caer dentro de ella. Lo que sí se exige: 6 huecos
-  // YouTube / 3 el resto, todos dentro de franja de cron y con
-  // ≥2 h entre ellos.
-  const inCronWindow = (hhmm: string): boolean => {
-    const [h, m] = hhmm.split(":").map(Number);
-    const mins = h * 60 + m;
-    return (mins >= 12 * 60 && mins < 16 * 60) || mins >= 18 * 60 || mins < 1 * 60;
-  };
-  test("YouTube tiene 6 horas al día, el resto 3; todas en franja de cron y con ≥2 h entre ellas", () => {
-    const toMin = (hhmm: string) => {
-      const [h, m] = hhmm.split(":").map(Number);
-      return h * 60 + m;
-    };
-    for (const [platform, hours] of Object.entries(PLATFORM_SCHEDULE)) {
-      expect(hours).toHaveLength(platform === "youtube_shorts" ? 6 : 3);
-      for (let i = 0; i < hours.length; i++) {
-        expect(inCronWindow(hours[i])).toBe(true);
-        if (i > 0) {
-          // Hueco hacia delante (00:00 es el día siguiente: +24 h).
-          const gap = toMin(hours[i]) - toMin(hours[i - 1]);
-          const forward = gap > 0 ? gap : gap + 24 * 60;
-          expect(forward).toBeGreaterThanOrEqual(120);
-        }
-      }
-      void platform;
+  test("10:00, 13:00, 16:00, 19:00, 22:00 y 00:30 pasan: no hay franja que comprobar", () => {
+    for (const hhmm of ["10:00", "13:00", "16:00", "19:00", "22:00", "00:30"]) {
+      expect(publishGate("tiktok", gateCtx({ nowMs: santiagoWallToUtcMs(day, hhmm) }))).toBeNull();
     }
   });
-  test("YouTube 00:00, 12:00, 14:00, 18:00, 20:00, 22:00; IG 12:00, 18:00, 21:00; TikTok/FB 13:00, 19:00, 22:00", () => {
-    expect(PLATFORM_SCHEDULE.youtube_shorts).toEqual(["00:00", "12:00", "14:00", "18:00", "20:00", "22:00"]);
-    expect(PLATFORM_SCHEDULE.instagram_reels).toEqual(["12:00", "18:00", "21:00"]);
-    expect(PLATFORM_SCHEDULE.tiktok).toEqual(["13:00", "19:00", "22:00"]);
-    expect(PLATFORM_SCHEDULE.facebook_reels).toEqual(["13:00", "19:00", "22:00"]);
+  test("manual a las 10:00 (fuera de la vieja franja) TAMBIÉN pasa", () => {
+    expect(publishGate("tiktok", gateCtx({ manual: true, nowMs: santiagoWallToUtcMs(day, "10:00") }))).toBeNull();
   });
-  test("nextPlatformHourMs: antes de la hora → esa hora; dentro de la hora → ahora; pasada la última → mañana a la primera", () => {
-    // 11:00 → YT 12:00 hoy; TT 13:00 hoy.
-    expect(nextPlatformHourMs("youtube_shorts", santiagoWallToUtcMs(day, "11:00"))).toBe(santiagoWallToUtcMs(day, "12:00"));
-    expect(nextPlatformHourMs("tiktok", santiagoWallToUtcMs(day, "11:00"))).toBe(santiagoWallToUtcMs(day, "13:00"));
-    // 12:05, dentro de la hora YT 12:00 → ahora (vence inmediato).
-    const dentro = santiagoWallToUtcMs(day, "12:05");
-    expect(nextPlatformHourMs("youtube_shorts", dentro)).toBe(dentro);
-    // 12:05 para TikTok (su hora es 13:00) → 13:00 hoy.
-    expect(nextPlatformHourMs("tiktok", dentro)).toBe(santiagoWallToUtcMs(day, "13:00"));
-    // 23:30, pasada la última hora YT (22:00, vence 23:00) → mañana 00:00
-    // (la lista empieza en 00:00, así que "mañana a la primera" es medianoche).
-    expect(nextPlatformHourMs("youtube_shorts", santiagoWallToUtcMs(day, "23:30"))).toBe(santiagoWallToUtcMs("2026-11-20", "00:00"));
+  test("F0 (spec 2026-11-24, vigente sin franjas): el hueco YT 00:00 sigue alcanzable — a las 00:30 el gate pasa", () => {
+    expect(publishGate("tiktok", gateCtx({ nowMs: santiagoWallToUtcMs(day, "00:30") }))).toBeNull();
+    expect(publishGate("youtube_shorts", gateCtx({ nowMs: santiagoWallToUtcMs(day, "00:30") }))).toBeNull();
   });
 });
 
-describe("jitter determinista y día libre determinista", () => {
-  test("slotTimeFor: mismo día+cuenta siempre igual; dentro de su franja", () => {
-    const a = slotTimeFor("2026-11-19", "acc-1", 0, 2);
-    const b = slotTimeFor("2026-11-19", "acc-1", 0, 2);
-    expect(a).toBe(b);
-    const [h] = a.split(":").map(Number);
-    expect(h).toBeGreaterThanOrEqual(12);
-    expect(h).toBeLessThan(14); // 2/día: primera en mañana
-    const night = slotTimeFor("2026-11-19", "acc-1", 1, 2);
-    const [hn] = night.split(":").map(Number);
-    expect(hn).toBeGreaterThanOrEqual(21);
-    expect(hn).toBeLessThan(23); // segunda en noche
-    expect(jitterMinutes("acc-1|2026-11-19|mañana")).toBeGreaterThanOrEqual(-10);
-    expect(jitterMinutes("acc-1|2026-11-19|mañana")).toBeLessThanOrEqual(10);
+describe("azar 90–180 min entre publicaciones (SPEC quitar-franjas v2, 2026-11-26)", () => {
+  test("randomPublishDelayMs: límites con rng inyectado (0 → 90 min, 1 → 180 min, 0,5 → 135 min)", () => {
+    expect(randomPublishDelayMs(() => 0)).toBe(90 * 60_000);
+    expect(randomPublishDelayMs(() => 1)).toBe(180 * 60_000);
+    expect(randomPublishDelayMs(() => 0.5)).toBe(135 * 60_000);
+    expect(MIN_PUBLISH_SPACING_MINUTES).toBe(90);
+    expect(MAX_PUBLISH_SPACING_MINUTES).toBe(180);
   });
+  test("randomPublishDelayMs: sin rng usa Math.random y cae en [90, 180] min (100 sorteos)", () => {
+    for (let i = 0; i < 100; i++) {
+      const d = randomPublishDelayMs();
+      expect(d).toBeGreaterThanOrEqual(90 * 60_000);
+      expect(d).toBeLessThanOrEqual(180 * 60_000);
+    }
+  });
+  test("6 YouTube al día caben en 24 h incluso con azar máximo: 5 huecos × 180 min = 15 h ≤ 24 h", () => {
+    expect(5 * MAX_PUBLISH_SPACING_MINUTES).toBeLessThanOrEqual(24 * 60);
+  });
+  test("3 por plataforma el resto caben: 2 huecos × 180 min = 6 h ≤ 24 h", () => {
+    expect(2 * MAX_PUBLISH_SPACING_MINUTES).toBeLessThanOrEqual(24 * 60);
+  });
+});
+
+describe("día libre determinista", () => {
   test("día libre: mismo hash cuenta+semana siempre; isRestDay coherente", () => {
     const ms = santiagoWallToUtcMs("2026-11-19", "13:00");
     const week = santiagoWeekKey(ms);
@@ -354,7 +296,7 @@ describe("plan diario (GET /api/daily-plan, constructor puro)", () => {
       id: 1, platform: "tiktok", apiPlatform: "tiktok", language: "es", label: "TikTok ES",
       stage: "establecida", plan: 2, max: 3, daysSinceFirst: 40, strikes: 0,
       publishedToday: 0, publishedLast24h: 0, hasCredential: true,
-      pausedUntilMs: null, restDay: false, restWeekday: 0, canEscalate: false, ...over,
+      pausedUntilMs: null, restDay: false, restWeekday: 0, canEscalate: false, lastPublishedAtMs: null, ...over,
     };
   }
   function clipInput(id: number, score: number): DailyPlanClipInput {
@@ -365,7 +307,7 @@ describe("plan diario (GET /api/daily-plan, constructor puro)", () => {
     };
   }
   const now = santiagoWallToUtcMs("2026-11-19", "13:00");
-  test("reparte por cuentas: TikTok 2 (mañana+noche), Instagram 1; pausa y día libre alertan y no programan", () => {
+  test("reparte por cuentas: TikTok 2, Instagram 1; pausa y día libre alertan y no programan", () => {
     const plan = buildDailyPlan({
       fecha: "2026-11-19",
       accounts: [
@@ -382,9 +324,16 @@ describe("plan diario (GET /api/daily-plan, constructor puro)", () => {
     const tt = plan.publicaciones.filter((p) => p.plataforma === "tiktok");
     expect(tt).toHaveLength(2);
     expect(tt.map((p) => p.clip_id)).toEqual([1, 2]);
-    // 2/día: mediodía (12:xx) + noche (21:xx).
-    expect(tt[0]?.hora_local.startsWith("12:")).toBe(true);
-    expect(tt[1]?.hora_local.startsWith("21:")).toBe(true);
+    // 2/día: cadena aleatoria 90–180 min entre publicaciones (sin
+    // franjas: ya no hay "mañana 12:xx + noche 21:xx").
+    const toMin = (hhmm: string): number => {
+      const [h, m] = hhmm.split(":").map(Number);
+      return h * 60 + m;
+    };
+    const ttMin = tt.map((p) => toMin(p.hora_local)).sort((a, b) => a - b);
+    const gap = ttMin[1] - ttMin[0];
+    expect(gap).toBeGreaterThanOrEqual(90);
+    expect(gap).toBeLessThanOrEqual(180);
     const ig = plan.publicaciones.filter((p) => p.plataforma === "instagram");
     expect(ig).toHaveLength(1);
     expect(ig[0]?.clip_id).toBe(3);

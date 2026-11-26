@@ -17,21 +17,17 @@ import {
   getSettings,
   isGtaViGame,
   isRestDayEffective,
-  isWithinPublishSlot,
   languageName,
   logWorkerEvent,
   maturityOut,
-  nextPlatformHourMs,
-  nextSlotStartMs,
+  MIN_PUBLISH_SPACING_MS,
   panelPlatformLabel,
   parseViralJson,
   platformMax,
   platformPlan,
-  PLATFORM_SCHEDULE,
+  randomPublishDelayMs,
   santiagoDayKeyMs,
   santiagoWallToUtcMs,
-  slotWindowBoundsMs,
-  spacingHoursFor,
   toApiPlatform,
   type ClipLanguage,
   type ClipRow,
@@ -100,7 +96,7 @@ export interface GateContext {
    *  (o el cerebro) pide publicar DE NUEVO el mismo clip en la
    *  misma plataforma el mismo día porque la plataforma borró
    *  el vídeo. Solo salta la puerta "mismo clip hoy"; el resto
-   *  (franja, tope, espaciamiento, calentamiento, rolling,
+   *  (tope, piso 90 min, calentamiento, rolling,
    *  calidad) sigue frenando igual. El job nuevo lleva la key
    *  con sufijo |repubN (ver enqueuePublishJobs). */
   republish?: boolean;
@@ -120,28 +116,13 @@ export interface GateContext {
    *  (el día libre es planificación, no un freno de seguridad;
    *  documentado en el informe 2026-11-19). */
   isRestDay?: boolean;
-  /** Comprobar la franja horaria (reglas 2026-11-19): la
-   *  publicación solo sale 12:00-14:00, 18:00-20:00 o 21:00-23:00
-   *  (hora Chile). Desde la orden 09:25 (2026-11-21, SIN
-   *  AMONTONAR) la comprueba TAMBIÉN la manual: "Publicar ahora"
-   *  fuera de franja queda frenado. Solo la pone quien encola;
-   *  el re-chequeo en ejecución NO la comprueba (un job ya
-   *  encolado dentro de franja no se queda varado por reanudarse
-   *  fuera de ella, multi-step). */
-  checkSlot?: boolean;
-  /** Instante de referencia para franja/pausa/rolling (tests y
+  /** Instante de referencia para pausa/rolling (tests y
    *  llamadas con fecha congelada). Default: Date.now(). */
   nowMs?: number;
-  /** Publicaciones de esta cuenta en ESTA plataforma+idioma
-   *  dentro de la franja actual (regla 09:25, 2026-11-21, SIN
-   *  AMONTONAR): como mucho 1 por plataforma y franja. Frena
-   *  SIEMPRE, también a mano. undefined = quien llama no lo
-   *  contó (tests viejos). */
-  publishedThisSlot?: number;
   /** Publicación MANUAL (2026-11-19, botón "Publicar ahora"):
    *  decisión humana explícita. Desde la orden 09:25 del
-   *  2026-11-21 (SIN AMONTONAR) la manual ya NO salta franja,
-   *  tope diario, espaciamiento ni cross-platform: respeta
+   *  2026-11-21 (SIN AMONTONAR) la manual ya NO salta
+   *  tope diario, piso 90 min ni cross-platform: respeta
    *  TODAS las reglas anti-baneo igual que la automática. Desde
    *  el refuerzo del validador (2026-11-21) TAMPOCO salta el
    *  veredicto de calidad BLANDO (sin veredicto válido): un clip
@@ -311,25 +292,13 @@ export function publishGate(platform: PanelPlatform, g: GateContext): string | n
   if (!g.manual && g.isRestDay) {
     return `día libre de la cuenta en ${platform}: hoy no publica (1 día libre por semana, rotativo)`;
   }
-  // FRANJA HORARIA (reglas 2026-11-19; REVOCA la decisión
-  // 2026-11-18 "sin franja"): la publicación solo sale
-  // 12:00-14:00, 18:00-20:00 o 21:00-23:00 (hora Chile). Desde
-  // la orden 09:25 (2026-11-21, SIN AMONTONAR) la comprueba
-  // TAMBIÉN la manual. Solo cuando quien encola lo pide
-  // (checkSlot): el re-chequeo en ejecución no la comprueba y
-  // la manual en ejecución tampoco (un job encolado dentro de
-  // franja no se queda varado por reanudarse fuera de ella).
-  if (g.checkSlot && !isWithinPublishSlot(now)) {
-    return `fuera de franja: la publicación solo sale 12:00–14:00, 18:00–20:00 o 21:00–23:00 (hora de Chile)`;
-  }
-  // 1 POR PLATAFORMA Y FRANJA (orden 09:25, 2026-11-21, SIN
-  // AMONTONAR): como mucho una publicación por plataforma en
-  // cada franja. Frena SIEMPRE, también a mano. Es lo que
-  // impide que 3 YouTube salgan a las 09:11 en la misma franja.
-  if (g.publishedThisSlot !== undefined && g.publishedThisSlot >= 1) {
-    return `ya se publicó 1 en ${platform} en esta franja: como mucho 1 por plataforma y franja`;
-  }
-  // FRENOS (tope diario + espaciamiento + cross-platform 15 min):
+  // SIN FRANJAS desde 2026-11-26 (SPEC quitar-franjas v2,
+  // opción A): se eliminaron el chequeo de franja (checkSlot) y
+  // el "1 por plataforma y franja" (publishedThisSlot). La
+  // separación entre publicaciones la guardan el piso de 90 min
+  // y el azar 90–180 min en next_run_at (ver rateLimitGate y
+  // jobs.ts). La manual tampoco tiene franja que saltar.
+  // FRENOS (tope diario + piso 90 min + cross-platform 15 min):
   // desde la orden 09:25 (2026-11-21, SIN AMONTONAR) rigen
   // TAMBIÉN la manual. Antes la manual los saltaba y el llamador
   // solo registraba el aviso con rateLimitGate; eso es lo que
@@ -339,7 +308,7 @@ export function publishGate(platform: PanelPlatform, g: GateContext): string | n
   return null;
 }
 
-/** Solo los FRENOS (tope diario + espaciamiento + cross-platform
+/** Solo los FRENOS (tope diario + piso 90 min + cross-platform
  *  15 min) de publishGate, sin las puertas de calidad: lo usa
  *  publishGate (automático y manual, desde la orden 09:25) y
  *  quien quiera saber QUÉ freno aplicaría sin encolar. Devuelve
@@ -361,14 +330,21 @@ export function rateLimitGate(platform: PanelPlatform, g: GateContext): string |
   if (g.publishedToday >= max) return `tope diario alcanzado: ${g.publishedToday}/${max} en ${platform}`;
   if (g.publishedToday >= plan) return `plan del día cubierto: ${g.publishedToday}/${plan} en ${platform} (techo ${max})`;
   const now = g.nowMs ?? nowMs();
-  // Espaciamiento POR CUENTA (regla 4): 3 h en general, 4 h en
-  // YouTube; mínimo absoluto 5 min (nunca 2 vídeos al mismo
-  // minuto). spacing_hours=0 lo apaga (excepción documentada).
-  const spacingH = spacingHoursFor(s, toApiPlatform(platform));
-  const spacingMs = spacingH * 3600 * 1000;
-  if (spacingMs > 0 && g.lastPublishedAtMs && now - g.lastPublishedAtMs < spacingMs) {
-    return `espaciamiento: menos de ${spacingH} h desde la última subida en esta plataforma`;
+  // PISO 90 MIN (regla del usuario 2026-11-26, SPEC
+  // quitar-franjas v2): nunca menos de 1:30 h entre dos
+  // publicaciones de la misma cuenta+plataforma+idioma. Es el
+  // segundo control del azar 90–180 min (el primero es el
+  // programador, que pone next_run_at): si un job vencido
+  // publicaría a menos de 90 min de la anterior, se frena aquí
+  // y se reprograma a última + azar(90–180) (retry "min90").
+  // Frena TAMBIÉN a mano, como el viejo espaciamiento fijo.
+  if (g.lastPublishedAtMs && now - g.lastPublishedAtMs < MIN_PUBLISH_SPACING_MS) {
+    return `menos de 90 min desde la última subida en esta plataforma`;
   }
+  // Piso absoluto 5 min (nunca 2 vídeos al mismo minuto).
+  // Queda subsumido por el piso de 90 min (90 > 5), pero se
+  // conserva como defensa: si el piso de 90 min se relajara
+  // algún día, este seguiría frenando el amontonamiento.
   if (g.lastPublishedAtMs && now - g.lastPublishedAtMs < s.min_spacing_minutes * 60 * 1000) {
     return `espaciamiento: menos de ${s.min_spacing_minutes} min desde la última subida en esta plataforma`;
   }
@@ -398,7 +374,7 @@ export function rateLimitGate(platform: PanelPlatform, g: GateContext): string |
 // ---------------------------------------------------------------------------
 
 /** Cómo se reprograma un job frenado por un motivo transitorio. */
-export type GateBlockRetryKind = "spacing" | "cross15" | "slotEnd" | "nextSlot" | "rolling" | "tomorrow" | "backoff" | null;
+export type GateBlockRetryKind = "spacing" | "cross15" | "min90" | "rolling" | "tomorrow" | "backoff" | null;
 
 export interface GateBlockRule {
   /** Regex que casa el motivo (sin `$` = prefijo: el motivo puede
@@ -417,11 +393,21 @@ export const GATE_BLOCKS: GateBlockRule[] = [
   { match: /^tope diario alcanzado: cupo no reservado en \S+ tras 3 intentos$/, transient: true, retry: "backoff" },
   { match: /^reserva de cupo perdida: el job cambió de manos antes de publicar$/, transient: true, retry: "backoff" },
   { match: /^tope de reintentos por hoy:/, transient: true, retry: "backoff" },
-  { match: /^espaciamiento: menos de \d+ h desde la última subida en esta plataforma$/, transient: true, retry: "spacing" },
+  // Piso 90 min (SPEC quitar-franjas v2): el motivo nuevo y los
+  // dos motivos viejos de franja, que se mantienen UNA versión
+  // como transitorios (un job viejo frenado por franja se
+  // reprograma a última + azar(90–180), no va a draft; en la
+  // versión siguiente se retiran los regexes de franja). El regex
+  // de horas del viejo espaciamiento ya no lo produce el gate,
+  // pero se mantiene UNA versión como transitorio por el mismo
+  // motivo: un draft con last_error "espaciamiento: menos de 2 h"
+  // (anterior al deploy) debe revivir, no quedarse duro.
+  { match: /^menos de 90 min desde la última subida en esta plataforma$/, transient: true, retry: "min90" },
+  { match: /^espaciamiento: menos de \d+ h desde la última subida en esta plataforma$/, transient: true, retry: "min90" },
   { match: /^espaciamiento: menos de \d+ min desde la última subida en esta plataforma$/, transient: true, retry: "spacing" },
   { match: /^mismo clip en otra plataforma hace \d+ min: mínimo \d+ min entre plataformas$/, transient: true, retry: "cross15" },
-  { match: /^ya se publicó 1 en \S+ en esta franja: como mucho 1 por plataforma y franja$/, transient: true, retry: "slotEnd" },
-  { match: /^fuera de franja:/, transient: true, retry: "nextSlot" },
+  { match: /^ya se publicó 1 en \S+ en esta franja: como mucho 1 por plataforma y franja$/, transient: true, retry: "min90" },
+  { match: /^fuera de franja:/, transient: true, retry: "min90" },
   { match: /^tope rolling 24 h alcanzado: \d+\/\d+ en \S+ \(últimas 24 h\)$/, transient: true, retry: "rolling" },
   { match: /^tope diario alcanzado: \d+\/\d+ en \S+$/, transient: true, retry: "tomorrow" },
   { match: /^plan del día cubierto: \d+\/\d+ en \S+ \(techo \d+\)$/, transient: true, retry: "tomorrow" },
@@ -469,11 +455,12 @@ export function classifyGateBlock(reason: string): { transient: boolean; retry: 
  *  de cupo: `lastPublishedAtMs` del re-chequeo está contaminado por
  *  `max(lastPosted, slot.updated_at)` y una reserva que nunca
  *  publicó no es una subida. Fallbacks si no se puede calcular:
- *  las reglas de hora (`nextSlot`, `slotEnd`, `tomorrow`) se
- *  calculan solo con el horario (sin lecturas D1); las de contador
- *  (`spacing`, `cross15`, `rolling`) caen a
- *  `now + nextRetryDelayMs(retriesUsedToday)`. */
-export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string, now: number): Promise<number> {
+ *  `tomorrow` sin última subida es mañana 00:00 Chile; las de
+ *  contador (`spacing`, `cross15`, `rolling`, `min90`) caen a
+ *  `now + nextRetryDelayMs(retriesUsedToday)`. `rng` es el
+ *  generador de azar (Math.random() por defecto; los tests pasan
+ *  uno falso para probar determinísticamente). */
+export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string, now: number, rng: () => number = Math.random): Promise<number> {
   const { retry } = classifyGateBlock(reason);
   const db = env.DB;
   const platform = job.platform;
@@ -506,18 +493,28 @@ export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string
         .first<{ last_at: number | null }>()
         .catch(() => null);
       if (!lastPosted?.last_at) return backoffFallback();
+      // Solo queda el piso de 5 min ("menos de {min} min"): el
+      // motivo de horas murió con el espaciamiento fijo (SPEC
+      // quitar-franjas v2). Sin número en el motivo, el piso de
+      // Ajustes.
       const settings = await getSettings(db, job.tenant_id).catch(() => ({} as Record<string, unknown>));
       const eff = effectiveSettings(settings);
-      // "menos de {h} h" o "menos de {min} min": el motivo lleva
-      // el espaciamiento vigente; si no se lee, el de Ajustes.
-      const hMatch = /^espaciamiento: menos de (\d+) h /.exec(reason);
       const mMatch = /^espaciamiento: menos de (\d+) min /.exec(reason);
-      const spacingMs = hMatch
-        ? Number(hMatch[1]) * 3600 * 1000
-        : mMatch
-          ? Number(mMatch[1]) * 60 * 1000
-          : (platform ? spacingHoursFor(eff, toApiPlatform(platform)) * 3600 * 1000 : eff.min_spacing_minutes * 60 * 1000);
+      const spacingMs = mMatch ? Number(mMatch[1]) * 60 * 1000 : eff.min_spacing_minutes * 60 * 1000;
       return lastPosted.last_at + spacingMs;
+    }
+    case "min90": {
+      // Piso 90 min o motivo viejo de franja (transitorio una
+      // versión): última subida real + azar(90–180 min). Sin
+      // subida previa, backoff (no hay desde qué contar).
+      const lastPosted = await db.prepare(
+        "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted'",
+      )
+        .bind(job.tenant_id, platform, language)
+        .first<{ last_at: number | null }>()
+        .catch(() => null);
+      if (!lastPosted?.last_at) return backoffFallback();
+      return lastPosted.last_at + randomPublishDelayMs(rng);
     }
     case "cross15": {
       if (!job.clip_id) return backoffFallback();
@@ -534,16 +531,21 @@ export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string
       const crossMin = crossMatch ? Number(crossMatch[1]) : eff.cross_platform_spacing_minutes;
       return lastOther.last_at + crossMin * 60 * 1000;
     }
-    case "slotEnd": {
-      const bounds = slotWindowBoundsMs(now);
-      if (bounds) return bounds.endMs;
-      // Sin franja actual: próxima hora de hueco con now + 61 min
-      // (no nextPlatformHourMs(now): dentro de la ventana de 60
-      // min devuelve nowMs y el job re-vencería de inmediato).
-      return platform ? nextPlatformHourMs(platform, now + 61 * 60 * 1000) : nextSlotStartMs(now);
-    }
-    case "nextSlot": {
-      return nextSlotStartMs(now);
+    case "tomorrow": {
+      // "Mañana" sin horario por plataforma (SPEC quitar-franjas
+      // v2): mañana 00:00 Chile, pero nunca antes de la última
+      // subida + azar(90–180) — el piso de 90 min también vale
+      // para el día siguiente.
+      const tomorrow = santiagoDayKeyMs(now + 24 * 3600 * 1000);
+      const base = santiagoWallToUtcMs(tomorrow, "00:00");
+      const lastPosted = await db.prepare(
+        "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted'",
+      )
+        .bind(job.tenant_id, platform, language)
+        .first<{ last_at: number | null }>()
+        .catch(() => null);
+      if (!lastPosted?.last_at) return base;
+      return Math.max(base, lastPosted.last_at + randomPublishDelayMs(rng));
     }
     case "rolling": {
       const oldest = await db.prepare(
@@ -554,11 +556,6 @@ export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string
         .catch(() => null);
       if (!oldest?.oldest_at) return backoffFallback();
       return oldest.oldest_at + 24 * 3600 * 1000;
-    }
-    case "tomorrow": {
-      const hours = platform ? (PLATFORM_SCHEDULE[platform] ?? PLATFORM_SCHEDULE.youtube_shorts!) : PLATFORM_SCHEDULE.youtube_shorts!;
-      const tomorrow = santiagoDayKeyMs(now + 24 * 3600 * 1000);
-      return santiagoWallToUtcMs(tomorrow, hours[0]!);
     }
     case "backoff":
     default: {
@@ -721,29 +718,12 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
   )
     .bind(job.tenant_id, job.clip_id, job.platform)
     .first<{ posted_day: string | null }>();
-  // 1 POR PLATAFORMA Y FRANJA (orden 09:25, SIN AMONTONAR):
-  // publicadas en ESTA plataforma+idioma dentro de la franja
-  // actual. Se lee fresco justo antes del adaptador, así que un
-  // segundo job del mismo ciclo ya no pasa si el primero publicó.
-  const slotBounds = slotWindowBoundsMs(now);
-  let publishedThisSlot = 0;
-  if (slotBounds) {
-    // El intervalo es [startMs, endMs). Se escribe con `>` y
-    // `<` (no `>=`) porque los mocks de D1 de los tests no
-    // soportan `>=`; con timestamps enteros en ms,
-    // `updated_at > startMs - 1` es exactamente `>= startMs`.
-    const slotRow = await db.prepare(
-      "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ? AND updated_at < ?",
-    )
-      .bind(job.tenant_id, job.platform, lang, slotBounds.startMs - 1, slotBounds.endMs)
-      .first<{ n: number }>();
-    publishedThisSlot = slotRow?.n ?? 0;
-  }
   // Pausa por spam (settings account_pauses) y día libre
   // (determinista por cuenta+semana): frenan aquí igual que en
-  // el enqueue. La FRANJA no se re-chequea en ejecución: un job
-  // encolado dentro de franja no se queda varado por reanudarse
-  // fuera de ella (multi-step); la franja se aplica al encolar.
+  // el enqueue. Sin franjas desde 2026-11-26: el piso de 90 min
+  // SÍ se re-chequea en ejecución (rateLimitGate, dentro de
+  // publishGate), para que dos jobs vencidos no publiquen con
+  // menos de 90 min entre sí.
   const pausedUntilMs = acc ? accountPausedUntilMs(settings, acc.id) : null;
   const restDay = acc ? isRestDayEffective(`acc-${acc.id}`, now, settings, acc.id) : false;
   return publishGate(job.platform, {
@@ -764,15 +744,13 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
     clipPublishedEverOnPlatform: clipEverRow !== null,
     clipLastPublishedOnPlatformDay: clipEverRow?.posted_day ?? null,
     clipLastPublishedOtherPlatformMs: clipOtherRow?.updated_at ?? null,
-    publishedThisSlot,
     pausedUntilMs,
     isRestDay: restDay,
     accountLanguage: acc ? (acc.language === "en" ? "en" : "es") : null,
     accountReady: acc ? acc.verify_ok === 1 && !!(acc.credential_enc || acc.credential) : false,
     // Manual (2026-11-19): el job nació de "Publicar ahora". Desde
     // la orden 09:25 (SIN AMONTONAR) el re-chequeo aplica tope,
-    // espaciamiento y 1-por-franja también a manuales. La franja
-    // en sí no se re-chequea (el job se encoló dentro de ella).
+    // piso 90 min y rolling también a manuales.
     manual: job.manual === 1,
   });
 }
@@ -797,9 +775,9 @@ export interface SlotJob {
   slot_day?: string | null;
   // Publicación MANUAL (2026-11-19, jobs.manual, migración 0029):
   // el job se encoló a mano. Desde la orden 09:25 (SIN AMONTONAR)
-  // la reserva SÍ frena por tope diario y por 1-por-franja, como
-  // a cualquier job; el cupo se toma igual para que la publicación
-  // manual cuente en el uso del día de los jobs que vengan después.
+  // la reserva SÍ frena por tope diario, como a cualquier job;
+  // el cupo se toma igual para que la publicación manual cuente
+  // en el uso del día de los jobs que vengan después.
   manual?: number | null;
 }
 
@@ -896,10 +874,9 @@ export async function reservePublishSlot(db: D1Database, job: SlotJob): Promise<
     const reserved = slot?.reserved_count ?? 0;
     // ROLLING 24 h (regla 2, techo duro): nunca más de 3 por
     // cuenta en 24 h móviles (6 en YouTube, decisión 2026-11-23).
-    // Frena la reserva incluso a mano: "Publicar ahora" salta
-    // tope diario + espaciamiento, no el rolling. El gate ya lo
-    // comprueba al encolar; aquí es la segunda valla para dos
-    // ciclos solapados.
+    // Frena la reserva incluso a mano: el rolling es techo duro
+    // y no se salta ni a mano. El gate ya lo comprueba al
+    // encolar; aquí es la segunda valla para dos ciclos solapados.
     const eff = effectiveSettings(await getSettings(db, job.tenant_id));
     const rollingMax = job.platform === "youtube_shorts"
       ? (eff.rolling_24h_max_youtube ?? eff.rolling_24h_max)
@@ -912,26 +889,6 @@ export async function reservePublishSlot(db: D1Database, job: SlotJob): Promise<
       .first<{ n: number }>();
     if ((rolling?.n ?? 0) >= rollingMax) {
       return { ok: false, reason: `tope rolling 24 h alcanzado: ${rolling?.n ?? 0}/${rollingMax} en ${job.platform} (últimas 24 h)` };
-    }
-    // 1 POR PLATAFORMA Y FRANJA (orden 09:25, SIN AMONTONAR):
-    // última valla antes del adaptador: si ya se publicó 1 en
-    // esta plataforma+idioma dentro de la franja actual, el cupo
-    // no se toma (el re-chequeo ya lo frenó; esto cubre el caso
-    // en que otro job publicó entre el re-chequeo y la reserva).
-    const slotBounds = slotWindowBoundsMs(nowMs());
-    if (slotBounds) {
-      // `>` en vez de `>=` (ver recheckPublishGate): los mocks
-      // de D1 de los tests no soportan `>=`; con timestamps
-      // enteros en ms, `> startMs - 1` es exactamente `>= startMs`.
-      const slotPosted = await db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ? AND updated_at < ?",
-        )
-        .bind(job.tenant_id, job.platform, job.language, slotBounds.startMs - 1, slotBounds.endMs)
-        .first<{ n: number }>();
-      if ((slotPosted?.n ?? 0) >= 1) {
-        return { ok: false, reason: `ya se publicó 1 en ${job.platform} en esta franja: como mucho 1 por plataforma y franja` };
-      }
     }
     // Tope diario (orden 09:25, SIN AMONTONAR): frena TAMBIÉN a
     // mano; el cupo se toma igual (abajo), para que cuente en el día.

@@ -22,15 +22,19 @@ main = "worker/src/index.ts"
 compatibility_date = "2026-11-17"
 workers_dev = true
 
-# Cron del Worker: SOLO en franjas de publicación (2026-11-21, ahorro
-# D1: fuera de franja el Worker ni despierta, así que no gasta
-# escrituras). Franjas hora Chile 12:00-14:00, 18:00-20:00, 21:00-23:00;
-# en UTC con 1 h de margen por el cambio DST (-03/-04): 15-18 y 21-23,0-3.
-# La puerta (gate.ts) sigue filtrando la franja exacta en hora Chile.
-# Avanza la cola SOLO si el tenant inició su Worker (botón Iniciar).
+# Cron del Worker: CADA 5 MIN, TODO EL DÍA (SPEC quitar-franjas
+# v2, opción A, 2026-11-26, orden del usuario: sin franjas,
+# aleatorio 1:30–3 h, todo publicado en 24 h). Una sola expresión
+# (antes 4: */5 15-18, */5 21-23,0-4, 0 12,13 y 0 6,7 UTC). El
+# ciclo no tiene puerta horaria (cycle-gate.ts): en cada despertar
+# procesa los jobs vencidos; las funciones horarias/diarias
+# (resumen 09:00, prune 03:00, monitor horario, informe 20:50)
+# se auto-gobiernan por la hora y el dedupe por día, así que
+# siguen corriendo a su hora con el cron cada 5 min. Avanza la
+# cola SOLO si el tenant inició su Worker (botón Iniciar).
 # Un tenant parado no frena al otro.
 [triggers]
-crons = ["*/5 15-18 * * *", "*/5 21-23,0-4 * * *", "0 12,13 * * *", "0 6,7 * * *"]
+crons = ["*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

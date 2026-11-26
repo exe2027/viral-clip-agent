@@ -643,6 +643,10 @@ export const DEFAULT_PANEL_SETTINGS = {
   // 2026-11-23: antes 4 h, pero con 4 h solo cabían 4 huecos al
   // día y YouTube es 6/día; con 2 h caben los 6). Mínimo
   // absoluto: nunca 2 vídeos al mismo minuto (5 min).
+  // INERTES desde 2026-11-26 (SPEC quitar-franjas v2): la regla
+  // vigente es aleatorio 90–180 min (MIN/MAX_PUBLISH_SPACING_*),
+  // no estos valores. Se conservan en settings por compatibilidad
+  // (la D1 y el panel los guardan); el gate ya no los lee.
   spacing_hours: 3,
   youtube_spacing_hours: 2,
   min_spacing_minutes: 5,
@@ -992,9 +996,10 @@ export function extractBaseSettings(raw: Record<string, unknown>): Record<string
 // El recálculo corre como mucho UNA vez al día por cuenta
 // (maturity_checked_day, día America/Santiago); la publicación
 // solo usa el estado guardado, nunca un cálculo en caliente.
-// La decisión 2026-11-18 "sin franja horaria" queda REVOCADA:
-// vuelven las franjas (ver PUBLISH_SLOT_WINDOWS). La madurez vieja
-// (30 días + 10 publicaciones) queda reemplazada por esta.
+// La madurez vieja (30 días + 10 publicaciones) queda
+// reemplazada por esta. Las franjas horarias 2026-11-19 quedaron
+// REVOCADAS por la regla del usuario 2026-11-26 (aleatorio
+// 1:30–3 h, SPEC quitar-franjas v2): ya no hay franjas.
 // ---------------------------------------------------------------------------
 export const MATURITY_MIN_DAYS = 14;
 export const MATURITY_MIN_PUBLISHED = 20;
@@ -1099,27 +1104,30 @@ export function santiagoDayKeyMs(ms: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// FRANJAS HORARIAS (reglas 2026-11-19, hora Chile, America/Santiago).
-// Mañana 12:00-14:00, tarde 18:00-20:00, noche 21:00-23:00.
-// 1 vídeo/día: tarde o noche. 2 o más: mediodía + noche (y tarde
-// si son 3). La hora exacta varía ±10 min cada día con jitter
-// DETERMINISTA por cuenta+día (hash FNV-1a, no aleatorio sin
-// semilla): el mismo día y cuenta siempre dan la misma hora, y
-// otro día da otra. La publicación automática solo sale dentro
-// de estas franjas (ver gate.ts, checkSlot).
+// PUBLICACIÓN ALEATORIA (regla del usuario 2026-11-26, SPEC
+// quitar-franjas-aleatorio v2, opción A): SIN franjas ni hora
+// asignada. Entre dos publicaciones de la misma cuenta+
+// plataforma pasan entre 90 y 180 min, sorteados por decisión.
+// Revoca las franjas 2026-11-19 y el horario por plataforma
+// 2026-11-22 (se eliminaron PUBLISH_SLOT_WINDOWS, slotTimeFor,
+// nextPlatformHourMs, PLATFORM_SCHEDULE y compañía).
 // ---------------------------------------------------------------------------
-export interface PublishSlotWindow { label: string; startMin: number; endMin: number }
+/** Mínimo entre dos publicaciones de la misma cuenta+plataforma. */
+export const MIN_PUBLISH_SPACING_MINUTES = 90;
+/** Máximo entre dos publicaciones de la misma cuenta+plataforma. */
+export const MAX_PUBLISH_SPACING_MINUTES = 180;
+export const MIN_PUBLISH_SPACING_MS = MIN_PUBLISH_SPACING_MINUTES * 60 * 1000;
+export const MAX_PUBLISH_SPACING_MS = MAX_PUBLISH_SPACING_MINUTES * 60 * 1000;
 
-export const PUBLISH_SLOT_WINDOWS: PublishSlotWindow[] = [
-  { label: "mañana", startMin: 12 * 60, endMin: 14 * 60 },
-  { label: "tarde", startMin: 18 * 60, endMin: 20 * 60 },
-  { label: "noche", startMin: 21 * 60, endMin: 23 * 60 },
-  // Madrugada (F0, spec 2026-11-24): la franja nocturna 00:00-01:00
-  // cubre el slot YT de las 00:00; el techo automático sube a 37/día.
-  // Va al final: slotWindowsForCount desestructura los 3 primeros
-  // (mañana/tarde/noche) y slotTimeFor nunca la elige.
-  { label: "madrugada", startMin: 0, endMin: 1 * 60 },
-];
+/** Sortea un retardo entre 90 y 180 min (ms, intervalo cerrado).
+ *  `rng` es Math.random() por defecto (jitter de programación, no
+ *  un secreto); los tests pasan un RNG falso para probar
+ *  determinísticamente. */
+export function randomPublishDelayMs(rng: () => number = Math.random): number {
+  const r = rng();
+  const clamped = Number.isFinite(r) ? Math.min(Math.max(r, 0), 0.999999999) : 0.5;
+  return MIN_PUBLISH_SPACING_MS + Math.floor(clamped * (MAX_PUBLISH_SPACING_MS - MIN_PUBLISH_SPACING_MS + 1));
+}
 
 /** Hash FNV-1a (32 bits) de una cadena: semilla determinista. */
 export function hashSeed(s: string): number {
@@ -1131,12 +1139,6 @@ export function hashSeed(s: string): number {
   return h;
 }
 
-/** Jitter determinista en minutos, entre -10 y +10, para una
- *  semilla (cuenta+día+franja). */
-export function jitterMinutes(seed: string): number {
-  return (hashSeed(seed) % 21) - 10;
-}
-
 /** Minutos desde medianoche (hora Chile) de un instante. */
 export function santiagoMinutesOfDay(ms: number): number {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -1145,60 +1147,6 @@ export function santiagoMinutesOfDay(ms: number): number {
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   const h = get("hour") % 24;
   return h * 60 + get("minute");
-}
-
-/** Franja que contiene un instante, o null si está fuera de franja. */
-export function slotWindowContaining(ms: number): PublishSlotWindow | null {
-  const m = santiagoMinutesOfDay(ms);
-  return PUBLISH_SLOT_WINDOWS.find((w) => m >= w.startMin && m < w.endMin) ?? null;
-}
-
-/** ¿Está este instante dentro de una franja de publicación? */
-export function isWithinPublishSlot(ms: number): boolean {
-  return slotWindowContaining(ms) !== null;
-}
-
-/** Límites en ms (UTC) de la franja que contiene un instante, o
- *  null si está fuera de franja. Se calcula por diferencia con
- *  `santiagoMinutesOfDay` (minutos desde medianoche en Chile), así
- *  no depende del offset UTC de la zona (que cambia con el horario
- *  de verano). Regla 09:25 (2026-11-21, SIN AMONTONAR): como mucho
- *  1 publicación por plataforma y franja; el gate cuenta las
- *  publicadas dentro de esta ventana. */
-export function slotWindowBoundsMs(ms: number): { startMs: number; endMs: number; label: string } | null {
-  const w = slotWindowContaining(ms);
-  if (!w) return null;
-  const m = santiagoMinutesOfDay(ms);
-  const startMs = ms - (m - w.startMin) * 60 * 1000;
-  return { startMs, endMs: startMs + (w.endMin - w.startMin) * 60 * 1000, label: w.label };
-}
-
-/** Ventanas que tocan a `count` publicaciones en un día:
- *  1 → tarde o noche (la elige el hash de cuenta+día);
- *  2 → mañana + noche; 3 → mañana + tarde + noche. */
-export function slotWindowsForCount(count: number, seed: string): PublishSlotWindow[] {
-  const [manana, tarde, noche] = PUBLISH_SLOT_WINDOWS as [PublishSlotWindow, PublishSlotWindow, PublishSlotWindow];
-  if (count <= 1) return [hashSeed(seed) % 2 === 0 ? tarde : noche];
-  if (count === 2) return [manana, noche];
-  return [manana, tarde, noche];
-}
-
-/** Hora local "HH:MM" de la publicación nº `slotIndex` (0-based)
- *  de un día con `count` publicaciones, para una cuenta (`seed`
- *  = p. ej. `acc-12`). Determinista por (día, cuenta, franja):
- *  hora base por franja (mañana 12:30, tarde 18:10, noche 21:30)
- *  ±10 min de jitter. Las bases están elegidas para que dos
- *  franjas seguidas queden SIEMPRE a ≥3 h (tarde 18:00-18:20 →
- *  noche 21:20-21:40 = 3 h como mínimo; YouTube, con 4 h, nunca
- *  tiene 3 publicaciones al día: con 2 usa mañana+noche, 9 h). */
-export function slotTimeFor(dayKey: string, seed: string, slotIndex: number, count: number): string {
-  const windows = slotWindowsForCount(count, `${seed}|${dayKey}`);
-  const w = windows[Math.min(slotIndex, windows.length - 1)] ?? windows[0]!;
-  const baseMin = w.label === "mañana" ? 12 * 60 + 30 : w.label === "tarde" ? 18 * 60 + 10 : 21 * 60 + 30;
-  const minute = baseMin + jitterMinutes(`${seed}|${dayKey}|${w.label}`);
-  const hh = String(Math.floor(minute / 60)).padStart(2, "0");
-  const mm = String(minute % 60).padStart(2, "0");
-  return `${hh}:${mm}`;
 }
 
 /** Pasa "HH:MM" (hora Chile) + día YYYY-MM-DD a ms epoch.
@@ -1231,68 +1179,6 @@ export function santiagoWallToUtcMs(dayKey: string, hhmm: string): number {
     guess += diff;
   }
   return guess;
-}
-
-/** Próximo inicio de franja (>= nowMs): hoy si queda alguna,
- *  si no mañana a las 12:00. Para programar next_run_at dentro
- *  de franja. */
-export function nextSlotStartMs(nowMs: number): number {
-  const day = santiagoDayKeyMs(nowMs);
-  for (const w of PUBLISH_SLOT_WINDOWS) {
-    const hh = String(Math.floor(w.startMin / 60)).padStart(2, "0");
-    const mm = String(w.startMin % 60).padStart(2, "0");
-    const start = santiagoWallToUtcMs(day, `${hh}:${mm}`);
-    if (start >= nowMs) return start;
-  }
-  const tomorrow = santiagoDayKeyMs(nowMs + 36 * 3600 * 1000);
-  return santiagoWallToUtcMs(tomorrow, "12:00");
-}
-
-// ---------------------------------------------------------------------------
-// HORARIO POR PLATAFORMA (orden usuario 2026-11-22 01:11):
-// a qué hora (Chile) sube cada plataforma, vídeos diferentes
-// para kaez y seba (cada uno su cola; nunca el mismo vídeo en
-// ambas cuentas). 3 al día por plataforma (mínimo, orden
-// 2026-11-21 20:52). YouTube e Instagram al inicio de franja,
-// TikTok y Facebook una hora después, para que no salgan todas
-// a la vez. El auto-enqueue programa next_run_at a la próxima
-// hora de SU plataforma (ver nextPlatformHourMs); la manual
-// ("Publicar ahora", force_now) sigue inmediata. Fuente única:
-// este mapa (no hay copia en settings; si el usuario cambia
-// las horas, se cambia aquí y se redespliega).
-// ---------------------------------------------------------------------------
-export const PLATFORM_SCHEDULE: Record<string, string[]> = {
-  // YouTube 6/día (decisión del usuario 2026-11-23): 6 huecos
-  // con 2 h entre ellos (youtube_spacing_hours=2), todos dentro
-  // de las franjas del cron (12:00-16:00 y 18:00-01:00 Chile;
-  // 16:00 queda fuera porque el cron no corre ahí). La lista va
-  // en orden cronológico desde medianoche para que
-  // nextPlatformHourMs resuelva bien el hueco 00:00 (mañana
-  // 00:00 = esta medianoche).
-  youtube_shorts: ["00:00", "12:00", "14:00", "18:00", "20:00", "22:00"],
-  tiktok: ["13:00", "19:00", "22:00"],
-  instagram_reels: ["12:00", "18:00", "21:00"],
-  facebook_reels: ["13:00", "19:00", "22:00"],
-};
-
-/** Próxima hora de una plataforma (hora Chile): si estamos
- *  dentro de una hora programada (60 min desde su inicio),
- *  vence AHORA; si no, la próxima hora de hoy; si no queda
- *  ninguna hoy, mañana a la primera. Para programar next_run_at
- *  del auto-enqueue a la hora de SU plataforma. */
-export function nextPlatformHourMs(platform: string, nowMs: number): number {
-  const hours = PLATFORM_SCHEDULE[platform] ?? PLATFORM_SCHEDULE.youtube_shorts!;
-  const day = santiagoDayKeyMs(nowMs);
-  for (const hhmm of hours) {
-    const start = santiagoWallToUtcMs(day, hhmm);
-    if (nowMs >= start && nowMs < start + 60 * 60 * 1000) return nowMs;
-    if (start > nowMs) return start;
-  }
-  // Mañana: +24 h (no +36 h: a partir del mediodía, +36 h cae
-  // en pasado mañana). nowMs+24 h siempre tiene el dayKey de
-  // mañana.
-  const tomorrow = santiagoDayKeyMs(nowMs + 24 * 3600 * 1000);
-  return santiagoWallToUtcMs(tomorrow, hours[0]!);
 }
 
 // ---------------------------------------------------------------------------
