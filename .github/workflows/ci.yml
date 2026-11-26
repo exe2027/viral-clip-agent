@@ -21,7 +21,12 @@ jobs:
           # la detección Haar a 1 fps y detect_faces_1fps devuelve
           # None (no una lista) sin cv2, lo que rompía ese test en
           # CI mientras en local pasaba (el .venv sí tiene cv2 4.11).
-          pip install -e .[dev,vision]
+          # .[youtube] es obligatorio en CI: clipagent/compilation.py
+          # importa googleapiclient dentro de publish_longform y
+          # test_compilation lo ejerce; sin el extra, el test cae
+          # con ModuleNotFoundError (en local pasa porque el .venv
+          # sí tiene google-api-python-client).
+          pip install -e .[dev,vision,youtube]
       - name: Instalar Arial Black (plantilla v2)
         # La plantilla v2 (clipagent/rdjavi.py) usa SUBS_FONT =
         # "Arial Black" para título y subtítulos. Sin ella libass
