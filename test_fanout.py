@@ -27,6 +27,21 @@ CHILE = datetime.timezone(datetime.timedelta(hours=-3))
 NOW = datetime.datetime(2026, 11, 17, 20, 0, tzinfo=CHILE)
 
 
+class _FrozenDatetime(datetime.datetime):
+    """datetime congelado en NOW para clipagent.priority.
+
+    order_queue calcula la edad del clip con datetime.now()
+    real; sin congelarlo, la edad crece con el calendario y la
+    regla de archivado (6B.2: 3+ días sin subir y prioridad
+    < 70) archiva los ítems antes de publicarlos. fromisoformat
+    se hereda de datetime y devuelve datetimes reales.
+    """
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW
+
+
 def _manifest(tmp, clips):
     """runs/v1 con clips, puntajes y paquete por plataforma."""
     run_dir = os.path.join(tmp, "runs", "v1")
@@ -93,6 +108,10 @@ def _patches():
         mock.patch("clipagent.accounts.is_new_account",
                    return_value=False),
         mock.patch("clipagent.publish._now_chile", return_value=NOW),
+        # El reloj de priority también: order_queue calcula la
+        # edad con datetime.now() real y a los 9 días (desde el
+        # 2026-11-26) la penalización archiva los ítems.
+        mock.patch("clipagent.priority.datetime", _FrozenDatetime),
         mock.patch("clipagent.publish.DirectPublisher.publish_draft",
                    return_value={"ok": True,
                                  "draft_dir": "drafts/c1_X"}),
