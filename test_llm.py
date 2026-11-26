@@ -144,5 +144,58 @@ class TestMakeSeoPackage(unittest.TestCase):
         self.assertIn("No me lo puedo creer", seen["prompt"])
 
 
+class TestPatternPackPrompt(unittest.TestCase):
+    """El pack alimenta el prompt como guía de estilo (spec v3
+    §3.2); sin pack el prompt no cambia."""
+
+    PACK = {"version": 2, "generated_at": "2026-11-26", "lang": "es",
+            "sample_n": 6,
+            "top_hook_types": [
+                {"hook_type": "question", "template": "¿Viste {what}?"},
+                {"hook_type": "superlative",
+                 "template": "GTA 6: {what} que nadie se creyó"}],
+            "top_hook_words": ["viste", "robo"],
+            "median_caption_chars": 42, "hook_texts": []}
+
+    def _spy(self):
+        seen = {}
+
+        class Spy(llm.LLMClient):
+            def available(self):
+                return True
+
+            def generate(self, prompt):
+                seen["prompt"] = prompt
+                return "{}"
+
+        return Spy(), seen
+
+    def test_prompt_con_pack_lleva_guia_de_estilo(self):
+        spy, seen = self._spy()
+        llm.make_seo_package(
+            spy, lang="es",
+            pattern_pack=self.PACK)(TestMakeSeoPackage.CARD)
+        self.assertIn("Guía de estilo", seen["prompt"])
+        self.assertIn("¿Viste {what}?", seen["prompt"])
+        self.assertIn("la ficha del momento manda", seen["prompt"])
+        self.assertIn("no copies estos textos", seen["prompt"])
+
+    def test_prompt_sin_pack_no_lleva_guia(self):
+        spy, seen = self._spy()
+        llm.make_seo_package(spy, lang="es")(TestMakeSeoPackage.CARD)
+        self.assertNotIn("Guía de estilo", seen["prompt"])
+
+    def test_prompt_en_con_pack(self):
+        spy, seen = self._spy()
+        pack_en = dict(self.PACK, lang="en",
+                       top_hook_types=[
+                           {"hook_type": "question",
+                            "template": "Did you see {what}?"}])
+        llm.make_seo_package(spy, lang="en",
+                             pattern_pack=pack_en)(TestMakeSeoPackage.CARD)
+        self.assertIn("Style guide", seen["prompt"])
+        self.assertIn("Did you see {what}?", seen["prompt"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

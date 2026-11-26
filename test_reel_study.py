@@ -201,5 +201,153 @@ class TestTemplatesAndTitles(unittest.TestCase):
         self.assertEqual(enriched["reel_study"]["sample_n"], 1)
 
 
+class TestPatternPack(unittest.TestCase):
+    """build_pattern_pack / load_pattern_pack (spec v3 §3.2)."""
+
+    def _report(self, n=6, lang="es", days_ago=0, version=2,
+                generated_at=None):
+        from datetime import date, timedelta
+        caps = [
+            "¿Viste esto?",
+            "¿Lo viste venir?",
+            "La jugada más brutal de la noche",
+            "¿Viste lo que pasó?",
+            "3 cosas que nadie te contó de GTA 6",
+            "¿Viste el robo?",
+        ]
+        analyses = [analyze_reel(
+            {"caption": c, "likes": 1000 + i, "comments": 50,
+             "followers": 10000}) for i, c in enumerate(caps[:n])]
+        pats = aggregate_patterns(analyses)
+        if generated_at is None:
+            generated_at = (date.today()
+                            - timedelta(days=days_ago)).isoformat()
+        return {"version": version, "lang": lang,
+                "generated_at": generated_at,
+                "sample_n": pats["sample_n"], "patterns": pats,
+                "reels": analyses}
+
+    def test_pack_ok(self):
+        from reel_study import build_pattern_pack
+        pack = build_pattern_pack(self._report())
+        self.assertIsNotNone(pack)
+        self.assertEqual(pack["version"], 2)
+        self.assertEqual(pack["lang"], "es")
+        self.assertEqual(pack["sample_n"], 6)
+        self.assertLessEqual(len(pack["top_hook_types"]), 2)
+        self.assertEqual(pack["top_hook_types"][0]["hook_type"],
+                         "question")
+        self.assertIn("{what}",
+                      pack["top_hook_types"][0]["template"])
+        self.assertLessEqual(len(pack["top_hook_words"]), 10)
+        self.assertIsNotNone(pack["median_caption_chars"])
+        self.assertEqual(len(pack["hook_texts"]), 6)
+
+    def test_pack_none_muestra_pequena(self):
+        from reel_study import build_pattern_pack
+        self.assertIsNone(build_pattern_pack(self._report(n=4)))
+
+    def test_pack_none_obsoleto(self):
+        from reel_study import build_pattern_pack
+        self.assertIsNone(build_pattern_pack(self._report(days_ago=40)))
+
+    def test_pack_ok_a_los_30_dias(self):
+        from reel_study import build_pattern_pack
+        self.assertIsNotNone(build_pattern_pack(self._report(days_ago=30)))
+
+    def test_pack_none_a_los_31_dias(self):
+        from reel_study import build_pattern_pack
+        self.assertIsNone(build_pattern_pack(self._report(days_ago=31)))
+
+    def test_pack_none_sin_fecha(self):
+        from reel_study import build_pattern_pack
+        report = self._report()
+        del report["generated_at"]
+        self.assertIsNone(build_pattern_pack(report))
+
+
+class TestLoadPatternPack(unittest.TestCase):
+    """load_pattern_pack (spec v3 §3.2): nombre nuevo, fallback,
+    versión, caducidad; nunca levanta."""
+
+    def _write(self, tmpdir, name, report):
+        import json
+        path = os.path.join(tmpdir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False)
+        return path
+
+    def test_carga_nombre_nuevo(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "reel_patterns_es.json",
+                        TestPatternPack()._report())
+            pack = load_pattern_pack("es", tmp)
+            self.assertIsNotNone(pack)
+            self.assertEqual(pack["lang"], "es")
+            self.assertEqual(pack["sample_n"], 6)
+
+    def test_fallback_nombre_viejo_solo_es(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "reel_patterns.json",
+                        TestPatternPack()._report())
+            self.assertIsNotNone(load_pattern_pack("es", tmp))
+            self.assertIsNone(load_pattern_pack("en", tmp))
+
+    def test_nombre_nuevo_manda_sobre_viejo(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "reel_patterns.json",
+                        TestPatternPack()._report(lang="es"))
+            self._write(tmp, "reel_patterns_en.json",
+                        TestPatternPack()._report(lang="en"))
+            pack = load_pattern_pack("en", tmp)
+            self.assertIsNotNone(pack)
+            self.assertEqual(pack["lang"], "en")
+
+    def test_obsoleto_devuelve_none(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "reel_patterns_es.json",
+                        TestPatternPack()._report(days_ago=45))
+            self.assertIsNone(load_pattern_pack("es", tmp))
+
+    def test_version_vieja_devuelve_none(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "reel_patterns_es.json",
+                        TestPatternPack()._report(version=1))
+            self.assertIsNone(load_pattern_pack("es", tmp))
+
+    def test_sin_archivo_devuelve_none(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(load_pattern_pack("es", tmp))
+
+    def test_json_roto_devuelve_none(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "reel_patterns_es.json"),
+                      "w", encoding="utf-8") as f:
+                f.write("{esto no es json")
+            self.assertIsNone(load_pattern_pack("es", tmp))
+
+    def test_muestra_pequena_devuelve_none(self):
+        from reel_study import load_pattern_pack
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "reel_patterns_es.json",
+                        TestPatternPack()._report(n=3))
+            self.assertIsNone(load_pattern_pack("es", tmp))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
