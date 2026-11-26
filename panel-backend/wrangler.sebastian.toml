@@ -39,8 +39,10 @@ workers_dev = true
 # La puerta (gate.ts) sigue filtrando la franja exacta en hora Chile.
 # Avanza la cola de sebastian SOLO si sebastian inició su Worker
 # (botón Iniciar en la pestaña Worker).
-[triggers]
-crons = ["*/5 15-18 * * *", "*/5 21-23,0-3 * * *"]
+# Sin [triggers]: decisión del usuario 2026-11-26 — los 2 temporizadores
+# de este Worker parado se quitaron para liberar cupo del plan Free
+# (5 por cuenta) para los 4 de avc. El ciclo está parado; si se
+# re-enciende algún día, volver a añadir [triggers] con sus crons.
 
 [[d1_databases]]
 binding = "DB"
