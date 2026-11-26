@@ -51,16 +51,17 @@ Si el chat o un segmento ya están descargados, se reutilizan (el chat
 solo si es un JSON válido de ese VOD; con --force-chat se vuelve a
 bajar aunque exista).
 
-Títulos honestos: el manifiesto NO se encabeza con las plantillas de
-suggest_titles() ("QUÉ JUGADA 😱 GTA 6" miente en un clip solo cams).
-Después de cortar, se construye la ficha del momento (moment_card.py:
-streamer, juego real del capítulo/categoría, reacción del chat) y el
-paquete viral recibe ficha + juego + streamer + vod_id + layout (de
-ahí sale `visible`: gameplay, cams+gameplay, cams-only o unknown).
-El título del manifiesto es viral["best_title"] en su idioma; el otro
-idioma usa la plantilla degradada con validate_legacy_title (en
-cams-only, a reacción sin juego ni gameplay). La ficha y el motivo de
-cada degradación quedan en manifest.json.
+Títulos honestos (spec títulos-verdad, enmienda 2026-11-26): el
+manifiesto NO se encabeza con plantillas — suggest_titles() ya no
+devuelve ningún título (retención). Después de cortar, se construye
+la ficha del momento (moment_card.py: streamer, juego real del
+capítulo/categoría, reacción del chat) y el paquete viral recibe
+ficha + juego + streamer + vod_id + layout (de ahí sale `visible`:
+gameplay, cams+gameplay, cams-only o unknown). El título del
+manifiesto es viral["best_title"] (Gemini, verificado); sin paquete
+Gemini válido el título queda en None (retención para revisión,
+nunca título de reglas). La ficha y el motivo de cada retención
+quedan en manifest.json.
 Con --dry-run solo descarga el chat y lista los picos, sin bajar el video ni cortar.
 En Kick, si el chat viene vacío, --audio-fallback busca picos por audio
 transcrito (muestreo con faster-whisper, ver kick_downloader/core.py).
@@ -120,18 +121,18 @@ except ImportError:
     seo_mod = False
 
 try:
-    # Títulos honestos (arreglos 3-4): validar/degradar títulos legacy,
-    # derivar lo visible del layout y normalizar el nombre del juego.
+    # Títulos honestos (arreglos 3-4 + títulos-verdad): validar
+    # títulos legacy, derivar lo visible del layout y normalizar
+    # el nombre del juego. (degrade_title_to_reaction ya no se
+    # importa: devuelve siempre None — retención, no degradación.)
     from clipagent.metadata import (
         KNOWN_GAMES,
-        degrade_title_to_reaction,
         validate_legacy_title,
         visible_from_layout,
     )
     viral_checks_mod = True
 except ImportError:
     KNOWN_GAMES = {}
-    degrade_title_to_reaction = None
     validate_legacy_title = None
     visible_from_layout = None
     viral_checks_mod = False
@@ -555,26 +556,19 @@ def write_manifest_atomic(out_dir: str, manifest: dict) -> str:
 
 
 def suggest_titles(detail, lang: str, game: str = None):
-    """Título sugerido según si el pico fue más de risas o de hype.
+    """Título sugerido por plantillas legacy — ELIMINADO (spec
+    títulos-verdad, enmienda 2026-11-26).
 
-    Plantillas legacy: NUNCA van al manifiesto sin validar (ver
-    honest_title). "QUÉ JUGADA 😱 GTA 6" miente en un clip solo cams
-    (Just Chatting) porque promete gameplay que no se ve, y miente
-    en cualquier clip que no sea GTA 6 porque el juego va
-    hardcodeado. Por eso el juego se pasa como parámetro y solo se
-    nombra si es el juego real del clip; sin juego conocido no se
-    nombra ningún juego.
+    Las plantillas ("QUÉ JUGADA 😱 GTA 6", "No se lo creyeron 😂",
+    "WHAT A PLAY 😱", ...) mentían: prometían gameplay que no se
+    veía en clips solo cams y hardcodeaban el juego. Sin ficha ni
+    transcripción no se puede producir un título evidenciado, así
+    que la función ya no devuelve ningún título: devuelve
+    ``(None, None)`` como señal de retención para revisión. Se
+    conserva la firma por compatibilidad (la llama el manifiesto);
+    el camino live usa ``package_clip`` (Gemini) y nunca esto.
     """
-    risas, hype = detail["risas"], detail["hype"]
-    label = f" {game}" if game else ""
-    if lang == "en":
-        if hype >= risas:
-            return f"WHAT A PLAY 😱{label}", f"Insane moment in{label} — full clip" if game else "Insane moment — full clip"
-        return f"They couldn't believe it 😂{label}", f"Chat lost it in{label} — best moment" if game else "Chat lost it — best moment"
-    # es / both: título en español, que es el canal principal
-    if hype >= risas:
-        return f"QUÉ JUGADA 😱{label}", f"El mejor momento del directo de{label}" if game else "El mejor momento del directo"
-    return f"No se lo creyeron 😂{label}", f"El chat se murió de risa en{label}" if game else "El chat se murió de risa"
+    return None, None
 
 
 # Alias mínimos por si viral_package no expone KNOWN_GAMES.
@@ -653,15 +647,17 @@ def honest_title(title: str, moment_card, layout_decision,
     """Título legacy pasado por el check promesa-payoff.
 
     Devuelve (título, degradado, motivo): si pasa, el mismo; si
-    miente en un clip solo cams, el degradado a reacción (sin juego
-    ni gameplay); si falla por otra cosa y no hay degradación, NUNCA
-    se devuelve el título mentiroso tal cual: se usa un título
-    seguro (reacción, o el juego real si se conoce) y se marca
-    revisar a mano. Sin viral_package no se puede validar: se
-    devuelve tal cual con aviso.
+    miente o no hay título, RETENCIÓN: ``(None, True, motivo)``.
+    Nunca se devuelve un título seguro de reglas ("el chat
+    explotó", "{juego}: chat went wild") ni una degradación a
+    reacción (spec títulos-verdad, enmienda 2026-11-26: Gemini o
+    retención). Sin viral_package no se puede validar: también
+    retención, con aviso.
     """
+    if not title:
+        return None, True, "sin título legacy (retención: revisar a mano)"
     if not viral_checks_mod:
-        return title, False, "sin viral_package para validar (se usa tal cual)"
+        return None, True, "sin viral_package para validar (retención: revisar a mano)"
     visible = None
     if visible_from_layout is not None and layout_decision is not None:
         visible = visible_from_layout(
@@ -671,25 +667,7 @@ def honest_title(title: str, moment_card, layout_decision,
         layout=layout_decision, lang=lang)
     if ok:
         return title, False, reason
-    if degraded:
-        return degraded, True, reason
-    # Sin degradación posible (p. ej. gameplay visible pero juego
-    # equivocado: "GTA 6" en un clip de GTA V): no se publica el
-    # título mentiroso. Título seguro con el juego real, o de
-    # reacción sin juego si no se conoce.
-    safe = None
-    if degrade_title_to_reaction is not None:
-        try:
-            safe = degrade_title_to_reaction(moment_card, lang=lang)
-        except Exception:
-            safe = None
-    if not safe:
-        game = (moment_card or {}).get("game")
-        if lang == "en":
-            safe = f"{game}: chat went wild" if game else "Chat went wild"
-        else:
-            safe = f"{game}: el chat explotó" if game else "El chat explotó"
-    return safe, True, reason + " (título mentiroso reemplazado por uno seguro: revisar a mano)"
+    return None, True, reason + " (título mentiroso: retención, revisar a mano)"
 
 
 def main() -> int:
@@ -1699,9 +1677,10 @@ def main() -> int:
             info = visible_from_layout(layout_decision,
                                        payoff_ts_clip=payoff_ts_clip)
             visible, visible_reason = info.get("visible"), info.get("reason")
-        # Títulos del manifiesto: el viral manda en su idioma (título
-        # honesto con check); el otro idioma usa el legacy degradado.
-        # suggest_titles() NUNCA va al manifiesto sin validar.
+        # Títulos del manifiesto: el viral manda en su idioma
+        # (título Gemini verificado); el otro idioma queda en
+        # retención (honest_title devuelve None si no pasa el
+        # check; suggest_titles ya no genera plantillas).
         title_es_raw, desc_es = suggest_titles(d, "es", game=game)
         title_en_raw, desc_en = suggest_titles(d, "en", game=game)
         title_es, degraded_es, why_es = honest_title(
@@ -1715,7 +1694,7 @@ def main() -> int:
                 title_en = viral["best_title"]
         print(f"    Título ES: {title_es} | EN: {title_en}")
         if degraded_es or degraded_en:
-            print(f"    Título legacy degradado (mentía): ES={degraded_es} EN={degraded_en}")
+            print(f"    Título legacy retenido (mentía o sin título): ES={degraded_es} EN={degraded_en}")
         if viral:
             print(f"    Viral: {viral['viral_multiple']}x la mediana | {viral['best_title']} | Miniatura: {viral['thumbnail_text']} | Visible: {viral.get('visible')}")
             if viral.get("needs_human_review"):
@@ -1925,12 +1904,12 @@ def main() -> int:
         for lg in ("es", "en"):
             info = leg.get(lg) or {}
             if info.get("degraded"):
-                lines.append(f"- Título legacy {lg.upper()} degradado: {info['raw']!r} → {info['final']!r} ({info.get('reason', '')})")
+                lines.append(f"- Título legacy {lg.upper()} retenido: {info['raw']!r} → {info['final']!r} ({info.get('reason', '')})")
         v = c.get("viral")
         if v:
             lines += [f"- Viral: {v['viral_multiple']}x la mediana | Fórmula: {v['formula']} ({v['formula_desc']})",
                       f"- Título viral: {v['best_title']} | Miniatura: {v['thumbnail_text']} (no repite el título)",
-                      f"- Hook (1ª línea): {v['hook_first_line']} | Texto en pantalla 2 s: {v['onscreen_first_2s']} | Loop: {v['loop_point']}",
+                      f"- Hook (1ª línea): {v['hook_first_line']}",
                       f"- Descripción: {v['description_first_2_lines']}",
                       f"- Tags: {', '.join(v['tags'])}",
                       f"- Búsquedas a ganar: {', '.join(v['search_queries'])}",

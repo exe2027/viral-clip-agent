@@ -369,10 +369,22 @@ describe("PATCH /api/clips/:id", () => {
     db.seed("clips", clipRow());
     const env = makeEnv(db);
     const tok = await tokenFor("seba", "sebastian");
-    const r = await call(env, "PATCH", "/api/clips/1", { token: tok, body: { title: "Otro título", score: 99, status: "publicado" } });
+    const r = await call(env, "PATCH", "/api/clips/1", { token: tok, body: { score: 99, status: "publicado" } });
     expect(r.status).toBe(400);
     const after = await call(env, "GET", "/api/clips/1", { token: tok });
     expect((after.json.clip as Row).title).toBe("Clip de prueba");
+    expect((after.json.clip as Row).score).toBe(80);
+  });
+
+  test("title sí es campo válido (R8.3, spec títulos 2026-11-26)", async () => {
+    const db = new FakeD1();
+    db.seed("clips", clipRow());
+    const env = makeEnv(db);
+    const tok = await tokenFor("seba", "sebastian");
+    const r = await call(env, "PATCH", "/api/clips/1", { token: tok, body: { title: "Otro título" } });
+    expect(r.status).toBe(200);
+    const after = await call(env, "GET", "/api/clips/1", { token: tok });
+    expect((after.json.clip as Row).title).toBe("Otro título");
     expect((after.json.clip as Row).score).toBe(80);
   });
 

@@ -84,6 +84,10 @@ from pathlib import Path
 MAX_URLS_PER_RUN = 10
 MIN_SAMPLE_NOTE = 5  # menos de 5 reels: muestra pequeña, se avisa
 
+# Pack de patrones para el prompt Gemini (spec v3 §3.2).
+PACK_VERSION = 2
+PACK_MAX_AGE_DAYS = 30  # informe con más edad no alimenta el prompt
+
 # ---------------------------------------------------------------------------
 # Normalización
 # ---------------------------------------------------------------------------
@@ -523,6 +527,96 @@ def save_report(analyses, patterns, out_path):
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2),
                         encoding="utf-8")
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# Pack de patrones para el prompt Gemini (spec v3 §3.2)
+# ---------------------------------------------------------------------------
+
+def _pack_age_days(generated_at):
+    """Días desde generated_at (fecha u hora ISO) o None si no se lee."""
+    if not generated_at:
+        return None
+    try:
+        from datetime import date, datetime
+        text = str(generated_at).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            day = datetime.fromisoformat(text).date()
+        except ValueError:
+            day = date.fromisoformat(text)
+        return (date.today() - day).days
+    except (ValueError, TypeError):
+        return None
+
+
+def build_pattern_pack(report_dict, lang=None):
+    """Pack de patrones para el prompt Gemini, o None.
+
+    Desde el informe v2 de reel_study (save_report): solo si
+    sample_n >= 5 y el informe tiene 30 días o menos. Sin fecha
+    de generación no se puede medir la edad: None (fail-closed).
+    El pack lleva las hook_text para la guardia anti-copia (§3.3);
+    el prompt solo recibe las plantillas genéricas y las palabras
+    frecuentes, nunca el texto literal de otros creadores.
+    """
+    report = report_dict or {}
+    if not isinstance(report, dict):
+        return None
+    patterns = report.get("patterns") or {}
+    if not isinstance(patterns, dict):
+        return None
+    try:
+        sample_n = int(report.get("sample_n", patterns.get("sample_n", 0)))
+    except (TypeError, ValueError):
+        return None
+    if sample_n < MIN_SAMPLE_NOTE:
+        return None
+    age = _pack_age_days(report.get("generated_at"))
+    if age is None or age < -1 or age > PACK_MAX_AGE_DAYS:
+        return None
+    pack_lang = lang or report.get("lang") or "es"
+    hook_texts = [a.get("hook_text") for a in (report.get("reels") or [])
+                  if isinstance(a, dict) and a.get("hook_text")]
+    return {
+        "version": PACK_VERSION,
+        "generated_at": report.get("generated_at"),
+        "lang": pack_lang,
+        "sample_n": sample_n,
+        "top_hook_types": hook_templates(patterns, lang=pack_lang),
+        "top_hook_words": list(
+            (patterns.get("top_hook_words") or {}).keys())[:10],
+        "median_caption_chars": patterns.get("median_caption_chars"),
+        "hook_texts": hook_texts,
+    }
+
+
+def load_pattern_pack(lang, base_dir=None):
+    """Pack vigente para un idioma, o None (sin excepción).
+
+    Prueba reel_patterns_{lang}.json y, solo para ES,
+    reel_patterns.json (informe viejo). Valida version == 2 y
+    delega en build_pattern_pack el sample_n y la caducidad.
+    """
+    lang = (lang or "es").lower()
+    base = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+    names = [f"reel_patterns_{lang}.json"]
+    if lang == "es":
+        names.append("reel_patterns.json")
+    for name in names:
+        try:
+            report = json.loads((base / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(report, dict):
+            continue
+        if report.get("version") != PACK_VERSION:
+            continue
+        pack = build_pattern_pack(report, lang=lang)
+        if pack is not None:
+            return pack
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -301,6 +301,12 @@ def pre_corte_package(chat_path, peak_ts, score, multiple, detail,
     el SEO sale sistemáticamente bajo. Solo sirve para la puerta de
     render; el paquete DEFINITIVO se construye tras el corte con la
     ficha, el layout y lo visible.
+
+    El título de este paquete es PROVISIONAL (spec títulos-verdad
+    2026-11-25, §6.1/§6.4): se construye sin transcripción y nunca
+    debe filtrarse al record, al paquete definitivo ni al panel
+    cuando existe título definitivo. ``register=False`` se mantiene
+    aquí (el registro ocurre en el paquete definitivo).
     ``visible`` (2026-11-19, calibración): lo que se ve de verdad
     ("gameplay" | "cams+gameplay"); sin él la coherencia queda en
     80 ("lo visible sin confirmar") y el SEO pre-corte pierde
@@ -613,6 +619,206 @@ def apply_sfx(video, transcript_path=None, srt_path=None, payoff_s=20.0,
     except Exception as e:  # noqa: BLE001 - el clip sigue sin SFX
         return video, {"enabled": True, "events": [],
                        "error": f"mezcla SFX falló: {e}"}
+
+
+def ensure_shorts_fifth(hashtags):
+    """5 hashtags con #Shorts quinto (spec títulos-verdad, R6.3).
+
+    Recibe los hashtags de contenido del paquete (Gemini) y
+    devuelve 4 de contenido + ``#Shorts`` como quinto. Si ya trae
+    #Shorts, se mueve al final sin duplicarlo; si trae más de 4 de
+    contenido, se recortan a 4. Sin hashtags de contenido devuelve
+    solo [#Shorts] (el llamador decide si eso es retención).
+    """
+    content = []
+    for tag in hashtags or []:
+        if not isinstance(tag, str):
+            continue
+        tag = tag.strip()
+        if not tag:
+            continue
+        if not tag.startswith("#"):
+            tag = "#" + tag.lstrip("#")
+        if tag.lower() == "#shorts":
+            continue
+        if tag not in content:
+            content.append(tag)
+    return content[:4] + ["#Shorts"]
+
+
+def write_held_package(clip, title, dedupe_verified=None,
+                       out_path=None):
+    """Paquete mínimo de un clip RETENIDO (spec títulos-verdad,
+    R3.4): sin título honesto no hay SEO que medir (seo={} ->
+    statuses={} -> ningún reporte de descarte) y el clip queda en
+    la Cola BLOQUEADO, nunca descartado. Escribe el JSON en la
+    misma ruta que package_clip_step (clip + ".package.json") y
+    devuelve {"package_path": ...}."""
+    if not os.path.isfile(clip):
+        raise StepError(f"clip no existe: {clip}", kind="permanent")
+    if not (title or "").strip():
+        raise StepError("falta el título del paquete (empaquetar no "
+                        "inventa títulos: vienen del manifiesto o de "
+                        "la revisión humana)", kind="permanent")
+    out_path = out_path or (clip + ".package.json")
+    package = {"clip": clip, "title": title,
+               "description": "", "tags": [], "hashtags": [],
+               "thumbnail_text": None,
+               "game_verified": True, "visible": None,
+               "lang": "es",
+               "seo": {}, "seo_detail": {},
+               "priority": {}, "publish_status": {},
+               "needs_human_review": True,
+               "dedupe_verified": dedupe_verified,
+               "pkg_source": "held"}
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(package, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, out_path)
+    return {"package_path": out_path, "seo": {},
+            "priority": {}, "publish_status": {}}
+
+
+def call_package_clip(**kwargs):
+    """package_clip con la interfaz fija R4.1 (recent_titles,
+    dedupe_verified). El lado metadata.py la implementa en
+    paralelo; mientras su firma no traiga esos kwargs, se llama
+    sin ellos (sin dedupe por lista en ese caso)."""
+    import inspect
+
+    from .metadata import package_clip
+    params = inspect.signature(package_clip).parameters
+    if "recent_titles" not in params:
+        kwargs.pop("recent_titles", None)
+    if "dedupe_verified" not in params:
+        kwargs.pop("dedupe_verified", None)
+    return package_clip(**kwargs)
+
+
+def vod_package_from_transcript(transcript_txt, streamer, lang, risas,
+                                hype, audio_multiple_value, game=None,
+                                recent_titles=None, dedupe_verified=False,
+                                llm_client=None, reel_patterns=None):
+    """Paquete endurecido de un clip VOD (spec títulos-verdad, §6.4).
+
+    Misma vía que el live post-transcripción: ficha del momento
+    CON transcript_text + package_clip con checks R1–R4. El VOD
+    NO tiene el bug de orden (la transcripción ya existe antes
+    del paquete); su fallo era la fuente del título
+    (suggest_titles, plantillas sin verificación): por eso aquí
+    no se reordena nada y no se llama a suggest_titles.
+
+    Sin transcripción no hay ficha ni título honesto: paquete
+    retenido (best_title None, needs_human_review True), nunca
+    título de reglas. `game` es "GTA 6" cuando el juego está
+    verificado (el título nombra GTA 6) o None si no lo está.
+    Devuelve (viral, moment_card): viral es el dict del
+    manifiesto (best_title, description, description_first_2_lines,
+    tags, hashtags con #Shorts quinto, thumbnail_text,
+    viral_multiple, game si procede, needs_human_review,
+    dedupe_verified, pkg_source). Sin onscreen_first_2s ni
+    loop_point (M6: sin consumidor en cerebro, Worker ni panel).
+    """
+    import re
+
+    from .moment_card import build_moment_card
+    streamer = (streamer or "").strip().lstrip("@")
+    transcript = (transcript_txt or "").strip()
+    moment_card = {"game": game, "title": None, "streamer": streamer}
+    if not transcript:
+        viral = {"best_title": None, "description": "",
+                 "description_first_2_lines": "", "tags": [],
+                 "thumbnail_text": None, "hashtags": [],
+                 "viral_multiple": round(float(audio_multiple_value), 2),
+                 "needs_human_review": True,
+                 "dedupe_verified": dedupe_verified,
+                 "pkg_source": "held"}
+        if game:
+            viral["game"] = game
+        return viral, moment_card
+    try:
+        card = build_moment_card(
+            clip_path=None, chat_path=None, streamer=streamer,
+            game=game, game_source="transcripción del segmento (VOD)",
+            language=lang if lang in ("es", "en") else "es",
+            clip_start_vod=0.0, clip_duration_s=40,
+            risas=risas, hype=hype,
+            # 2026-11-26 (títulos-verdad): la ficha VOD se construye
+            # CON la transcripción y el pico, para que sepa qué pasa
+            # (acciones, cita del streamer, evidencia) en vez de
+            # quedar en evidence low con payoff None — sin eso la
+            # verificación promesa-payoff rechaza TODO título VOD.
+            transcript_text=transcript,
+            peak_ts_vod=20.0)
+    except Exception:  # noqa: BLE001 - ficha mínima, no tumba
+        card = {"game": game, "streamer": streamer or "",
+                "language": lang, "transcript_text": transcript,
+                "risas": risas, "hype": hype}
+    card["transcript_text"] = transcript
+    # Payoff (2026-11-26, integración títulos-verdad): el check
+    # promesa-payoff exige payoff_ts_clip dentro del clip; sin él
+    # TODOS los clips VOD quedaban retenidos (build_moment_card lo
+    # deja en None sin peak_ts_vod). El clip VOD se corta alrededor
+    # del pico de audio (el candidato pasó la puerta de pico), así
+    # que el momento está dentro del clip por construcción; el
+    # offset exacto no se rastrea en este camino y el centro (20 s,
+    # pre-roll, mismo default que visible_from_layout) es la
+    # convención establecida.
+    card["payoff_ts_clip"] = 20.0
+    # El múltiple de audio ES el múltiple de viralidad del clip VOD
+    # (sin chat no hay otro): sin él los superlativos con condición
+    # multiple>=5 fallan siempre aunque el audio lo respalde.
+    card["viral_multiple"] = round(float(audio_multiple_value), 2)
+    card["transcript_segments_timed"] = []
+    card["evidence_tokens"] = sorted(
+        set(re.findall(r"[0-9a-záéíóúñü]+", transcript.lower())))
+    try:
+        pkg = call_package_clip(
+            n=1, peak_ts=0, score=0, risas=risas, hype=hype,
+            median_score=None, all_scores=[],
+            lang=lang, moment_card=card, game=game, streamer=streamer,
+            register=True, visible=None, layout=None,
+            recent_titles=recent_titles,
+            dedupe_verified=dedupe_verified,
+            llm_client=llm_client, reel_patterns=reel_patterns)
+    except Exception:  # noqa: BLE001 - sin paquete, retención
+        pkg = {}
+    pkg = pkg or {}
+    best = pkg.get("best_title")
+    if not best:
+        viral = {"best_title": None, "description": "",
+                 "description_first_2_lines": "", "tags": [],
+                 "thumbnail_text": None, "hashtags": [],
+                 "viral_multiple": round(float(audio_multiple_value), 2),
+                 "needs_human_review": True,
+                 "dedupe_verified": dedupe_verified,
+                 "pkg_source": pkg.get("pkg_source") or "held"}
+        if game:
+            viral["game"] = game
+        if pkg.get("pattern_pack_id") is not None:
+            viral["pattern_pack_id"] = pkg["pattern_pack_id"]
+            viral["title_pattern_types"] = (
+                pkg.get("title_pattern_types") or [])
+        moment_card["title"] = None
+        return viral, moment_card
+    desc = (pkg.get("description")
+            or pkg.get("description_first_2_lines") or "")
+    viral = {"best_title": best, "description": desc,
+             "description_first_2_lines": desc,
+             "tags": pkg.get("tags") or [],
+             "thumbnail_text": pkg.get("thumbnail_text"),
+             "hashtags": ensure_shorts_fifth(pkg.get("hashtags")),
+             "viral_multiple": round(float(audio_multiple_value), 2),
+             "needs_human_review": bool(pkg.get("needs_human_review")),
+             "dedupe_verified": dedupe_verified,
+             "pkg_source": pkg.get("pkg_source")}
+    if game:
+        viral["game"] = game
+    if pkg.get("pattern_pack_id") is not None:
+        viral["pattern_pack_id"] = pkg["pattern_pack_id"]
+        viral["title_pattern_types"] = pkg.get("title_pattern_types") or []
+    moment_card["title"] = best
+    return viral, moment_card
 
 
 def package_clip_step(clip, title, description="", tags=None,

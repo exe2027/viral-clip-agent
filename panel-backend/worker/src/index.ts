@@ -1139,6 +1139,14 @@ function parseClipPatch(body: Record<string, unknown>, clip?: ClipRow, rawSettin
   };
   const seoTitleErr = textField("seo_title", 200, "seo_title");
   if (seoTitleErr) return seoTitleErr;
+  // Título del clip (2026-11-26, spec títulos R8.3): mismo patrón
+  // textField que seo_title, para que title y seo_title queden
+  // sincronizados en una sola llamada (re-título de YouTube).
+  const titleErr = textField("title", 200, "title");
+  if (titleErr) return titleErr;
+  if (body.title !== undefined && typeof body.title === "string" && body.title.trim() === "") {
+    return "El título no puede estar vacío.";
+  }
   const seoDescriptionErr = textField("seo_description", 5000, "seo_description");
   if (seoDescriptionErr) return seoDescriptionErr;
   if (body.seo_tags !== undefined) {
@@ -1237,6 +1245,39 @@ function parseClipPatch(body: Record<string, unknown>, clip?: ClipRow, rawSettin
     if (typeof parsed === "string") return parsed;
     columns.viral = mergeViralJson(clip ? clip.viral : "{}", parsed);
   }
+  // Retención por título (2026-11-26, spec títulos R3.4/I5): un
+  // clip retenido (viral.hold_reason presente) solo puede
+  // desbloquearse (publish_blocked=0) junto con un título nuevo no
+  // vacío en el mismo PATCH; al cambiar el título en ese PATCH se
+  // limpia hold_reason del viral (merge con null lo borra, ver
+  // db.ts). Quitar la retención sin título nuevo es 400.
+  // «Título nuevo» es `title` o `seo_title` DISTINTO del guardado:
+  // el Editor no tiene campo `title` (solo seo_title editable) y
+  // el título que se publica es seo_title || title (jobs.ts:963),
+  // así que corregir el seo_title en el Editor es corregir el
+  // título que se publica; exigir solo `title` dejaría el
+  // desbloqueo del Editor sin vía posible.
+  const retainedReason = clip ? (parseViralJson(clip.viral).hold_reason ?? "").trim() : "";
+  if (retainedReason && clip) {
+    const existing = clip;
+    const newTitle = typeof body.title === "string" ? body.title.trim() : "";
+    const newSeoTitle = typeof body.seo_title === "string" ? body.seo_title.trim() : "";
+    const hasNewTitle =
+      (newTitle !== "" && newTitle !== (existing.title ?? "").trim()) ||
+      (newSeoTitle !== "" && newSeoTitle !== (existing.seo_title ?? "").trim());
+    const wantsUnblock = body.publish_blocked === 0 || body.publish_blocked === false;
+    const clearsHold = typeof body.viral === "object" && body.viral !== null && (body.viral as Record<string, unknown>).hold_reason === null;
+    if (wantsUnblock && !hasNewTitle) {
+      return "Clip retenido por título: para desbloquearlo hay que poner un título nuevo no vacío en el mismo cambio (título o título SEO).";
+    }
+    if (clearsHold && !hasNewTitle) {
+      return "Clip retenido por título: para quitar la retención hay que poner un título nuevo no vacío.";
+    }
+    if (hasNewTitle) {
+      const baseViral = typeof columns.viral === "string" ? columns.viral : existing.viral ?? "{}";
+      columns.viral = mergeViralJson(baseViral, { hold_reason: null });
+    }
+  }
   return { columns, duration };
 }
 
@@ -1247,6 +1288,8 @@ function parseClipPatch(body: Record<string, unknown>, clip?: ClipRow, rawSettin
  *  se deriva de subtitles_complete (regla 2026-11-17 22:10: sin
  *  subtítulos completos no se publica): solo nace desbloqueado si
  *  el que lo encola declara subtitles_complete=1 (MP4 ya quemado).
+ *  Excepción — retención por título (2026-11-26, spec títulos
+ *  R3.4): viral.hold_reason no vacío también nace bloqueado.
  *  Excepción — rescate por gritos (2026-11-18, decisión del
  *  usuario): viralidad revisada 45-49 + 2+ s de gritos + SEO >= 90
  *  entra BLOQUEADO (publish_blocked=1) para revisión humana; la
@@ -1453,6 +1496,11 @@ export function parseClipInput(body: Record<string, unknown>, rawSettings: Recor
   if (isRescue) {
     viralJson = mergeViralJson(viralJson, { rescue: { viral_revisado: rescueViral as number, shouts: rescueShouts } });
   }
+  // Retención por título (2026-11-26, spec títulos R3.4): si el
+  // cerebro manda viral.hold_reason, el clip nace BLOQUEADO para
+  // revisión humana aunque tenga los subtítulos completos — mismo
+  // patrón que el rescate por gritos.
+  const holdReason = typeof viralParsed.hold_reason === "string" ? viralParsed.hold_reason.trim() : "";
   return {
     source_id: sourceId,
     influencer_id: influencerId,
@@ -1472,8 +1520,9 @@ export function parseClipInput(body: Record<string, unknown>, rawSettings: Recor
     // Rescatado: nace bloqueado aunque tenga subtítulos completos;
     // solo el usuario lo desbloquea tras revisarlo (PATCH
     // publish_blocked). Sin rescate, como siempre: bloqueado solo
-    // si no hay subtítulos completos.
-    publish_blocked: isRescue ? 1 : (subtitlesComplete === 1 ? 0 : 1),
+    // si no hay subtítulos completos. Con hold_reason, también
+    // bloqueado (ver holdReason arriba).
+    publish_blocked: isRescue || holdReason !== "" ? 1 : (subtitlesComplete === 1 ? 0 : 1),
     needs_human_transcription: needsHuman,
     game: GTA_VI_GAME,
     // Idioma (0019): decide la cola (español / inglés) y las
@@ -2407,6 +2456,40 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       return json({ ok: true, tenant: session.tenant, ...creds });
     }
 
+    // --- Títulos del tenant para el anti-duplicado del cerebro ---
+    // GET /api/bridge/titles?days=30 (2026-11-26, spec títulos
+    // R4.1): el cerebro lee los títulos publicados (y en Cola) de
+    // los últimos N días para el dedupe de 30 días y la detección
+    // de patrones (ventana 10). Misma autenticación por sesión que
+    // /api/bridge/credentials: el tenant sale de la sesión, nunca
+    // de un parámetro. Solo lectura, sin escrituras D1, sin tope
+    // de 50 (GET /api/clips no basta: la Cola no trae publicados
+    // y ?status=publicado topa en 50, ~1 día). days entero 1..90,
+    // default 30. Respuesta: {titles: [{title, language,
+    // created_at, seo_description, thumb_text}]} ordenados por
+    // created_at DESC. seo_description + thumb_text son R4.4: la
+    // variedad también se mide en las 2 primeras líneas de la
+    // descripción y en el texto de miniatura (mismo esqueleto,
+    // misma ventana de 10).
+    if (path === "/api/bridge/titles" && method === "GET") {
+      const session = await requireSession(req, env);
+      if (!session) return err("Bridge no autorizado.", 401);
+      const rawDays = url.searchParams.get("days");
+      let days = 30;
+      if (rawDays !== null) {
+        if (!/^\d+$/.test(rawDays.trim())) return err("days debe ser un entero entre 1 y 90.", 400);
+        days = Number(rawDays.trim());
+        if (days < 1 || days > 90) return err("days debe ser un entero entre 1 y 90.", 400);
+      }
+      const since = Date.now() - days * 86_400_000;
+      const rows = await env.DB.prepare(
+        "SELECT title, language, created_at, seo_description, thumb_text FROM clips WHERE tenant_id = ? AND created_at >= ? ORDER BY created_at DESC",
+      )
+        .bind(session.tenant, since)
+        .all<{ title: string; language: string; created_at: number; seo_description: string | null; thumb_text: string | null }>();
+      return json({ ok: true, tenant: session.tenant, titles: rows.results });
+    }
+
     // --- Aviso del vigilante por Telegram ---
     // POST /api/bridge/notify {message} -> {ok: true} (2026-11-19,
     // activación del vigilante). La usa el cerebro
@@ -3024,7 +3107,7 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       await logClipEvent(env.DB, clipId, "revision", session.sub, "Preview visto en el Editor.", false, tenant);
       return json({ ok: true, clip: clipOut(updated), already_seen: false });
     }
-    // PATCH /api/clips/:id: edita SOLO subtitle_style, seo_title,
+    // PATCH /api/clips/:id: edita SOLO title, subtitle_style, seo_title,
     // seo_description, seo_tags, thumbnail_text (columna thumb_text),
     // target_platforms (columna platforms), schedule (scheduled_for),
     // duration (end_sec = start_sec + duration), language (columna
@@ -3039,7 +3122,7 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       const parsed = parseClipPatch(body, clip, await getSettings(env.DB, tenant));
       if (typeof parsed === "string") return err(parsed, 400);
       if (Object.keys(parsed.columns).length === 0 && parsed.duration === null) {
-        return err("No hay campos válidos para actualizar: usa subtitle_style, seo_title, seo_description, seo_tags, thumbnail_text, target_platforms, schedule, duration, game, language, seo_override, viral, seo_scores, hype_score, priority o score_kind.", 400);
+        return err("No hay campos válidos para actualizar: usa title, subtitle_style, seo_title, seo_description, seo_tags, thumbnail_text, target_platforms, schedule, duration, game, language, seo_override, viral, seo_scores, hype_score, priority o score_kind.", 400);
       }
       const columns = { ...parsed.columns };
       let previewReset = false;

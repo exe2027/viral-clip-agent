@@ -22,12 +22,11 @@ Piezas reutilizadas (no reinventadas):
   §3.3 (``detail=None, chat_multiple=None``; el componente chat
   queda estimado en 5,0 por el propio código; el total es
   45 + valor_audio, 47-55).
-- títulos: ``auto_clips.suggest_titles`` para el idioma
-  secundario; el título principal sale del TÍTULO DEL VÍDEO
-  (metadato real del creador) + descripción del vídeo: el
-  paquete de ``suggest_titles`` solo puntúa SEO ~50-70 y NO
-  pasaría la puerta de SEO ≥80 (medido 2026-11-24: paquete
-  suggest-only 63-70; paquete con título del vídeo 82-88).
+- títulos: ``clipagent.metadata.package_clip`` con la ficha del
+  momento CON la transcripción (spec títulos-verdad 2026-11-25,
+  §6.4): el título, la descripción, los hashtags y la miniatura
+  salen del momento concreto del segmento, nunca de plantillas;
+  sin transcripción el clip queda retenido para revisión.
 - SEO: ``clipagent.metadata.score_package_seo`` (motor local).
 - render: ``clipagent.render.cut_clip_with_layout`` (rubius) +
   ``workers.subtitle_clip`` / ``workers.apply_sfx`` (estos dos
@@ -448,84 +447,82 @@ def download_audio(vod_url, out_wav, start_s=None, end_s=None,
 # Títulos + SEO (paquete viral del manifiesto)
 # ---------------------------------------------------------------------------
 
-def _clean_title(title):
-    """Título del vídeo limpio (sin saltos de línea ni espacios
-    dobles), truncado a 65 caracteres sin cortar la palabra
-    clave si está al final."""
-    text = " ".join((title or "").split())
-    return text[:65].rstrip()
+def _resolve_recent_titles(bridge):
+    """(recent_titles, dedupe_verified) desde el panel (R4.1).
 
-
-def _mentions_gta(title):
-    compact = "".join(ch for ch in (title or "").lower()
-                      if ch.isalnum())
-    return any(tok in compact
-               for tok in ("gtavi", "gta6", "grandtheftautovi"))
+    Sin bridge no hay lectura: (None, False). Si la lectura
+    falla, fail-open solo en dedupe. El bridge lo pasa el
+    llamador (run_youtube_clips / run_facebook_clips); sin él el
+    VOD sigue con dedupe no verificado.
+    """
+    if bridge is None:
+        return None, False
+    try:
+        return bridge.list_titles(days=30), True
+    except Exception as e:  # noqa: BLE001 - dedupe no verificado
+        _log(f"list_titles falló ({e}): dedupe no verificado")
+        return None, False
 
 
 def build_youtube_package(video_title, video_description,
                           transcript_txt, streamer, lang, risas,
-                          hype, audio_multiple_value):
+                          hype, audio_multiple_value, bridge=None,
+                          llm_client=None):
     """Paquete viral + SEO de un clip de YouTube.
 
-    El título principal es el TÍTULO DEL VÍDEO (metadato real
-    del creador, no inventado); el otro idioma y la miniatura
-    salen de ``suggest_titles`` (mismo que hoy). La descripción
-    es la del vídeo (primeras líneas) o, si no hay, un extracto
-    real de la transcripción + una línea factual («Clip de X en
-    GTA 6»). Nada inventado: ni subtítulos ni momentos.
-    Devuelve {"viral", "title_es", "title_en", "seo_scores",
-    "moment_card"}.
+    Camino endurecido (spec títulos-verdad, §6.4): el título, la
+    descripción, los hashtags y la miniatura salen de
+    ``package_clip`` con la ficha del momento CON la
+    transcripción (checks R1–R4, dedupe contra el panel si hay
+    bridge), nunca de ``suggest_titles``. El título del vídeo
+    (metadato del creador) ya NO fija el título del clip: el
+    título del clip nombra el momento concreto de ESE segmento;
+    el título del vídeo queda en el manifiesto (nivel VOD).
+    Sin transcripción no hay título honesto: paquete retenido
+    (best_title None, needs_human_review True), nunca título de
+    reglas. Devuelve {"viral", "title_es", "title_en", "seo_scores",
+    "moment_card"}; "viral" trae además needs_human_review,
+    dedupe_verified y pkg_source.
     """
-    import auto_clips
+    from .workers import vod_package_from_transcript
 
     from .metadata import score_package_seo
 
     streamer = (streamer or "").strip().lstrip("@") or "rubius"
-    title = _clean_title(video_title)
-    if not title:
-        title, _ = auto_clips.suggest_titles(
-            {"risas": risas, "hype": hype}, lang, game="GTA VI")
-    if not _mentions_gta(title):
-        title = f"{title} | GTA 6"
-    detail = {"risas": risas, "hype": hype}
-    title_es_raw, desc_es = auto_clips.suggest_titles(
-        detail, "es", game="GTA VI")
-    title_en_raw, desc_en = auto_clips.suggest_titles(
-        detail, "en", game="GTA VI")
+    recent_titles, dedupe_verified = _resolve_recent_titles(bridge)
+    viral, moment_card = vod_package_from_transcript(
+        transcript_txt, streamer, lang, risas, hype,
+        audio_multiple_value, game="GTA 6",
+        recent_titles=recent_titles,
+        dedupe_verified=dedupe_verified,
+        llm_client=llm_client)
+    viral["game"] = "GTA VI"
+    moment_card = {"game": "GTA VI", "title": viral["best_title"],
+                   "streamer": streamer}
+    if viral.get("needs_human_review") or not viral.get("best_title"):
+        return {"viral": viral, "title_es": "", "title_en": "",
+                "desc_es": "", "desc_en": "",
+                "seo_scores": score_package_seo(viral, lang=lang),
+                "moment_card": moment_card}
+    # Título/descripción del otro idioma: mismo momento, mismo
+    # camino endurecido (sin título de reglas tampoco ahí).
+    other = "en" if lang != "en" else "es"
+    viral_other, _mc = vod_package_from_transcript(
+        transcript_txt, streamer, other, risas, hype,
+        audio_multiple_value, game="GTA 6",
+        recent_titles=recent_titles,
+        dedupe_verified=dedupe_verified,
+        llm_client=llm_client)
     if lang == "en":
-        title_en = title
-        title_es = title_es_raw
+        title_en = viral["best_title"]
+        title_es = viral_other.get("best_title") or title_en
+        desc_en = viral["description"]
+        desc_es = viral_other.get("description") or desc_en
     else:
-        title_es = title
-        title_en = title_en_raw
-    desc = " ".join((video_description or "").split())
-    if not desc:
-        desc = (transcript_txt or "")[:200].strip()
-    if desc and "gta" not in desc.lower():
-        desc = f"{desc} Clip de {streamer} en GTA 6."
-    if not desc:
-        desc = f"Clip de {streamer} en GTA 6."
-    desc = desc[:500]
-    tags = []
-    for tag in ("GTA 6", "GTA VI", "Grand Theft Auto VI", streamer,
-                "gameplay", "clips gaming", "stream clips"):
-        if tag and tag not in tags:
-            tags.append(tag)
-    thumb = ("¡QUÉ JUGADA!" if hype >= risas
-             else "¡NO SE LO CREYERON!")
-    hashtags = ["#GTA6", "#GTA",
-                "#" + re.sub(r"[^0-9A-Za-z_]", "", streamer)]
-    viral = {
-        "best_title": title_es if lang != "en" else title_en,
-        "description": desc,
-        "description_first_2_lines": desc,
-        "tags": tags,
-        "thumbnail_text": thumb,
-        "hashtags": hashtags,
-        "viral_multiple": round(float(audio_multiple_value), 2),
-        "game": "GTA VI",
-    }
+        title_es = viral["best_title"]
+        title_en = viral_other.get("best_title") or title_es
+        desc_es = viral["description"]
+        desc_en = viral_other.get("description") or desc_es
     seo_scores = score_package_seo(viral, lang=lang)
     return {
         "viral": viral,
@@ -534,8 +531,7 @@ def build_youtube_package(video_title, video_description,
         "desc_es": desc_es,
         "desc_en": desc_en,
         "seo_scores": seo_scores,
-        "moment_card": {"game": "GTA VI", "title": viral["best_title"],
-                        "streamer": streamer},
+        "moment_card": moment_card,
     }
 
 
@@ -642,13 +638,15 @@ def run_youtube_clips(vod_url, out_dir, top_n=2, lang="es",
                       rms_fn=None, segment_fn=None,
                       render_fn=None, validate_fn=None,
                       titles_fn=None, layout_fn=None,
-                      runner=None):
+                      runner=None, bridge=None, llm_client=None):
     """Corta clips de un vídeo de YouTube (contrato §3.1).
 
     Devuelve el manifiesto (dict) o None si no se pudo ni leer
     el vídeo. Escribe SIEMPRE ``out_dir/manifest.json`` a disco
     cuando hay metadatos (aunque no salga ningún clip: el
     manifiesto documenta el motivo en ``descartados``).
+    ``bridge`` (PanelBridge, opcional): si se pasa, el dedupe de
+    títulos se lee del panel (R4.1); si no, dedupe_verified=False.
 
     Cada clip trae: start, duration, file (MP4 final
     renderizado), viral_score (dict de score_clip), seo_scores
@@ -1012,8 +1010,22 @@ def run_youtube_clips(vod_url, out_dir, top_n=2, lang="es",
                      video_description=meta.get("description") or "",
                      transcript_txt=seg_text, streamer=streamer,
                      lang=lang, risas=cand["risas"], hype=cand["hype"],
-                     audio_multiple_value=cand["audio_multiple"])
+                     audio_multiple_value=cand["audio_multiple"],
+                     bridge=bridge, llm_client=llm_client)
         viral = pkg["viral"]
+        # Retención (spec títulos-verdad, §6.4): sin título honesto
+        # el clip NO entra en el manifiesto (queda registrado en
+        # descartados con el motivo, nunca con título de reglas).
+        if viral.get("needs_human_review") or not viral.get(
+                "best_title"):
+            _log(f"clip {idx}: sin título honesto: retención para "
+                 f"revisión")
+            manifest["descartados"].append({
+                "reason": "sin título honesto: retención para "
+                          "revisión",
+                "start": start, "vod_id": video_id})
+            _write_manifest(out_dir, manifest)
+            continue
         title = viral.get("best_title") or ""
         # Validador final sobre el render (mismo que Twitch). Un
         # veredicto «rechazado» no se guarda sin revisar los

@@ -24,11 +24,9 @@ Diferencias con YouTube (declaradas en la spec, no accidentes):
   es de TODOS los buckets de 1 s, no solo de la ventana.
 - El título del -J de Facebook es texto de engagement («31K
   views · 894 reactions | #gta6 ...»), NO el título del reel:
-  el título del clip sale de ``auto_clips.suggest_titles``
-  (la spec lo nombra «Gemini»; en el código actual
-  ``suggest_titles`` es la función de títulos del pipeline, sin
-  llamada a Gemini — se sigue la spec al pie de la letra y se
-  deja constancia aquí) sobre el detalle real, y el SEO es
+  el título del clip sale de ``clipagent.metadata.package_clip``
+  con la ficha del momento CON la transcripción (spec
+  títulos-verdad 2026-11-25, §6.4), y el SEO es
   ``metadata.score_package_seo``.
 - Verificación de GTA VI: ``facebook_clearly_not_gta6`` por
   hashtags de la descripción, con chequeo por transcripción
@@ -378,74 +376,89 @@ def _resolve_single_facebook_influencer(meta, streamers):
 # Títulos + SEO (paquete viral del manifiesto)
 # ---------------------------------------------------------------------------
 
+def _resolve_recent_titles(bridge):
+    """(recent_titles, dedupe_verified) desde el panel (R4.1).
+
+    Sin bridge no hay lectura: (None, False). Si la lectura
+    falla, fail-open solo en dedupe. El bridge lo pasa el
+    llamador (run_facebook_clips); sin él el VOD sigue con
+    dedupe no verificado.
+    """
+    if bridge is None:
+        return None, False
+    try:
+        return bridge.list_titles(days=30), True
+    except Exception as e:  # noqa: BLE001 - dedupe no verificado
+        _log(f"list_titles falló ({e}): dedupe no verificado")
+        return None, False
+
+
 def build_facebook_package(video_description, transcript_txt,
                            streamer, lang, risas, hype,
-                           audio_multiple_value, gta_verified):
+                           audio_multiple_value, gta_verified,
+                           bridge=None, llm_client=None):
     """Paquete viral + SEO de un clip de Facebook.
 
     Espejo de ``build_youtube_package`` sin título de vídeo (en
     Facebook NO hay título útil: el del -J es texto de
-    engagement): el título principal sale de
-    ``auto_clips.suggest_titles`` sobre el detalle real
-    (risas/hype de la transcripción). La descripción es la del
-    reel (los hashtags del -J) o, si no hay, un extracto real de
-    la transcripción + una línea factual («Clip de X en GTA 6»).
-    Nada inventado. El SEO es ``metadata.score_package_seo``.
+    engagement): el título, la descripción, los hashtags y la
+    miniatura salen de ``package_clip`` con la ficha del momento
+    CON la transcripción (checks R1–R4, dedupe contra el panel
+    si hay bridge), nunca de ``suggest_titles``. Sin transcripción
+    no hay título honesto: paquete retenido (best_title None,
+    needs_human_review True), nunca título de reglas.
     ``moment_card.game`` / ``viral["game"]`` son "GTA VI" SOLO
     cuando ``gta_verified`` es True: sin verificación no se
     emite el juego, así la puerta de ``clip_passes_gates`` deja
     de ser tautológica. Devuelve {"viral", "title_es",
-    "title_en", "seo_scores", "moment_card"}.
+    "title_en", "seo_scores", "moment_card"}; "viral" trae además
+    needs_human_review, dedupe_verified y pkg_source.
     """
-    import auto_clips
+    from .workers import vod_package_from_transcript
 
     from .metadata import score_package_seo
 
     streamer = (streamer or "").strip().lstrip("@")
-    game = "GTA VI" if gta_verified else None
-    detail = {"risas": risas, "hype": hype}
-    title_es, desc_es = auto_clips.suggest_titles(
-        detail, "es", game=game)
-    title_en, desc_en = auto_clips.suggest_titles(
-        detail, "en", game=game)
-    desc = " ".join((video_description or "").split())
-    if not desc:
-        desc = (transcript_txt or "")[:200].strip()
-    if desc and "gta" not in desc.lower():
-        desc = (f"{desc} Clip de {streamer} en GTA 6."
-                if streamer else f"{desc} Clip en GTA 6.")
-    if not desc:
-        desc = (f"Clip de {streamer} en GTA 6."
-                if streamer else "Clip en GTA 6.")
-    desc = desc[:500]
-    tags = []
-    for tag in ("GTA 6", "GTA VI", "Grand Theft Auto VI", streamer,
-                "gameplay", "clips gaming", "stream clips"):
-        if tag and tag not in tags:
-            tags.append(tag)
-    thumb = ("¡QUÉ JUGADA!" if hype >= risas
-             else "¡NO SE LO CREYERON!")
-    hashtags = ["#GTA6", "#GTA"]
-    if streamer:
-        clean = re.sub(r"[^0-9A-Za-z_]", "", streamer)
-        if clean:
-            hashtags.append("#" + clean)
-    viral = {
-        "best_title": title_es if lang != "en" else title_en,
-        "description": desc,
-        "description_first_2_lines": desc,
-        "tags": tags,
-        "thumbnail_text": thumb,
-        "hashtags": hashtags,
-        "viral_multiple": round(float(audio_multiple_value), 2),
-    }
+    game = "GTA 6" if gta_verified else None
+    recent_titles, dedupe_verified = _resolve_recent_titles(bridge)
+    viral, moment_card = vod_package_from_transcript(
+        transcript_txt, streamer, lang, risas, hype,
+        audio_multiple_value, game=game,
+        recent_titles=recent_titles,
+        dedupe_verified=dedupe_verified,
+        llm_client=llm_client)
     if gta_verified:
         viral["game"] = "GTA VI"
+        moment_card = {"game": "GTA VI",
+                       "title": viral["best_title"],
+                       "streamer": streamer}
+    else:
+        viral.pop("game", None)
+        moment_card = {"title": viral["best_title"],
+                       "streamer": streamer}
+    if viral.get("needs_human_review") or not viral.get("best_title"):
+        return {"viral": viral, "title_es": "", "title_en": "",
+                "desc_es": "", "desc_en": "",
+                "seo_scores": score_package_seo(viral, lang=lang),
+                "moment_card": moment_card}
+    other = "en" if lang != "en" else "es"
+    viral_other, _mc = vod_package_from_transcript(
+        transcript_txt, streamer, other, risas, hype,
+        audio_multiple_value, game=game,
+        recent_titles=recent_titles,
+        dedupe_verified=dedupe_verified,
+        llm_client=llm_client)
+    if lang == "en":
+        title_en = viral["best_title"]
+        title_es = viral_other.get("best_title") or title_en
+        desc_en = viral["description"]
+        desc_es = viral_other.get("description") or desc_en
+    else:
+        title_es = viral["best_title"]
+        title_en = viral_other.get("best_title") or title_es
+        desc_es = viral["description"]
+        desc_en = viral_other.get("description") or desc_es
     seo_scores = score_package_seo(viral, lang=lang)
-    moment_card = {"title": viral["best_title"],
-                   "streamer": streamer}
-    if gta_verified:
-        moment_card["game"] = "GTA VI"
     return {
         "viral": viral,
         "title_es": title_es,
@@ -568,13 +581,15 @@ def run_facebook_clips(reel_url, out_dir, top_n=2, lang="es",
                        rms_fn=None, segment_fn=None,
                        render_fn=None, validate_fn=None,
                        titles_fn=None, layout_fn=None,
-                       runner=None):
+                       runner=None, bridge=None, llm_client=None):
     """Corta clips de un reel de Facebook (contrato §3.1).
 
     Devuelve el manifiesto (dict) o None si no se pudo ni leer
     el reel. Escribe SIEMPRE ``out_dir/manifest.json`` a disco
     cuando hay metadatos (aunque no salga ningún clip: el
     manifiesto documenta el motivo en ``descartados``).
+    ``bridge`` (PanelBridge, opcional): si se pasa, el dedupe de
+    títulos se lee del panel (R4.1); si no, dedupe_verified=False.
 
     Cada clip trae: start, duration, file (MP4 final
     renderizado), viral_score (dict de score_clip), seo_scores
@@ -951,8 +966,22 @@ def run_facebook_clips(reel_url, out_dir, top_n=2, lang="es",
                      transcript_txt=seg_text, streamer=streamer,
                      lang=lang, risas=cand["risas"], hype=cand["hype"],
                      audio_multiple_value=cand["audio_multiple"],
-                     gta_verified=gta_verified)
+                     gta_verified=gta_verified, bridge=bridge,
+                     llm_client=llm_client)
         viral = pkg["viral"]
+        # Retención (spec títulos-verdad, §6.4): sin título honesto
+        # el clip NO entra en el manifiesto (queda registrado en
+        # descartados con el motivo, nunca con título de reglas).
+        if viral.get("needs_human_review") or not viral.get(
+                "best_title"):
+            _log(f"clip {idx}: sin título honesto: retención para "
+                 f"revisión")
+            manifest["descartados"].append({
+                "reason": "sin título honesto: retención para "
+                          "revisión",
+                "start": start, "vod_id": reel_id})
+            _write_manifest(out_dir, manifest)
+            continue
         title = viral.get("best_title") or ""
         # Validador final sobre el render (mismo que Twitch). Un
         # veredicto «rechazado» no se guarda sin revisar los

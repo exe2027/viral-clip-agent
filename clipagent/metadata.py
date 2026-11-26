@@ -13,8 +13,11 @@ empaquetado viral del proyecto:
   * Shorts — un Short no es "el mejor momento", es un momento que
     sobrevive SIN el video alrededor: abre con una idea completa,
     tiene un giro y termina en una frase, no en un balbuceo.
-    Por eso cada clip lleva: primera línea nueva, texto en pantalla
-    en los primeros 2 s (distinto de lo hablado) y punto de loop.
+    Por eso cada clip lleva una primera línea nueva (el hook, que
+    es la primera línea de la descripción) que confirma el título
+    y sube una pregunta. (R6.2, 2026-11-26: el texto en pantalla
+    de los primeros 2 s y el punto de loop se eliminaron del
+    paquete; no los consumía nadie.)
   * Paquete — título + miniatura son UNA unidad. Reglas que se
     verifican aquí: título ≤60 caracteres (40 en móvil), miniatura
     ≤3 palabras y SIN repetir el título, máx. 2 palabras en MAYÚSCULAS,
@@ -74,9 +77,9 @@ hardcodeado, sin validar jamás). El arreglo 3 añade lo que faltaba:
     validación FINAL antes de publicar: el check promesa-payoff de
     siempre MÁS las reglas de lo visible. En cams-only el título no
     puede nombrar ningún juego ni prometer nada de gameplay (jugada,
-    tiro, penal, gol, clutch...): si miente, devuelve
-    ``degraded_title``, un título de reacción ("El chat no paraba
-    de reírse", "No lo podía creer").
+    tiro, penal, gol, clutch...): si miente, el paquete queda
+    retenido (``degraded_title`` es siempre None; spec
+    títulos-verdad 2026-11-26: no hay degradación a reacción).
   * ``generate_titles(..., visible=...)`` y ``package_clip(...,
     visible=..., layout=...)`` ya aceptan lo visible: en cams-only
     solo salen títulos de reacción (sin prefijo de juego), el
@@ -120,6 +123,27 @@ El título, el hook y el texto en pantalla son los mismos en las 4;
 lo que cambia es el caption, los hashtags, la portada y el modo de
 subida. Nunca se copia el mismo texto literal en las 4.
 
+TÍTULOS VERDAD (spec 2026-11-25, enmienda 2026-11-26) — Gemini o
+retención: TODO el relleno del paquete (título, descripción,
+hashtags, texto de miniatura) lo genera Gemini desde el video
+(transcripción + momento). NO hay fallback de reglas ni lista fija
+de hashtags: si Gemini no produce un paquete válido y verificado
+tras ``gemini_retries`` reintentos, ``best_title`` es None y
+``needs_human_review`` es True. Las listas (clichés ES/EN,
+superlativos, evidencia, tokens de risa) viven en la sección
+``titles:`` de config.yaml / DEFAULT_CONFIG (R9.1) y se cargan con
+``load_titles_config``; si falta un valor requerido, ConfigError
+ruidoso, nunca default silencioso. Dedupe (R4.1, 30 días) y patrón
+(R4.2, ventana 10) contra la lista ``recent_titles`` del panel:
+``package_clip(..., recent_titles=None, dedupe_verified=True)``,
+``title_skeleton(...)``, ``is_pattern_repeat(...)`` e
+``is_duplicate_title(..., recent_titles=...)``. titles_seen.json
+solo queda como caché local de respaldo (R4.3). Los superlativos
+de la lista de clichés R2.1 se rechazan sin evidencia aunque la
+tabla de superlativos los daría por evidenciados (M3), salvo cita
+literal del streamer en la transcripción (I3: tramo contiguo ≥3
+palabras + atribución).
+
 Uso:
     from .metadata import package_clip, viral_multiple, package_for_platforms
     from .moment_card import build_moment_card
@@ -132,12 +156,27 @@ Uso:
     # (False, "el título dice 'GTA 6' pero el juego real es 'GTA V RP'; ...")
 """
 
+import difflib
 import json
 import re
 import statistics
 import unicodedata
 from datetime import date as _date
+from datetime import datetime as _datetime
 from pathlib import Path
+
+# Títulos verdad (spec 2026-11-25, R9.1): las listas del check
+# promesa-payoff viven en config.yaml (clipagent/config.py,
+# sección ``titles:``) y se leen de ahí, nunca hardcodeadas.
+# Si este módulo se ejecuta como script suelto (sin paquete),
+# se usa el respaldo literal de abajo (mismos valores); en
+# cualquier importación normal manda la config.
+try:
+    from .config import DEFAULT_CONFIG as _DEFAULT_CONFIG
+    from .config import load_titles_config as _load_titles_config
+except ImportError:  # noqa: BLE001 - script suelto, sin paquete
+    _DEFAULT_CONFIG = None
+    _load_titles_config = None
 
 # Fórmulas de hook, adaptadas a clips de GTA 6.
 # Solo las que tienen sentido para un clip de 60 s sin guion previo.
@@ -250,10 +289,14 @@ GAME_HASHTAGS = {
 GENERIC_HASHTAGS = (["#Gaming", "#Clips", "#Directo", "#StreamClips"],
                     ["clips gaming", "stream clips", "gameplay", "momentos gaming"])
 
-# Superlativos/absolutos y la evidencia mínima que los respalda.
-# multiple = viral_multiple de la ficha; risas/hype = conteos del pico.
-SUPERLATIVES = {
-    # palabra -> (condición que la respalda, por qué)
+# Condiciones de evidencia de la tabla de superlativos (la
+# LÓGICA: qué respalda cada palabra). Las PALABRAS de la tabla
+# viven en config (titles.superlatives_es/en, R9.1/M12) y se
+# combinan aquí con su condición; una palabra de config sin
+# condición en este dict falla en voz alta al arrancar, nunca
+# se ignora en silencio. multiple = viral_multiple de la ficha;
+# risas/hype = conteos del pico.
+_SUPERLATIVE_CONDITIONS = {
     "mejor": ("multiple>=5 o risas>=10", lambda c: (c.get("viral_multiple") or 0) >= 5 or (c.get("risas") or 0) >= 10),
     "peor": ("multiple>=5 o risas>=10", lambda c: (c.get("viral_multiple") or 0) >= 5 or (c.get("risas") or 0) >= 10),
     "loco": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
@@ -277,8 +320,15 @@ SUPERLATIVES = {
               lambda c: (c.get("unique_users_peak_30s") or 0) >= 30 or (c.get("chat_msgs_peak_10s") or 0) >= 100),
     "siempre": ("usuarios>=30 o mensajes del pico>=100",
                 lambda c: (c.get("unique_users_peak_30s") or 0) >= 30 or (c.get("chat_msgs_peak_10s") or 0) >= 100),
+    # R2.4 (spec títulos-verdad): "imparable", "máximo",
+    # "desatado" y "total" entran en la tabla con multiple>=5.
+    "imparable": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
+    "máximo": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
+    "maximo": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
+    "desatado": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
+    "total": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
 }
-SUPERLATIVES_EN = {
+_SUPERLATIVE_CONDITIONS_EN = {
     "best": ("multiple>=5 o risas>=10", lambda c: (c.get("viral_multiple") or 0) >= 5 or (c.get("risas") or 0) >= 10),
     "worst": ("multiple>=5 o risas>=10", lambda c: (c.get("viral_multiple") or 0) >= 5 or (c.get("risas") or 0) >= 10),
     "craziest": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
@@ -292,35 +342,180 @@ SUPERLATIVES_EN = {
                  lambda c: (c.get("unique_users_peak_30s") or 0) >= 30 or (c.get("chat_msgs_peak_10s") or 0) >= 100),
     "ever": ("usuarios>=30 o mensajes del pico>=100",
              lambda c: (c.get("unique_users_peak_30s") or 0) >= 30 or (c.get("chat_msgs_peak_10s") or 0) >= 100),
+    # R2.4: "unstoppable", "maximum", "unreal" y "crazy" entran
+    # en la tabla con multiple>=5. OJO (M3): la lista de clichés
+    # R2.1 manda sobre esta tabla — "insane"/"craziest"/"unreal"/
+    # "crazy" como palabra suelta de reacción se rechazan aunque
+    # la tabla los daría por evidenciados; solo pasan dentro de
+    # una cita literal del streamer (I3, §3.7).
+    "unstoppable": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
+    "maximum": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
+    "unreal": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
+    "crazy": ("multiple>=5", lambda c: (c.get("viral_multiple") or 0) >= 5),
 }
 
+
+def _build_superlatives(words, conditions):
+    """Tabla {palabra: (condición, fn)} desde las palabras de
+    config. Una palabra sin condición falla en voz alta: la
+    tabla no puede licenciar lo que no sabe medir."""
+    out = {}
+    for w in words or []:
+        if w not in conditions:
+            raise ValueError(
+                f"superlativo {w!r} en config titles.* pero sin "
+                "condición de evidencia en metadata.py "
+                "(_SUPERLATIVE_CONDITIONS*): añade la condición, "
+                "nunca se ignora en silencio")
+        out[w] = conditions[w]
+    return out
+
+
+# Respaldo literal SOLO para ejecutar metadata.py como script
+# suelto (sin paquete: no se puede importar clipagent.config).
+# En cualquier importación normal manda config.yaml vía
+# DEFAULT_CONFIG; este respaldo no es fuente de nada.
+_TITLES_FALLBACK = {
+    "cliches_es": ["risa imparable", "no puede parar de reírse",
+                   "no paraba de reírse", "se murió de risa",
+                   "hype máximo", "hype desatado",
+                   "el chat explotó", "el chat enloqueció",
+                   "el chat no paraba", "no lo podía creer",
+                   "nadie se lo creía", "momento que el chat clippeó",
+                   "mira por qué reaccionó el chat",
+                   "hizo reír al chat", "la risa de X con el chat"],
+    "cliches_en": ["couldn't stop laughing", "chat went crazy",
+                   "chat exploded", "chat lost it",
+                   "nobody could believe it", "the moment chat clipped",
+                   "watch what chat reacted to", "broke chat",
+                   "insane", "unreal", "crazy", "craziest"],
+    "generic_words": ["chat", "directo", "stream", "clip",
+                      "vídeo", "momento"],
+    "superlatives_es": ["mejor", "peor", "loco", "locura", "insano",
+                        "increíble", "increible", "épico", "epico",
+                        "brutal", "imposible", "roto", "rompió",
+                        "nadie", "nunca", "todos", "siempre",
+                        "imparable", "máximo", "desatado", "total"],
+    "superlatives_en": ["best", "worst", "craziest", "insane",
+                        "epic", "broke", "nobody", "everyone", "ever",
+                        "unstoppable", "maximum", "unreal", "crazy"],
+    "noun_evidence": {
+        "jugada": ["jugada", "jugar", "jugo", "jugó"],
+        "tiro": ["tiro", "dispar", "erra", "patea"],
+        "disparo": ["dispar", "tiro"],
+        "penal": ["penal", "penalti"],
+        "gol": ["gol"],
+        "partido": ["partido"],
+        "muerte": ["muere", "murio", "mata", "mato"],
+        "robo": ["robo", "roba", "robo"],
+        "coche": ["coche", "auto", "carro"],
+        "clutch": ["clutch"],
+        "risa": ["risa", "jaja", "kekw", "lol"],
+        "reacción": ["reaccion", "no"],
+        "reaccion": ["reaccion", "no"],
+        "play": ["play", "jugada", "clutch"],
+        "shot": ["shot", "tiro", "dispar"],
+        "goal": ["gol", "goal"],
+    },
+    "laughter_tokens": ["jaja", "jeje", "jajaja", "jejeje",
+                        "lol", "kekw", "lmao"],
+    "dedupe_days": 30,
+    "pattern_window": 10,
+    "title_len": [40, 55],
+    "gemini_retries": 2,
+}
+
+
+def _titles_source():
+    """Dict ``titles:`` efectivo: config.yaml si el paquete se
+    importó, respaldo literal si se ejecuta como script suelto."""
+    if _DEFAULT_CONFIG is not None:
+        return dict(_DEFAULT_CONFIG.get("titles") or _TITLES_FALLBACK)
+    return dict(_TITLES_FALLBACK)
+
+
+# Config efectiva de títulos (fuente única: config.yaml).
+# apply_titles_config() la reemplaza desde un cfg cargado.
+TITLES_CFG = _titles_source()
+
+# Listas de clichés prohibidos (R2.1, texto exacto de la spec).
+CLICHES_ES = list(TITLES_CFG["cliches_es"])
+CLICHES_EN = list(TITLES_CFG["cliches_en"])
+# Superlativos/absolutos y la evidencia mínima que los respalda.
+SUPERLATIVES = _build_superlatives(
+    TITLES_CFG["superlatives_es"], _SUPERLATIVE_CONDITIONS)
+SUPERLATIVES_EN = _build_superlatives(
+    TITLES_CFG["superlatives_en"], _SUPERLATIVE_CONDITIONS_EN)
 # Sustantivo prometido -> tokens que deben aparecer en la evidencia
 # (transcripción + chat + what de la ficha). Si el título promete un
 # "penal" y nadie dijo "penal", el título miente.
-NOUN_EVIDENCE = {
-    "jugada": ["jugada", "jugar", "jugo", "jugó"],
-    "tiro": ["tiro", "dispar", "erra", "patea"],
-    "disparo": ["dispar", "tiro"],
-    "penal": ["penal", "penalti"],
-    "gol": ["gol"],
-    "partido": ["partido"],
-    "muerte": ["muere", "murio", "mata", "mato"],
-    "robo": ["robo", "roba", "robo"],
-    "coche": ["coche", "auto", "carro"],
-    "clutch": ["clutch"],
-    "risa": ["risa", "jaja", "kekw", "lol"],
-    "reacción": ["reaccion", "no"],
-    "reaccion": ["reaccion", "no"],
-    "play": ["play", "jugada", "clutch"],
-    "shot": ["shot", "tiro", "dispar"],
-    "goal": ["gol", "goal"],
-}
+NOUN_EVIDENCE = {k: list(v)
+                 for k, v in TITLES_CFG["noun_evidence"].items()}
 # Palabras que un título puede usar sin evidencia: son el medio, no la promesa.
-GENERIC_WORDS = set(
-    "chat directo stream streamer clip video momento segundos mensajes "
-    "risa risas hype reacción reaccion explotó exploto perdió perdona "
-    "nadie esperaba".split()
-)
+# R2.3: solo palabras de medio; "risa/risas/hype/explotó/reacción"
+# YA NO están exentas del check de evidencia.
+GENERIC_WORDS = set(TITLES_CFG["generic_words"])
+# Tokens de risa hablada del streamer (evidencia §3.3).
+LAUGHTER_TOKENS = list(TITLES_CFG["laughter_tokens"])
+# Ventanas y reintentos (R4.1/R4.2/R2.2).
+DEDUPE_DAYS = int(TITLES_CFG["dedupe_days"])
+PATTERN_WINDOW = int(TITLES_CFG["pattern_window"])
+TITLE_LEN = [int(TITLES_CFG["title_len"][0]),
+             int(TITLES_CFG["title_len"][1])]
+GEMINI_RETRIES = int(TITLES_CFG["gemini_retries"])
+
+
+def get_titles_config():
+    """Dict ``titles:`` efectivo (copia)."""
+    return {
+        "cliches_es": list(CLICHES_ES),
+        "cliches_en": list(CLICHES_EN),
+        "generic_words": sorted(GENERIC_WORDS),
+        "superlatives_es": list(SUPERLATIVES),
+        "superlatives_en": list(SUPERLATIVES_EN),
+        "noun_evidence": {k: list(v)
+                          for k, v in NOUN_EVIDENCE.items()},
+        "laughter_tokens": list(LAUGHTER_TOKENS),
+        "dedupe_days": DEDUPE_DAYS,
+        "pattern_window": PATTERN_WINDOW,
+        "title_len": list(TITLE_LEN),
+        "gemini_retries": GEMINI_RETRIES,
+    }
+
+
+def apply_titles_config(cfg):
+    """Rebindea las listas del check desde un cfg cargado
+    (``load_config()`` o dict mínimo en tests). Valida con
+    ``load_titles_config``: falta un valor requerido -> ConfigError
+    ruidoso, nunca default silencioso. Devuelve el dict resuelto.
+    Es como los tests prueban que las listas se alimentan desde
+    la config (M12)."""
+    global TITLES_CFG, CLICHES_ES, CLICHES_EN, SUPERLATIVES
+    global SUPERLATIVES_EN, NOUN_EVIDENCE, GENERIC_WORDS
+    global LAUGHTER_TOKENS, DEDUPE_DAYS, PATTERN_WINDOW
+    global TITLE_LEN, GEMINI_RETRIES
+    if _load_titles_config is None:
+        raise ImportError(
+            "apply_titles_config necesita el paquete clipagent "
+            "(sin import de clipagent.config no hay config que aplicar)")
+    resolved = _load_titles_config(cfg)
+    TITLES_CFG = resolved
+    CLICHES_ES = list(resolved["cliches_es"])
+    CLICHES_EN = list(resolved["cliches_en"])
+    SUPERLATIVES = _build_superlatives(
+        resolved["superlatives_es"], _SUPERLATIVE_CONDITIONS)
+    SUPERLATIVES_EN = _build_superlatives(
+        resolved["superlatives_en"], _SUPERLATIVE_CONDITIONS_EN)
+    NOUN_EVIDENCE = {k: list(v)
+                     for k, v in resolved["noun_evidence"].items()}
+    GENERIC_WORDS = set(resolved["generic_words"])
+    LAUGHTER_TOKENS = list(resolved["laughter_tokens"])
+    DEDUPE_DAYS = int(resolved["dedupe_days"])
+    PATTERN_WINDOW = int(resolved["pattern_window"])
+    TITLE_LEN = [int(resolved["title_len"][0]),
+                 int(resolved["title_len"][1])]
+    GEMINI_RETRIES = int(resolved["gemini_retries"])
+    return dict(resolved)
 
 # ``what`` de la ficha viene en español (verbo+objeto); para los títulos
 # EN se usa esta equivalencia fija, sin traducir con LLM. Si la acción
@@ -344,6 +539,71 @@ def _norm_title(title: str) -> str:
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = re.sub(r"[^\w ]", " ", text.lower())
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _pattern_pack_id(pack):
+    """ID de trazabilidad de un pack: v{version}:{generated_at}:{lang}."""
+    if not isinstance(pack, dict):
+        return None
+    version = pack.get("version")
+    generated_at = pack.get("generated_at")
+    lang = pack.get("lang")
+    if version is None or not generated_at or not lang:
+        return None
+    return f"v{version}:{generated_at}:{lang}"
+
+
+def _pattern_pack_from_reel_patterns(reel_patterns, lang):
+    """Pack vigente desde reel_patterns (spec v3 §3.2), o None.
+
+    - Si ya es un pack (lo construyó load/build_pattern_pack):
+      vale si su idioma coincide con el idioma efectivo del
+      paquete ("both" construye el paquete ES: vale el pack ES;
+      el paquete EN lo construye otra llamada con lang="en").
+    - Si es un informe crudo (camino batch): se construye el pack
+      en el momento; None si no califica (muestra < 5 u obsoleto).
+    - El enrich post-hoc sigue recibiendo reel_patterns tal cual.
+    """
+    if not isinstance(reel_patterns, dict):
+        return None
+    eff = lang if lang in ("es", "en") else "es"
+    if "top_hook_types" in reel_patterns and "version" in reel_patterns:
+        pack_lang = reel_patterns.get("lang")
+        if pack_lang and pack_lang != eff:
+            return None
+        return reel_patterns
+    if "patterns" in reel_patterns or "reels" in reel_patterns:
+        try:
+            from reel_study import build_pattern_pack
+        except Exception:
+            return None
+        try:
+            return build_pattern_pack(reel_patterns, lang=eff)
+        except Exception:
+            return None
+    return None
+
+
+def _title_copies_hook(title, hook_texts):
+    """True si el título copia (o casi) una hook_text del informe.
+
+    Guardia anti-copia (spec v3 §3.3): comparación normalizada
+    (sin tildes/puntuación) con difflib; ratio >= 0,8 o
+    coincidencia exacta. Ciega entre idiomas (limitación conocida).
+    """
+    norm_title = _norm_title(title)
+    if not norm_title:
+        return False
+    for hook in hook_texts or []:
+        norm_hook = _norm_title(hook)
+        if not norm_hook:
+            continue
+        if norm_title == norm_hook:
+            return True
+        if difflib.SequenceMatcher(None, norm_title,
+                                   norm_hook).ratio() >= 0.8:
+            return True
+    return False
 
 
 def _today_iso():
@@ -370,14 +630,298 @@ def save_seen(seen, seen_path=None):
     return path
 
 
-def is_duplicate_title(title, vod_id=None, date=None, seen=None, seen_path=None):
-    """True si el título ya se usó en el mismo VOD o el mismo día."""
+def _recent_title_entries(recent_titles):
+    """Normaliza una lista de títulos recientes a
+    [{title, language, created_at, description, thumb_text}].
+    Acepta dicts con esas claves o strings simples (sin idioma ni
+    fecha: se tratan como recientes, la lista la construye el
+    llamador ya filtrada). ``description`` es la seo_description
+    del clip y ``thumb_text`` su texto de miniatura (R4.4: la
+    variedad también se mide ahí; una entrada sin ellos no cuenta
+    para ese lado)."""
+    out = []
+    for item in recent_titles or []:
+        if isinstance(item, dict):
+            out.append({
+                "title": item.get("title") or "",
+                "language": item.get("language"),
+                "created_at": item.get("created_at"),
+                "description": (item.get("description")
+                                or item.get("seo_description") or ""),
+                "thumb_text": item.get("thumb_text") or "",
+            })
+        else:
+            out.append({"title": str(item or ""),
+                        "language": None, "created_at": None,
+                        "description": "", "thumb_text": ""})
+    return out
+
+
+def _parse_recent_date(value):
+    """Fecha (date) de un created_at ISO (fecha o datetime, con
+    o sin zona). None si no se puede interpretar."""
+    if value is None:
+        return None
+    if isinstance(value, _datetime):
+        dt = value
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo("America/Santiago"))
+        except Exception:
+            pass
+        return dt.date()
+    if isinstance(value, _date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return _datetime.fromisoformat(
+            text.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    try:
+        return _date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def is_duplicate_title(title, vod_id=None, date=None, seen=None,
+                       seen_path=None, recent_titles=None,
+                       dedupe_days=None, language=None):
+    """True si el título ya se usó en la ventana anti-duplicado
+    (R4.1: ``dedupe_days``, 30 días, por tenant+idioma).
+
+    Con ``recent_titles`` (lista de {title, language, created_at}
+    o strings simples, la que devuelve el panel): compara el
+    título normalizado (``_norm_title``) con los de la ventana;
+    una entrada sin fecha cuenta como reciente (la lista ya es
+    de recientes) y una de hace más de ``dedupe_days`` no cuenta.
+    Sin ``recent_titles``, usa el registro local visto (mismo
+    VOD / mismo día) como caché de respaldo — R4.3: ese archivo
+    YA NO es la fuente de dedupe en producción."""
+    norm = _norm_title(title)
+    if not norm:
+        return False
+    if recent_titles is not None:
+        days = DEDUPE_DAYS if dedupe_days is None else int(dedupe_days)
+        today = _date.today()
+        for entry in _recent_title_entries(recent_titles):
+            lang = entry.get("language")
+            if language and lang and \
+                    str(lang).lower() != str(language).lower():
+                continue
+            if _norm_title(str(entry.get("title") or "")) != norm:
+                continue
+            created = _parse_recent_date(entry.get("created_at"))
+            if created is None:
+                return True
+            if 0 <= (today - created).days <= days:
+                return True
+        return False
     seen = seen if seen is not None else load_seen(seen_path)
-    uses = seen.get(_norm_title(title), [])
+    uses = seen.get(norm, [])
     for u in uses:
         if vod_id and u.get("vod_id") == vod_id:
             return True
         if date and u.get("date") == date:
+            return True
+    return False
+
+
+# Palabras de relleno que no forman el esqueleto de un título
+# (artículos, preposiciones, pronombres, "en directo", "con esto").
+_SKELETON_DROP = frozenset(
+    "el la los las un una unos unas de del en con por para a al "
+    "se su sus este esta estos estas eso que y o es son fue hay "
+    "mas muy ya no si mi tu le lo me te nos les cuando como pero "
+    "directo esto eso vivo live the an this that it with in on to "
+    "of for and is was so".split())
+
+
+def _cliche_family(phrase_words):
+    """Familia de una frase cliché (para el esqueleto): la risa,
+    el hype, el chat, la incredulidad o la primera palabra con
+    contenido. Dos títulos de la misma familia colapsan al mismo
+    esqueleto aunque cambien las palabras de relleno."""
+    words = [w for w in phrase_words if w not in _SKELETON_DROP
+             and w != "x"]
+    if not words:
+        return phrase_words[0] if phrase_words else ""
+    if any(w in ("risa", "risas", "reirse", "reir", "laughing",
+                 "laugh", "laughs") for w in words):
+        return "risa"
+    if "hype" in words:
+        return "hype"
+    if "chat" in words:
+        return "chat"
+    if any(w in ("creer", "creia", "creyo", "creyeron", "believe",
+                 "believed") for w in words):
+        return "creer"
+    if any(w in ("momento", "moment") for w in words):
+        return "momento"
+    return words[0]
+
+
+def _collapse_cliches(words):
+    """Colapsa cada frase cliché R2.1 a su familia (frases más
+    largas primero; "x" es comodín de una palabra: "la risa de X
+    con el chat" casa con cualquier nombre de streamer). Devuelve
+    (palabras, colapsó): ``colapsó`` dice si alguna frase casó.
+
+    Dos añadidos para el esqueleto (R4.2), no para el check:
+    - El prefijo hasta la "x" inclusive también colapsa ("la risa
+      de X" -> "risa"), para que "La risa de Rubius" tenga el mismo
+      esqueleto que "La risa de Grefg con el chat".
+    - "chat said it" (plantilla de cita R5, no frase R2.1) colapsa
+      a "chat": todos los "Chat said it: ..." comparten esqueleto.
+    """
+    phrases = []
+    for phrase in list(CLICHES_ES) + list(CLICHES_EN):
+        pw = _norm_title(phrase).split()
+        if pw:
+            phrases.append((pw, _cliche_family(pw)))
+            if "x" in pw:
+                # Prefijo hasta la "x": "la risa de X" -> "risa".
+                cut = pw[:pw.index("x") + 1]
+                phrases.append((cut, _cliche_family(pw)))
+    phrases.append((["chat", "said", "it"], "chat"))
+    phrases.sort(key=lambda p: -len(p[0]))
+    out = list(words)
+    collapsed = False
+    for pw, family in phrases:
+        i = 0
+        while i + len(pw) <= len(out):
+            ok = True
+            for j, p in enumerate(pw):
+                if p == "x":
+                    continue
+                if out[i + j] != p:
+                    ok = False
+                    break
+            if ok:
+                out[i:i + len(pw)] = [family]
+                collapsed = True
+                i += 1
+            else:
+                i += 1
+    return out, collapsed
+
+
+def _streamer_words(streamer):
+    """Palabras del nombre del streamer, más las subpalabras
+    (>=4 car.) para casar "thegrefg" con "grefg" en el título."""
+    words = set(_norm_title(streamer or "").split())
+    extra = set()
+    for w in list(words):
+        if len(w) >= 8:
+            for part in re.split(r"[^a-z0-9]+", w):
+                if len(part) >= 4:
+                    extra.add(part)
+    return words | extra
+
+
+# Familias de cliché (lo que devuelve _cliche_family): si el
+# esqueleto empieza por una de ellas tras colapsar una frase, el
+# título ES ese patrón (el resto — nombre del streamer, contenido
+# de la cita — varía por clip y no distingue el patrón).
+_CLICHE_FAMILIES = frozenset(
+    ("risa", "hype", "chat", "creer", "momento"))
+
+
+def title_skeleton(title, streamer="", game="GTA 6"):
+    """Esqueleto de un título (R4.2): normalizado, sin prefijo de
+    juego, sin nombre del streamer, sin números ni emojis, con las
+    palabras de la lista de clichés colapsadas a su familia y sin
+    palabras de relleno. Dos títulos del mismo patrón tienen el
+    mismo esqueleto (p. ej. todos los "hype máximo" -> "hype";
+    todos los "la risa de X" -> "risa"; todos los "Chat said it:
+    ..." -> "chat"). Si el esqueleto empieza por una familia de
+    cliché, el título es ese patrón y el resto se descarta (el
+    nombre del streamer y el contenido de la cita varían por clip).
+    Un título con momento concreto ("La misión de Brian: saltar
+    el banco" -> "mision brian saltar banco") no empieza por
+    familia y conserva todas sus palabras."""
+    words = _norm_title(title or "").split()
+    game_words = set(_norm_title(game or "").split())
+    stream_words = _streamer_words(streamer)
+    words = [w for w in words
+             if w not in game_words and w not in stream_words]
+    words, collapsed = _collapse_cliches(words)
+    words = [w for w in words
+             if not w.isdigit() and w not in _SKELETON_DROP]
+    if collapsed and words and words[0] in _CLICHE_FAMILIES:
+        return words[0]
+    return " ".join(words)
+
+
+def is_pattern_repeat(title, recent_titles, streamer="", game="GTA 6",
+                      window=10):
+    """True si el esqueleto del título coincide con el de alguno
+    de los últimos ``window`` títulos (R4.2, 10 por defecto) del
+    mismo tenant+idioma. ``recent_titles`` es la lista del panel
+    (la más reciente primero, como la devuelve el Worker) con
+    dicts {title, language, created_at} o strings simples. Un
+    esqueleto vacío no es patrón (fail-open). Compat: el tercer
+    argumento posicional puede ser la ventana (llamada
+    ``is_pattern_repeat(title, recent, 10)``)."""
+    if isinstance(streamer, int):
+        window = streamer
+        streamer = ""
+    if isinstance(game, int):
+        window = game
+        game = "GTA 6"
+    skel = title_skeleton(title, streamer=streamer, game=game)
+    if not skel:
+        return False
+    try:
+        n = max(0, int(window))
+    except (TypeError, ValueError):
+        n = PATTERN_WINDOW
+    for entry in _recent_title_entries(recent_titles)[:n]:
+        other = entry.get("title") or ""
+        if title_skeleton(other, streamer=streamer,
+                          game=game) == skel:
+            return True
+    return False
+
+
+def is_package_repeat(description, thumb_text, recent_titles,
+                      streamer="", game="GTA 6", window=10):
+    """True si el esqueleto de las 2 primeras líneas de la
+    descripción o el del texto de miniatura coincide con el de
+    alguno de los últimos ``window`` paquetes (R4.4, spec
+    títulos-verdad). Mismo esqueleto (``title_skeleton``) y misma
+    ventana (10) que R4.2, pero sobre descripción+miniatura: una
+    descripción que repite la plantilla (el cierre fijo
+    «¿Te lo esperabas? Suscríbete...») o una miniatura que repite
+    el mismo grito tienen el mismo esqueleto que la anterior.
+    ``recent_titles`` es la lista del panel (la más reciente
+    primero) con dicts {title, language, created_at, description,
+    thumb_text} o strings simples. Un esqueleto vacío no es patrón
+    (fail-open); una entrada sin descripción/miniatura no cuenta
+    para ese lado."""
+    desc_lines = "\n".join((description or "").splitlines()[:2])
+    desc_skel = title_skeleton(desc_lines, streamer=streamer,
+                               game=game)
+    thumb_skel = title_skeleton(thumb_text or "", streamer=streamer,
+                                game=game)
+    if not desc_skel and not thumb_skel:
+        return False
+    try:
+        n = max(0, int(window))
+    except (TypeError, ValueError):
+        n = PATTERN_WINDOW
+    for entry in _recent_title_entries(recent_titles)[:n]:
+        other_desc = "\n".join(
+            (entry.get("description") or "").splitlines()[:2])
+        if desc_skel and title_skeleton(
+                other_desc, streamer=streamer, game=game) == desc_skel:
+            return True
+        other_thumb = entry.get("thumb_text") or ""
+        if thumb_skel and title_skeleton(
+                other_thumb, streamer=streamer,
+                game=game) == thumb_skel:
             return True
     return False
 
@@ -415,6 +959,145 @@ def _evidence_text(card):
     if (card.get("quote_streamer") or {}).get("text"):
         parts.append(card["quote_streamer"]["text"])
     return " " + " ".join(parts) + " "
+
+
+# ---------------------------------------------------------------------------
+# Títulos verdad (spec 2026-11-25) — clichés, cita literal, evidencia
+# ---------------------------------------------------------------------------
+
+# Tokens de incredulidad hablada por el streamer (evidencia §3.3
+# para las frases de "no lo podía creer" / "nobody could believe").
+_DISBELIEF_TOKENS = (
+    "no me lo puedo creer", "no lo puedo creer",
+    "no puedo creer", "no me lo creo", "no me lo creia",
+    "increible", "can't believe", "cannot believe",
+    "unbelievable",
+)
+
+
+def _has_streamer_attribution(title, card):
+    """True si el título atribuye al streamer (presentación §3.7):
+    nombre del streamer + ":" o la afirmación entre comillas.
+    El nombre casa también por subpalabra ("grefg" en "thegrefg")."""
+    raw = title or ""
+    streamer = (card or {}).get("streamer") or ""
+    if streamer and str(streamer).lower() != "desconocido":
+        norm_streamer = _norm_title(str(streamer))
+        for tw in _norm_title(raw).split():
+            if len(tw) >= 4 and tw in norm_streamer:
+                if re.search(rf"\b{re.escape(tw)}\s*:",
+                             raw, re.IGNORECASE):
+                    return True
+        if re.search(rf"{re.escape(str(streamer))}\s*:",
+                     raw, re.IGNORECASE):
+            return True
+    if re.search(r'["\'][^"\']+["\']', raw):
+        return True
+    return False
+
+
+def _is_literal_quote(title, anchor_word, card):
+    """True si un tramo contiguo de >=3 palabras consecutivas del
+    título que incluye ``anchor_word`` aparece literal en la
+    transcripción (I3, §3.7). Una coincidencia de la palabra
+    suelta NO basta: cualquier transcripción que mencione la
+    palabra una vez licenciaría cualquier título con ella."""
+    transcript = _norm_title((card or {}).get("transcript_text") or "")
+    if not transcript:
+        return False
+    twords = _norm_title(title or "").split()
+    anchor = _norm_title(anchor_word or "")
+    if anchor not in twords:
+        return False
+    tr_joined = " " + transcript + " "
+    for i, w in enumerate(twords):
+        if w != anchor:
+            continue
+        for start in range(max(0, i - 2), i + 1):
+            for end in range(start + 3,
+                             min(len(twords), start + 6) + 1):
+                if i < start or i >= end:
+                    continue
+                span = " ".join(twords[start:end])
+                if f" {span} " in tr_joined:
+                    return True
+    return False
+
+
+def _find_cliches(title):
+    """[(frase, palabras)] de la lista R2.1 presentes en el título
+    (normalizado; "x" es comodín de una palabra)."""
+    words = _norm_title(title or "").split()
+    found = []
+    phrases = []
+    for phrase in list(CLICHES_ES) + list(CLICHES_EN):
+        pw = _norm_title(phrase).split()
+        if pw:
+            phrases.append((phrase, pw))
+    phrases.sort(key=lambda p: -len(p[1]))
+    for phrase, pw in phrases:
+        for i in range(0, len(words) - len(pw) + 1):
+            ok = True
+            for j, p in enumerate(pw):
+                if p == "x":
+                    continue
+                if words[i + j] != p:
+                    ok = False
+                    break
+            if ok:
+                found.append((phrase, pw))
+                break
+    return found
+
+
+def _cliche_evidence_kind(phrase_words):
+    """Qué evidencia licencia un cliché (§3.3): risa del streamer
+    (transcripción), reacción del chat (mensajes del pico),
+    incredulidad del streamer (transcripción) o solo cita literal
+    (palabra suelta de reacción EN: insane/unreal/crazy/craziest)."""
+    words = [w for w in phrase_words if w != "x"]
+    if len(words) == 1 and words[0] in (
+            "insane", "unreal", "crazy", "craziest"):
+        return "quote_only"
+    if any(w in ("risa", "risas", "reirse", "reir", "laughing",
+                 "laugh", "laughs") for w in words):
+        return "streamer_laughter"
+    if any(w in ("creer", "creia", "creyo", "creyeron", "believe",
+                 "believed") for w in words):
+        return "belief"
+    return "chat"
+
+
+def _transcript_has_laughter(card):
+    """Risa hablada por el streamer en la transcripción (§3.3):
+    un token de risa al inicio de palabra (casa "jaja" con
+    "jajaja"). La risa del CHAT nunca es evidencia de que el
+    streamer se ría."""
+    text = _norm_title((card or {}).get("transcript_text") or "")
+    return any(re.search(rf"\b{re.escape(tok)}", text)
+               for tok in LAUGHTER_TOKENS)
+
+
+def _transcript_has_disbelief(card):
+    """El streamer dice que no se lo cree, en la transcripción."""
+    text = " " + _norm_title((card or {}).get("transcript_text") or "") + " "
+    return any(f" {tok} " in text for tok in _DISBELIEF_TOKENS)
+
+
+def _chat_reaction_evidence(card):
+    """Evidencia de reacción del CHAT (§3.3): conteos altos del
+    pico o tokens de risa en los mensajes del chat."""
+    if (card.get("risas") or 0) >= 10 or (card.get("hype") or 0) >= 10:
+        return True
+    if (card.get("chat_msgs_peak_10s") or 0) >= 25:
+        return True
+    chat_text = _norm_title(" ".join(
+        str((m or {}).get("text", ""))
+        for m in (card.get("chat_top") or [])))
+    quote = (card.get("quote_chat") or {}).get("text") or ""
+    chat_text += " " + _norm_title(quote)
+    return any(re.search(rf"\b{re.escape(tok)}", chat_text)
+               for tok in LAUGHTER_TOKENS)
 
 
 def _check_title_lint(title):
@@ -459,6 +1142,12 @@ def check_title_detail(title, moment_card):
         else:
             reasons.append(f"lint: {issue}")
 
+    # 1b. Cita vacía (R5.1, clip 191): un título cuya cita
+    # entrecomillada está vacía es inválido.
+    if re.search(r'["\']\s*["\']', title):
+        reasons.append("cita vacía entre comillas (el título cita "
+                       '"" sin contenido)')
+
     # 2. Juego veraz: cualquier juego nombrado debe ser el juego real.
     found_games = [alias for alias in KNOWN_GAMES if alias in low]
     # "gta" a secas sin número: solo vale si el juego real es algún GTA.
@@ -475,11 +1164,36 @@ def check_title_detail(title, moment_card):
     # Un título sin juego nombrado nunca falla por juego; si el juego es
     # desconocido y el título nombra uno, ya falló arriba.
 
+    # 2b. Clichés prohibidos (R2.1): un cliché solo se permite
+    # con evidencia según §3.3 (transcripción para el streamer,
+    # chat para el chat) o dentro de una cita literal del streamer
+    # (I3, §3.7). La lista manda sobre la tabla de superlativos
+    # (M3): la evidencia de chat de la tabla NO licencia un cliché.
+    for phrase, pw in _find_cliches(title):
+        anchor = next((w for w in pw
+                       if w not in _SKELETON_DROP and w != "x"),
+                      pw[0])
+        if _is_literal_quote(title, anchor, card) and \
+                _has_streamer_attribution(title, card):
+            continue
+        kind = _cliche_evidence_kind(pw)
+        if kind == "streamer_laughter" and \
+                _transcript_has_laughter(card):
+            continue
+        if kind == "chat" and _chat_reaction_evidence(card):
+            continue
+        if kind == "belief" and _transcript_has_disbelief(card):
+            continue
+        reasons.append(f"cliché '{phrase}' sin evidencia "
+                       f"(hace falta {kind} según §3.3; la lista "
+                       "R2.1 manda sobre la tabla de superlativos)")
+
     # 3. Sustantivo prometido: debe aparecer en transcripción/chat/ficha.
     evidence = _norm_title(_evidence_text(card))
     evidence_tokens = set(card.get("evidence_tokens") or [])
     for noun, tokens in NOUN_EVIDENCE.items():
-        if re.search(r"\b" + re.escape(noun) + r"\b", low):
+        norm_noun = _norm_title(noun)
+        if re.search(r"\b" + re.escape(norm_noun) + r"\b", low):
             if noun in GENERIC_WORDS:
                 continue
             hit = any(t in evidence or t in evidence_tokens for t in tokens)
@@ -499,7 +1213,7 @@ def check_title_detail(title, moment_card):
         # concretos). Nombrar el juego real NO se bloquea aquí: el juego
         # viene del metadato del VOD, no de la evidencia del clip.
         specific = [n for n in NOUN_EVIDENCE
-                    if re.search(r"\b" + re.escape(n) + r"\b", low) and n not in GENERIC_WORDS]
+                    if re.search(r"\b" + re.escape(_norm_title(n)) + r"\b", low) and n not in GENERIC_WORDS]
         if specific:
             reasons.append("evidencia baja: la ficha no sabe qué pasa, "
                            f"no se puede prometer {specific}")
@@ -511,7 +1225,15 @@ def check_title_detail(title, moment_card):
     else:
         sup.update(SUPERLATIVES_EN)  # los títulos EN se chequean igual
     for word, (need, ok_fn) in sup.items():
-        if re.search(r"\b" + re.escape(word) + r"\b", low):
+        norm_word = _norm_title(word)
+        if re.search(r"\b" + re.escape(norm_word) + r"\b", low):
+            # I3 (§3.7): superlativo dentro de una cita literal del
+            # streamer en la transcripción + atribución: la cita
+            # misma es la evidencia, no se evalúa contra la tabla.
+            # La palabra suelta en la transcripción NO basta.
+            if _is_literal_quote(title, word, card) and \
+                    _has_streamer_attribution(title, card):
+                continue
             try:
                 supported = bool(ok_fn(card))
             except Exception:
@@ -598,14 +1320,26 @@ def _fit_what(what, prefix_len, target_min=40, target_max=55):
 
 
 def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
-                    vod_id=None, date=None, visible=None):
+                    vod_id=None, date=None, visible=None,
+                    recent_titles=None):
     """10 títulos por clip desde la ficha (no 2 plantillas fijas).
 
     Solo devuelve títulos que pasan ``check_title`` y el lint, y que
-    no están repetidos en el mismo VOD ni el mismo día. Si pasan
+    no están repetidos en la ventana de dedupe (``recent_titles``,
+    30 días; sin ella, el registro local visto). Si pasan
     menos de ``n``, devuelve los que pasan y el llamador lo ve en
     ``len(titles)``: mejor pocos títulos reales que 10 inventados.
     Cada título lleva su check: {"title", "issues", "check_ok", "check_reason"}.
+
+    Títulos verdad (spec 2026-11-25): NO hay candidatos de reacción
+    genéricos ("El chat no paraba de reírse", "El chat explotó con
+    esto", "Chat went crazy for this", "No lo podía creer", "El
+    momento que el chat clippeó", ...). El candidato de reacción
+    solo existe si hay evidencia de reacción en la ficha (risas/
+    mensajes del pico) y nombra el momento (``what``/cita), no la
+    reacción en abstracto. La cita del chat se comprueba DESPUÉS
+    de ``_title_quote`` (R5.2): si el recorte la deja vacía, el
+    candidato NO se añade (R5.1).
 
     ``visible`` (arreglo 3): "cams-only" degrada a títulos de
     reacción — sin prefijo de juego y sin sustantivos de gameplay
@@ -644,61 +1378,49 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
     candidates = []
     what_en = WHAT_EN.get(card.get("what_key")) if lang == "en" else None
     if lang == "en":
-        if quote_chat:
-            candidates.append(f"{game_prefix}Chat said it: \"{_title_quote(quote_chat, 30)}\"")
+        # Cita del chat: se comprueba DESPUÉS de _title_quote (R5.2).
+        quoted_chat = _title_quote(quote_chat, 30) if quote_chat else ""
+        if quoted_chat:
+            candidates.append(f"{game_prefix}Chat said it: \"{quoted_chat}\"")
         if what_en:
-            candidates.append(f"{game_prefix}{_cap_first(what_en)} and chat lost it")
-            candidates.append(f"Nobody expected {what_en}")
             fitted = _fit_what(what_en, len(game_prefix))
             if fitted:
                 candidates.append(f"{game_prefix}{_cap_first(fitted)}")
-        if reaction == "risas":
-            candidates.append(f"{game_prefix}Chat couldn't stop laughing")
-            candidates.append(f"{risas} laughs in 10 seconds" if risas >= 5 else f"{game_prefix}Everyone laughed at this")
-        if reaction == "hype":
-            candidates.append(f"{game_prefix}Chat went crazy for this")
-        if reaction == "volumen":
-            candidates.append(f"{msgs} messages in 10 seconds over this")
-            candidates.append(f"{game_prefix}Chat exploded over this")
+        # Candidato de reacción: solo con evidencia de reacción en
+        # la ficha y nombrando el momento (what), nunca la reacción
+        # en abstracto ni plantillas de cliché (R2.1/R2.2).
+        if what_en and reaction == "risas" and risas >= 5:
+            candidates.append(f"{game_prefix}{_cap_first(what_en)} — {risas} laughs in 10 seconds")
+        if what_en and reaction in ("hype", "volumen") and msgs >= 10:
+            candidates.append(f"{game_prefix}{_cap_first(what_en)} ({msgs} messages in 10 seconds)")
         if multiple and multiple >= 5:
             candidates.append(f"{multiple}x the median: {game_label}")
         if quote_streamer:
-            candidates.append(f"{streamer + ': ' if streamer else ''}\"{_title_quote(quote_streamer, 30)}\"")
-        if what_en:
-            candidates.append(f"{_cap_first(what_en)} — watch chat react")
-        candidates.append(f"{game_prefix}The moment chat clipped")
-        candidates.append(f"{game_prefix}Watch what chat reacted to")
-        candidates.append(f"{streamer + ' broke chat' if streamer else 'This broke chat'}" if reaction in ("risas", "hype") else f"{game_prefix}Chat reacted to this")
+            quoted_streamer = _title_quote(quote_streamer, 30)
+            if quoted_streamer:
+                candidates.append(f"{streamer + ': ' if streamer else ''}\"{quoted_streamer}\"")
     else:
-        if quote_chat:
-            candidates.append(f"{game_prefix}El chat: \"{_title_quote(quote_chat, 28)}\"")
+        # Cita del chat: se comprueba DESPUÉS de _title_quote (R5.2).
+        quoted_chat = _title_quote(quote_chat, 28) if quote_chat else ""
+        if quoted_chat:
+            candidates.append(f"{game_prefix}El chat: \"{quoted_chat}\"")
         if what:
-            candidates.append(f"{game_prefix}{_cap_first(what)} y el chat explotó")
-            candidates.append(f"{_cap_first(what)} que nadie se creyó")
-            # 7.5: título de largo ideal (40-55 car.) con el `what`
-            # ajustado por palabras; si no cabe, no se agrega.
             fitted = _fit_what(what, len(game_prefix))
             if fitted:
                 candidates.append(f"{game_prefix}{_cap_first(fitted)}")
-        if reaction == "risas":
-            candidates.append(f"{game_prefix}El chat no paraba de reírse")
-            candidates.append(f"{risas} risas en 10 segundos" if risas >= 5 else f"{game_prefix}Se murieron de risa")
-            candidates.append("El chat se murió de risa con esto")
-        if reaction == "hype":
-            candidates.append(f"{game_prefix}El chat enloqueció con esto")
-        if reaction == "volumen":
-            candidates.append(f"{msgs} mensajes en 10 segundos por esto")
-            candidates.append(f"{game_prefix}El chat explotó con esto")
+        # Candidato de reacción: solo con evidencia de reacción en
+        # la ficha y nombrando el momento (what), nunca la reacción
+        # en abstracto ni plantillas de cliché (R2.1/R2.2).
+        if what and reaction == "risas" and risas >= 5:
+            candidates.append(f"{game_prefix}{_cap_first(what)} — {risas} risas en 10 segundos")
+        if what and reaction in ("hype", "volumen") and msgs >= 10:
+            candidates.append(f"{game_prefix}{_cap_first(what)} ({msgs} mensajes en 10 segundos)")
         if multiple and multiple >= 5:
             candidates.append(f"{multiple}x la mediana: {game_label}")
         if quote_streamer:
-            candidates.append(f"{streamer + ': ' if streamer else ''}\"{_title_quote(quote_streamer, 30)}\"")
-        if what:
-            candidates.append(f"{_cap_first(what)}: mira la reacción")
-        candidates.append(f"{game_prefix}El momento que el chat clippeó")
-        candidates.append(f"{game_prefix}Mira por qué reaccionó el chat")
-        if reaction in ("risas", "hype"):
-            candidates.append(f"{streamer + ' hizo reír al chat' if streamer else 'Esto hizo reír al chat'}")
+            quoted_streamer = _title_quote(quote_streamer, 30)
+            if quoted_streamer:
+                candidates.append(f"{streamer + ': ' if streamer else ''}\"{quoted_streamer}\"")
 
     # Con evidencia baja no se promete nada concreto: solo reacción/volumen.
     if evidence_low:
@@ -716,13 +1438,16 @@ def generate_titles(moment_card, lang="es", n=10, seen=None, seen_path=None,
                       and not _title_has_gameplay_word(t)]
 
     out, seen_norm = [], set()
+    dedupe_lang = lang if lang in ("es", "en") else None
     for t in candidates:
         if len(out) >= n:
             break
         norm = _norm_title(t)
         if not t or norm in seen_norm or len(t) > 60:
             continue
-        if is_duplicate_title(t, vod_id=vod, date=day, seen=seen):
+        if is_duplicate_title(t, vod_id=vod, date=day, seen=seen,
+                              recent_titles=recent_titles,
+                              language=dedupe_lang):
             continue
         ok, reason = check_title(t, card)
         if not ok:
@@ -890,39 +1615,15 @@ def visible_from_chapter(chapter_game):
 
 
 def degrade_title_to_reaction(moment_card, lang="es"):
-    """Título de reacción para un clip solo cams (arreglo 3).
+    """Retención (spec títulos-verdad, R3.2 + enmienda 2026-11-26):
+    si no hay título Gemini válido, el clip queda retenido para
+    revisión — NUNCA plantilla de reacción ni título de reglas.
 
-    Primero intenta ``generate_titles(..., visible="cams-only")``
-    (títulos reales de la ficha, sin juego ni gameplay); si no sale
-    ninguno, cae a una plantilla de reacción según la reacción
-    dominante — nunca a un título con juego. Devuelve str o None
-    (None solo si ni la ficha ni la reacción dan nada).
-    """
-    card = moment_card or {}
-    try:
-        titles = generate_titles(card, lang=lang, n=10,
-                                 visible=VISIBLE_CAMS_ONLY)
-        if titles:
-            # La degradación prefiere un título de reacción plano
-            # ("El chat no paraba de reírse") antes que una cita del
-            # chat ('El chat: "W"'): la cita es honesta, pero como
-            # título de rescate dice poco de qué pasó.
-            plain = [t["title"] for t in titles
-                     if not t["title"].startswith('El chat: "')
-                     and not t["title"].startswith('Chat said it: "')]
-            return plain[0] if plain else titles[0]["title"]
-    except Exception:
-        pass
-    reaction = (card or {}).get("dominant_reaction") or ""
-    if lang == "en":
-        return {"risas": "Chat couldn't stop laughing",
-                "hype": "Chat went crazy for this",
-                "volumen": "Chat exploded over this"}.get(
-                    reaction, "Nobody could believe it")
-    return {"risas": "El chat no paraba de reírse",
-            "hype": "El chat enloqueció con esto",
-            "volumen": "El chat explotó con esto"}.get(
-                reaction, "No lo podía creer")
+    Devuelve siempre None como señal de retención; los llamadores
+    (``validate_title_final``: ``degraded_title`` None;
+    ``auto_clips.honest_title``) lo tratan como hold, no como
+    título. Se mantiene la firma por compatibilidad."""
+    return None
 
 
 def validate_title_final(title, moment_card=None, visible=None, layout=None,
@@ -932,13 +1633,13 @@ def validate_title_final(title, moment_card=None, visible=None, layout=None,
     Es el check promesa-payoff (``check_title_detail``) MÁS las
     reglas de lo visible. En cams-only el título no puede nombrar
     ningún juego ni prometer gameplay: si lo hace, el título se
-    rechaza y se devuelve ``degraded_title`` (título de reacción).
-    En gameplay/cams+gameplay/unknown solo aplica el check de
-    siempre.
+    rechaza. NO hay degradación a título de reacción (spec
+    títulos-verdad, R3.2 + enmienda 2026-11-26): si el título no
+    pasa, el clip queda retenido para revisión.
 
     Devuelve {"ok", "reasons", "warnings", "title", "visible",
-    "degraded_title"}: ``degraded_title`` es None si el título pasa
-    o si no hay degradación posible (visible != cams-only).
+    "degraded_title"}: ``degraded_title`` es siempre None
+    (retención, no título de reglas).
     """
     if visible is None and layout is not None:
         visible = visible_from_layout(layout).get("visible")
@@ -976,10 +1677,10 @@ def validate_legacy_title(title, moment_card=None, visible=None, layout=None,
     Para títulos generados fuera de ``generate_titles`` — p. ej. los
     de ``suggest_titles`` en auto_clips.py ("QUÉ JUGADA 😱 GTA 6"),
     que nunca pasaron por el check. Devuelve (ok, motivo,
-    degradado): ``degradado`` es el título de reacción cuando el
-    original miente en un clip solo cams, o None si pasa o no hay
-    degradación. El cableado (usar ``best_title`` o degradar el
-    título de plantilla en el manifiesto) vive en auto_clips.py.
+    degradado): ``degradado`` es siempre None (spec títulos-verdad
+    2026-11-26: no hay degradación a título de reacción; un título
+    que miente se retiene, no se reescribe). El cableado (usar
+    ``best_title`` en el manifiesto) vive en auto_clips.py.
     """
     detail = validate_title_final(title, moment_card, visible=visible,
                                   layout=layout, lang=lang)
@@ -1446,6 +2147,17 @@ def _thumb_content_words(text, extra_drop=()):
     return out
 
 
+def _thumb_sense_ok(text):
+    """Un texto de miniatura tiene sentido si nombra el momento
+    con al menos 2 palabras de contenido (M4: sustantivo, verbo,
+    adjetivo o adverbio que nombra un objeto/acción/persona/
+    cualidad del momento; excluye artículos, preposiciones,
+    pronombres y palabras de medio/chat). "om en el chat" tiene
+    una sola palabra con contenido ("om") y no pasa; "Motor de
+    la moto" tiene dos (motor, moto) y pasa."""
+    return len(_thumb_content_words(text)) >= 2
+
+
 def _moment_thumbnail_text(card, title, streamer=None, game_label=None):
     """Texto de miniatura que nombra el momento concreto (2026-11-18,
     regla endurecida por el usuario): se deriva de las palabras del
@@ -1453,8 +2165,12 @@ def _moment_thumbnail_text(card, title, streamer=None, game_label=None):
     streamer), luego su cita, luego `what` — quitando juego,
     streamer, palabras del título y exclamaciones genéricas. Máx. 3
     palabras (las más frecuentes, en orden de aparición), en
-    MAYÚSCULAS con ¡!. Sin palabras del momento, "" (sin texto
-    inventado: mejor sin miniatura que una genérica).
+    MAYÚSCULAS con ¡!. R6.4: si una fuente produce un fragmento sin
+    sentido (menos de 2 palabras con contenido, o solo palabras de
+    chat sin verbo/objeto — como "om en el chat"), se descarta y se
+    regenera desde la siguiente fuente de la transcripción. Sin
+    palabras del momento con sentido, "" (sin texto inventado: mejor
+    sin miniatura que una genérica).
     """
     drop = set()
     for src in (game_label, streamer):
@@ -1479,7 +2195,9 @@ def _moment_thumbnail_text(card, title, streamer=None, game_label=None):
                 counts[w] = counts.get(w, 0) + 1
         ranked = sorted(words, key=lambda w: (-counts[w], words.index(w)))
         core = ranked[:3]
-        return "¡" + " ".join(w.upper() for w in core) + "!"
+        candidate = "¡" + " ".join(w.upper() for w in core) + "!"
+        if _thumb_sense_ok(candidate):
+            return candidate
     return ""
 
 # Estilo de miniatura GTA 6 / Vice City (2026-11-18). La miniatura
@@ -1501,20 +2219,36 @@ THUMBNAIL_STYLE = {
 
 
 def _prefer_ideal_length(titles):
-    """El mejor título con 40-55 caracteres (7.5), o el primero.
+    """El mejor título con largo ideal (TITLE_LEN de config, 7.5),
+    o el primero.
 
-    El largo ideal da +30 en el componente título (34 car. solo +15):
-    entre los títulos que ya pasaron el check, se prefiere uno de
-    largo ideal; si no hay ninguno, manda el primero.
+    El largo ideal da +30 en el componente título (34 car. solo
+    +15): entre los títulos que ya pasaron el check, se prefiere
+    uno de largo ideal; si no hay ninguno, manda el primero.
+    Ya no lo usa package_clip (el título lo da Gemini), pero se
+    conserva para ordenar la lista de candidatos.
     """
+    lo, hi = TITLE_LEN
     for entry in titles or []:
         title = entry.get("title") if isinstance(entry, dict) else entry
-        if title and 40 <= len(title) <= 55:
+        if title and lo <= len(title) <= hi:
             return title
     if titles:
         first = titles[0]
         return first.get("title") if isinstance(first, dict) else first
     return None
+
+
+def _hook_from_description(desc):
+    """Hook desde la descripción de Gemini (R6.2): su primera
+    línea, máx. MAX_HOOK_LEN car. (lo que mide
+    validate_metadata_lengths). Sin descripción, cadena vacía."""
+    lines = (desc or "").strip().splitlines()
+    text = lines[0].strip() if lines else ""
+    if len(text) <= MAX_HOOK_LEN:
+        return text
+    cut = text[:MAX_HOOK_LEN].rsplit(" ", 1)[0]
+    return cut or text[:MAX_HOOK_LEN]
 
 
 def _best_thumbnail_text(thumb, title):
@@ -1533,6 +2267,10 @@ def _best_thumbnail_text(thumb, title):
         return ""
     words = str(thumb).replace("¡", "").replace("!", "").split()
     if not words:
+        return ""
+    # R6.4: un fragmento sin sentido (<2 palabras con contenido)
+    # se descarta, nunca se publica como texto de miniatura.
+    if not _thumb_sense_ok(thumb):
         return ""
     if len(words) > 4:
         words = words[:4]
@@ -1575,20 +2313,59 @@ _GEMINI_GENERIC_THUMBNAIL_NORM = frozenset({
 })
 
 
-def _gemini_first_package(check_card, visible, lang, llm_client=None):
+def _normalize_gemini_hashtags(hashtags):
+    """Hashtags Gemini -> 5 exactos (R6.3): 4 de contenido
+    generados desde el momento + "#Shorts" quinto fijo. Sin lista
+    fija de relleno: si Gemini trae menos de 4 de contenido,
+    None (el paquete no vale; reintento o retención)."""
+    tags = []
+    for t in hashtags or []:
+        if not isinstance(t, str):
+            continue
+        tag = t.strip()
+        if not tag:
+            continue
+        if not tag.startswith("#"):
+            tag = "#" + tag.lstrip("#")
+        if len(tag) > 1 and tag.lower() != "#shorts" \
+                and tag not in tags:
+            tags.append(tag)
+    if len(tags) < 4:
+        return None
+    return tags[:4] + ["#Shorts"]
+
+
+def _gemini_first_package(check_card, visible, lang, llm_client=None,
+                          recent_titles=None, pattern_pack=None,
+                          guard_state=None, hook_texts=None):
     """Primer paquete SEO con Gemini (título, descripción, hashtags,
     miniatura) desde la ficha. Devuelve el dict validado o None.
 
-    Validación (lo que ya existe): ``validate_title_final``
-    (check_title + lint + reglas de lo visible); el título nombra
-    el juego real cuando se ve gameplay (sin juego en el título el
-    SEO pierde la keyword); descripción con el juego; hashtags con
-    #; miniatura de 1-4 palabras sin repetir el título. El SEO por
+    Validación: ``validate_title_final`` (check_title + lint +
+    reglas de lo visible); el título nombra el juego real cuando
+    se ve gameplay (sin juego en el título el SEO pierde la
+    keyword); descripción con el juego; hashtags 4 de contenido +
+    #Shorts (R6.3); miniatura de 1-4 palabras sin repetir el
+    título y con sentido (R6.4: si la de Gemini no vale, se
+    regenera desde la transcripción; si tampoco hay una con
+    sentido, el paquete no vale). Además (spec títulos-verdad):
+    el título pasa el check de repetidos R4.1 y el de patrón R4.2
+    contra ``recent_titles``, y la regla de cita vacía (R5.1).
+    El dict devuelto lleva ``dedupe_verified`` (False si no se
+    pudo verificar el dedupe porque no llegó lista). El SEO por
     plataforma se mide DESPUÉS, sobre el paquete armado
     (``gemini_seo``): si no llega a 90, el reintento existente lo
     mejora o el clip queda retenido como hoy — aquí no es motivo
-    de fallback. Sin LLM, o si algo falla, None: reglas.
-    Nunca levanta: cualquier excepción es fallback a reglas.
+    de fallback. Sin LLM, o si algo falla, None: retención, nunca
+    reglas. Nunca levanta.
+
+    ``pattern_pack`` (spec v3 §3.2): guía de estilo para el
+    prompt; ``hook_texts`` es el corpus de la guardia cuando no
+    viene del pack. Guardia anti-copia (§3.3): tras
+    validate_title_final, si el título copia una hook_text, UN
+    reintento sin pack; si también se rechaza, None y
+    ``guard_state["anticopy_rejected"] = True`` (para que
+    package_clip no reintente el bucle).
     """
     try:
         from .llm import get_llm_client, make_seo_package
@@ -1598,8 +2375,11 @@ def _gemini_first_package(check_card, visible, lang, llm_client=None):
         client = llm_client if llm_client is not None else get_llm_client()
         if client is None or not client.available():
             return None
-        raw = make_seo_package(client, lang=lang)(check_card,
-                                                  visible=visible)
+        if hook_texts is None:
+            hook_texts = (pattern_pack or {}).get("hook_texts") or []
+        raw = make_seo_package(client, lang=lang,
+                               pattern_pack=pattern_pack)(
+            check_card, visible=visible)
         if not isinstance(raw, dict):
             return None
         title = (raw.get("title") or "").strip()
@@ -1608,19 +2388,42 @@ def _gemini_first_package(check_card, visible, lang, llm_client=None):
         thumb = (raw.get("thumbnail_text") or "").strip()
         if not title or not desc or not hashtags or not thumb:
             return None
+        # R5.1: cita vacía = título inválido (clip 191).
+        if re.search(r'["\']\s*["\']', title):
+            return None
         validation = validate_title_final(title, check_card,
                                           visible=visible, lang=lang)
         if not validation["ok"]:
             return None
+        # R4.1/R4.2: duplicado exacto (30 días) y patrón (10).
+        dedupe_lang = lang if lang in ("es", "en") else None
+        dedupe_verified = recent_titles is not None
+        if recent_titles is not None:
+            if is_duplicate_title(title, recent_titles=recent_titles,
+                                  language=dedupe_lang):
+                return None
+            streamer = (check_card or {}).get("streamer") or ""
+            game_label = (check_card or {}).get("game_label") or \
+                (check_card or {}).get("game") or "GTA 6"
+            if is_pattern_repeat(title, recent_titles,
+                                 streamer=streamer, game=game_label,
+                                 window=PATTERN_WINDOW):
+                return None
+            # R4.4: variedad en descripción (2 primeras líneas) y
+            # miniatura: mismo esqueleto que un paquete reciente
+            # = mismo patrón que el título (reintento o retención).
+            if is_package_repeat(desc, thumb, recent_titles,
+                                 streamer=streamer, game=game_label,
+                                 window=PATTERN_WINDOW):
+                return None
         game = (check_card or {}).get("game")
         if game and visible != VISIBLE_CAMS_ONLY:
             if _norm_title(game) not in _norm_title(title):
                 return None
             if _norm_title(game) not in _norm_title(desc):
                 return None
-        tags = [t for t in hashtags
-                if isinstance(t, str) and t.startswith("#")]
-        if not tags:
+        tags = _normalize_gemini_hashtags(hashtags)
+        if tags is None:
             return None
         if not 1 <= len(thumb.split()) <= 4:
             return None
@@ -1634,8 +2437,39 @@ def _gemini_first_package(check_card, visible, lang, llm_client=None):
                     or _GEMINI_GENERIC_THUMBNAIL_NORM)
         if _norm_title(thumb).upper() in _generic:
             return None
+        # R6.4: miniatura sin sentido -> se regenera desde la
+        # transcripción; si tampoco sale una con sentido, no vale.
+        if not _thumb_sense_ok(thumb):
+            repaired = _moment_thumbnail_text(
+                check_card, title,
+                streamer=(check_card or {}).get("streamer"),
+                game_label=(check_card or {}).get("game_label"))
+            if not repaired or not _thumb_sense_ok(repaired):
+                return None
+            thumb = repaired
+        # Guardia anti-copia (spec v3 §3.3): último filtro, tras
+        # validate_title_final y el resto de validaciones. El
+        # corpus son las hook_text del informe; el prompt nunca
+        # las recibió (solo plantillas genéricas).
+        if _title_copies_hook(title, hook_texts):
+            if pattern_pack is not None:
+                # UN reintento sin pattern_pack (prompt plano); el
+                # corpus de la guardia sigue siendo el mismo.
+                return _gemini_first_package(
+                    check_card, visible, lang, llm_client=llm_client,
+                    recent_titles=recent_titles, pattern_pack=None,
+                    guard_state=guard_state, hook_texts=hook_texts)
+            if guard_state is not None:
+                guard_state["anticopy_rejected"] = True
+            return None
         return {"title": title, "description": desc,
-                "hashtags": tags[:8], "thumbnail_text": thumb}
+                "hashtags": tags, "thumbnail_text": thumb,
+                "dedupe_verified": dedupe_verified,
+                "pattern_pack_id": _pattern_pack_id(pattern_pack),
+                "title_pattern_types": [
+                    t.get("hook_type")
+                    for t in (pattern_pack or {}).get("top_hook_types")
+                    or [] if t.get("hook_type")]}
     except Exception:
         return None
 
@@ -1644,36 +2478,49 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  lang="both", examples=None, moment_card=None, game=None,
                  streamer=None, seen_path=None, vod_id=None, date=None,
                  register=False, visible=None, layout=None,
-                 reel_patterns=None, credit_streamer=True, llm_client=None):
+                 reel_patterns=None, credit_streamer=True, llm_client=None,
+                 recent_titles=None, dedupe_verified=True):
     """Devuelve el paquete viral completo de un clip.
 
-    Con ``moment_card`` (recomendado, Bloque 2): los 10 títulos, el
-    hook, la descripción, los tags y los hashtags salen de la ficha;
-    ``best_title`` es el primer título que pasa el check promesa-payoff
-    y no está repetido en el mismo VOD ni el mismo día. Sin ficha, el
-    juego es desconocido y ningún título nombra un juego: el paquete
-    queda marcado ``needs_human_review`` si ningún título pasa.
-    Con ``register=True`` se anota el ``best_title`` en titles_seen.json.
+    Títulos verdad (spec 2026-11-25 + enmienda 2026-11-26): TODO
+    el relleno del paquete (título, descripción, hashtags, texto
+    de miniatura) lo genera Gemini desde el video (transcripción +
+    momento). Cadena de fallback: Gemini -> retención para
+    revisión. NO hay fallback de reglas: si Gemini no produce un
+    paquete válido y verificado tras ``gemini_retries`` reintentos,
+    ``best_title`` es None y ``needs_human_review`` es True.
+    ``titles`` sigue listando los candidatos de ``generate_titles``
+    (anclados a la ficha, con check) como referencia para la
+    revisión humana, pero ninguno se publica como título.
+
+    ``recent_titles`` es la lista de títulos recientes del panel
+    ([{title, language, created_at}] o strings) para el dedupe
+    R4.1 (30 días) y el patrón R4.2 (10). Si es None, el check de
+    dedupe se salta pero el paquete lleva ``dedupe_verified:
+    False`` (fail-open SOLO en dedupe, nunca en veracidad).
+    ``dedupe_verified`` dice si el llamador verificó el dedupe
+    (la lectura del panel funcionó); el paquete devuelve siempre
+    ``dedupe_verified`` y ``needs_human_review``.
+    Con ``register=True`` se anota el ``best_title`` en
+    titles_seen.json (caché local; R4.3: ya no es la fuente de
+    dedupe en producción).
 
     Arreglo 3: ``visible`` ("gameplay" | "cams+gameplay" |
     "cams-only" | "unknown") o ``layout`` (la decisión de layout.py)
-    dicen qué se ve en el clip. En cams-only los títulos degradan
-    a reacción (sin juego ni gameplay) y ``best_title`` pasa la
-    validación final como red de seguridad: si mintiera, se degrada
-    y queda marcado en ``title_degraded``. ``thumbnail_subject`` es
-    "faces" en cams-only (las caras van en la miniatura).
+    dicen qué se ve en el clip. En cams-only el título no puede
+    nombrar ningún juego ni prometer gameplay; ``best_title`` pasa
+    la validación final como red de seguridad y, si mintiera, el
+    paquete queda retenido (no hay degradación a reacción).
+    ``thumbnail_subject`` es "faces" en cams-only (las caras van
+    en la miniatura).
     Arreglo 4: en cams-only, ``reaction_context`` trae el texto de
     contexto quemado ("reaccionando al tráiler de GTA 3") o None.
     Con ``reel_patterns`` (reel_study.py): el paquete añade la clave
     ``reel_study`` con plantillas y títulos sugeridos desde reels
     virales, todos validados por el check; ``best_title`` NO cambia.
-    Gemini primero (2026-11-18): el primer paquete SEO (título,
-    descripción, hashtags, miniatura) lo escribe Gemini desde la
-    ficha (``_gemini_first_package``); si no está disponible o lo
-    que devuelve no pasa check_title + lint + juego, las reglas de
-    siempre. ``llm_client`` es inyección para tests; sin él se
-    resuelve solo (gemini si hay key, si no reglas). El paquete
-    expone ``pkg_source`` ("gemini" o "rules") y, con Gemini,
+    ``llm_client`` es inyección para tests; sin él se resuelve
+    solo (gemini si hay key, si no retención). El paquete expone
+    ``pkg_source`` ("gemini" o "retained") y, con Gemini,
     ``gemini_package`` + ``gemini_seo`` (SEO medido del paquete).
     """
     examples = examples or []
@@ -1694,7 +2541,9 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     formula = "the-superlative" if is_hype else ("the-statistic" if reaction == "volumen" else "the-reveal")
 
     game_label = game or "desconocido"
-    hashtags, tags = game_hashtags_tags(game)
+    # Tags de búsqueda (15) por juego (R6.3: los hashtags ya no
+    # salen de GAME_HASHTAGS; los trae Gemini o no hay).
+    _, tags = game_hashtags_tags(game)
     tags = (tags + ["clips gaming", "stream clips"])[:15]
 
     # Títulos desde la ficha (10, con check). Sin ficha: ficha mínima
@@ -1726,29 +2575,38 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     visible_reason = (visible_info or {}).get("reason") or (
         f"visible pasado por el llamador: {visible}" if visible else
         "sin dato de lo visible")
-    # Gemini primero (2026-11-18): el primer paquete SEO lo escribe
-    # la IA desde la ficha; si no está disponible o lo que devuelve
-    # no valida, las reglas de siempre (sin romper nada).
+    # Gemini o retención (enmienda 2026-11-26): el paquete lo
+    # escribe la IA desde la ficha (con transcripción); si no está
+    # disponible o lo que devuelve no valida, se reintenta hasta
+    # ``gemini_retries`` veces y luego el clip queda retenido.
     # ``llm_client`` es inyección para tests; sin él se resuelve
-    # solo (gemini si hay key, si no NullLLMClient -> reglas).
+    # solo (gemini si hay key, si no retención).
     gemini_pkg = None
-    try:
-        gemini_pkg = _gemini_first_package(
-            check_card, visible, lang, llm_client=llm_client)
-    except Exception:
-        gemini_pkg = None
-    if gemini_pkg:
-        # Los hashtags de Gemini reemplazan los del juego; los tags
-        # de búsqueda siguen siendo los de las reglas.
-        hashtags = gemini_pkg["hashtags"]
+    pattern_pack = _pattern_pack_from_reel_patterns(reel_patterns, lang)
+    guard_state = {}
+    for _attempt in range(1 + GEMINI_RETRIES):
+        try:
+            gemini_pkg = _gemini_first_package(
+                check_card, visible, lang, llm_client=llm_client,
+                recent_titles=recent_titles, pattern_pack=pattern_pack,
+                guard_state=guard_state)
+        except Exception:
+            gemini_pkg = None
+        if gemini_pkg:
+            break
+        if guard_state.get("anticopy_rejected"):
+            # La guardia agotó su único reintento: retención, sin
+            # volver a generar (spec v3 §3.3).
+            break
+    # Candidatos de reglas (anclados a la ficha, con check): solo
+    # referencia para la revisión humana; ninguno se publica.
     titles = generate_titles(check_card, lang=lang, n=10,
                              seen_path=seen_path, vod_id=vod_id, date=date,
-                             visible=visible)
-    # 7.5: entre los títulos que pasaron el check, se prefiere uno
-    # de largo ideal (40-55 car.): da el máximo en el componente
-    # título del SEO. Sin títulos, best queda None como antes.
+                             visible=visible,
+                             recent_titles=recent_titles)
     # Con Gemini, manda su título (ya validado): se antepone a la
-    # lista de candidatos para que quede trazado.
+    # lista de candidatos para que quede trazado. Sin Gemini, no
+    # hay título: retención (nunca título de reglas).
     if gemini_pkg:
         titles = [{"title": gemini_pkg["title"],
                    "issues": _check_title_lint(gemini_pkg["title"]),
@@ -1757,23 +2615,18 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                    "check_reason": "Gemini: pasa check_title + lint"}] + titles
         best = gemini_pkg["title"]
     else:
-        best = _prefer_ideal_length(titles)
-    # Arreglo 3, red de seguridad: el mejor título pasa la validación
-    # final contra lo visible. No debería fallar (generate_titles ya
-    # filtró), pero si un candidato se colara, se degrada a reacción
-    # y queda marcado, en vez de publicar un título mentiroso.
+        best = None
+    # Red de seguridad: el título elegido pasa la validación final
+    # contra lo visible. Si no pasara, retención (nunca título de
+    # reglas ni degradación a reacción).
     title_validation = validate_title_final(
         best, check_card, visible=visible, lang=lang) if best else None
     title_degraded = False
     title_degrade_reason = None
     if title_validation and not title_validation["ok"]:
-        degraded = title_validation["degraded_title"]
-        if degraded and degraded != best:
-            title_degrade_reason = "; ".join(title_validation["reasons"])
-            best = degraded
-            title_degraded = True
-            title_validation = validate_title_final(
-                best, check_card, visible=visible, lang=lang)
+        title_degrade_reason = "; ".join(title_validation["reasons"])
+        best = None
+        title_validation = None
     if register and best:
         register_title(best, vod_id=vod_id, date=date, seen_path=seen_path,
                        clip=f"clip_{n:02d}", lang=lang)
@@ -1782,94 +2635,55 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
     reaction_context = extract_reaction_context(
         check_card, visible=visible, lang=lang)
 
-    what = card.get("what") if card else None
-    if lang == "en":
-        # Miniatura del momento (2026-11-18, regla endurecida): se
-        # deriva de las palabras del momento, nunca una exclamación
-        # genérica (ver _moment_thumbnail_text).
-        thumb = _moment_thumbnail_text(card, best, streamer, game_label)
-        hook = ("Watch why chat lost it here." if reaction == "risas"
-                else "Watch this moment — chat went crazy in seconds.")
-        onscreen = "CHAT REACTION"
-        loop = "And that's why everyone clipped it."
-        if what and game:
-            desc = (f"{game}: {what} — chat reacted live.\n"
-                    "Full clip, vertical, no context needed.")
-        elif game:
-            desc = (f"{game}: the moment chat reacted to.\n"
-                    "Full clip, vertical, no context needed.")
-        else:
-            desc = ("The moment chat reacted to — game not verified.\n"
-                    "Full clip, vertical, no context needed.")
-        queries = [f"{game_label.lower()} best moments", f"{game_label.lower()} funny clips"] if game else ["funny stream clips", "chat reaction clips"]
-    else:
-        # Miniatura del momento (2026-11-18, regla endurecida): se
-        # deriva de las palabras del momento, nunca una exclamación
-        # genérica (ver _moment_thumbnail_text).
-        thumb = _moment_thumbnail_text(card, best, streamer, game_label)
-        hook = ("Mira por qué el chat se murió de risa acá." if reaction == "risas"
-                else "Mira este momento, el chat explotó en segundos.")
-        onscreen = "LA REACCIÓN"
-        loop = "Y por eso todos lo clippearon."
-        if what and game:
-            desc = (f"{game_label}: {what} — el chat reaccionó en vivo.\n"
-                    "Clip completo en vertical, sin contexto necesario.")
-        elif game:
-            desc = (f"{game_label}: el momento al que reaccionó el chat.\n"
-                    "Clip completo en vertical, sin contexto necesario.")
-        else:
-            desc = ("El momento al que reaccionó el chat — juego sin verificar.\n"
-                    "Clip completo en vertical, sin contexto necesario.")
-        queries = [f"{game_label.lower()} mejores momentos", f"{game_label.lower()} clips graciosos"] if game else ["clips graciosos stream", "reacción del chat clips"]
-
-    # Gemini primero: su descripción y su texto de miniatura
-    # reemplazan los de las reglas (el hook/onscreen/loop y los
-    # sufijos de abajo — contexto, crédito, CTA — se mantienen).
+    # Hashtags (R6.3): solo los de Gemini (4 de contenido +
+    # #Shorts); sin Gemini no hay hashtags (retención). Los tags
+    # de búsqueda (15) siguen siendo los del juego.
+    hashtags = gemini_pkg["hashtags"] if gemini_pkg else []
     if gemini_pkg:
         desc = gemini_pkg["description"]
         thumb = gemini_pkg["thumbnail_text"]
-
-    # Arreglo 4: en un clip solo cams con contexto, la descripción lo
-    # dice (el contexto va quemado en pantalla; la descripción no lo
-    # promete como si fuera gameplay, solo lo anota).
-    if visible == VISIBLE_CAMS_ONLY and reaction_context:
-        desc += (f"\nContexto en pantalla: {reaction_context['text']}."
-                 if lang != "en" else
-                 f"\nOn-screen context: {reaction_context['text']}.")
-
-    # 7.5: crédito al streamer en la descripción (configurable) +
-    # CTA/pregunta al final. El crédito nombra al streamer del VOD
-    # (nunca hardcodeado); la CTA suma en el componente descripción
-    # del SEO (+30 en vez de +10) y va al final, donde la mide el
-    # score. Sin streamer conocido no hay crédito.
-    _credit_streamer = streamer if streamer not in (None, "", "desconocido") else ""
-    if credit_streamer and _credit_streamer and _credit_streamer not in desc:
-        if lang == "en":
-            desc += f"\n\n🎬 Clip by {_credit_streamer}, live."
-        else:
-            desc += f"\n\n🎬 Clip de {_credit_streamer} en directo."
-    if lang == "en":
-        desc += "\nDid you see that coming? Subscribe for more clips."
+        # R6.1: el crédito al streamer se mantiene (es dato por
+        # clip, no afirmación). La CTA fija se ELIMINA: el cierre
+        # lo genera Gemini por clip.
+        _credit_streamer = streamer if streamer not in (None, "", "desconocido") else ""
+        if credit_streamer and _credit_streamer and _credit_streamer not in desc:
+            if lang == "en":
+                desc += f"\n\n🎬 Clip by {_credit_streamer}, live."
+            else:
+                desc += f"\n\n🎬 Clip de {_credit_streamer} en directo."
+        # Arreglo 4: en un clip solo cams con contexto, la
+        # descripción lo dice (el contexto va quemado en pantalla;
+        # la descripción no lo promete como si fuera gameplay,
+        # solo lo anota).
+        if visible == VISIBLE_CAMS_ONLY and reaction_context:
+            desc += (f"\nContexto en pantalla: {reaction_context['text']}."
+                     if lang != "en" else
+                     f"\nOn-screen context: {reaction_context['text']}.")
+        # Red de seguridad: la descripción nunca pasa de 1000 car.
+        if len(desc) > MAX_DESC_LEN:
+            desc = desc[:MAX_DESC_LEN - 1] + "…"
+        # Hook (R6.2): se conserva porque lo consume la validación
+        # de longitudes; es la primera línea de la descripción de
+        # Gemini (el momento), nunca una cadena fija de reacción.
+        hook = _hook_from_description(desc)
     else:
-        desc += "\n¿Te lo esperabas? Suscríbete para más clips."
-    # 7.5: red de seguridad: la descripción nunca pasa de 1000 car.
-    # (se recorta antes de construir los paquetes por plataforma).
-    if len(desc) > MAX_DESC_LEN:
-        desc = desc[:MAX_DESC_LEN - 1] + "…"
-
-    # La miniatura no repite el título: _moment_thumbnail_text ya
-    # quita las palabras del título, y el paquete Gemini se valida
-    # en _gemini_first_package. Nada se reemplaza por una
-    # exclamación genérica (regla 2026-11-18): el texto que nombra
-    # el momento comparte palabras con el título por naturaleza y
-    # la puntuación SEO lo refleja, sin inventar otro texto.
-    if not gemini_pkg:
-        thumb = _best_thumbnail_text(thumb, best)
+        # Retención: sin título ni relleno publicable.
+        desc = ""
+        thumb = ""
+        hook = ""
+    if lang == "en":
+        queries = [f"{game_label.lower()} best moments", f"{game_label.lower()} funny clips"] if game else ["funny stream clips", "chat reaction clips"]
+    else:
+        queries = [f"{game_label.lower()} mejores momentos", f"{game_label.lower()} clips graciosos"] if game else ["clips graciosos stream", "reacción del chat clips"]
 
     # Estudio de reels (reel_study.py): solo AÑADE sugerencias
     # validadas al paquete, nunca cambia best_title ni la descripción.
     # reel_patterns puede ser el dict de patrones o el informe
     # completo (con clave "patterns").
+    # Dedupe verificado (R4.1): solo si hubo título Gemini y el
+    # llamador verificó el dedupe (lista reciente disponible).
+    pkg_dedupe_verified = bool(gemini_pkg) and bool(dedupe_verified) \
+        and bool(gemini_pkg.get("dedupe_verified"))
     pkg = {
         "n": n,
         "viral_multiple": multiple,  # x veces la mediana del stream
@@ -1879,12 +2693,16 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "best_title": best,
         "title": best,  # alias del título elegido (= best_title)
         "description": desc,  # alias de description_first_2_lines
-        "hashtags": hashtags,  # hashtags usados (Gemini o reglas)
-        # Gemini primero (2026-11-18): "gemini" si el paquete lo
-        # escribió la IA, "rules" si salió por reglas (fallback).
-        "pkg_source": "gemini" if gemini_pkg else "rules",
-        "title_issues": _check_title_lint(best) if best else ["sin título que pase el check promesa-payoff"],
+        "hashtags": hashtags,  # hashtags de Gemini (o [] en retención)
+        # Gemini o retención (enmienda 2026-11-26): "gemini" si el
+        # paquete lo escribió la IA, "retained" si no hubo paquete
+        # Gemini válido y verificado tras los reintentos.
+        "pkg_source": "gemini" if gemini_pkg else "retained",
+        "title_issues": _check_title_lint(best) if best else ["sin título Gemini válido y verificado: retención para revisión"],
         "needs_human_review": best is None,
+        # R4.1: el dedupe solo está verificado si llegó la lista de
+        # títulos recientes del panel y hubo título que verificar.
+        "dedupe_verified": pkg_dedupe_verified,
         # Arreglo 3: lo visible y la validación final del título.
         "visible": visible or VISIBLE_UNKNOWN,
         "visible_reason": visible_reason,
@@ -1901,8 +2719,9 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "thumbnail_text": thumb,  # ≤3 palabras, distinto del título
         "hook_first_line": hook,  # primera línea nueva
         "length_issues": [],  # 7.5: se rellena tras construir el pkg
-        "onscreen_first_2s": onscreen,  # distinto de lo hablado
-        "loop_point": loop,
+        # onscreen_first_2s y loop_point ELIMINADOS (R6.2): no los
+        # consume nadie; el hook es la primera línea de la
+        # descripción de Gemini y la retención va en retention_note.
         "description_first_2_lines": desc,
         "tags": tags[:15],
         "search_queries": queries,
@@ -1914,6 +2733,12 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "platforms": package_for_platforms(best, desc, tags, thumb, lang=lang,
                                            hashtags=hashtags, game=game),
     }
+    # Trazabilidad del pack (spec v3 §3.2): qué pack produjo el
+    # título (None si no hubo pack o si el título salió del
+    # reintento sin pack).
+    pkg["pattern_pack_id"] = (gemini_pkg or {}).get("pattern_pack_id")
+    pkg["title_pattern_types"] = (
+        (gemini_pkg or {}).get("title_pattern_types") or [])
     if reel_patterns:
         try:
             from reel_study import enrich_package
@@ -2003,13 +2828,18 @@ def seo_inputs_from_package(pkg, lang="es"):
         hashtags = yt.get("hashtags") or []
     if not hashtags:
         hashtags = pkg.get("hashtags") or []
-    return {
+    out = {
         "hashtags": list(hashtags),
         "visible": visible,
         "game_verified": game_verified,
         "keyword": "GTA 6" if (game or "GTA 6") in ("GTA 6", "GTA VI") else (game or "GTA 6"),
         "lang": lang,
     }
+    # Trazabilidad del pack (spec v3 §3.2): solo si hubo pack.
+    if pkg.get("pattern_pack_id") is not None:
+        out["pattern_pack_id"] = pkg["pattern_pack_id"]
+        out["title_pattern_types"] = pkg.get("title_pattern_types") or []
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2084,8 +2914,8 @@ def _self_test():
                              coker_card, visible="cams-only")
     check("Coker: 'GTA 6: la jugada...' rechazado en cams-only",
           not v["ok"], "; ".join(v["reasons"])[:120])
-    check("Coker: degradado a título de reacción",
-          v["degraded_title"] == "El chat no paraba de reírse", str(v["degraded_title"]))
+    check("Coker: sin degradación (retención: degraded_title None)",
+          v["degraded_title"] is None, str(v["degraded_title"]))
     v2 = validate_title_final("GTA V RP: errar un tiro y el chat explotó",
                               coker_card, visible="gameplay")
     check("Coker: mismo título PASA si se viera gameplay",
@@ -2097,8 +2927,8 @@ def _self_test():
           f"{len(titles)} títulos: {[t['title'] for t in titles][:3]}")
     ok, why, deg = validate_legacy_title("QUÉ JUGADA 😱 GTA 6", coker_card,
                                          visible="cams-only")
-    check("Coker: título legacy 'QUÉ JUGADA 😱 GTA 6' rechazado + degradado",
-          not ok and deg == "El chat no paraba de reírse", f"{why[:80]} -> {deg}")
+    check("Coker: título legacy 'QUÉ JUGADA 😱 GTA 6' rechazado, sin degradado",
+          not ok and deg is None, f"{why[:80]} -> {deg}")
 
     print("== Locones (GTA RP rumano, solo volumen, cams-only) ==")
     locones_card = {"game": "GTA V RP", "game_label": "GTA V RP",
@@ -2113,11 +2943,8 @@ def _self_test():
                               locones_card, visible="cams-only")
     check("Locones: 'GTA 6: La jugada que rompió el chat' rechazado",
           not v3["ok"], "; ".join(v3["reasons"])[:120])
-    check("Locones: degradado a reacción de volumen (honesto, sin juego)",
-          v3["degraded_title"] in ("El chat explotó con esto",
-                                   "25 mensajes en 10 segundos por esto")
-          and validate_title_final(v3["degraded_title"], locones_card,
-                                   visible="cams-only")["ok"],
+    check("Locones: sin degradación (retención: degraded_title None)",
+          v3["degraded_title"] is None,
           str(v3["degraded_title"]))
     check("Locones: sin transcripción no hay contexto",
           extract_reaction_context(locones_card, visible="cams-only") is None)
@@ -2147,8 +2974,8 @@ def _self_test():
     v4 = validate_title_final("QUÉ JUGADA 😱 GTA 6", illo_card, visible="cams-only")
     check("IlloJuan: 'QUÉ JUGADA 😱 GTA 6' rechazado en cams-only",
           not v4["ok"], "; ".join(v4["reasons"])[:120])
-    check("IlloJuan: degradado a reacción de hype",
-          v4["degraded_title"] == "El chat enloqueció con esto", str(v4["degraded_title"]))
+    check("IlloJuan: sin degradación (retención: degraded_title None)",
+          v4["degraded_title"] is None, str(v4["degraded_title"]))
     ctx = extract_reaction_context(illo_card, visible="cams-only")
     check("IlloJuan: contexto = reaccionando al tráiler de GTA 3",
           ctx is not None and ctx["text"] == "reaccionando al tráiler de GTA 3",
@@ -2161,10 +2988,11 @@ def _self_test():
           str(ctx_en))
     pkg = package_clip(1, 1575, 19.22, 4, 47, None, [1, 2, 3], lang="es",
                        moment_card=illo_card, visible="cams-only")
-    check("package_clip IlloJuan: best_title es reacción, sin juego",
-          pkg["best_title"] and not _title_names_game(pkg["best_title"])
-          and not _title_has_gameplay_word(pkg["best_title"]),
-          str(pkg["best_title"]))
+    check("package_clip IlloJuan: sin Gemini -> retención (best None)",
+          pkg["best_title"] is None and pkg["needs_human_review"]
+          and pkg["pkg_source"] == "retained"
+          and pkg["dedupe_verified"] is False,
+          f"best={pkg['best_title']} source={pkg['pkg_source']}")
     check("package_clip IlloJuan: visible + thumbnail faces + contexto",
           pkg["visible"] == "cams-only"
           and pkg["thumbnail_subject"] == "faces"

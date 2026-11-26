@@ -8,10 +8,152 @@
 // resume_data y avanza un chunk por invocación del cron.
 
 import type { Env } from "../cloudflare";
+import { decryptCredential } from "../crypto";
 import { errorMessage, httpJson, isRetryableStatus } from "./http";
 import type { PublishContext, PublishResult, ResumeData } from "./index";
+import { YOUTUBE_COMMENT_SCOPE } from "./oauth-scopes";
 
 const SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+
+/** Scopes que acepta videos.update (2026-11-26, spec títulos §6.5
+ *  I1): el scope genérico de YouTube o youtube.force-ssl. El de
+ *  subida (youtube.upload) NO basta para re-titular. La fuente
+ *  única de scopes es oauth-scopes.ts: force-ssl se importa de
+ *  ahí; el genérico no está en esa lista y vive aquí.
+ *  Verificar contra la doc viva de la API en la implementación:
+ *  videos.update acepta youtube y youtube.force-ssl. */
+export const YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube";
+export const YOUTUBE_UPDATE_SCOPES: readonly string[] = [YOUTUBE_SCOPE, YOUTUBE_COMMENT_SCOPE];
+
+/** ¿Trae la lista de scopes concedidos (tokeninfo, URLs exactas)
+ *  alguno de los que acepta videos.update? Comparación EXACTA:
+ *  una subcadena no vale ("youtube.upload" no es "youtube"). */
+export function hasYoutubeUpdateScope(grantedScopes: string[]): boolean {
+  return grantedScopes.some((s) => (YOUTUBE_UPDATE_SCOPES as readonly string[]).includes(s));
+}
+
+export interface YoutubeSnippet {
+  title: string;
+  description: string;
+  tags: string[];
+  categoryId: string;
+}
+
+export interface YoutubeTitleUpdate {
+  ok: boolean;
+  reason?: string;
+  /** true cuando el fallo es falta del scope youtube.force-ssl:
+   *  la cuenta necesita re-autorización en el panel (Cuentas →
+   *  reconectar). Sin él no hay re-título por API. */
+  missingScope?: boolean;
+}
+
+/** Resuelve las credenciales OAuth de YouTube de una cuenta por su
+ *  id de api_accounts. Espejo de la rama youtube de resolveCreds
+ *  (publish/index.ts) — misma fuente (api_accounts), mismo
+ *  descifrado, misma precedencia (extra y luego el JSON de la
+ *  credencial) — sin importar publish/index.ts para no crear un
+ *  ciclo (index.ts ya importa youtubeStep de aquí). */
+async function resolveYoutubeCredsByAccount(env: Env, accountId: number): Promise<YoutubeCreds | null> {
+  const row = await env.DB.prepare(
+    "SELECT tenant_id, platform, language, credential_enc, extra_enc FROM api_accounts WHERE id = ?",
+  )
+    .bind(accountId)
+    .first<{ tenant_id: string; platform: string; language: string; credential_enc: string; extra_enc: string }>()
+    .catch(() => null);
+  if (!row || row.platform !== "youtube" || !row.credential_enc) return null;
+  const tenant = row.tenant_id;
+  const key = env.CREDENTIAL_ENCRYPTION_KEY;
+  const credential = await decryptCredential(row.credential_enc, key, tenant).catch(() => "");
+  const extra = row.extra_enc ? await decryptCredential(row.extra_enc, key, tenant).catch(() => "") : "";
+  const parseJson = (text: string): Record<string, unknown> => {
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  };
+  const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+  const extraJson = parseJson(extra);
+  let clientId = str(extraJson.client_id);
+  let clientSecret = str(extraJson.client_secret);
+  let refreshToken = str(extraJson.refresh_token);
+  if ((!clientId || !clientSecret || !refreshToken) && credential.trim().startsWith("{")) {
+    const fromCred = parseJson(credential.trim());
+    clientId = clientId ?? str(fromCred.client_id);
+    clientSecret = clientSecret ?? str(fromCred.client_secret);
+    refreshToken = refreshToken ?? str(fromCred.refresh_token);
+  }
+  if (!clientId || !clientSecret || !refreshToken) return null;
+  return { accessToken: "", refreshToken, clientId, clientSecret };
+}
+
+/** Re-titula un vídeo ya publicado en YouTube (2026-11-26, spec
+ *  títulos R8.2): PUT /youtube/v3/videos?part=snippet enviando el
+ *  snippet COMPLETO (título + descripción + tags + categoryId); si
+ *  no se envía un campo, YouTube lo borra.
+ *
+ *  CHECK EXPLÍCITO DE SCOPE (I1): antes de llamar a videos.update
+ *  se refresca el token y se comprueba con tokeninfo que los scopes
+ *  concedidos incluyen youtube o youtube.force-ssl (exactos). Si
+ *  falta, devuelve missingScope sin llamar a la API: la cuenta
+ *  necesita re-autorización en el panel y eso se ve en su
+ *  verificación (verify.ts muestra el aviso). Los tokens concedidos
+ *  antes de v5.4.0 casi seguro no traen force-ssl (GOOGLE_SCOPES lo
+ *  incluye desde v5.4.0, pero los scopes son por concesión).
+ *
+ *  NO escribe en D1: solo devuelve el resultado; quien lo llama
+ *  actualiza title/seo_title con PATCH /api/clips/:id y verifica
+ *  con videos.list. No se ejecuta aquí el re-título de 213/185. */
+export async function updateVideoTitle(
+  env: Env,
+  accountId: number,
+  videoId: string,
+  snippet: YoutubeSnippet,
+): Promise<YoutubeTitleUpdate> {
+  const title = snippet.title.trim();
+  if (!title) return { ok: false, reason: "El título nuevo no puede estar vacío." };
+  if (title.length > 100) return { ok: false, reason: "El título no puede superar 100 caracteres (límite de YouTube)." };
+  if (!videoId.trim()) return { ok: false, reason: "Falta el id del vídeo de YouTube." };
+  const creds = await resolveYoutubeCredsByAccount(env, accountId);
+  if (!creds) {
+    return { ok: false, reason: "sin OAuth de YouTube configurado para esa cuenta (client + refresh token). Pégalo en Cuentas." };
+  }
+  const access = await refreshAccessToken(creds);
+  if (!access) {
+    return { ok: false, reason: "no se pudo renovar el access token de YouTube: reautorizar OAuth en Cuentas." };
+  }
+  const ti = await httpJson("GET", `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(access)}`);
+  if (ti.status !== 200) {
+    return { ok: false, reason: `YouTube no respondió a la comprobación del scope (HTTP ${ti.status}): vuelve a intentarlo sin re-titular.` };
+  }
+  const granted = typeof ti.json.scope === "string" ? ti.json.scope.split(" ") : [];
+  if (!hasYoutubeUpdateScope(granted)) {
+    return {
+      ok: false,
+      missingScope: true,
+      reason: "missing_scope: youtube.force-ssl — re-autoriza YouTube en el panel (Cuentas → reconectar). El token concedido no trae el permiso para re-titular vídeos.",
+    };
+  }
+  const r = await httpJson(
+    "PUT",
+    "https://www.googleapis.com/youtube/v3/videos?part=snippet",
+    { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
+    {
+      id: videoId.trim(),
+      snippet: {
+        title,
+        description: snippet.description,
+        tags: snippet.tags,
+        categoryId: snippet.categoryId,
+      },
+    },
+  );
+  if (r.status !== 200) {
+    return { ok: false, reason: `YouTube rechazó el re-título: ${errorMessage(r.json, `HTTP ${r.status}`)}` };
+  }
+  return { ok: true };
+}
 
 export interface YoutubeCreds {
   accessToken: string;

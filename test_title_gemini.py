@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Título Gemini de punta a punta (2026-11-19).
+"""Título Gemini de punta a punta (2026-11-19, actualizado 2026-11-26).
 
 El título que se quema en el vídeo es el MISMO que va al panel
 (title/seo_title) y a las plataformas: el del paquete Gemini
-(best_title) cuando Gemini está, o el de reglas si no está (el
-clip NUNCA muere porque falle Gemini). El texto de miniatura
-viaja al panel (columna thumb_text).
+(best_title) cuando Gemini está. Sin título Gemini válido NO hay
+título de reglas (enmienda aprobada 2026-11-26): el clip queda
+RETENIDO para revisión (HELD_TITLE al panel, sin banner quemado,
+BLOQUEADO en la Cola). El texto de miniatura viaja al panel
+(columna thumb_text).
 
 - _publication_package: reutiliza el paquete de la revisión si
   trae best_title; si no, lo construye con pre_corte_package;
-  si no se puede, {} (fallback a reglas).
+  si no se puede, {} (solo lo usa la revisión, no el quemado).
 - _enqueue_panel: el payload lleva title == seo_title == título
   quemado, y thumbnail_text cuando hay texto (sin texto no se
   manda la clave: el panel rechaza null con 400).
 - process_peak: el título quemado (subtitle_clip) es el mismo
-  que el del payload, con Gemini y sin él.
+  que el del payload, con Gemini; sin él, retención.
 - burn_and_enqueue (VOD): thumbnail_text del paquete del
   manifiesto llega al payload.
 """
@@ -50,7 +52,6 @@ PRE_CORTE_FULL = {
     "pkg_source": "gemini",
 }
 
-RULES_TITLE = "Título de reglas"
 
 
 class TestPublicationPackage(unittest.TestCase):
@@ -239,10 +240,39 @@ class TestProcessPeakTituloGemini(unittest.TestCase):
         pkg_path = os.path.join(self.out, "pkg.json")
         sub_calls = {}
 
-        def _sub(*a, **k):
-            sub_calls.update(k)
+        def _sub(video, srt=None, burn=None, **kw):
+            # 2026-11-26 (spec títulos-verdad §6.1): llamada 1
+            # (burn=None) transcribe y escribe SRT + .transcript.json
+            # reales; llamada 2 reutiliza el SRT y quema con el
+            # título del paquete definitivo.
+            if burn is None:
+                srt_path = srt or (os.path.splitext(video)[0] + ".srt")
+                tpath = os.path.splitext(srt_path)[0] \
+                    + ".transcript.json"
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:00,000 --> 00:00:03,500\n"
+                            "no me creo que estemos aquí\n")
+                with open(tpath, "w", encoding="utf-8") as f:
+                    json.dump({"segments": [
+                        {"start": 0.0, "end": 3.5,
+                         "text": "no me creo que estemos aquí",
+                         "words": [
+                             {"word": "no", "start": 0.0, "end": 0.5},
+                             {"word": "me", "start": 0.5, "end": 1.0},
+                             {"word": "creo", "start": 1.0,
+                              "end": 1.5}]}],
+                        "word_count": 6}, f)
+                return {"publish_blocked": False, "no_speech": False,
+                        "srt": srt_path, "transcript": tpath}
+            sub_calls.update({"srt": srt, "burn": burn,
+                              "title": kw.get("title")})
+            with open(burn, "wb") as f:
+                f.write(b"fake-burned")
             return {"publish_blocked": False, "no_speech": False,
-                    "srt": None, "transcript": None}
+                    "srt": srt, "burned": burn,
+                    "transcript": (os.path.splitext(srt)[0]
+                                   + ".transcript.json"
+                                   if srt else None)}
 
         patches = [
             mock.patch("clipagent.detect.score_clip",
@@ -251,10 +281,14 @@ class TestProcessPeakTituloGemini(unittest.TestCase):
                        return_value={"layout": {}}),
             mock.patch("clipagent.workers.subtitle_clip",
                        side_effect=_sub),
-            mock.patch("clipagent.live_cutter._publication_package",
+            # 2026-11-26 (spec títulos-verdad §6.1/R3.2): build_title
+            # está eliminado y _publication_package ya no alimenta
+            # el quemado; el título sale del paquete DEFINITIVO
+            # (metadata.package_clip, después de la transcripción).
+            mock.patch("clipagent.metadata.package_clip",
                        return_value=dict(pub_pkg)),
-            mock.patch("clipagent.live_cutter.build_title",
-                       return_value=RULES_TITLE),
+            mock.patch("clipagent.workers.apply_sfx",
+                       side_effect=lambda v, **kw: (v, {})),
             mock.patch("clipagent.workers.package_clip_step",
                        return_value={"package_path": pkg_path}),
             mock.patch("clipagent.live_cutter.finalize_package",
@@ -297,20 +331,32 @@ class TestProcessPeakTituloGemini(unittest.TestCase):
                          GEMINI_PKG["best_title"])
         self.assertEqual(payload["thumbnail_text"], "RISAS SIN PARAR")
 
-    def test_sin_gemini_quema_el_de_reglas(self):
+    def test_sin_gemini_queda_retenido(self):
+        # 2026-11-26 (enmienda aprobada): sin título Gemini válido
+        # NO hay título de reglas — el clip queda RETENIDO para
+        # revisión (marcador HELD_TITLE al panel, sin banner
+        # quemado, BLOQUEADO en la Cola).
+        from clipagent.live_cutter import HELD_TITLE, HOLD_REASON
         bridge = _FakeBridge()
         session = self._session(bridge)
-        sub_calls = self._patch_peak({})
+        sub_calls = self._patch_peak({
+            "best_title": None, "needs_human_review": True,
+            "pkg_source": "retained"})
         record = session.process_peak(self._peak())
         self.assertIsNotNone(record)
-        self.assertEqual(sub_calls.get("title"), RULES_TITLE)
-        self.assertEqual(record["title"], RULES_TITLE)
-        self.assertEqual(record["burned_title"], RULES_TITLE)
-        self.assertIsNone(record.get("pkg_source"))
+        # Sin banner: la llamada 2 quema con title=None.
+        self.assertIsNone(sub_calls.get("title"))
+        self.assertTrue(record["publish_blocked"])
+        self.assertTrue(record["needs_human_review"])
+        self.assertEqual(record["title"], HELD_TITLE)
+        self.assertEqual(record["burned_title"], "")
+        self.assertEqual(record["pkg_source"], "held")
+        self.assertIsNone(record.get("thumbnail_text"))
         self.assertEqual(len(bridge.payloads), 1)
         payload = bridge.payloads[0]
-        self.assertEqual(payload["title"], RULES_TITLE)
-        self.assertEqual(payload["seo_title"], RULES_TITLE)
+        self.assertEqual(payload["title"], HELD_TITLE)
+        self.assertEqual(payload["seo_title"], HELD_TITLE)
+        self.assertEqual(payload["viral"]["hold_reason"], HOLD_REASON)
         self.assertNotIn("thumbnail_text", payload)
 
 

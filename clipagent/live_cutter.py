@@ -377,29 +377,178 @@ class FileRecorder:
 # El cutter: pico -> clip -> paquete -> cola LIVE + publicación
 # ---------------------------------------------------------------------------
 
-def build_title(detail, layout_decision, payoff_ts_clip=20.0,
-                lang="es", game="GTA 6"):
-    """Título validado anti-clickbait (mismo camino que el VOD).
+HELD_TITLE = "Sin título — revisión pendiente"
+HOLD_REASON = "Sin título honesto: retención para revisión"
 
-    suggest_titles + honest_title de auto_clips.py. Si la
-    validación no está disponible o falla, se usa el título
-    sugerido tal cual (nunca se inventa otro).
-    """
-    try:
-        import auto_clips as _auto
-        raw, _desc = _auto.suggest_titles(detail, lang, game=game)
+
+def _transcript_text_from_sub(sub):
+    """Texto de la transcripción de un resultado de subtitle_clip.
+
+    Lee el .transcript.json si existe; si no, el SRT. "" si no hay
+    transcripción (sin voz o transcripción fallida)."""
+    sub = sub or {}
+    tpath = sub.get("transcript")
+    if not tpath and sub.get("srt"):
+        tpath = os.path.splitext(sub["srt"])[0] + ".transcript.json"
+    if tpath and os.path.isfile(tpath):
         try:
-            moment_card = {"game": game,
-                           "risas": detail.get("risas", 0),
-                           "hype": detail.get("hype", 0)}
-            title, _degraded, _why = _auto.honest_title(
-                raw, moment_card, layout_decision, payoff_ts_clip, lang)
-            return title
-        except Exception:  # noqa: BLE001 - título sugerido tal cual
-            return raw
-    except Exception:  # noqa: BLE001 - título seguro de reacción
-        return "El chat explotó 😂 GTA 6" if lang != "en" \
-            else "Chat went wild 😂 GTA 6"
+            with open(tpath, encoding="utf-8") as f:
+                data = json.load(f)
+            parts = [str(s.get("text") or "")
+                     for s in data.get("segments") or []]
+            text = " ".join(p for p in parts if p).strip()
+            if text:
+                return text
+        except (OSError, ValueError):
+            pass
+    if sub.get("srt") and os.path.isfile(sub["srt"]):
+        try:
+            from .final_review import transcript_text_for_srt
+            return transcript_text_for_srt(sub["srt"]) or ""
+        except Exception:  # noqa: BLE001 - sin texto, sin paquete
+            return ""
+    return ""
+
+
+def _timed_segments_from_sub(sub):
+    """Segmentos {start, end, text} de la transcripción (para el
+    tramo del payoff ±20 s en el prompt, R1.1). [] sin ellos."""
+    sub = sub or {}
+    tpath = sub.get("transcript")
+    if not tpath and sub.get("srt"):
+        tpath = os.path.splitext(sub["srt"])[0] + ".transcript.json"
+    if tpath and os.path.isfile(tpath):
+        try:
+            from .moment_card import parse_transcript_json
+            segs, _lang = parse_transcript_json(tpath)
+            if segs:
+                return segs
+        except Exception:  # noqa: BLE001 - sin tiempos, sin tramo
+            pass
+    if sub.get("srt") and os.path.isfile(sub["srt"]):
+        try:
+            from .moment_card import parse_srt
+            return parse_srt(sub["srt"])
+        except Exception:  # noqa: BLE001 - sin tiempos, sin tramo
+            return []
+    return []
+
+
+def _recent_titles(bridge, days=30):
+    """(recent_titles, dedupe_verified) desde el panel (R4.1).
+
+    Sin bridge no hay lectura: (None, False). Si la lectura
+    falla, fail-open SOLO en dedupe: (None, False); la veracidad
+    nunca depende de esta lectura.
+    """
+    if bridge is None:
+        return None, False
+    try:
+        return bridge.list_titles(days=days), True
+    except Exception as e:  # noqa: BLE001 - dedupe no verificado
+        print(f"[dedupe] list_titles falló ({e}): dedupe no "
+              f"verificado", flush=True)
+        return None, False
+
+
+def _call_package_clip(**kwargs):
+    """package_clip con la interfaz fija R4.1 (recent_titles,
+    dedupe_verified). Vive en workers.call_package_clip; aquí
+    solo se re-exporta para los tests del reordenamiento."""
+    from .workers import call_package_clip
+    return call_package_clip(**kwargs)
+
+
+# Caché por proceso de los packs de patrones (spec v3 §3.2):
+# una corrida carga cada informe de idioma una vez; None también
+# se cachea (sin informe válido no se reintenta leerlo).
+_PATTERN_PACK_CACHE = {}
+
+
+def _pattern_pack_for_lang(lang, base_dir=None):
+    """Pack vigente para el idioma del clip, o None.
+
+    Sin informe válido (o con muestra < 5 u obsoleto) devuelve
+    None y el paquete se construye como hoy, sin pack. Nunca
+    levanta.
+    """
+    lang = lang if lang in ("es", "en") else "es"
+    if lang not in _PATTERN_PACK_CACHE:
+        try:
+            from reel_study import load_pattern_pack
+            base = base_dir or os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__)))
+            _PATTERN_PACK_CACHE[lang] = load_pattern_pack(lang, base)
+        except Exception:
+            _PATTERN_PACK_CACHE[lang] = None
+    return _PATTERN_PACK_CACHE[lang]
+
+
+def _definitive_package(n, peak_ts, score, detail, median_score,
+                        lang, streamer, rec_start, category, visible,
+                        layout, chat_path, sub, bridge, vod_id):
+    """Paquete DEFINITIVO post-transcripción (R1.1, §6.1).
+
+    Construye la ficha del momento CON la transcripción (SRT +
+    .transcript.json de la llamada 1 de subtitle_clip, texto
+    completo, sin truncar) y llama a package_clip con
+    register=True y la lista de títulos recientes del panel.
+    Devuelve (pkg, transcript_text, dedupe_verified); pkg es {}
+    si package_clip levanta (el llamador retiene, nunca inventa
+    título de reglas).
+    """
+    from .ingest import sample_messages
+    from .moment_card import build_moment_card
+    d = detail or {}
+    transcript_text = _transcript_text_from_sub(sub)
+    try:
+        card = build_moment_card(
+            clip_path=None, chat_path=chat_path,
+            srt_path=(sub or {}).get("srt"),
+            transcript_path=(sub or {}).get("transcript"),
+            streamer=streamer or "", game="GTA 6",
+            game_source="categoría verificada (live)",
+            language=lang if lang in ("es", "en") else "es",
+            peak_ts_vod=peak_ts, clip_start_vod=rec_start,
+            clip_duration_s=CLIP_DURATION_S, score=score,
+            risas=d.get("risas", 0), hype=d.get("hype", 0),
+            median_score=median_score, vod_id=vod_id,
+            category=category)
+    except Exception as e:  # noqa: BLE001 - ficha mínima, no tumba
+        print(f"[paquete] ficha del momento falló ({e})",
+              flush=True)
+        card = {"game": "GTA 6", "streamer": streamer or "",
+                "language": lang, "transcript_text": transcript_text,
+                "risas": d.get("risas", 0), "hype": d.get("hype", 0)}
+    if not (card.get("transcript_text") or "").strip() \
+            and transcript_text:
+        card["transcript_text"] = transcript_text
+    card["transcript_segments_timed"] = _timed_segments_from_sub(sub)
+    recent_titles, dedupe_verified = _recent_titles(bridge)
+    examples = []
+    if chat_path:
+        try:
+            examples = sample_messages(chat_path, int(peak_ts),
+                                       window_size=60)
+        except Exception:  # noqa: BLE001 - sin ejemplos, no tumba
+            examples = []
+    try:
+        pkg = _call_package_clip(
+            n=n, peak_ts=peak_ts, score=score,
+            risas=d.get("risas", 0), hype=d.get("hype", 0),
+            median_score=median_score, all_scores=[],
+            lang=lang, examples=examples, moment_card=card,
+            game="GTA 6", streamer=streamer, vod_id=vod_id,
+            register=True, visible=visible, layout=layout,
+            recent_titles=recent_titles,
+            dedupe_verified=dedupe_verified,
+            reel_patterns=_pattern_pack_for_lang(lang))
+    except Exception as e:  # noqa: BLE001 - sin paquete, retención
+        print(f"[paquete] package_clip falló ({e}): retención",
+              flush=True)
+        pkg = {}
+    return pkg or {}, (card.get("transcript_text") or ""), \
+        dedupe_verified
 
 
 def _publication_package(reviewed, detector, peak_ts, score, multiple,
@@ -407,6 +556,14 @@ def _publication_package(reviewed, detector, peak_ts, score, multiple,
                          category, visible):
     """Paquete de publicación (título Gemini + descripción + tags +
     miniatura) para el quemado y el panel.
+
+    NOTA (spec títulos-verdad, §6.1): el paso 5b del cutter YA NO
+    usa esta función — el paquete definitivo se construye
+    post-transcripción con `_definitive_package`. Esta función
+    queda para la revisión pre-corte (review_peak) y sus tests: su
+    título es PROVISIONAL (sin transcripción) y nunca debe
+    filtrarse al record ni al panel cuando existe título
+    definitivo.
 
     Reutiliza el paquete pre-corte de la revisión si trae
     best_title; si no (camino directo, o paquete pre-corte sin
@@ -773,6 +930,14 @@ class LiveCutterSession(LiveSession):
         final2 = burned2 if os.path.isfile(burned2) else raw2
         _sfx2 = None
         try:
+            # Tras un re-render, borrar el archivo _sfx antes de
+            # re-mezclar (spec títulos-verdad, §6.1): apply_sfx
+            # reutiliza el existente y dejaría el audio viejo.
+            _base, _ext = os.path.splitext(final2)
+            try:
+                os.remove(f"{_base}_sfx{_ext}")
+            except OSError:
+                pass
             final2, _sfx2 = apply_sfx(
                 final2, transcript_path=sub2.get("transcript"),
                 srt_path=sub2.get("srt"), payoff_s=float(CLIP_PRE_S),
@@ -814,7 +979,8 @@ class LiveCutterSession(LiveSession):
         el motivo en self.skipped).
         """
         from .workers import (CLIP_DURATION_S, cut_clip,
-                              package_clip_step, subtitle_clip)
+                              ensure_shorts_fifth, package_clip_step,
+                              subtitle_clip, write_held_package)
         peak_ts, score, multiple, detail = peak
         detail = detail or {}
         # 1. GATE DE CATEGORÍA: solo GTA VI. En vivo se lee la
@@ -938,38 +1104,78 @@ class LiveCutterSession(LiveSession):
         plantilla = (layout.get("plantilla")
                      or template_for_variant(
                          layout.get("split_variant")))
-        # 5b. Paquete de publicación ANTES del quemado (2026-11-19):
-        # el título que se quema en la franja es el del paquete
-        # Gemini (mejor SEO), no el de reglas: vídeo, panel y
-        # plataformas usan el MISMO título. En el camino con
-        # revisión se reutiliza el paquete pre-corte (ya existe
-        # antes del corte); en el directo se construye ahora con
-        # lo visible real del layout. Si Gemini no está o el
-        # paquete no se puede construir, se cae al título de
-        # reglas como antes: el clip NUNCA muere porque falle
-        # Gemini.
+        # 5b. TRANSCRIPCIÓN ANTES DEL PAQUETE (spec títulos-verdad
+        # §6.1, R1.1): el título se decide DESPUÉS de transcribir.
+        # Llamada 1 a subtitle_clip con burn=None: transcribe el
+        # audio, escribe el SRT y el .transcript.json, sin quemar
+        # nada todavía. Si la transcripción falla, no hay título
+        # honesto posible desde el vídeo: retención (§11), nunca
+        # título de reglas (build_title está eliminado).
         visible = _visible_from_layout(layout)
-        pub_pkg = _publication_package(
-            reviewed, getattr(self, "detector", None), peak_ts,
-            score, multiple, detail,
-            median_score=(float(score) / float(multiple)
-                          if multiple and float(multiple) > 0
-                          else None),
-            lang=self.lang, streamer=self.streamer,
-            rec_start=rec_start, category=category,
-            visible=visible)
-        title = pub_pkg.get("best_title") or build_title(
-            detail, layout, payoff_ts_clip=CLIP_PRE_S,
-            lang=self.lang, game="GTA 6")
-        # 6. Subtítulos quemados COMPLETOS cuando hay voz. Sin voz
-        # verificable el clip NO se bloquea aquí (regla 2026-11-19
-        # 18:41): la decisión llega en el paso 8, con las puertas
-        # (viralidad/SEO); nunca se inventa texto. El título sí se
-        # quema aunque no haya voz (subtitle_clip, SRT vacío).
         burned = os.path.join(work_dir, f"clip_{n:02d}_subs.mp4")
-        sub = subtitle_clip(raw_clip, burn=burned, cfg=self.cfg,
-                            lang=self.lang, title=title)
-        final_clip = burned if os.path.isfile(burned) else raw_clip
+        try:
+            sub1 = subtitle_clip(raw_clip, burn=None, cfg=self.cfg,
+                                 lang=self.lang)
+        except Exception as exc:  # noqa: BLE001 - sin transcripción
+            print(f"[live] transcripción falló ({exc}): retención "
+                  f"para revisión", flush=True)
+            sub1 = None
+        transcription_failed = sub1 is None
+        no_speech = bool((sub1 or {}).get("no_speech"))
+        # 5c. Paquete DEFINITIVO con la transcripción (ficha CON
+        # transcript_text completo; register=True; dedupe contra el
+        # panel). El título provisional pre-corte NO se usa aquí:
+        # ni el de reviewed.package ni el de pre_corte_package.
+        from .live import _chat_json_path
+        _detector = getattr(self, "detector", None)
+        chat_path = (_chat_json_path(_detector.messages)
+                     if _detector is not None else None)
+        pub_pkg, _transcript_text, dedupe_verified = \
+            _definitive_package(
+                n, peak_ts, score, detail,
+                median_score=(float(score) / float(multiple)
+                              if multiple and float(multiple) > 0
+                              else None),
+                lang=self.lang, streamer=self.streamer,
+                rec_start=rec_start, category=category,
+                visible=visible, layout=layout, chat_path=chat_path,
+                sub=sub1, bridge=self.bridge, vod_id=self.vod_id)
+        best_title = (pub_pkg or {}).get("best_title")
+        # Un clip SIN VOZ con transcript no_speech NO es retención
+        # automática: si package_clip dio título honesto, sigue la
+        # regla sin-voz (se publica sin subtítulos si pasa las
+        # puertas). La retención es solo cuando no hay título
+        # honesto (best None) o no hubo transcripción que lo
+        # anclara.
+        needs_human_review = bool(
+            transcription_failed or not best_title
+            or (pub_pkg or {}).get("needs_human_review"))
+        if needs_human_review:
+            print(f"RETENIDO {self.streamer} pico {peak_ts:.0f}s: "
+                  f"{HOLD_REASON}", flush=True)
+            title = HELD_TITLE
+            burned_title = ""
+            pkg_source = "held"
+            thumbnail_text = None
+        else:
+            title = best_title
+            burned_title = title
+            pkg_source = (pub_pkg or {}).get("pkg_source")
+            thumbnail_text = (pub_pkg or {}).get("thumbnail_text")
+        # 6. Quemado conjunto (título + subtítulos, misma pasada):
+        # llamada 2 a subtitle_clip reutilizando el SRT de la
+        # llamada 1 (sin re-transcribir). Con retención, title=None
+        # (burn_subtitles no dibuja banner con title falsy) y sin
+        # SRT no hay quemado: el clip final es el corte crudo.
+        if sub1 is not None:
+            sub = subtitle_clip(
+                raw_clip, srt=sub1.get("srt"), burn=burned,
+                cfg=self.cfg, lang=self.lang,
+                title=(burned_title or None))
+            final_clip = burned if os.path.isfile(burned) else raw_clip
+        else:
+            sub = {"srt": None, "transcript": None, "no_speech": True}
+            final_clip = raw_clip
         no_speech = bool(sub.get("no_speech"))
         # 6a. SFX por defecto (2026-11-19): boom/riser en el payoff
         # (pico en CLIP_PRE_S) + lift de volumen, sobre el MP4
@@ -1014,18 +1220,21 @@ class LiveCutterSession(LiveSession):
         self._report_event(
             "clip_cortado",
             f"{self.streamer}: «{title}» cortado (40 s, viral auto "
-            f"{viral_auto:.1f})")
+            f"{viral_auto:.1f})"
+            + (" — RETENIDO: sin título honesto"
+               if needs_human_review else ""))
         # 7. Paquete SEO + prioridad (intocable). El paquete de
-        # publicación ya se construyó en el paso 5b (antes del
-        # quemado) para que el título quemado sea el Gemini; aquí
-        # solo se reutiliza. El SEO post-corte se mide sobre el
-        # paquete de PUBLICACIÓN (título Gemini + descripción +
-        # tags + miniatura), NO sobre el título de reglas sin tags:
-        # antes se puntuaba solo ese título y el SEO colapsaba
-        # 92 -> 49, bloqueando publicar TODOS los clips en vivo
-        # (2026-11-19, calibración). Lo visible es el layout real
-        # del corte (no None): la coherencia pasa de 80 a 100
-        # cuando el juego está verificado y se ve.
+        # publicación ya se construyó en el paso 5c (después de la
+        # transcripción) para que el título quemado sea el del
+        # paquete verificado; aquí solo se reutiliza. El SEO
+        # post-corte se mide sobre el paquete de PUBLICACIÓN (título
+        # Gemini + descripción + tags + miniatura), NO sobre el
+        # título de reglas sin tags: antes se puntuaba solo ese
+        # título y el SEO colapsaba 92 -> 49, bloqueando publicar
+        # TODOS los clips en vivo (2026-11-19, calibración). Lo
+        # visible es el layout real del corte (no None): la
+        # coherencia pasa de 80 a 100 cuando el juego está
+        # verificado y se ve.
         # Si hubo revisión, la viralidad post-corte usa sus valores
         # REALES (human Gemini + audio medido), no la estimación.
         if reviewed is not None:
@@ -1035,19 +1244,32 @@ class LiveCutterSession(LiveSession):
         else:
             viral = _score_clip(detail, multiple)
         viral_total = viral.get("total")
-        # pub_title es el título quemado en el paso 5b (el del
-        # paquete Gemini cuando existe, o el de reglas): vídeo,
-        # panel y plataformas usan el MISMO.
+        # pub_title es el título quemado en el paso 6 (el del
+        # paquete verificado cuando existe, o HELD_TITLE retenido):
+        # vídeo, panel y plataformas usan el MISMO.
         pub_title = title
-        pkg = package_clip_step(
-            final_clip, pub_title,
-            description=pub_pkg.get("description") or "",
-            tags=pub_pkg.get("tags") or [],
-            hashtags=pub_pkg.get("hashtags") or [],
-            thumbnail_text=pub_pkg.get("thumbnail_text"),
-            game_verified=True, visible=visible, lang=self.lang)
-        package = finalize_package(pkg["package_path"], viral_total,
-                                   multiple, cfg=self.cfg)
+        if needs_human_review:
+            # Paquete mínimo retenido (R3.4): package_clip_step NO
+            # se llama con título vacío (levanta StepError); seo={}
+            # -> statuses={} -> ningún reporte de descarte. El clip
+            # retenido NUNCA se descarta: queda en la Cola
+            # BLOQUEADO.
+            pkg = write_held_package(final_clip, HELD_TITLE,
+                                     dedupe_verified=dedupe_verified)
+            package = finalize_package(pkg["package_path"], viral_total,
+                                       multiple, cfg=self.cfg)
+        else:
+            pkg = package_clip_step(
+                final_clip, pub_title,
+                description=(pub_pkg.get("description")
+                             or pub_pkg.get("description_first_2_lines")
+                             or ""),
+                tags=pub_pkg.get("tags") or [],
+                hashtags=ensure_shorts_fifth(pub_pkg.get("hashtags")),
+                thumbnail_text=pub_pkg.get("thumbnail_text"),
+                game_verified=True, visible=visible, lang=self.lang)
+            package = finalize_package(pkg["package_path"], viral_total,
+                                       multiple, cfg=self.cfg)
         package["category"] = category
         package["game"] = "GTA 6"
         package["category_source"] = source
@@ -1082,7 +1304,10 @@ class LiveCutterSession(LiveSession):
         # ninguna plataforma publicable -> BLOQUEADO, como antes.
         _gates_ok = any(s[0] in ("publicable", "publicable_override")
                         for s in statuses.values())
-        blocked = bool(no_speech and not _gates_ok)
+        # R3.4: la retención por título también bloquea (el `blocked`
+        # actual solo cubría sin-voz + puertas).
+        blocked = bool((no_speech and not _gates_ok)
+                       or needs_human_review)
         record = {
             "clip_id": clip_id, "streamer": self.streamer,
             "platform": self.platform, "vod_id": self.vod_id,
@@ -1110,27 +1335,40 @@ class LiveCutterSession(LiveSession):
             "hype_score": detail.get("hype_score"),
             "hype_ratio": detail.get("hype_ratio"),
             "streamer_hype": streamer_hype,
-            "title": pub_title, "burned_title": title,
+            "title": pub_title, "burned_title": burned_title,
             # 2026-11-19: el quemado y la publicación usan el MISMO
-            # título (pub_title == title por construcción); el
-            # origen del paquete queda trazado (gemini/rules) y el
+            # título (pub_title == burned_title por construcción,
+            # salvo retención: pub_title es el marcador HELD_TITLE
+            # y burned_title es "" — no se quema banner); el origen
+            # del paquete queda trazado (gemini/rules/held) y el
             # texto de miniatura viaja al panel con el record.
-            "pkg_source": pub_pkg.get("pkg_source"),
-            "thumbnail_text": pub_pkg.get("thumbnail_text"),
+            "pkg_source": pkg_source,
+            "thumbnail_text": thumbnail_text,
             "clip": final_clip, "hype_s": hype_s, "sfx": sfx_info,
             "package_path": pkg["package_path"],
             "subtitles_complete": not no_speech,
             "publish_blocked": blocked,
             "no_speech": no_speech,
+            # R3.4/R4.1: retención y dedupe viajan en el record
+            # (viral.dedupe_verified visible en D1/panel; el
+            # hold_reason lo consume _enqueue_panel).
+            "needs_human_review": needs_human_review,
+            "dedupe_verified": dedupe_verified,
+            "viral": {"dedupe_verified": dedupe_verified,
+                      **({"hold_reason": HOLD_REASON}
+                         if needs_human_review else {})},
             "seo": seo, "publish_status": {
                 p: {"status": s[0], "reason": s[1]}
                 for p, s in statuses.items()},
             "at": datetime.now(timezone.utc).isoformat(),
         }
-        if blocked:
+        if blocked and not needs_human_review:
             # Sin voz y bajo las puertas: el descarte se reporta
             # aquí (antes que el de SEO del paso 9, que
             # _report_discard_once suprime por ser el mismo clip).
+            # Un retenido NO se reporta como descartado: nunca se
+            # descarta, y su RETENIDO ya quedó en el log y en el
+            # evento de encolado.
             self._report_discard_once(
                 clip_id,
                 f"{self.streamer}: «{pub_title}» descartado — sin "
@@ -1156,7 +1394,7 @@ class LiveCutterSession(LiveSession):
         from .validate import ConfigError
         try:
             final_review = validate_final_clip(
-                final_clip, title,
+                final_clip, burned_title,
                 transcript_text=transcript_text_for_srt(sub.get("srt")),
                 srt_path=sub.get("srt"),
                 out_dir=os.path.join(work_dir, "final_review"),
@@ -1178,7 +1416,7 @@ class LiveCutterSession(LiveSession):
         if final_review.get("needs_rerender"):
             final_review, final_clip, sub = self._rerender_after_gate(
                 final_review, final_clip, sub, work_dir,
-                video_for_cut, cut_start, title, n, hype_s,
+                video_for_cut, cut_start, burned_title, n, hype_s,
                 plantilla=plantilla)
             record["clip"] = final_clip
             package["clip"] = final_clip
@@ -1237,7 +1475,7 @@ class LiveCutterSession(LiveSession):
         self._record(record)
         # 9. Panel web (Cola LIVE) + publicación automática.
         fr_decision = (final_review or {}).get("decision")
-        if fr_decision == "rechazado":
+        if fr_decision == "rechazado" and not needs_human_review:
             human = bool(final_review.get("needs_human_review"))
             reason = (f"validación final: "
                       f"{final_review.get('motivo')}")
@@ -1254,6 +1492,14 @@ class LiveCutterSession(LiveSession):
                 f"{'revisión humana — ' if human else 'descartado — '}"
                 f"{reason} (viralidad {viral_total})")
             return record
+        if fr_decision == "rechazado" and needs_human_review:
+            # Retenido: el veredicto de vídeo viaja en el record,
+            # pero el clip SÍ llega al panel BLOQUEADO — un
+            # retenido nunca se descarta.
+            print(f"RETENIDO {self.streamer} pico {peak_ts:.0f}s: "
+                  f"validación final rechazado "
+                  f"({final_review.get('motivo') or ''}); llega al "
+                  f"panel BLOQUEADO", flush=True)
         # Puerta de publicación (2026-11-19): si ninguna plataforma
         # es publicable y no hubo rescate por gritos, el clip no
         # entra a la ruta de publicación: queda en la Cola como
@@ -1385,14 +1631,21 @@ class LiveCutterSession(LiveSession):
                     if _viral_revisado is not None else float(
                         record.get("viral_total") or 0)
                 payload["seo_scores"] = record.get("seo") or {}
-            # Puerta de calidad B4 (2026-11-20): el veredicto viaja
-            # al panel dentro de `viral` (el panel lo guarda en
-            # clips.viral.quality_gate y publishGate lo lee antes
-            # de crear jobs). Solo si hay veredicto: los records
-            # viejos sin él no cambian su payload.
+            # R3.4: el dict `viral` se construye SIEMPRE en este
+            # punto (aunque el record no traiga todavía
+            # quality_gate): con quality_gate si lo hay, con
+            # hold_reason si el clip está retenido y con
+            # dedupe_verified si se conoce. NUNCA se sobrescribe
+            # quality_gate.decision. El PATCH SEO posterior se
+            # salta solo cuando no hay seo (record.get("seo")
+            # vacío, caso retenido).
+            _viral = dict(record.get("viral") or {})
             if record.get("quality_gate"):
-                payload["viral"] = {
-                    "quality_gate": record["quality_gate"]}
+                _viral["quality_gate"] = record["quality_gate"]
+            if record.get("needs_human_review"):
+                _viral["hold_reason"] = HOLD_REASON
+            if _viral:
+                payload["viral"] = _viral
             clip = self.bridge.create_clip(payload)
             panel_id = clip.get("id")
             # SEO al panel por PATCH (2026-11-24, auto-seo): el POST
@@ -1438,13 +1691,17 @@ class LiveCutterSession(LiveSession):
                     except Exception:  # noqa: BLE001 - no tumba
                         pass
             # Encolado en la Cola del panel (2026-11-19): create_clip
-            # + upload_video con éxito, con viralidad y SEO.
+            # + upload_video con éxito, con viralidad y SEO. Un
+            # retenido se anuncia como RETENIDO con su motivo: la
+            # retención nunca es silenciosa.
             if panel_id:
                 self._report_event(
                     "clip_encolado",
                     f"{self.streamer}: «{record['title']}» encolado "
                     f"(viralidad {record.get('viral_total')}; SEO "
-                    f"{_seo_summary(record.get('seo'))})")
+                    f"{_seo_summary(record.get('seo'))})"
+                    + (" — RETENIDO: " + HOLD_REASON
+                       if record.get("needs_human_review") else ""))
             for step, msg in (
                     ("detectado", f"LIVE {self.streamer}: pico a "
                      f"{record['peak_ts']:.0f}s"),

@@ -514,6 +514,11 @@ function langPill(c) {
 function blockedPill(c) {
   if (Number(c.publish_blocked) !== 1) return "";
   const human = Number(c.needs_human_transcription) === 1;
+  // Retención por título (2026-11-26, spec títulos R3.4/I5): si hay
+  // viral.hold_reason, la píldora muestra el motivo (escapado; el
+  // texto completo va en el title).
+  const hold = String((parseViral(c).hold_reason || "")).trim();
+  if (hold) return `<span class="pill bad" title="${esc(hold)}">Bloqueado · ${esc(hold)}</span>`;
   return `<span class="pill bad" title="${human ? "Sin subtítulos completos: necesita transcripción humana" : "Publicar está bloqueado"}">${human ? "Bloqueado · sin voz" : "Bloqueado"}</span>`;
 }
 function platStatePill(raw) {
@@ -1878,23 +1883,38 @@ function renderEditor(c) {
   const pub = $("edPublish");
   pub.disabled = (requirePreview && !seen) || subsBlocked;
   const subsComplete = Number(c.subtitles_complete) === 1;
+  // Retención por título (2026-11-26, spec títulos R3.4/I5): el
+  // aviso cubre también el clip retenido por título, no solo el
+  // rescate por gritos.
+  const holdReason = String(((parseJsonObj(c.viral) || {}).hold_reason || "")).trim();
   $("edPublishNote").textContent = (rescue && subsBlocked)
     ? (subsComplete
       ? `Publicar está bloqueado: clip rescatado (viralidad ${rescue.viral_revisado} < 50). Revísalo y desbloquéalo abajo para poder publicarlo.`
       : `Publicar está bloqueado: clip rescatado (viralidad ${rescue.viral_revisado} < 50) y sin subtítulos completos: necesita transcripción humana antes de desbloquearlo.`)
-    : (subsBlocked ? "Publicar está bloqueado: sin subtítulos completos, necesita transcripción humana." : (seen ? "Preview vista: puedes publicar." : (requirePreview ? "Publicar está bloqueado: falta ver el preview en el Editor." : "Preview no vista: no hace falta verlo para publicar (la exigencia está desactivada en Ajustes).")));
+    : (holdReason && subsBlocked ? `Publicar está bloqueado: ${holdReason}. Sin título honesto: corrige el título/descripción y desbloquéalo.` : (subsBlocked ? "Publicar está bloqueado: sin subtítulos completos, necesita transcripción humana." : (seen ? "Preview vista: puedes publicar." : (requirePreview ? "Publicar está bloqueado: falta ver el preview en el Editor." : "Preview no vista: no hace falta verlo para publicar (la exigencia está desactivada en Ajustes)."))));
   // Desbloqueo del rescate: solo el usuario, tras revisar el clip
   // en el Editor, quita el freno (PATCH publish_blocked=0). Solo
   // aparece si los subtítulos están completos: un rescatado sin voz
   // sigue bloqueado por subtítulos, no se puede colar por aquí.
+  // Retención por título (2026-11-26, I5): el botón aparece también
+  // cuando publish_blocked=1 y existe viral.hold_reason. El Worker
+  // exige un título nuevo en el mismo PATCH para desbloquear un
+  // retenido, así que se manda el título SEO del campo (si lo hay):
+  // si el usuario corrigió el título pero no lo guardó, el
+  // desbloqueo lo guarda junto con el desbloqueo; si no corrigió
+  // nada, el Worker responde 400 con el motivo.
   const unblockBtn = $("edUnblockRescue");
   if (unblockBtn) {
-    unblockBtn.classList.toggle("hidden", !(rescue && subsBlocked && subsComplete));
+    const showUnblock = (rescue && subsBlocked && subsComplete) || (holdReason !== "" && subsBlocked);
+    unblockBtn.classList.toggle("hidden", !showUnblock);
+    unblockBtn.textContent = (holdReason !== "" && !rescue) ? "Revisado: desbloquear este clip retenido" : "Revisado: desbloquear este rescatado";
     unblockBtn.onclick = async () => {
       unblockBtn.disabled = true;
       try {
-        await patchEditorClip({ publish_blocked: 0 });
-        showMsg("Rescatado desbloqueado: ya puedes publicarlo.", "info");
+        const seoTitleInput = $("edSeoTitle");
+        const seoTitle = seoTitleInput ? String(seoTitleInput.value || "").trim() : "";
+        await patchEditorClip(holdReason !== "" && seoTitle !== "" ? { seo_title: seoTitle, publish_blocked: 0 } : { publish_blocked: 0 });
+        showMsg(holdReason !== "" ? "Clip retenido desbloqueado: ya puedes publicarlo." : "Rescatado desbloqueado: ya puedes publicarlo.", "info");
       } catch (e) { showMsg(e.message, "err"); }
       unblockBtn.disabled = false;
     };

@@ -52,6 +52,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import clipagent.vod_fallback as vod_fallback  # noqa: E402
+from clipagent import llm  # noqa: E402
 from clipagent.detect import score_clip  # noqa: E402
 from clipagent.facebook_cut import (  # noqa: E402
     FACEBOOK_FORMAT,
@@ -116,9 +117,62 @@ def _transcript(windows):
 
 
 def _segment_transcript(n_words=60):
-    text = " ".join(f"palabra{i}" for i in range(n_words))
+    """Transcripción del segmento: 60 palabras reales (2026-11-26,
+    spec títulos-verdad): antes eran 60 «palabraN» genéricas, lo
+    que valía cuando el título no leía la transcripción; ahora el
+    paquete Gemini se ancla al momento (la jugada brutal de Noni)
+    y el conteo (60) no cambia: el score 54,4 queda intacto."""
+    text = ("jaja qué jugada brutal increíble vamos no lo puedo "
+            "creer en gta 6 el avión se queda sin combustible y se "
+            "estrella entre edificios mira el humo sale del motor "
+            "y cae en picado sobre la ciudad vamos vamos vamos no "
+            "me lo creo esto es de cine total qué locura de "
+            "aterrizaje chicos madre mía madre mía madre mía")
     return {"segments": [{"start": 0.0, "end": 17.0, "text": text,
                           "words": _words(text, 0.0)}]}
+
+
+class FakeLLM(llm.LLMClient):
+    """LLM de pruebas: devuelve el paquete que se le pasa."""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def available(self):
+        return True
+
+    def generate(self, prompt):
+        return json.dumps(self.payload)
+
+
+# Paquete Gemini falso para el camino VOD (spec títulos-verdad):
+# título anclado a la transcripción del segmento, descripción con
+# el juego y cierre con pregunta, 4 hashtags de contenido +
+# #Shorts, miniatura con sentido. Sin él el paquete queda retenido
+# (Gemini -> retención).
+FB_PACKAGE = {
+    "title": "GTA 6: Noni y su jugada brutal increíble",
+    "description": "Noni hace una jugada brutal increíble en GTA 6 "
+                   "con el avión sin combustible. ¿Viste cómo "
+                   "termina?",
+    "hashtags": ["#GTA6", "#Noni", "#JugadaBrutal", "#Avion",
+                 "#Shorts"],
+    "thumbnail_text": "LA JUGADA BRUTAL",
+}
+
+# Paquete para el reel de 70 s (test_reel_70s): el múltiple de
+# audio real de ese clip es 3.31 (< 5), así que el título NO
+# puede usar superlativos con condición multiple>=5 («brutal»,
+# «increíble»): la verificación los rechaza y el clip queda
+# retenido. Mismo momento, sin superlativos.
+FB_PACKAGE_70S = {
+    "title": "GTA 6: Noni y su jugada en el avión sin combustible",
+    "description": "Noni hace una jugada en GTA 6 con el avión sin "
+                   "combustible. ¿Viste cómo termina?",
+    "hashtags": ["#GTA6", "#Noni", "#Jugada", "#Avion",
+                 "#Shorts"],
+    "thumbnail_text": "LA JUGADA DEL AVIÓN",
+}
 
 
 def _meta(**over):
@@ -516,34 +570,53 @@ class TestBuildFacebookPackage(unittest.TestCase):
         pkg = build_facebook_package(
             "#gta6 #noni #noniclips #clipsdenoni #gta",
             "jaja qué jugada brutal increíble", "noni", "es",
-            2, 3, 5.62, True)
+            2, 3, 5.62, True, llm_client=FakeLLM(FB_PACKAGE))
         self.assertEqual(pkg["viral"]["game"], "GTA VI")
         self.assertEqual(pkg["moment_card"]["game"], "GTA VI")
         self.assertTrue(pkg["viral"]["best_title"])
         self.assertTrue(pkg["title_es"])
         self.assertTrue(pkg["title_en"])
-        self.assertEqual(pkg["viral"]["description"],
-                         "#gta6 #noni #noniclips #clipsdenoni #gta")
+        # La descripción ya NO es la del vídeo: la escribe Gemini
+        # desde el momento (spec títulos-verdad §6.4); el título
+        # del vídeo/descripción del reel no fija el paquete.
+        self.assertIn("jugada brutal", pkg["viral"]["description"])
+        self.assertIn("GTA 6", pkg["viral"]["description"])
+        # El cierre es una pregunta generada por clip; el crédito
+        # fijo («Clip de noni en directo») va DESPUÉS, así que la
+        # descripción no termina en «?».
+        self.assertIn("¿Viste cómo termina?",
+                      pkg["viral"]["description"])
+        self.assertIn("Clip de noni en directo",
+                      pkg["viral"]["description"])
         self.assertEqual(pkg["viral"]["viral_multiple"], 5.62)
         self.assertEqual(
             set(pkg["seo_scores"]),
             {"youtube_shorts", "tiktok", "instagram_reels",
              "facebook_reels"})
-        # MEDIDO 2026-11-25: el paquete suggest-only real puntúa
-        # 51-54 (no llega a 80). Se registra, no se afirma que
-        # pase: la calibración es de aceptación (spec §3.1).
+        # El paquete suggest-only real medía 51-54 (no llegaba a
+        # 80) — esa era la causa sistemática del bug de títulos.
+        # Con el paquete Gemini el SEO pasa la puerta en las 4.
         scores = {p: v["score"]
                   for p, v in pkg["seo_scores"].items()}
         self.assertTrue(all(isinstance(v, (int, float))
                             for v in scores.values()))
-        self.assertEqual(scores, {
-            "youtube_shorts": 51, "tiktok": 54,
-            "instagram_reels": 53, "facebook_reels": 52})
+        self.assertTrue(all(v >= 80 for v in scores.values()),
+                        scores)
 
     def test_sin_verificar_no_hay_game(self):
         pkg = build_facebook_package(
             "#noni", "hablando normal del juego", "noni", "es",
-            0, 0, 1.0, False)
+            0, 0, 1.0, False, llm_client=FakeLLM({
+                "title": "Noni habla del juego en directo sin parar",
+                "description": "Noni habla del juego en directo "
+                               "sin parar. ¿Qué te parece?",
+                "hashtags": ["#Noni", "#Directo", "#Juego", "#Charla",
+                             "#Shorts"],
+                # La miniatura NO puede repetir el título (regla
+                # preexistente: el texto completo es subcadena del
+                # título y el paquete se rechaza).
+                "thumbnail_text": "CHARLA EN DIRECTO",
+            }))
         self.assertNotIn("game", pkg["viral"])
         self.assertNotIn("game", pkg["moment_card"])
         self.assertNotIn("GTA", pkg["viral"]["best_title"])
@@ -551,10 +624,26 @@ class TestBuildFacebookPackage(unittest.TestCase):
     def test_sin_descripcion_extracto_mas_linea_factual(self):
         pkg = build_facebook_package(
             "", "el avión se queda sin combustible y se estrella "
-            "entre edificios", "noni", "es", 1, 2, 3.0, True)
-        self.assertIn("el avión se queda sin combustible",
+            "entre edificios", "noni", "es", 1, 2, 3.0, True,
+            llm_client=FakeLLM({
+                "title": "GTA 6: El avión se queda sin combustible",
+                "description": "El avión se queda sin combustible "
+                               "y se estrella entre edificios en "
+                               "GTA 6. ¿Viste cómo termina?",
+                "hashtags": ["#GTA6", "#Noni", "#Avion", "#Edificios",
+                             "#Shorts"],
+                # La miniatura NO puede repetir el título (regla
+                # preexistente): «SIN COMBUSTIBLE» es subcadena del
+                # título y el paquete se rechaza; el payoff es que
+                # el avión cae.
+                "thumbnail_text": "EL AVIÓN CAE",
+            }))
+        self.assertIn("El avión se queda sin combustible",
                       pkg["viral"]["description"])
-        self.assertIn("Clip de noni en GTA 6",
+        # La línea factual fija («Clip de noni en GTA 6») ya no
+        # existe: el crédito que se mantiene es «Clip de noni en
+        # directo» (R6.1).
+        self.assertIn("Clip de noni en directo",
                       pkg["viral"]["description"])
 
 
@@ -692,6 +781,9 @@ class TestRunFacebookClips(unittest.TestCase):
             "render_fn": self._render,
             "validate_fn": self._validate,
             "layout_fn": self._layout,
+            # Paquete Gemini falso (spec títulos-verdad): sin LLM
+            # el paquete queda retenido y no sale ningún clip.
+            "llm_client": FakeLLM(FB_PACKAGE),
         }
         kwargs.update(over)
         return run_facebook_clips(REEL_URL, self.out, top_n=2,
@@ -749,12 +841,13 @@ class TestRunFacebookClips(unittest.TestCase):
         self.assertEqual(len(on_disk["clips"]), 1)
         self.assertEqual(on_disk["clips"][0]["viral"]["best_title"],
                          viral["best_title"])
-        # Puertas: viralidad y juego pasan; el SEO suggest-only
-        # real (51-54) NO llega a 80: el clip no pasa las puertas
-        # por SEO (medido, no bajado: spec §3.1).
+        # Puertas (2026-11-26, spec títulos-verdad): el paquete
+        # suggest-only real medía 51-54 y NO pasaba la puerta SEO;
+        # con el paquete Gemini (título, descripción, hashtags y
+        # miniatura desde el momento) el SEO pasa y el clip pasa
+        # las puertas. El 51-54 era el bug, no la calibración.
         ok, reasons = clip_passes_gates(clip, REEL_ID)
-        self.assertFalse(ok)
-        self.assertTrue(any("SEO" in r for r in reasons))
+        self.assertTrue(ok, reasons)
 
     def test_con_titulos_que_pasan_seo_pasa_puertas_y_se_encola(self):
         manifest = self._run(titles_fn=_titles_passing)
@@ -836,7 +929,8 @@ class TestRunFacebookClips(unittest.TestCase):
             transcribe_fn=_transcribe70,
             rms_fn=_rms70, segment_fn=self._segment,
             render_fn=self._render, validate_fn=self._validate,
-            layout_fn=self._layout, titles_fn=_titles_passing)
+            layout_fn=self._layout, titles_fn=_titles_passing,
+            llm_client=FakeLLM(FB_PACKAGE_70S))
         # Audio completo UNA vez (single_url=True -> modo full);
         # el muestreo no se usa.
         self.assertEqual(len(self.calls["audio"]), 1)

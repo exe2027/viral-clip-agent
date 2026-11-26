@@ -483,11 +483,18 @@ describe("V3: la pasada registra lo encontrado por plataforma+idioma", () => {
     const { d1, raw } = makeDb();
     await seedSettings(raw, { engagement_enabled: true });
     await seedZernioTikTok(raw, "es");
+    // R7.1: los comentarios traen el id nativo del post, que
+    // resuelve al clip ES en D1; sin él no se respondería.
+    raw.query("INSERT INTO clips (id, tenant_id, title, language, created_at, updated_at) VALUES (7, 'sebastian', 'Rubius descubre los cromos', 'es', ?1, ?1)").run(NOW);
+    raw.query(
+      "INSERT INTO jobs (tenant_id, kind, clip_id, platform, language, state, platform_id, evidence_url, created_at, updated_at) " +
+        "VALUES ('sebastian', 'publish', 7, 'tiktok', 'es', 'posted', '7711400021152812306', 'https://www.tiktok.com/@elclipdegta6____bits/video/7711400021152812306', ?1, ?1)",
+    ).run(NOW);
     const accounts = { accounts: [{ _id: "acc_tt_es", platform: "tiktok", username: "elclipdegta6____bits" }] };
     const inbox = { data: [{ id: "post1", platform: "tiktok", accountId: "acc_tt_es", commentCount: 2 }] };
     const comments = [
-      { id: "c1", text: "¡Buenísimo!", from: { username: "fan1" } },
-      { id: "c2", text: "jaja qué bueno", from: { username: "fan2" } },
+      { id: "c1", text: "¡Buenísimo!", from: { username: "fan1" }, platformPostId: "7711400021152812306" },
+      { id: "c2", text: "jaja qué bueno", from: { username: "fan2" }, platformPostId: "7711400021152812306" },
     ];
     stubFetch([
       { status: 200, body: accounts },

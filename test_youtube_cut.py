@@ -40,6 +40,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from clipagent import llm  # noqa: E402
 from clipagent.detect import score_clip  # noqa: E402
 from clipagent.vod_fallback import (  # noqa: E402
     burn_and_enqueue,
@@ -109,10 +110,50 @@ def _full_transcript():
 
 
 def _segment_transcript():
-    """Transcripción del segmento: 60 palabras (audio >= 50 -> +1)."""
-    text = " ".join(f"palabra{i}" for i in range(60))
+    """Transcripción del segmento: 60 palabras (audio >= 50 -> +1).
+
+    Texto realista (2026-11-26, spec títulos-verdad): antes eran
+    60 «palabraN» genéricas, lo que valía cuando el título no leía
+    la transcripción; ahora el paquete Gemini se ancla al momento
+    y el título falso debe nombrar la persecución de 6 estrellas.
+    El conteo (60) no cambia: el score 54,4 queda intacto."""
+    text = ("rubius escapa de la policía en el aeropuerto con seis "
+            "estrellas encima y el helicóptero viene por detrás no "
+            "hay forma de salir de aquí el coche ya no corre más "
+            "mira el mapa está en rojo todo el mundo me busca vamos "
+            "vamos que nos pillan en la pista vamos vamos vamos "
+            "corre corre corre no pares sigue sigue")
     return {"segments": [{"start": 0.0, "end": 49.0, "text": text,
                           "words": _words(text, 0.0)}]}
+
+
+class FakeLLM(llm.LLMClient):
+    """LLM de pruebas: devuelve el paquete que se le pasa."""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def available(self):
+        return True
+
+    def generate(self, prompt):
+        return json.dumps(self.payload)
+
+
+# Paquete Gemini falso para el camino VOD (spec títulos-verdad):
+# título anclado a la transcripción del segmento (persecución de
+# 6 estrellas en el aeropuerto), descripción con el juego y cierre
+# con pregunta, 4 hashtags de contenido + #Shorts, miniatura con
+# sentido. Sin él el paquete queda retenido (Gemini -> retención).
+YT_PACKAGE = {
+    "title": "GTA 6: Rubius escapa de la policía en el aeropuerto",
+    "description": "Rubius escapa de la policía en el aeropuerto "
+                   "de GTA 6 con seis estrellas encima. ¿Crees que "
+                   "logra salir?",
+    "hashtags": ["#GTA6", "#Rubius", "#Policia", "#Aeropuerto",
+                 "#Shorts"],
+    "thumbnail_text": "ESCAPA DEL AEROPUERTO",
+}
 
 
 def _rms_full():
@@ -530,6 +571,9 @@ class TestRunYoutubeClips(unittest.TestCase):
             "render_fn": self._render,
             "validate_fn": self._validate,
             "layout_fn": self._layout,
+            # Paquete Gemini falso (spec títulos-verdad): sin LLM
+            # el paquete queda retenido y no sale ningún clip.
+            "llm_client": FakeLLM(YT_PACKAGE),
         }
         kwargs.update(over)
         return run_youtube_clips(VIDEO_URL, self.out, top_n=2,
@@ -647,7 +691,7 @@ class TestRunYoutubeClips(unittest.TestCase):
             rms_fn=lambda p: _rms_short(),
             segment_fn=self._segment,
             render_fn=self._render, validate_fn=self._validate,
-            layout_fn=self._layout)
+            layout_fn=self._layout, llm_client=FakeLLM(YT_PACKAGE))
         self.assertEqual(len(manifest["clips"]), 1)
         clip = manifest["clips"][0]
         self.assertEqual(clip["start"], 0)
@@ -696,7 +740,7 @@ class TestRunYoutubeClips(unittest.TestCase):
             rms_fn=self._rms,
             segment_fn=self._segment,
             render_fn=self._render, validate_fn=self._validate,
-            layout_fn=self._layout)
+            layout_fn=self._layout, llm_client=FakeLLM(YT_PACKAGE))
         # Muestreo: 15 muestras cada 120 s (1750 s, barrido).
         self.assertEqual(len(self.calls["samples"]), 15)
         self.assertEqual(len(manifest["clips"]), 1)

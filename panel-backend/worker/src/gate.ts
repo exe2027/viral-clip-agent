@@ -221,9 +221,15 @@ export function publishGate(platform: PanelPlatform, g: GateContext): string | n
   // bajo el mínimo, puerta única 45/80 desde P0 #3).
   if (clip.publish_blocked === 1) {
     try {
-      const rescue = parseViralJson(clip.viral).rescue;
+      const viral = parseViralJson(clip.viral);
+      // Retención por título (2026-11-26, spec títulos R3.4/I5):
+      // el motivo guardado manda, para que el ciclo registre el
+      // mismo motivo que muestra la píldora del panel.
+      const hold = (viral.hold_reason ?? "").trim();
+      if (hold) return `retenido para revisión: ${hold} — corrige el título/descripción y desbloquéalo en el Editor`;
+      const rescue = viral.rescue;
       if (rescue) return `rescatado por gritos (viralidad ${rescue.viral_revisado} < ${s.min_virality}): bloqueado hasta revisión humana — desbloquéalo en el Editor`;
-    } catch { /* sin rescue medido: cae al freno de subtítulos */ }
+    } catch { /* sin viral medido: cae al freno de subtítulos */ }
   }
   if (clip.publish_blocked === 1) return "sin subtítulos completos: necesita transcripción humana";
   // PUERTA DE CALIDAD B4 (2026-11-20): ningún job nace para un

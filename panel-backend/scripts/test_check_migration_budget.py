@@ -406,14 +406,18 @@ class TestDeployScript(unittest.TestCase):
     def test_strip_triggers_real_template(self):
         sys.path.insert(0, HERE)
         import deploy_with_token  # noqa: E402
-        text = open(os.path.join(ROOT, "wrangler.sebastian.toml"),
+        # 2026-11-26: wrangler.sebastian.toml YA NO trae [triggers]
+        # (decisión del usuario, commit 7230658: se quitaron los
+        # temporizadores de avc-sebastian, ciclo parado). La
+        # plantilla real CON triggers es wrangler.toml (avc vivo).
+        text = open(os.path.join(ROOT, "wrangler.toml"),
                     encoding="utf-8").read()
         self.assertTrue(deploy_with_token.toml_has_triggers(text))
         stripped = deploy_with_token.strip_triggers(text)
         self.assertFalse(deploy_with_token.toml_has_triggers(stripped))
         self.assertNotIn("crons =", stripped)
         self.assertIn("Cron APAGADO", stripped)
-        self.assertIn('name = "avc-sebastian"', stripped)
+        self.assertIn('name = "avc"', stripped)
         self.assertIn('TENANT = "sebastian"', stripped)
 
 

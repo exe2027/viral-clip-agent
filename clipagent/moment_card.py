@@ -88,6 +88,21 @@ ACTION_LEXICON = [
     ("penal", "un penal", ["penal", "penalti"]),
     ("clutch", "ganar un clutch", ["clutch"]),
     ("falla", "fallar algo", ["falla", "falló", "fallo"]),
+    # 2026-11-26 (spec títulos-verdad): el léxico era de fútbol/
+    # shooter y no conocía acciones que NOUN_EVIDENCE (config.yaml
+    # titles.noun_evidence) sí conoce: un título VOD que nombra
+    # "jugada" o "partido" fallaba el check de evidencia baja
+    # aunque la transcripción lo dijera. Cada sustantivo del
+    # validador tiene que tener su acción aquí, o ningún título
+    # que lo nombre puede pasar. "vuela"/"estrella" son el choque
+    # de GTA (el coche que sale volando / se estrella).
+    ("jugada", "hacer una jugada", ["jugada", "jugadón", "jugar",
+                                    "jugó", "jugo"]),
+    ("partido", "jugar un partido", ["partido", "partidazo"]),
+    ("vuela", "volar por los aires", ["vuela", "voló", "volar",
+                                      "sale volando"]),
+    ("estrella", "estrellarse", ["se estrella", "estrella",
+                                 "estrelló", "estrellarse"]),
 ]
 
 # Palabras que no aportan nada como "qué pasa" (reacción, no acción).
@@ -260,7 +275,8 @@ def build_moment_card(clip_path, chat_path, srt_path=None, transcript_path=None,
                       streamer="", game=None, game_source="", language="es",
                       peak_ts_vod=None, clip_start_vod=None, clip_duration_s=60,
                       score=None, risas=0, hype=0, median_score=None,
-                      vod_id=None, clip_start_fallback=None, category=None):
+                      vod_id=None, clip_start_fallback=None, category=None,
+                      transcript_text=None):
     """Construye la ficha del momento. ``game`` None = juego desconocido.
 
     ``category``: categoría cruda del capítulo del VOD donde cae el
@@ -269,6 +285,11 @@ def build_moment_card(clip_path, chat_path, srt_path=None, transcript_path=None,
     la ficha la guarda para que el gate de publicación la exija.
     ``peak_ts_vod`` / ``clip_start_vod`` en segundos del VOD. Si no se
     pasan, el payoff queda en None y la ficha lo marca (evidence low).
+    ``transcript_text`` (2026-11-26, spec títulos-verdad): texto ya
+    transcrito del clip (sin archivo SRT/JSON a mano, camino VOD):
+    si no hay segmentos de archivo, se usa como un único segmento
+    0–clip_duration_s para que la ficha sepa qué pasa (acciones,
+    cita del streamer, evidencia) en vez de quedar en evidence low.
     """
     clip_path = Path(clip_path) if clip_path else None
     messages = load_chat(chat_path) if chat_path else []
@@ -278,6 +299,12 @@ def build_moment_card(clip_path, chat_path, srt_path=None, transcript_path=None,
         segments = parse_srt(srt_path)
     if not segments and transcript_path:
         segments, lang_detected = parse_transcript_json(transcript_path)
+    if not segments and transcript_text:
+        # Texto ya transcrito sin archivo (camino VOD): un único
+        # segmento que cubre el clip; la ficha detecta acciones y
+        # cita del streamer desde el audio real, no inventado.
+        segments = [{"start": 0.0, "end": float(clip_duration_s),
+                     "text": str(transcript_text), "words": []}]
     transcript_text = " ".join(s["text"] for s in segments)
 
     if peak_ts_vod is not None and clip_start_vod is not None:

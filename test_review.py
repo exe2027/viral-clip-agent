@@ -368,7 +368,45 @@ class TestProcessPeakReview(unittest.TestCase):
                   "burst_score": 5.9}
         return (float(ts), 14.3, 1.09, detail)
 
-    def _patch_process(self, viral_auto, review_result):
+    def _patch_process(self, viral_auto, review_result, pkg=None):
+        # 2026-11-26 (spec títulos-verdad §6.1): build_title está
+        # eliminado; el título sale del paquete DEFINITIVO
+        # (metadata.package_clip, después de la transcripción).
+        # subtitle_clip se simula en dos llamadas: la 1 transcribe
+        # (burn=None, escribe SRT + .transcript.json reales) y la
+        # 2 quema (reutiliza el SRT).
+        pkg = pkg or {
+            "best_title": "Título test",
+            "description": "Descripción de prueba.",
+            "description_first_2_lines": "Descripción de prueba.",
+            "tags": ["gta 6"], "hashtags": ["#GTA6"],
+            "thumbnail_text": "PRUEBA", "pkg_source": "gemini",
+            "needs_human_review": False}
+
+        def _sub(video, srt=None, burn=None, **kw):
+            if burn is None:
+                srt_path = srt or (os.path.splitext(video)[0] + ".srt")
+                tpath = os.path.splitext(srt_path)[0] \
+                    + ".transcript.json"
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:00,000 --> 00:00:03,500\n"
+                            "no me creo que estemos aquí\n")
+                with open(tpath, "w", encoding="utf-8") as f:
+                    json.dump({"segments": [
+                        {"start": 0.0, "end": 3.5,
+                         "text": "no me creo que estemos aquí",
+                         "words": [
+                             {"word": "no", "start": 0.0, "end": 0.5},
+                             {"word": "me", "start": 0.5, "end": 1.0},
+                             {"word": "creo", "start": 1.0,
+                              "end": 1.5}]}],
+                        "word_count": 6}, f)
+                return {"srt": srt_path, "transcript": tpath,
+                        "no_speech": False}
+            with open(burn, "wb") as f:
+                f.write(b"fake-burned")
+            return {"srt": srt, "burned": burn, "no_speech": False}
+
         pkg_path = os.path.join(self.out, "pkg.json")
         patches = [
             mock.patch("clipagent.detect.score_clip",
@@ -378,14 +416,16 @@ class TestProcessPeakReview(unittest.TestCase):
             mock.patch("clipagent.workers.cut_clip",
                        return_value={"layout": {}}),
             mock.patch("clipagent.workers.subtitle_clip",
-                       return_value={"publish_blocked": False}),
+                       side_effect=_sub),
+            mock.patch("clipagent.metadata.package_clip",
+                       return_value=dict(pkg)),
+            mock.patch("clipagent.workers.apply_sfx",
+                       side_effect=lambda v, **kw: (v, {})),
             mock.patch("clipagent.workers.package_clip_step",
                        return_value={"package_path": pkg_path}),
             mock.patch("clipagent.live_cutter.finalize_package",
                        return_value={"seo": {"youtube_shorts": 92},
                                      "priority": {}}),
-            mock.patch("clipagent.live_cutter.build_title",
-                       return_value="Título test"),
             mock.patch("clipagent.priority.publish_status",
                        return_value=("publicable", "ok")),
             # La puerta final se mockea como aprobada: estos tests
@@ -426,13 +466,11 @@ class TestProcessPeakReview(unittest.TestCase):
         self.assertEqual(len(session._reviewed_peaks), 1)
         cut.assert_called_once()
 
-    def test_paso7_usa_el_paquete_de_la_revision(self):
-        # 2026-11-19, calibración: el SEO post-corte se mide sobre
-        # el paquete Gemini de la revisión (título + descripción +
-        # tags + miniatura). 2026-11-19 (título Gemini): el paquete
-        # se construye ANTES del quemado, así que la franja lleva
-        # el título Gemini y no el de reglas: quemado y publicación
-        # usan el MISMO título.
+    def test_paso7_usa_el_paquete_definitivo_no_el_de_la_revision(self):
+        # 2026-11-26 (spec títulos-verdad §6.1): el paquete de la
+        # revisión ya NO alimenta el paso 7. El título se decide
+        # DESPUÉS de la transcripción y el paquete DEFINITIVO
+        # (post-transcripción) es el que se quema y se publica.
         review_ok = {"pasa": True, "motivo": "revisión ok",
                      "viral_revisado": 53.8, "human": {"hook": 8},
                      "audio": {"stats": {}, "words": 40},
@@ -450,38 +488,38 @@ class TestProcessPeakReview(unittest.TestCase):
         self.assertIsNotNone(record)
         from clipagent import workers as _workers
         _args, kwargs = _workers.package_clip_step.call_args
-        # El título viaja como 2º argumento posicional.
-        self.assertEqual(_args[1], 'GTA 6: El chat: "Cinema"')
+        # El título viaja como 2º argumento posicional, y es el
+        # DEFINITIVO ("Título test"), no el de la revisión.
+        self.assertEqual(_args[1], "Título test")
         self.assertEqual(kwargs["description"],
-                         "GTA 6: el chat explotó.")
-        self.assertEqual(kwargs["tags"], ["gta 6", "cinema"])
-        self.assertEqual(kwargs["thumbnail_text"], "CINEMA")
+                         "Descripción de prueba.")
+        self.assertEqual(kwargs["tags"], ["gta 6"])
+        self.assertEqual(kwargs["thumbnail_text"], "PRUEBA")
         self.assertEqual(kwargs["lang"], "es")
-        # El registro lleva el título de publicación, y el quemado
-        # es EL MISMO (el paquete se construyó antes del quemado).
-        self.assertEqual(record["title"], 'GTA 6: El chat: "Cinema"')
-        self.assertEqual(record["burned_title"],
-                         'GTA 6: El chat: "Cinema"')
+        # El registro lleva el título definitivo, y el quemado es
+        # EL MISMO (el paquete se construyó tras la transcripción).
+        self.assertEqual(record["title"], "Título test")
+        self.assertEqual(record["burned_title"], "Título test")
         self.assertEqual(record["pkg_source"], "gemini")
-        self.assertEqual(record["thumbnail_text"], "CINEMA")
+        self.assertEqual(record["thumbnail_text"], "PRUEBA")
+        self.assertNotIn("Cinema", record["title"])
 
     def test_paso7_directo_construye_paquete_con_visible(self):
-        # Sin revisión (viral auto >= 50): el paso 7 construye el
-        # mismo paquete Gemini que el pre-corte, con lo visible
-        # real del layout (split -> cams+gameplay).
+        # Sin revisión (viral auto >= 50): el paso 7 usa el paquete
+        # DEFINITIVO (post-transcripción), con lo visible real del
+        # layout (split -> cams+gameplay).
         pkg_full = {"best_title": "GTA 6: directo total",
                     "description_first_2_lines":
                         "GTA 6: jugada directa.",
                     "tags": ["gta 6"], "hashtags": ["#GTA6"],
-                    "thumbnail_text": "DIRECTO", "pkg_source": "gemini"}
-        self._patch_process(51.4, None)
+                    "thumbnail_text": "DIRECTO", "pkg_source": "gemini",
+                    "needs_human_review": False}
+        self._patch_process(51.4, None, pkg=pkg_full)
         session = self._session(51.4)
         layout = {"mode": "split", "segments": [
             {"start": 0.0, "end": 40.0, "layout": "split"}]}
         with mock.patch("clipagent.workers.cut_clip",
-                        return_value={"layout": layout}), \
-                mock.patch("clipagent.workers.pre_corte_package",
-                           return_value=(pkg_full, {})):
+                        return_value={"layout": layout}):
             record = session.process_peak(self._peak())
         self.assertIsNotNone(record)
         from clipagent import workers as _workers

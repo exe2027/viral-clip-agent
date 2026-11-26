@@ -289,6 +289,85 @@ DEFAULT_CONFIG = {
         "base_url": "https://avc-em9.pages.dev",
         "worker_url": "https://avc.vikingosfoodspa.workers.dev",
     },
+    # Títulos verdad (spec 2026-11-25, enmienda 2026-11-26):
+    # FUENTE ÚNICA de las listas que usa el check promesa-payoff
+    # (clipagent/metadata.py las lee de aquí, nunca hardcodeadas).
+    # Falta un valor requerido -> ConfigError ruidoso, nunca
+    # default silencioso (ver load_titles_config).
+    #   * cliches_es/en: frases/palabras prohibidas (R2.1) salvo
+    #     evidencia según §3.3 (transcripción para el streamer,
+    #     chat para el chat) o cita literal (I3, §3.7).
+    #   * generic_words: palabras de MEDIO exentas del check de
+    #     evidencia (chat, directo, stream, clip, vídeo, momento).
+    #     "risa/risas/hype/explotó/reacción" YA NO están exentas.
+    #   * superlatives_es/en: palabras de la tabla de superlativos;
+    #     su condición de evidencia vive en metadata.py
+    #     (_SUPERLATIVE_CONDITIONS). Una palabra de la lista de
+    #     clichés manda sobre la tabla (M3).
+    #   * noun_evidence: sustantivo prometido -> tokens que deben
+    #     aparecer en transcripción/chat/ficha.
+    #   * laughter_tokens: tokens de risa hablada del streamer.
+    #   * dedupe_days: ventana anti-duplicado exacto (R4.1).
+    #   * pattern_window: últimos N títulos para el patrón (R4.2).
+    #   * title_len: [mín, máx] caracteres del título (40-55).
+    #   * gemini_retries: reintentos Gemini antes de retener (R2.2).
+    "titles": {
+        "cliches_es": [
+            "risa imparable", "no puede parar de reírse",
+            "no paraba de reírse", "se murió de risa",
+            "hype máximo", "hype desatado",
+            "el chat explotó", "el chat enloqueció",
+            "el chat no paraba", "no lo podía creer",
+            "nadie se lo creía", "momento que el chat clippeó",
+            "mira por qué reaccionó el chat",
+            "hizo reír al chat", "la risa de X con el chat",
+        ],
+        "cliches_en": [
+            "couldn't stop laughing", "chat went crazy",
+            "chat exploded", "chat lost it",
+            "nobody could believe it", "the moment chat clipped",
+            "watch what chat reacted to", "broke chat",
+            "insane", "unreal", "crazy", "craziest",
+        ],
+        "generic_words": ["chat", "directo", "stream", "clip",
+                          "vídeo", "momento"],
+        "superlatives_es": [
+            "mejor", "peor", "loco", "locura", "insano",
+            "increíble", "increible", "épico", "epico", "brutal",
+            "imposible", "roto", "rompió", "nadie", "nunca",
+            "todos", "siempre", "imparable", "máximo", "desatado",
+            "total",
+        ],
+        "superlatives_en": [
+            "best", "worst", "craziest", "insane", "epic",
+            "broke", "nobody", "everyone", "ever",
+            "unstoppable", "maximum", "unreal", "crazy",
+        ],
+        "noun_evidence": {
+            "jugada": ["jugada", "jugar", "jugo", "jugó"],
+            "tiro": ["tiro", "dispar", "erra", "patea"],
+            "disparo": ["dispar", "tiro"],
+            "penal": ["penal", "penalti"],
+            "gol": ["gol"],
+            "partido": ["partido"],
+            "muerte": ["muere", "murio", "mata", "mato"],
+            "robo": ["robo", "roba", "robo"],
+            "coche": ["coche", "auto", "carro"],
+            "clutch": ["clutch"],
+            "risa": ["risa", "jaja", "kekw", "lol"],
+            "reacción": ["reaccion", "no"],
+            "reaccion": ["reaccion", "no"],
+            "play": ["play", "jugada", "clutch"],
+            "shot": ["shot", "tiro", "dispar"],
+            "goal": ["gol", "goal"],
+        },
+        "laughter_tokens": ["jaja", "jeje", "jajaja", "jejeje",
+                            "lol", "kekw", "lmao"],
+        "dedupe_days": 30,
+        "pattern_window": 10,
+        "title_len": [40, 55],
+        "gemini_retries": 2,
+    },
 }
 
 
@@ -771,6 +850,103 @@ def load_validator_config(cfg=None):
         "observe_only": bool(review["observe_only"]),
         "templates": recipes,
         "default_template": default,
+    }
+
+
+# Claves obligatorias de la sección ``titles:`` (spec títulos
+# 2026-11-25, R9.1). Sin default silencioso: falta una -> ConfigError.
+TITLES_REQUIRED_KEYS = (
+    "cliches_es", "cliches_en", "generic_words",
+    "superlatives_es", "superlatives_en", "noun_evidence",
+    "laughter_tokens", "dedupe_days", "pattern_window",
+    "title_len", "gemini_retries",
+)
+
+
+def load_titles_config(cfg=None):
+    """Config de títulos verdad (spec 2026-11-25, R9.1).
+
+    ÚNICA fuente: la sección ``titles:`` de config.yaml (vía
+    ``load_config()``, que la fusiona sobre DEFAULT_CONFIG).
+    ``cfg`` puede ser el dict de load_config(), un dict mínimo en
+    tests, o None/{} (en ese caso se carga config.yaml en disco).
+    Si falta la sección o una clave, levanta ConfigError nombrando
+    la clave exacta y el run para, nunca sigue con un valor
+    inventado. Devuelve el dict ``titles:`` normalizado (listas
+    copiadas, ``title_len`` como [mín, máx]).
+    """
+    from .validate import ConfigError
+
+    cfg = cfg or load_config()
+    section = cfg.get("titles")
+    if not isinstance(section, dict):
+        raise ConfigError(
+            "titles: falta la sección 'titles' en config.yaml "
+            "(los títulos verdad no arrancan sin sus listas; "
+            "sin defaults silenciosos)")
+    missing = [k for k in TITLES_REQUIRED_KEYS if k not in section]
+    if missing:
+        raise ConfigError(
+            "titles: faltan claves en config.yaml: "
+            + ", ".join(f"titles.{k}" for k in missing)
+            + " (sin defaults silenciosos)")
+    for key in ("cliches_es", "cliches_en", "generic_words",
+                "superlatives_es", "superlatives_en",
+                "laughter_tokens"):
+        val = section[key]
+        if (not isinstance(val, list) or not val
+                or not all(isinstance(v, str) and v.strip() for v in val)):
+            raise ConfigError(
+                f"titles.{key}: debe ser una lista no vacía de textos, "
+                f"es {val!r}")
+    noun_ev = section["noun_evidence"]
+    if (not isinstance(noun_ev, dict) or not noun_ev
+            or not all(isinstance(v, list) and v
+                       and all(isinstance(t, str) for t in v)
+                       for v in noun_ev.values())):
+        raise ConfigError(
+            "titles.noun_evidence: debe ser un mapa no vacío de "
+            "sustantivo -> lista no vacía de tokens, "
+            f"es {noun_ev!r}")
+    dedupe_days = section["dedupe_days"]
+    if not isinstance(dedupe_days, int) or isinstance(dedupe_days, bool) \
+            or dedupe_days < 1:
+        raise ConfigError(
+            "titles.dedupe_days: debe ser un entero >= 1, "
+            f"es {dedupe_days!r}")
+    pattern_window = section["pattern_window"]
+    if not isinstance(pattern_window, int) \
+            or isinstance(pattern_window, bool) or pattern_window < 1:
+        raise ConfigError(
+            "titles.pattern_window: debe ser un entero >= 1, "
+            f"es {pattern_window!r}")
+    title_len = section["title_len"]
+    if (not isinstance(title_len, (list, tuple)) or len(title_len) != 2
+            or not all(isinstance(v, int) and not isinstance(v, bool)
+                       for v in title_len)
+            or not 1 <= title_len[0] <= title_len[1] <= 60):
+        raise ConfigError(
+            "titles.title_len: debe ser [mín, máx] con "
+            f"1 <= mín <= máx <= 60, es {title_len!r}")
+    retries = section["gemini_retries"]
+    if not isinstance(retries, int) or isinstance(retries, bool) \
+            or not 0 <= retries <= 5:
+        raise ConfigError(
+            "titles.gemini_retries: debe ser un entero entre 0 y 5, "
+            f"es {retries!r}")
+    return {
+        "cliches_es": list(section["cliches_es"]),
+        "cliches_en": list(section["cliches_en"]),
+        "generic_words": list(section["generic_words"]),
+        "superlatives_es": list(section["superlatives_es"]),
+        "superlatives_en": list(section["superlatives_en"]),
+        "noun_evidence": {k: list(v)
+                          for k, v in noun_ev.items()},
+        "laughter_tokens": list(section["laughter_tokens"]),
+        "dedupe_days": dedupe_days,
+        "pattern_window": pattern_window,
+        "title_len": [int(title_len[0]), int(title_len[1])],
+        "gemini_retries": retries,
     }
 
 

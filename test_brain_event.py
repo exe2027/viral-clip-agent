@@ -295,10 +295,42 @@ class TestLiveCutterEvents(unittest.TestCase):
             return {"layout": {"mode": "split", "segments": [
                 {"layout": "split"}]}}
 
-        def _sub(*a, **k):
-            return {"publish_blocked": subtitle_blocked,
-                    "no_speech": subtitle_blocked,
-                    "srt": None, "transcript": None}
+        def _sub(video, srt=None, burn=None, **k):
+            # 2026-11-26 (spec títulos-verdad §6.1): llamada 1
+            # (burn=None) transcribe y escribe SRT + .transcript.json
+            # reales; llamada 2 reutiliza el SRT y quema. Sin voz,
+            # la llamada 1 devuelve no_speech sin SRT.
+            if subtitle_blocked:
+                return {"publish_blocked": True,
+                        "no_speech": True,
+                        "srt": None, "transcript": None}
+            if burn is None:
+                srt_path = srt or (os.path.splitext(video)[0] + ".srt")
+                tpath = os.path.splitext(srt_path)[0] \
+                    + ".transcript.json"
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:00,000 --> 00:00:03,500\n"
+                            "no me creo que estemos aquí\n")
+                with open(tpath, "w", encoding="utf-8") as f:
+                    json.dump({"segments": [
+                        {"start": 0.0, "end": 3.5,
+                         "text": "no me creo que estemos aquí",
+                         "words": [
+                             {"word": "no", "start": 0.0, "end": 0.5},
+                             {"word": "me", "start": 0.5, "end": 1.0},
+                             {"word": "creo", "start": 1.0,
+                              "end": 1.5}]}],
+                        "word_count": 6}, f)
+                return {"publish_blocked": False,
+                        "no_speech": False, "srt": srt_path,
+                        "transcript": tpath}
+            with open(burn, "wb") as f:
+                f.write(b"fake-burned")
+            return {"publish_blocked": False, "no_speech": False,
+                    "srt": srt, "burned": burn,
+                    "transcript": (os.path.splitext(srt)[0]
+                                   + ".transcript.json"
+                                   if srt else None)}
 
         def _pre_corte(*a, **k):
             return ({"best_title": "Título Gemini",
@@ -328,10 +360,22 @@ class TestLiveCutterEvents(unittest.TestCase):
                        side_effect=_sub),
             mock.patch("clipagent.workers.pre_corte_package",
                        side_effect=_pre_corte),
+            # 2026-11-26 (spec títulos-verdad §6.1): build_title
+            # está eliminado; el título sale del paquete DEFINITIVO
+            # (metadata.package_clip, después de la transcripción).
+            mock.patch("clipagent.metadata.package_clip",
+                       return_value={
+                           "best_title": "Título Gemini",
+                           "description": "desc",
+                           "description_first_2_lines": "desc",
+                           "tags": ["gta6"], "hashtags": [],
+                           "thumbnail_text": "txt",
+                           "pkg_source": "gemini",
+                           "needs_human_review": False}),
+            mock.patch("clipagent.workers.apply_sfx",
+                       side_effect=lambda v, **kw: (v, {})),
             mock.patch("clipagent.workers.package_clip_step",
                        side_effect=_pkg_step),
-            mock.patch("clipagent.live_cutter.build_title",
-                       return_value="Título de prueba"),
             mock.patch("clipagent.live_cutter.finalize_package",
                        side_effect=_finalize),
             mock.patch("clipagent.priority.publish_status",

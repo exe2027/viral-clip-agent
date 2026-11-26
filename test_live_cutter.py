@@ -244,9 +244,20 @@ class TestProcessPeakReal(unittest.TestCase):
                 self.assertLessEqual(dur, 60)
                 # Subtítulos: o completos, o bloqueado (nunca
                 # inventados ni publicados sin ellos).
+                # 2026-11-26 (enmienda: Gemini o retención, sin
+                # fallback de reglas): un clip puede quedar
+                # BLOQUEADO con los subtítulos completos — retenido
+                # por falta de título honesto (sin clave Gemini en
+                # local el paquete se retiene y el render sale sin
+                # banner, así que la validación final también lo
+                # rechaza por plantilla) o por validación. Lo que no
+                # puede pasar es publicar sin subtítulos reales.
                 self.assertIn(record["publish_blocked"], (True, False))
                 if record["publish_blocked"]:
-                    self.assertFalse(record["subtitles_complete"])
+                    self.assertTrue(
+                        not record["subtitles_complete"]
+                        or record.get("needs_human_review"),
+                        record)
                 else:
                     # Título cableado (2026-11-19): el título del
                     # paso 5b se quemó en la franja 702-800 (en el
@@ -697,6 +708,98 @@ class TestCalibrationLangVisible(unittest.TestCase):
                                     3300.0)
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(len(json.load(f)), 2)
+
+
+class TestPatternPackWiring(unittest.TestCase):
+    """Cableado del pack en el flujo en vivo (spec v3 §3.2):
+    _definitive_package carga el pack con caché por proceso y lo
+    pasa a package_clip; sin pack, comportamiento actual."""
+
+    def setUp(self):
+        import clipagent.live_cutter as lc
+        self.lc = lc
+        lc._PATTERN_PACK_CACHE.clear()
+        self.addCleanup(lc._PATTERN_PACK_CACHE.clear)
+
+    def _report(self, lang="es"):
+        import json
+        import tempfile
+        from datetime import date
+        report = {"version": 2, "lang": lang,
+                  "generated_at": date.today().isoformat(),
+                  "sample_n": 6,
+                  "patterns": {
+                      "sample_n": 6,
+                      "hook_types": {"question": 4, "superlative": 2},
+                      "top_hook_type": "question",
+                      "cta_types": {"none": 6}, "top_cta_type": "none",
+                      "top_hashtags": {}, "top_hook_words": {"viste": 4},
+                      "median_caption_chars": 42,
+                      "median_engagement_rate": 0.07, "notes": []},
+                  "reels": [{"hook_text": "¿Viste esto?"}
+                            for _ in range(6)]}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, f"reel_patterns_{lang}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False)
+        return tmp.name, report
+
+    def test_cache_por_proceso(self):
+        tmpdir, _report = self._report()
+        pack1 = self.lc._pattern_pack_for_lang("es", base_dir=tmpdir)
+        self.assertIsNotNone(pack1)
+        # Se borra el archivo: la segunda lectura usa la caché.
+        os.remove(os.path.join(tmpdir, "reel_patterns_es.json"))
+        pack2 = self.lc._pattern_pack_for_lang("es", base_dir=tmpdir)
+        self.assertIs(pack1, pack2)
+        # Sin caché, ya no hay informe: None.
+        self.lc._PATTERN_PACK_CACHE.clear()
+        self.assertIsNone(
+            self.lc._pattern_pack_for_lang("es", base_dir=tmpdir))
+
+    def test_definitive_package_pasa_el_pack(self):
+        pack = {"version": 2, "generated_at": "2026-11-26",
+                "lang": "es", "sample_n": 6,
+                "top_hook_types": [{"hook_type": "question",
+                                    "template": "¿Viste {what}?"}],
+                "top_hook_words": ["viste"], "median_caption_chars": 42,
+                "hook_texts": ["¿Viste esto?"]}
+        self.lc._PATTERN_PACK_CACHE["es"] = pack
+        seen = {}
+        card = {"game": "GTA 6", "streamer": "rubius", "language": "es",
+                "transcript_text": "hola", "risas": 40, "hype": 5}
+        with mock.patch("clipagent.moment_card.build_moment_card",
+                        return_value=dict(card)), \
+            mock.patch.object(self.lc, "_call_package_clip",
+                              side_effect=lambda **kw: seen.update(kw) or {
+                                  "best_title": "GTA 6: test"}):
+            pkg, _txt, _ded = self.lc._definitive_package(
+                1, 100.0, 90.0, {"risas": 40, "hype": 5}, 10.0, "es",
+                "rubius", 0.0, "Grand Theft Auto VI", "gameplay", None,
+                None, None, None, "v1")
+        self.assertEqual(seen.get("reel_patterns"), pack)
+        self.assertEqual(pkg["best_title"], "GTA 6: test")
+
+    def test_definitive_package_sin_pack_como_hoy(self):
+        # Sin pack (caché en None): reel_patterns=None, como antes
+        # del cambio; el paquete se construye igual.
+        self.lc._PATTERN_PACK_CACHE["es"] = None
+        seen = {}
+        card = {"game": "GTA 6", "streamer": "rubius", "language": "es",
+                "transcript_text": "hola", "risas": 40, "hype": 5}
+        with mock.patch("clipagent.moment_card.build_moment_card",
+                        return_value=dict(card)), \
+            mock.patch.object(self.lc, "_call_package_clip",
+                              side_effect=lambda **kw: seen.update(kw) or {
+                                  "best_title": "GTA 6: test"}):
+            pkg, _txt, _ded = self.lc._definitive_package(
+                1, 100.0, 90.0, {"risas": 40, "hype": 5}, 10.0, "es",
+                "rubius", 0.0, "Grand Theft Auto VI", "gameplay", None,
+                None, None, None, "v1")
+        self.assertIn("reel_patterns", seen)
+        self.assertIsNone(seen["reel_patterns"])
+        self.assertEqual(pkg["best_title"], "GTA 6: test")
 
 
 if __name__ == "__main__":

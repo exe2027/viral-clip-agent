@@ -363,6 +363,46 @@ class PanelBridge:
         return self._request_retry(
             "GET", "/api/clips").get("clips") or []
 
+    def list_titles(self, days=30):
+        """GET /api/bridge/titles?days=N: títulos del tenant para
+        el anti-duplicado (spec títulos-verdad, R4.1) y la variedad
+        del paquete (R4.4: descripción + miniatura).
+
+        El endpoint vive en la sección /api/bridge/* del Worker
+        (misma autenticación por sesión que bridge/credentials;
+        tenant de la sesión, nunca de un parámetro). Acepta la
+        respuesta {titles: [{title, language, created_at,
+        seo_description, thumb_text}]} o una lista directa.
+        Devuelve [{title, language, created_at, description,
+        thumb_text}] (solo entradas con título no vacío; la
+        descripción es la seo_description del clip). Levanta
+        PanelError si el panel no responde: el llamador decide el
+        fail-open (dedupe no verificado, nunca bloqueo por
+        veracidad).
+        """
+        self._ensure_login()
+        res = self._request_retry(
+            "GET", f"/api/bridge/titles?days={int(days)}",
+            key=f"GET /api/bridge/titles?days={int(days)}")
+        rows = res.get("titles") if isinstance(res, dict) else res
+        if not isinstance(rows, list):
+            return []
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = (row.get("title") or "").strip()
+            if not title:
+                continue
+            out.append({"title": title,
+                        "language": row.get("language") or "",
+                        "created_at": row.get("created_at") or "",
+                        "description": (row.get("description")
+                                        or row.get("seo_description")
+                                        or ""),
+                        "thumb_text": row.get("thumb_text") or ""})
+        return out
+
     def get_clip(self, clip_id):
         """GET /api/clips/:id."""
         self._ensure_login()

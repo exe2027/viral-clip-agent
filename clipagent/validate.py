@@ -48,6 +48,9 @@ KNOWN_TOP_KEYS = {
     "viral_source",
     # Señales de Uri (2026-11-17): solo diagnóstico, no puntaje.
     "signals",
+    # Títulos verdad (spec 2026-11-25, R9.1): fuente única de las
+    # listas del check promesa-payoff; se valida abajo.
+    "titles",
     # Reglas obvias del proyecto (decisiones del usuario 2026-11-17):
     # lista canónica en config.yaml; se valida en validate_config.
     "rules",
@@ -153,6 +156,48 @@ def validate_config(cfg, source="config.yaml"):
         c.check_str_list(cfg, f"hashtags.{lang}")
     c.check(cfg, "tools", "dict")
     c.check(cfg, "tools.twitch_downloader_cli", "str")
+
+    # Títulos verdad (spec 2026-11-25, R9.1): la sección es
+    # obligatoria y cada clave también; falta una -> ConfigError
+    # ruidoso (sin default silencioso). Los valores por defecto
+    # viven en DEFAULT_CONFIG, no aquí.
+    titles = c.check(cfg, "titles", "dict", required=True)
+    if titles is not None:
+        for k in ("cliches_es", "cliches_en", "generic_words",
+                  "superlatives_es", "superlatives_en",
+                  "laughter_tokens", "noun_evidence",
+                  "dedupe_days", "pattern_window", "title_len",
+                  "gemini_retries"):
+            if k not in titles:
+                c.err(f"titles.{k}", "falta (clave obligatoria)")
+        for k in ("cliches_es", "cliches_en", "generic_words",
+                  "superlatives_es", "superlatives_en",
+                  "laughter_tokens"):
+            c.check_str_list(cfg, f"titles.{k}")
+            v = titles.get(k)
+            if isinstance(v, list) and not v:
+                c.err(f"titles.{k}", "no puede ser una lista vacía")
+        noun_ev = c.check(cfg, "titles.noun_evidence", "dict")
+        if noun_ev is not None:
+            if not noun_ev:
+                c.err("titles.noun_evidence",
+                      "no puede ser un mapa vacío")
+            for noun, toks in noun_ev.items():
+                if not isinstance(toks, list) or not toks or \
+                        not all(isinstance(t, str) for t in toks):
+                    c.err(f"titles.noun_evidence.{noun}",
+                          "debe ser una lista no vacía de textos")
+        c.check(cfg, "titles.dedupe_days", "int", minimum=1)
+        c.check(cfg, "titles.pattern_window", "int", minimum=1)
+        tlen = c.check(cfg, "titles.title_len", "list")
+        if tlen is not None:
+            if len(tlen) != 2 or not all(
+                    isinstance(v, int) and not isinstance(v, bool)
+                    for v in tlen) or not 1 <= tlen[0] <= tlen[1] <= 60:
+                c.err("titles.title_len",
+                      "debe ser [mín, máx] con 1 <= mín <= máx <= 60, "
+                      f"es {tlen!r}")
+        c.check(cfg, "titles.gemini_retries", "int", minimum=0, maximum=5)
 
     # game / games
     c.check(cfg, "game", "dict")

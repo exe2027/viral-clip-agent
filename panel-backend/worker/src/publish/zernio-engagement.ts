@@ -142,40 +142,43 @@ function hashStr(s: string): number {
   return h;
 }
 
-// --- Respuestas: varias, específicas del clip, nunca genéricas. ---
-// {title} se sustituye por el título del clip cuando se conoce;
-// si no se conoce, se usa la variante sin título (mismo índice).
-export const REPLIES_ES: Array<{ withTitle: string; plain: string }> = [
-  { withTitle: "¡Gracias por verlo! Ese momento de «{title}» quedó brutal, ¿cuál fue tu parte favorita?", plain: "¡Gracias por verlo! Ese momento quedó brutal, ¿cuál fue tu parte favorita?" },
-  { withTitle: "¡Ese clip de «{title}» es de mis favoritos! El chat enloqueció en ese momento.", plain: "¡Ese clip es de mis favoritos! El chat enloqueció en ese momento." },
-  { withTitle: "¡Totalmente! En «{title}» pasó justo lo que nadie esperaba. ¿Lo viste en directo?", plain: "¡Totalmente! Ahí pasó justo lo que nadie esperaba. ¿Lo viste en directo?" },
-  { withTitle: "¡Gracias! «{title}» salió del directo, tal cual, sin guion. Se vienen más clips así.", plain: "¡Gracias! Ese clip salió del directo, tal cual, sin guion. Se vienen más clips así." },
-  { withTitle: "¡Jajaja sí! La reacción en «{title}» lo dice todo. ¿Qué otro momento quieres ver clippeado?", plain: "¡Jajaja sí! La reacción lo dice todo. ¿Qué otro momento quieres ver clippeado?" },
-  { withTitle: "¡Gracias por comentar! «{title}» es GTA 6 en estado puro. ¿De qué streamer quieres el próximo clip?", plain: "¡Gracias por comentar! Esto es GTA 6 en estado puro. ¿De qué streamer quieres el próximo clip?" },
-  { withTitle: "¡Ese instante de «{title}» valió todo el directo! Gracias por estar por aquí.", plain: "¡Ese instante valió todo el directo! Gracias por estar por aquí." },
-  { withTitle: "¡Sí! En «{title}» ni el streamer se lo creía. Estate atento, que subimos clips todos los días.", plain: "¡Sí! Ni el streamer se lo creía. Estate atento, que subimos clips todos los días." },
+// --- Respuestas: solo agradecimiento + pregunta neutra (2026-11-26,
+// spec títulos R7.2, textos aprobados con la spec). NUNCA afirman
+// nada sobre el contenido del clip («even the streamer couldn't
+// believe it», «chat went crazy», «la reacción lo dice todo», «ni
+// el streamer se lo creía», «ese momento quedó brutal» y
+// equivalentes están fuera) y NUNCA incrustan el título (R7.3: la
+// variante withTitle se eliminó; solo queda `plain`). La selección
+// sigue siendo por hash del commentId con `exclude`.
+export const REPLIES_ES: string[] = [
+  "¡Gracias por comentar! ¿Qué otro momento quieres ver clippeado?",
+  "¡Gracias por verlo! ¿De qué streamer quieres el próximo clip?",
+  "¡Gracias! ¿Cuál fue tu parte favorita?",
+  "¡Gracias por estar por aquí! ¿Qué te gustaría ver?",
+  "¡Gracias por comentar! ¿Lo viste en directo?",
+  "¡Gracias! ¿Qué otro clip de GTA 6 quieres ver?",
 ];
-export const REPLIES_EN: Array<{ withTitle: string; plain: string }> = [
-  { withTitle: "Thanks for watching! That moment in «{title}» was insane — what was your favorite part?", plain: "Thanks for watching! That moment was insane — what was your favorite part?" },
-  { withTitle: "That clip from «{title}» is one of my favorites! Chat went crazy at that moment.", plain: "That clip is one of my favorites! Chat went crazy at that moment." },
-  { withTitle: "Right?! In «{title}» exactly what nobody expected happened. Did you catch it live?", plain: "Right?! Exactly what nobody expected happened there. Did you catch it live?" },
-  { withTitle: "Thanks! «{title}» came straight from the stream, unscripted. More clips like this coming.", plain: "Thanks! That clip came straight from the stream, unscripted. More clips like this coming." },
-  { withTitle: "Haha yes! The reaction in «{title}» says it all. What other moment should we clip next?", plain: "Haha yes! The reaction says it all. What other moment should we clip next?" },
-  { withTitle: "Thanks for commenting! «{title}» is pure GTA 6. Which streamer should we clip next?", plain: "Thanks for commenting! This is pure GTA 6. Which streamer should we clip next?" },
-  { withTitle: "That instant in «{title}» made the whole stream worth it! Thanks for stopping by.", plain: "That instant made the whole stream worth it! Thanks for stopping by." },
-  { withTitle: "Yes! In «{title}» even the streamer couldn't believe it. We post clips every day, stay tuned.", plain: "Yes! Even the streamer couldn't believe it. We post clips every day, stay tuned." },
+export const REPLIES_EN: string[] = [
+  "Thanks for commenting! What other moment should we clip next?",
+  "Thanks for watching! Which streamer should we clip next?",
+  "Thanks! What was your favorite part?",
+  "Thanks for stopping by! What would you like to see?",
+  "Thanks for commenting! Did you catch it live?",
+  "Thanks! What other GTA 6 clip do you want to see?",
 ];
 
 /** Elige la respuesta por hash del commentId: determinista (el mismo
  *  comentario siempre cae en la misma plantilla) y variada entre
  *  comentarios. `exclude` evita repetir la plantilla anterior en la
- *  misma pasada. */
-export function pickReply(lang: ClipLanguage, title: string | null, commentId: string, exclude = -1): { text: string; index: number } {
+ *  misma pasada. `title` se IGNORA (compatibilidad con la vía
+ *  nativa, que sigue llamando con el título): la respuesta nunca
+ *  incrusta el título (R7.3). El idioma que se pasa aquí es el
+ *  idioma DEL CLIP (R7.1), nunca el del bucle. */
+export function pickReply(lang: ClipLanguage, _title: string | null, commentId: string, exclude = -1): { text: string; index: number } {
   const list = lang === "en" ? REPLIES_EN : REPLIES_ES;
   let idx = hashStr(commentId) % list.length;
   if (idx === exclude) idx = (idx + 1) % list.length;
-  const t = list[idx] as { withTitle: string; plain: string };
-  return { text: title ? t.withTitle.replace("{title}", title) : t.plain, index: idx };
+  return { text: list[idx] as string, index: idx };
 }
 
 /** ¿Hay que saltar este comentario? Vacío, con enlace (spam típico)
@@ -398,6 +401,23 @@ export async function loadClipTitles(db: D1Database, tenant: Tenant): Promise<Ma
   return clipTitles;
 }
 
+/** Idioma del clip por id nativo de plataforma (2026-11-26, spec
+ *  títulos R7.1): el mismo lookup que loadClipTitles (jobs posted
+ *  + SELECT language FROM clips), para responder en el idioma DEL
+ *  CLIP, nunca en el del bucle. Un post cuyo id nativo no resuelve
+ *  a ningún clip no está en este mapa: no se le responde. */
+export async function loadClipLanguages(db: D1Database, tenant: Tenant): Promise<Map<string, ClipLanguage>> {
+  const posted = await listPostedJobs(db, tenant).catch(() => []);
+  const clipLanguages = new Map<string, ClipLanguage>();
+  for (const j of posted) {
+    if (!clipLanguages.has(j.platform_id)) {
+      const clip = await db.prepare("SELECT language FROM clips WHERE id = ? AND tenant_id = ?").bind(j.clip_id, tenant).first<{ language: string }>().catch(() => null);
+      if (clip?.language === "es" || clip?.language === "en") clipLanguages.set(j.platform_id, clip.language);
+    }
+  }
+  return clipLanguages;
+}
+
 export interface EngagementEventRow {
   id: number;
   day: string;
@@ -591,9 +611,9 @@ export async function runZernioEngagement(
     if (opts.sleepMs !== undefined) await sleep(opts.sleepMs);
     else await sleep(8000 + Math.floor(Math.random() * 7000));
   };
-  // Títulos de clips publicados, por id nativo, para personalizar la
-  // respuesta. Si no se encuentra, la respuesta va sin título.
-  const clipTitles = await loadClipTitles(db, tenant);
+  // Idioma de los clips publicados, por id nativo (R7.1): la
+  // respuesta va en el idioma DEL CLIP, nunca en el del bucle.
+  const clipLanguages = await loadClipLanguages(db, tenant);
   for (const lang of ["es", "en"] as ClipLanguage[]) {
     try {
       // La clave Zernio vive en la fila TikTok via=zernio de ESE
@@ -645,6 +665,10 @@ export async function runZernioEngagement(
         // es un post nuestro.
         const mine = rows.filter((r) => r.accountId === acc.id).slice(0, MAX_POSTS_PER_RUN);
         let lastTemplate = -1;
+        // Posts ya registrados como clip_desconocido en esta pasada
+        // (R7.1): un registro + una línea en el resumen por post,
+        // no uno por comentario.
+        const unknownClipRows = new Set<string>();
         for (const row of mine) {
           zFound.postsChecked++;
           if (row.commentCount === 0) continue;
@@ -665,12 +689,13 @@ export async function runZernioEngagement(
             if (skip) continue;
             if (isOwnComment(c, ownNames)) continue;
             if (await hasReplied(db, tenant, commentId)) continue;
-            const repliesToday = await countEngagementToday(db, tenant, day, platform, lang, "reply");
-            if (repliesToday >= caps.reply) {
-              summary.skipped.push({ what: `${platform} ${lang}`, reason: `tope respuestas ${repliesToday}/${caps.reply}${caps.safeMode ? " (modo seguro)" : ""}` });
-              break;
-            }
-            // Título del clip si el hilo trae el id nativo del post.
+            // Idioma DEL CLIP por id nativo del post (R7.1): los
+            // mismos campos que ya se usaban para el título
+            // (platformPostId/videoId/mediaId/postId del comentario
+            // o de la fila). Si el clip no se encuentra en D1, NO
+            // se responde: se registra clip_desconocido y la pasada
+            // sigue. Nunca se responde en el idioma del bucle por
+            // defecto.
             const nativeIds = [c, row].flatMap((o) => {
               const vals: string[] = [];
               for (const k of ["platformPostId", "videoId", "mediaId", "postId"]) {
@@ -679,31 +704,44 @@ export async function runZernioEngagement(
               }
               return vals;
             });
-            const title = nativeIds.map((id) => clipTitles.get(id)).find(Boolean) ?? null;
-            const picked = pickReply(lang, title, commentId, lastTemplate);
+            const clipLang = nativeIds.map((id) => clipLanguages.get(id)).find(Boolean) ?? null;
+            if (!clipLang) {
+              if (!unknownClipRows.has(row.id)) {
+                unknownClipRows.add(row.id);
+                await logEngagement(db, tenant, day, platform, lang, "reply", "skipped", { accountId: acc.id, targetPostId: row.id, commentId, reason: "clip_desconocido", nowMs: now });
+                summary.skipped.push({ what: `${platform} ${lang} post ${row.id}`, reason: "clip_desconocido: el clip no está en D1, no se responde" });
+              }
+              continue;
+            }
+            const repliesToday = await countEngagementToday(db, tenant, day, platform, clipLang, "reply");
+            if (repliesToday >= caps.reply) {
+              summary.skipped.push({ what: `${platform} ${clipLang}`, reason: `tope respuestas ${repliesToday}/${caps.reply}${caps.safeMode ? " (modo seguro)" : ""}` });
+              break;
+            }
+            const picked = pickReply(clipLang, null, commentId, lastTemplate);
             lastTemplate = picked.index;
             try {
               await zernioReply(apiKey, row.id, acc.id, picked.text, commentId);
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
-              await logEngagement(db, tenant, day, platform, lang, "reply", "error", { accountId: acc.id, targetPostId: row.id, commentId, reason: msg, nowMs: now });
+              await logEngagement(db, tenant, day, platform, clipLang, "reply", "error", { accountId: acc.id, targetPostId: row.id, commentId, reason: msg, nowMs: now });
               if (/401|403|PLATFORM_LIMITATION|PLATFORM_BETA_RESTRICTED/i.test(msg)) break;
               continue;
             }
             await markReplied(db, tenant, commentId, platform, now);
-            await logEngagement(db, tenant, day, platform, lang, "reply", "ok", { accountId: acc.id, targetPostId: row.id, commentId, nowMs: now });
+            await logEngagement(db, tenant, day, platform, clipLang, "reply", "ok", { accountId: acc.id, targetPostId: row.id, commentId, nowMs: now });
             summary.replies++;
             // Like al comentario: best effort (IG limited release
             // puede dar 403). No deshace la respuesta si falla.
             try {
-              const likesToday = await countEngagementToday(db, tenant, day, platform, lang, "like_comment");
+              const likesToday = await countEngagementToday(db, tenant, day, platform, clipLang, "like_comment");
               if (likesToday < caps.like) {
                 await zernioLikeComment(apiKey, row.id, acc.id, commentId);
-                await logEngagement(db, tenant, day, platform, lang, "like_comment", "ok", { accountId: acc.id, targetPostId: row.id, commentId, nowMs: now });
+                await logEngagement(db, tenant, day, platform, clipLang, "like_comment", "ok", { accountId: acc.id, targetPostId: row.id, commentId, nowMs: now });
                 summary.commentLikes++;
               }
             } catch (e) {
-              await logEngagement(db, tenant, day, platform, lang, "like_comment", "skipped", { accountId: acc.id, targetPostId: row.id, commentId, reason: e instanceof Error ? e.message : String(e), nowMs: now });
+              await logEngagement(db, tenant, day, platform, clipLang, "like_comment", "skipped", { accountId: acc.id, targetPostId: row.id, commentId, reason: e instanceof Error ? e.message : String(e), nowMs: now });
             }
             await pace();
           }

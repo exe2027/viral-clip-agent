@@ -12,6 +12,7 @@
 //   también se trata como Zernio aunque falte el extra.
 
 import { httpJson } from "./publish/http";
+import { hasYoutubeUpdateScope } from "./publish/youtube";
 
 export interface VerifyOutcome {
   ok: boolean;
@@ -134,6 +135,19 @@ export async function verifyCredential(platform: string, credential: string, ext
           const ti = await httpJson("GET", `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(fresh)}`);
           const scope = typeof ti.json.scope === "string" ? ti.json.scope.split(" ") : [];
           if (ti.status === 200 && scope.some((s) => s.includes("youtube.upload"))) {
+            // Check explícito de scope (I1, spec títulos 2026-11-26):
+            // youtube.upload NO basta para re-titular (videos.update
+            // exige youtube o youtube.force-ssl, exactos). Si falta,
+            // la cuenta sigue sirviendo para SUBIR (ok:true: un
+            // ok:false pondría verify_ok=0 y gate.ts frenaría la
+            // publicación, que hoy funciona), pero el mensaje lo deja
+            // marcado como «necesita re-autorización» en la
+            // verificación del panel (verify_message se muestra en
+            // Cuentas). Los tokens concedidos antes de v5.4.0 casi
+            // seguro no traen force-ssl.
+            if (!hasYoutubeUpdateScope(scope)) {
+              return { ok: true, message: "YouTube aceptó el token OAuth (scope youtube.upload, renovado con refresh_token). Falta youtube.force-ssl: para re-titular vídeos publicados hay que re-autorizar YouTube en el panel (Cuentas → reconectar); la subida sigue funcionando." };
+            }
             return { ok: true, message: "YouTube aceptó el token OAuth (scope youtube.upload, renovado con refresh_token)." };
           }
           if (ti.status === 200 && scope.some((s) => s.includes("youtube"))) {
@@ -146,6 +160,11 @@ export async function verifyCredential(platform: string, credential: string, ext
           const ti = await httpJson("GET", `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`);
           const scope = typeof ti.json.scope === "string" ? ti.json.scope.split(" ") : [];
           if (ti.status === 200 && scope.some((s) => s.includes("youtube.upload"))) {
+            // Mismo check I1 que arriba: sin youtube/force-ssl no
+            // hay re-título, pero la subida sigue valiendo.
+            if (!hasYoutubeUpdateScope(scope)) {
+              return { ok: true, message: "YouTube aceptó el token OAuth (scope youtube.upload). Sin refresh_token: cuando caduque habrá que pegar uno nuevo. Falta youtube.force-ssl: para re-titular vídeos publicados hay que re-autorizar YouTube en el panel." };
+            }
             return { ok: true, message: "YouTube aceptó el token OAuth (scope youtube.upload). Sin refresh_token: cuando caduque habrá que pegar uno nuevo." };
           }
           if (ti.status !== 200) {
@@ -169,6 +188,10 @@ export async function verifyCredential(platform: string, credential: string, ext
       const scope = typeof ti.json.scope === "string" ? ti.json.scope.split(" ") : [];
       if (ti.status === 200 && scope.some((s) => s.includes("youtube"))) {
         const up = scope.some((s) => s.includes("youtube.upload"));
+        // Mismo check I1: sin youtube/force-ssl no hay re-título.
+        if (up && !hasYoutubeUpdateScope(scope)) {
+          return { ok: true, message: "YouTube aceptó el token (scope youtube.upload). Falta youtube.force-ssl: para re-titular vídeos publicados hay que re-autorizar YouTube en el panel." };
+        }
         return { ok: true, message: up ? "YouTube aceptó el token (scope youtube.upload)." : "YouTube aceptó el token." };
       }
       // Fallback: token con scope readonly (channels?mine=true).

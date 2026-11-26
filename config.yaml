@@ -57,6 +57,75 @@ hashtags:
     - "#RockstarGames"
     - "#gaming"
 
+# Títulos verdad (spec 2026-11-25, R9.1; enmienda 2026-11-26):
+# FUENTE ÚNICA de las listas del check promesa-payoff
+# (clipagent/metadata.py las lee de aquí vía clipagent/config.py).
+# Falta un valor requerido -> ConfigError ruidoso, nunca default
+# silencioso. "X" en "la risa de X con el chat" es el nombre del
+# streamer (comodín de una palabra).
+titles:
+  cliches_es:
+    - "risa imparable"
+    - "no puede parar de reírse"
+    - "no paraba de reírse"
+    - "se murió de risa"
+    - "hype máximo"
+    - "hype desatado"
+    - "el chat explotó"
+    - "el chat enloqueció"
+    - "el chat no paraba"
+    - "no lo podía creer"
+    - "nadie se lo creía"
+    - "momento que el chat clippeó"
+    - "mira por qué reaccionó el chat"
+    - "hizo reír al chat"
+    - "la risa de X con el chat"
+  cliches_en:
+    - "couldn't stop laughing"
+    - "chat went crazy"
+    - "chat exploded"
+    - "chat lost it"
+    - "nobody could believe it"
+    - "the moment chat clipped"
+    - "watch what chat reacted to"
+    - "broke chat"
+    - "insane"
+    - "unreal"
+    - "crazy"
+    - "craziest"
+  # Palabras de MEDIO exentas del check de evidencia. "risa/risas/
+  # hype/explotó/reacción" YA NO están exentas (R2.3).
+  generic_words: ["chat", "directo", "stream", "clip", "vídeo", "momento"]
+  superlatives_es: ["mejor", "peor", "loco", "locura", "insano",
+    "increíble", "increible", "épico", "epico", "brutal",
+    "imposible", "roto", "rompió", "nadie", "nunca",
+    "todos", "siempre", "imparable", "máximo", "desatado", "total"]
+  superlatives_en: ["best", "worst", "craziest", "insane", "epic",
+    "broke", "nobody", "everyone", "ever",
+    "unstoppable", "maximum", "unreal", "crazy"]
+  noun_evidence:
+    jugada: ["jugada", "jugar", "jugo", "jugó"]
+    tiro: ["tiro", "dispar", "erra", "patea"]
+    disparo: ["dispar", "tiro"]
+    penal: ["penal", "penalti"]
+    gol: ["gol"]
+    partido: ["partido"]
+    muerte: ["muere", "murio", "mata", "mato"]
+    robo: ["robo", "roba", "robo"]
+    coche: ["coche", "auto", "carro"]
+    clutch: ["clutch"]
+    risa: ["risa", "jaja", "kekw", "lol"]
+    reacción: ["reaccion", "no"]
+    reaccion: ["reaccion", "no"]
+    play: ["play", "jugada", "clutch"]
+    shot: ["shot", "tiro", "dispar"]
+    goal: ["gol", "goal"]
+  laughter_tokens: ["jaja", "jeje", "jajaja", "jejeje", "lol", "kekw", "lmao"]
+  dedupe_days: 30
+  pattern_window: 10
+  title_len: [40, 55]
+  gemini_retries: 2
+
 clips:
   crop: "center"          # center | left | right
   crf: 23
@@ -390,6 +459,8 @@ watcher:
 reel_study:
   enabled: true           # auto_clips.py carga reel_patterns.json si existe
   report_file: "reel_patterns.json"
+  report_file_en: "reel_patterns_en.json"  # spec v3: un informe por idioma
+  official_accounts: ["rockstargames"]  # spec v3: tráilers/cuentas oficiales fuera de los conteos
   max_urls_per_run: 10    # estudiar reels es una pasada manual, no un scrapeo
   min_sample: 5           # menos de 5 reels: muestra pequeña, se avisa
 
@@ -814,14 +885,20 @@ tenant_watchdog:
 # falta uno.
 viral_source:
   enabled: true
-  min_views: 100000      # un Short tiene que tener >=100k vistas para ser candidato
-  min_likes: 5000        # ...y >=5k likes (se verifica con la metadata completa)
+  min_views: 300000      # viral = más de 300k vistas (bajado de 800k el 2026-11-26: con 800k salían cero candidatos)
+  min_likes: 0           # likes y comentarios ya NO filtran (varían mucho; quedan en 0, la llave se mantiene)
+  min_comments: 0        # ...igual comentarios: no filtran, solo se registran en el candidato
   # Outlier multiple (2026-11-21, ig-viral): vistas / mediana de
   # ESA cuenta. >3x es señal; <1,5x es su día normal y no enseña
   # nada. Los likes crudos no son evidencia: un clip de 400k
   # vistas en una cuenta de 2M fue un martes flojo; el mismo en
   # una de 4k encontró algo.
   min_outlier_multiple: 3.0  # un candidato tiene que superar 3x la mediana de su canal
+  # Excepción absoluta (2026-11-26, decisión del usuario: "si tú
+  # te sabes la lógica hazlo tú"): un Short con >=3M vistas es
+  # viral sin importar la mediana de su canal (Speed: mediana
+  # 6,05M, 3x = 18M; sus Shorts de 7,2M y 5,6M caían fuera).
+  absolute_viral_views: 3000000
   max_age_days: 30       # solo vídeos de los últimos 30 días
   max_candidates: 5      # candidatos a enriquecer por corrida
   max_per_run: 2         # re-makes como mucho por corrida (cuentas nuevas: 1/día por plataforma)

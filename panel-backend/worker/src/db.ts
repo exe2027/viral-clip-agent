@@ -246,6 +246,14 @@ export interface ViralData {
   // cortar), "backfill_exacto" (reproducido con seo_inputs),
   // "backfill_aproximado" (derivado sin seo_inputs).
   seo_source?: "corte" | "backfill_exacto" | "backfill_aproximado";
+  // Retención por título honesto (2026-11-26, spec títulos R3.4):
+  // motivo por el que el clip quedó retenido para revisión humana
+  // (p. ej. "Sin título honesto: retención para revisión"). Vive
+  // aquí, junto al resto del viral, y viaja con el record que ya
+  // se escribe (nunca es una escritura D1 aparte). `null` en un
+  // patch significa BORRARLO (ver mergeViralJson): el merge de
+  // viral no tiene otra forma de quitar una clave.
+  hold_reason?: string | null;
 }
 
 /** Parsea clips.viral (string JSON) a objeto; si está vacío o roto, {}. */
@@ -430,6 +438,20 @@ export function parseViralInput(body: Record<string, unknown>): Partial<ViralDat
       }
       out.seo_source = v.seo_source;
     }
+    // Motivo de retención por título (2026-11-26, spec títulos
+    // R3.4): string ≤ 500; `null` lo BORRA (el PATCH de desbloqueo
+    // lo manda al poner el título nuevo).
+    if (v.hold_reason !== undefined) {
+      if (v.hold_reason === null) {
+        out.hold_reason = null;
+      } else if (typeof v.hold_reason !== "string") {
+        return "viral.hold_reason debe ser texto (o null para quitarlo).";
+      } else if (v.hold_reason.trim().length > 500) {
+        return "viral.hold_reason no puede superar 500 caracteres.";
+      } else if (v.hold_reason.trim() !== "") {
+        out.hold_reason = v.hold_reason.trim();
+      }
+    }
   }
   // Campos sueltos (mandan sobre `viral`).
   if (body.seo_scores !== undefined) {
@@ -510,6 +532,13 @@ export function mergeViralJson(existing: string | null | undefined, patch: Parti
   // guardan tal cual (reemplazan a las anteriores, como el gate).
   if (patch.seo_inputs !== undefined) next.seo_inputs = patch.seo_inputs;
   if (patch.seo_source !== undefined) next.seo_source = patch.seo_source;
+  // Retención por título (2026-11-26, R3.4): un string lo fija;
+  // `null` lo BORRA del JSON (el merge no puede borrar claves de
+  // otra forma: un patch sin hold_reason lo deja como estaba).
+  if (patch.hold_reason !== undefined) {
+    if (patch.hold_reason === null) delete next.hold_reason;
+    else next.hold_reason = patch.hold_reason;
+  }
   return JSON.stringify(next);
 }
 export const GTA_VI_GAME = "GTA VI";

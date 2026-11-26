@@ -16,6 +16,8 @@ import {
   getEngagementStatus,
   listPendingTargets,
   pickReply,
+  REPLIES_EN,
+  REPLIES_ES,
   runZernioEngagement,
   shouldSkipComment,
 } from "../src/publish/zernio-engagement";
@@ -132,10 +134,28 @@ describe("pickReply / shouldSkipComment / extractNativePostId", () => {
     expect(a.text).not.toBe(b.text);
     expect(a.text.length).toBeGreaterThan(10);
     expect(a.text).not.toContain("{title}");
+    // R7.3 (spec títulos 2026-11-26): la respuesta nunca incrusta
+    // el título, aunque se pase (la vía nativa sigue llamando con él).
     const withTitle = pickReply("es", "Rubius descubre los cromos", "c1");
-    expect(withTitle.text).toContain("Rubius descubre los cromos");
+    expect(withTitle.text).not.toContain("Rubius descubre los cromos");
     const en = pickReply("en", null, "c1");
     expect(en.text).not.toBe(a.text);
+  });
+
+  test("R7.2/R7.3: ninguna plantilla afirma hechos del clip ni incrusta el título", () => {
+    // Textos exactos aprobados en la spec (R7.2): 6 ES + 6 EN, solo
+    // agradecimiento + pregunta neutra.
+    expect(REPLIES_ES).toHaveLength(6);
+    expect(REPLIES_EN).toHaveLength(6);
+    expect(REPLIES_ES).toContain("¡Gracias por comentar! ¿Qué otro momento quieres ver clippeado?");
+    expect(REPLIES_EN).toContain("Thanks for commenting! What other moment should we clip next?");
+    const banned = ["couldn't believe", "went crazy", "lo dice todo", "se lo creía", "quedó brutal", "enloqueció", "nadie esperaba", "estado puro", "valió todo el directo", "insane", "crazy"];
+    for (const list of [REPLIES_ES, REPLIES_EN]) {
+      for (const t of list) {
+        expect(t).not.toContain("{title}");
+        for (const b of banned) expect(t.toLowerCase()).not.toContain(b);
+      }
+    }
   });
 
   test("se saltan comentarios vacíos, con enlace o demasiado largos", () => {
@@ -233,7 +253,9 @@ describe("runZernioEngagement", () => {
     ).run(NOW);
     const inboxYt = { data: [{ id: "zpost1", platform: "youtube", accountId: "acc_yt", commentCount: 1 }] };
     const thread = {
-      comments: [{ id: "c1", text: "¡Qué buen clip!", from: { username: "fan123" }, replies: [] }],
+      // R7.1: el comentario trae el id nativo del post
+      // (platformPostId), que resuelve al clip 7 ES en D1.
+      comments: [{ id: "c1", text: "¡Qué buen clip!", from: { username: "fan123" }, replies: [], platformPostId: "1MRFiJBjXaU" }],
     };
     // Pasada 1: cuentas, inbox yt (1 comentario), inbox tiktok/ig/fb vacíos,
     // hilo, reply, like. EN no tiene clave: sin fetch.
@@ -269,15 +291,84 @@ describe("runZernioEngagement", () => {
     expect(await countEngagementToday(d1, "sebastian", "2026-11-23", "youtube", "es", "reply")).toBe(1);
   });
 
+  test("R7.1: clip desconocido no se responde y queda clip_desconocido en el log", async () => {
+    const { d1, raw } = makeDb();
+    await seedSettings(raw, { engagement_enabled: true });
+    await seedZernioTikTok(raw, "es");
+    // Sin clips ni jobs en D1: el post no resuelve a ningún clip.
+    const inboxYt = { data: [{ id: "zpost1", platform: "youtube", accountId: "acc_yt", commentCount: 1 }] };
+    const thread = {
+      comments: [{ id: "c1", text: "¡Qué buen clip!", from: { username: "fan123" }, replies: [] }],
+    };
+    stubFetch([
+      { status: 200, body: ACCOUNTS },
+      { status: 200, body: inboxYt },
+      { status: 200, body: thread },
+      { status: 200, body: { data: [] } },
+      { status: 200, body: { data: [] } },
+      { status: 200, body: { data: [] } },
+    ]);
+    const s = await runZernioEngagement(fakeEnv(d1), "sebastian", { nowMs: NOW, sleepMs: 0, force: true });
+    expect(s.ran).toBe(true);
+    expect(s.replies).toBe(0);
+    expect(seen.some((r) => r.method === "POST" && r.url.includes("/inbox/comments/zpost1"))).toBe(false);
+    expect(s.skipped.some((x) => x.reason.includes("clip_desconocido"))).toBe(true);
+    const row = raw.query("SELECT status, reason FROM engagement_log WHERE action = 'reply'").get() as { status: string; reason: string };
+    expect(row.status).toBe("skipped");
+    expect(row.reason).toBe("clip_desconocido");
+  });
+
+  test("R7.1: la respuesta va en el idioma del clip, no en el del bucle", async () => {
+    const { d1, raw } = makeDb();
+    await seedSettings(raw, { engagement_enabled: true });
+    // Solo clave Zernio EN: la pasada ES queda sin clave y solo corre EN.
+    await seedZernioTikTok(raw, "en");
+    // El clip es ES (publicado en TikTok EN no existe; el post es ES).
+    raw.query("INSERT INTO clips (id, tenant_id, title, language, created_at, updated_at) VALUES (7, 'sebastian', 'Rubius descubre los cromos', 'es', ?1, ?1)").run(NOW);
+    raw.query(
+      "INSERT INTO jobs (tenant_id, kind, clip_id, platform, language, state, platform_id, evidence_url, created_at, updated_at) " +
+        "VALUES ('sebastian', 'publish', 7, 'tiktok', 'es', 'posted', '7711400021152812306', 'https://www.tiktok.com/@elclipdegta6____bits/video/7711400021152812306', ?1, ?1)",
+    ).run(NOW);
+    const inboxTt = { data: [{ id: "zpost2", platform: "tiktok", accountId: "acc_tt", commentCount: 1 }] };
+    const thread = {
+      comments: [{ id: "c9", text: "¡Qué buen clip!", from: { username: "fan9" }, replies: [], platformPostId: "7711400021152812306" }],
+    };
+    // Orden de fetch: cuentas, inbox youtube (vacío), inbox tiktok,
+    // hilo, reply, like, inbox instagram, inbox facebook.
+    stubFetch([
+      { status: 200, body: ACCOUNTS },
+      { status: 200, body: { data: [] } },
+      { status: 200, body: inboxTt },
+      { status: 200, body: thread },
+      { status: 200, body: {} },
+      { status: 200, body: {} },
+      { status: 200, body: { data: [] } },
+      { status: 200, body: { data: [] } },
+    ]);
+    const s = await runZernioEngagement(fakeEnv(d1), "sebastian", { nowMs: NOW, sleepMs: 0, force: true });
+    expect(s.replies).toBe(1);
+    const replyCall = seen.find((r) => r.method === "POST" && r.url.includes("/inbox/comments/zpost2"));
+    expect(replyCall).toBeTruthy();
+    // Texto en español (idioma del clip) aunque el bucle sea EN.
+    expect(REPLIES_ES).toContain(replyCall?.body ? (JSON.parse(replyCall.body) as { message?: string }).message ?? "" : "");
+    expect(await countEngagementToday(d1, "sebastian", "2026-11-23", "tiktok", "es", "reply")).toBe(1);
+    expect(await countEngagementToday(d1, "sebastian", "2026-11-23", "tiktok", "en", "reply")).toBe(0);
+  });
+
   test("tope diario: con reply_daily_max=1 solo responde al primer comentario", async () => {
     const { d1, raw } = makeDb();
     await seedSettings(raw, { engagement_enabled: true, engagement_reply_daily_max: 1 });
     await seedZernioTikTok(raw, "es");
+    raw.query("INSERT INTO clips (id, tenant_id, title, language, created_at, updated_at) VALUES (7, 'sebastian', 'Rubius descubre los cromos', 'es', ?1, ?1)").run(NOW);
+    raw.query(
+      "INSERT INTO jobs (tenant_id, kind, clip_id, platform, language, state, platform_id, evidence_url, created_at, updated_at) " +
+        "VALUES ('sebastian', 'publish', 7, 'youtube_shorts', 'es', 'posted', '1MRFiJBjXaU', 'https://www.youtube.com/shorts/1MRFiJBjXaU', ?1, ?1)",
+    ).run(NOW);
     const inboxYt = { data: [{ id: "zpost1", platform: "youtube", accountId: "acc_yt", commentCount: 2 }] };
     const thread = {
       comments: [
-        { id: "c1", text: "¡Qué buen clip!", from: { username: "fan1" }, replies: [] },
-        { id: "c2", text: "¡Otro momentazo!", from: { username: "fan2" }, replies: [] },
+        { id: "c1", text: "¡Qué buen clip!", from: { username: "fan1" }, replies: [], platformPostId: "1MRFiJBjXaU" },
+        { id: "c2", text: "¡Otro momentazo!", from: { username: "fan2" }, replies: [], platformPostId: "1MRFiJBjXaU" },
       ],
     };
     stubFetch([
@@ -299,12 +390,17 @@ describe("runZernioEngagement", () => {
     const { d1, raw } = makeDb();
     await seedSettings(raw, { engagement_enabled: true });
     await seedZernioTikTok(raw, "es");
+    raw.query("INSERT INTO clips (id, tenant_id, title, language, created_at, updated_at) VALUES (7, 'sebastian', 'Rubius descubre los cromos', 'es', ?1, ?1)").run(NOW);
+    raw.query(
+      "INSERT INTO jobs (tenant_id, kind, clip_id, platform, language, state, platform_id, evidence_url, created_at, updated_at) " +
+        "VALUES ('sebastian', 'publish', 7, 'youtube_shorts', 'es', 'posted', '1MRFiJBjXaU', 'https://www.youtube.com/shorts/1MRFiJBjXaU', ?1, ?1)",
+    ).run(NOW);
     const inboxYt = { data: [{ id: "zpost1", platform: "youtube", accountId: "acc_yt", commentCount: 3 }] };
     const thread = {
       comments: [
-        { id: "c1", text: "¡Qué buen clip!", from: { username: "fan1" }, replies: [] },
-        { id: "c2", text: "¡Otro momentazo!", from: { username: "fan2" }, replies: [] },
-        { id: "c3", text: "¡El mejor clip del día!", from: { username: "fan3" }, replies: [] },
+        { id: "c1", text: "¡Qué buen clip!", from: { username: "fan1" }, replies: [], platformPostId: "1MRFiJBjXaU" },
+        { id: "c2", text: "¡Otro momentazo!", from: { username: "fan2" }, replies: [], platformPostId: "1MRFiJBjXaU" },
+        { id: "c3", text: "¡El mejor clip del día!", from: { username: "fan3" }, replies: [], platformPostId: "1MRFiJBjXaU" },
       ],
     };
     stubFetch([

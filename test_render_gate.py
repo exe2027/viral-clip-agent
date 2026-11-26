@@ -123,11 +123,18 @@ def _chat_with_burst(path, burst_start=100, n_burst=40, n_base=20):
 @pytest.mark.skipif(not os.path.isfile(P3220_CHAT),
                     reason="falta el chat real de p3220 en runs/")
 def test_gate_p3220_real_pasa():
-    """Con los datos reales de p3220, la puerta pre-corte PASA:
-    estimación 46,3 >= 45 y SEO máx. 81 >= 80 (puerta bajada a
-    45/80 el 2026-11-19; el paquete es el de reglas, sin clave de
-    Gemini en local), título provisional
-    'GTA 6: El chat: "Cinema"'."""
+    """Con los datos reales de p3220, la puerta pre-corte PASA por
+    viralidad: estimación 46,3 >= 45.
+
+    2026-11-26 (enmienda aprobada: Gemini o retención, sin fallback
+    de reglas): sin clave de Gemini en local NO hay título
+    provisional honesto, así que el SEO pre-corte NO se mide
+    (`seo_medido` False, `pre_corte_title` None) y la puerta decide
+    solo por viralidad (regla preexistente de render_gate: sin SEO
+    medible no se descarta por él; la retención llega después, con
+    el paquete definitivo). El test viejo afirmaba SEO máx. 81 con
+    el paquete de reglas — ese paquete ya no existe.
+    """
     from clipagent.ingest import median_over_all, score_windows
     scores, detail = score_windows(P3220_CHAT, lang="es")
     median = median_over_all(scores)
@@ -138,11 +145,10 @@ def test_gate_p3220_real_pasa():
         game_source="capítulo de Twitch: Grand Theft Auto VI",
         clip_start=3200, duration=48, n=1)
     assert gate["viral_estimate"] == pytest.approx(46.3, abs=0.2)
-    assert gate["seo_medido"] is True
-    assert max(gate["seo"].values()) >= 80
+    assert gate["seo_medido"] is False
+    assert gate["pre_corte_title"] is None
     assert gate["pasa"] is True
-    assert gate["pre_corte_title"] == 'GTA 6: El chat: "Cinema"'
-    assert gate["pasa"] is True
+    assert "SEO sin medir" in gate["motivo"]
 
 
 def test_gate_pico_debil_no_pasa(tmp_path):
