@@ -2051,7 +2051,7 @@ def package_for_platforms(best_title, desc, tags, thumb, lang="both",
             caption = f"{first_line}\n\n{' '.join(hashtags[:5])}"
             out[key] = {
                 "platform": rules["label"], "title": None,
-                "caption": caption, "hashtags": hashtags[:10],
+                "caption": caption, "hashtags": hashtags[:5],
                 "tags": [],
                 "thumbnail": rules["thumbnail"], "thumbnail_text": thumb,
                 "subtitles": rules["subtitles"],
@@ -2474,6 +2474,50 @@ def _gemini_first_package(check_card, visible, lang, llm_client=None,
         return None
 
 
+def _apply_caption_lint(pkg, game):
+    """Puerta del linter de caption sobre un paquete ya construido.
+
+    Linta el caption de cada plataforma (``pkg["platforms"]``) y
+    aplica el mapa de veredictos (PLAN-2 §4): FIX → retención R3.4
+    (``best_title`` None, ``needs_human_review`` True, hold_reason
+    propio, ``pkg_source`` "retained", plataformas reconstruidas
+    sin título); REVIEW → sigue, con los avisos en
+    ``pkg["caption_lint"]`` y en el log; READY → sigue normal.
+    Sin paquete publicable (``best_title`` None: ya retenido por
+    otro motivo) no linta: ``caption_lint`` queda SKIPPED y el
+    motivo original intacto. Devuelve el mismo dict (mutado).
+    """
+    from .caption_lint import (HOLD_REASON_CAPTION_LINT,
+                               keywords_for_game, lint_package)
+    if not pkg.get("best_title"):
+        pkg["caption_lint"] = {"verdict": "SKIPPED",
+                               "reason": "sin paquete publicable: "
+                               "retenido antes del lint"}
+        return pkg
+    caption_lint = lint_package(
+        pkg.get("platforms") or {}, keywords=keywords_for_game(game))
+    pkg["caption_lint"] = caption_lint
+    if caption_lint["verdict"] != "READY":
+        print(f"CAPTION-LINT {caption_lint['verdict']} "
+              f"clip_{pkg.get('n', 0):02d}: "
+              + "; ".join(caption_lint["fails"]
+                          or caption_lint["warns"]),
+              flush=True)
+    if caption_lint["verdict"] == "FIX":
+        hold_reason = HOLD_REASON_CAPTION_LINT
+        pkg["best_title"] = None
+        pkg["title"] = None
+        pkg["needs_human_review"] = True
+        pkg["pkg_source"] = "retained"
+        pkg["title_issues"] = [hold_reason]
+        pkg["hold_reason"] = hold_reason
+        pkg["platforms"] = package_for_platforms(
+            None, pkg.get("description_first_2_lines") or "",
+            pkg.get("tags") or [], pkg.get("thumbnail_text") or "",
+            hashtags=pkg.get("hashtags") or [], game=game)
+    return pkg
+
+
 def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
                  lang="both", examples=None, moment_card=None, game=None,
                  streamer=None, seen_path=None, vod_id=None, date=None,
@@ -2768,6 +2812,14 @@ def package_clip(n, peak_ts, score, risas, hype, median_score, all_scores,
         "platforms": package_for_platforms(best, desc, tags, thumb, lang=lang,
                                            hashtags=hashtags, game=game),
     }
+    # Linter de caption (adopción 2, 2026-11-26; COMPARACION.md §2):
+    # puerta DESPUÉS de generar el paquete y ANTES de publicarlo.
+    # FIX = retención R3.4; REVIEW = sigue con avisos; READY =
+    # sigue normal. Solo si hay paquete real: lintar captions
+    # vacíos daría FAILs falsos y taparía el motivo real de
+    # retención. La puerta vive en `_apply_caption_lint` (justo
+    # antes de `package_clip`) para poder probarla directamente.
+    _apply_caption_lint(pkg, game)
     # Trazabilidad del pack (spec v3 §3.2): qué pack produjo el
     # título (None si no hubo pack o si el título salió del
     # reintento sin pack).
