@@ -26,12 +26,14 @@ import {
   PANEL_PLATFORMS,
   accountPausedUntilMs,
   clipLanguage,
+  DAILY_FLOOR_PER_PLATFORM,
   effectiveSettings,
   getApiAccountByPlatform,
   getClip,
   getSettings,
   getTelegramLinkByTenant,
   isRestDayEffective,
+  listApiAccounts,
   listClipStats,
   listPublishedClips,
   listQueueClips,
@@ -44,12 +46,15 @@ import {
   parsePlatforms,
   queueClipCompare,
   randomPublishDelayMs,
+  MAX_PUBLISH_SPACING_MS,
   MIN_PUBLISH_SPACING_MS,
   recordEventCounter,
   refreshAccountMaturity,
   santiagoDayKeyMs,
+  santiagoWallToUtcMs,
   saveSettings,
   stampCampaignSubmissionPosted,
+  toApiPlatform,
   updateClipPublishState,
   updateClipPublishStates,
   withAccountPause,
@@ -803,7 +808,9 @@ export async function tryEnqueueClipPublish(
     accountReadyByPlatform[p] = ready;
     if (ready) {
       accountIdByPlatform[p] = acc.id;
-      const m = maturityOut(acc, eff);
+      // SPEC piso-3-por-dia v2 §4: la madurez se resuelve con la
+      // plataforma de panel (la fila Meta sirve a IG y FB).
+      const m = maturityOut(acc, eff, Date.now(), toApiPlatform(p));
       maturityByPlatform[p] = { limit: m.effective_daily_limit, plan: m.effective_daily_plan, stage: m.stage };
     }
   }
@@ -1034,6 +1041,73 @@ export interface AutoEnqueueResult {
   qualityBlocked?: number;
 }
 
+/** Motivos de déficit del piso 3/día (SPEC piso-3-por-dia v2 §2). */
+export type FloorBlockMotive = "sin clips" | "rolling" | "calentamiento" | "calidad" | "pausa" | "día libre" | "sin cuenta";
+
+/**
+ * Clasifica una entrada de `blocked` ("<plataforma>: <motivo>") en
+ * una de las 7 categorías de motivo del pase del piso (§2), o null
+ * cuando es un bloqueo transitorio (p. ej. "menos de 90 min" o
+ * "15 min entre plataformas") que no explica un déficit: el
+ * trabajo se reintenta en el siguiente ciclo.
+ */
+export function classifyFloorBlockReason(blockedEntry: string): FloorBlockMotive | null {
+  const m = blockedEntry.toLowerCase();
+  if (m.includes("calentamiento")) return "calentamiento";
+  if (m.includes("rolling")) return "rolling";
+  if (m.includes("calidad")) return "calidad";
+  if (m.includes("día libre")) return "día libre";
+  if (m.includes("pausa") || m.includes("spam")) return "pausa";
+  if (m.includes("sin cuenta") || m.includes("sin credencial") || m.includes("no hay cuenta")) return "sin cuenta";
+  return null;
+}
+
+/** Motivo dominante: el más frecuente; desempate por primer visto; sin razones clasificadas → "sin clips". */
+export function dominantFloorMotive(blocked: string[]): FloorBlockMotive {
+  const counts = new Map<FloorBlockMotive, number>();
+  const seen: FloorBlockMotive[] = [];
+  for (const entry of blocked) {
+    const m = classifyFloorBlockReason(entry);
+    if (m === null) continue;
+    if (!counts.has(m)) seen.push(m);
+    counts.set(m, (counts.get(m) ?? 0) + 1);
+  }
+  let best: FloorBlockMotive = "sin clips";
+  let bestN = 0;
+  for (const m of seen) {
+    const n = counts.get(m) ?? 0;
+    if (n > bestN) { best = m; bestN = n; }
+  }
+  return best;
+}
+
+/** Estado de un canal durante el pase del piso (§2). */
+interface FloorChannelState {
+  key: string;
+  platform: PanelPlatform;
+  language: "es" | "en";
+  floor: number;
+  postedToday: number;
+  scheduledToday: number;
+  lastPostedAtMs: number | null;
+  pendingMaxAtMs: number | null;
+  /** Clips ya intentados para este canal en este pase (no se reintentan: el gate no cambia dentro del ciclo). */
+  tried: Set<number>;
+  blocked: string[];
+}
+
+/**
+ * Canales con evento de piso ya escrito hoy (SPEC piso-3-por-dia
+ * v2 §2): un evento por canal y día, no uno por ciclo (el ciclo
+ * corre cada 5 min y el evento es una señal para la revisión
+ * diaria, no un log por intento; además cada Worker tiene un
+ * presupuesto de 3.500 eventos/día en D1).
+ */
+const floorEventLoggedDays = new Set<string>();
+export function resetFloorEventLogForTests(): void {
+  floorEventLoggedDays.clear();
+}
+
 const AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE = 5;
 
 /** Máx. clips escaneados por ciclo (60, F4, spec 2026-11-24):
@@ -1193,7 +1267,8 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
   const none: AutoEnqueueResult = { enabled: false, considered: 0, enqueued: 0, blocked: 0 };
   try {
     const settings = await getSettings(env.DB, tenant);
-    if (!effectiveSettings(settings).auto_publish_top) return none;
+    const eff = effectiveSettings(settings);
+    if (!eff.auto_publish_top) return none;
     // A4: circuito 7500 — con la cuota agotada ni se mira la Cola:
     // cada intento escribiría eventos que morirían con 7500.
     if (await checkQuotaBreaker(env.DB, tenant, Date.now())) {
@@ -1273,6 +1348,184 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
       for (const clip of sealed) {
         if (considered >= AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE || sealedDone >= 2) break;
         if (await attemptClip(clip, false)) sealedDone++;
+      }
+    }
+    // PASE DEL PISO 3/DÍA (SPEC piso-3-por-dia v2 §2): después del
+    // bucle principal y del pase de sellados, y solo con
+    // presupuesto de ciclo en los TRES contadores, se cubre el
+    // piso de cada canal (publicados + programados de hoy < piso
+    // efectivo) encolando desde la Cola en orden. Comparte
+    // presupuesto (no lo amplía) y no relaja ninguna puerta: el
+    // gate decide cada job igual que en el bucle principal.
+    // NOTA DE DISEÑO: la spec describe el pase por canal ("para
+    // cada canal, recorre la Cola"); el contador `scanned` se
+    // incrementa una vez por clip (cuando se calcula su `need`,
+    // cacheado entre canales), no una por par (clip, canal): un
+    // clip visitado para 3 canales es 1 clip visitado, no 3, y
+    // así el pase cabe en el presupuesto compartido de 60.
+    if (considered < AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE && evaluated < AUTO_ENQUEUE_MAX_EVALUATED_PER_CYCLE && scanned < AUTO_ENQUEUE_MAX_SCANNED_PER_CYCLE) {
+      const nowMs = Date.now();
+      const dayStartMs = santiagoWallToUtcMs(today, "00:00");
+      const dayEndMs = santiagoWallToUtcMs(santiagoDayKeyMs(nowMs + 86400000), "00:00");
+      // Canales vivos: filas api_accounts → plataformas de panel,
+      // con piso efectivo y contadores de hoy. Se saltan SIN
+      // evento los canales sin credencial, en pausa o en día
+      // libre (el plan ya los alerta) y los de piso 0.
+      const channels: FloorChannelState[] = [];
+      for (const row of await listApiAccounts(env.DB, tenant)) {
+        const panels: PanelPlatform[] = row.platform === "youtube"
+          ? ["youtube_shorts"]
+          : row.platform === "tiktok"
+            ? ["tiktok"]
+            : row.platform === "meta"
+              ? ["instagram_reels", "facebook_reels"]
+              : [];
+        const lang = row.language === "en" ? "en" : "es";
+        if (!(row.verify_ok === 1 && !!(row.credential_enc || row.credential))) continue;
+        const pausedUntil = accountPausedUntilMs(settings, row.id);
+        if (pausedUntil !== null && nowMs < pausedUntil) continue;
+        if (isRestDayEffective(`acc-${row.id}`, nowMs, settings, row.id)) continue;
+        for (const panel of panels) {
+          const mat = maturityOut(row, eff, nowMs, toApiPlatform(panel));
+          const floor = Math.min(DAILY_FLOOR_PER_PLATFORM, mat.effective_daily_plan);
+          if (floor <= 0) continue;
+          channels.push({
+            key: `${panel}|${lang}`,
+            platform: panel,
+            language: lang,
+            floor,
+            postedToday: 0,
+            scheduledToday: 0,
+            lastPostedAtMs: null,
+            pendingMaxAtMs: null,
+            tried: new Set<number>(),
+            blocked: [],
+          });
+        }
+      }
+      // Contadores de hoy por canal en UNA lectura: publicados
+      // (posted_day = hoy, con su última hora para la cota de
+      // derrame) y programados (next_run_at dentro de hoy).
+      const jobRows = await env.DB.prepare(
+        "SELECT platform, language, state, posted_day, next_run_at, updated_at FROM jobs WHERE tenant_id = ? AND kind = 'publish' AND state IN ('posted','scheduled','processing')",
+      )
+        .bind(tenant)
+        .all<{ platform: string; language: string; state: string; posted_day: string | null; next_run_at: number | null; updated_at: number }>()
+        .catch(() => ({ results: [] as Array<{ platform: string; language: string; state: string; posted_day: string | null; next_run_at: number | null; updated_at: number }> }));
+      for (const ch of channels) {
+        for (const j of jobRows.results) {
+          if (j.platform !== ch.platform || j.language !== ch.language) continue;
+          if (j.state === "posted") {
+            if (j.posted_day === today) ch.postedToday++;
+            if (j.updated_at > (ch.lastPostedAtMs ?? 0)) ch.lastPostedAtMs = j.updated_at;
+          } else if (j.next_run_at !== null && j.next_run_at >= dayStartMs && j.next_run_at < dayEndMs) {
+            ch.scheduledToday++;
+          }
+          if (j.state === "scheduled" && j.next_run_at !== null) {
+            ch.pendingMaxAtMs = Math.max(ch.pendingMaxAtMs ?? 0, j.next_run_at);
+          }
+        }
+      }
+      // Orden: mayor déficit primero; empate YT → TT → IG → FB;
+      // ES antes que EN.
+      const platformRank = (p: PanelPlatform): number => (p === "youtube_shorts" ? 0 : p === "tiktok" ? 1 : p === "instagram_reels" ? 2 : 3);
+      channels.sort((a, b) => {
+        const da = a.floor - (a.postedToday + a.scheduledToday);
+        const db = b.floor - (b.postedToday + b.scheduledToday);
+        if (db !== da) return db - da;
+        if (platformRank(a.platform) !== platformRank(b.platform)) return platformRank(a.platform) - platformRank(b.platform);
+        return (a.language === "es" ? 0 : 1) - (b.language === "es" ? 0 : 1);
+      });
+      const needCache = new Map<number, PanelPlatform[]>();
+      // Clausura gemela de attemptClip, con platforms=[canal] y
+      // la cota de no-derrame. Comparte los contadores del ciclo
+      // y el freno A4.
+      const attemptClipForChannel = async (clip: ClipRow, ch: FloorChannelState): Promise<boolean> => {
+        if (ch.tried.has(clip.id)) return false;
+        ch.tried.add(clip.id);
+        let need = needCache.get(clip.id);
+        if (need === undefined) {
+          scanned++;
+          need = await platformsNeedingWork(env.DB, tenant, clip);
+          needCache.set(clip.id, need);
+        }
+        if (!need.includes(ch.platform)) return false;
+        if (clipLanguage(clip) !== ch.language) return false;
+        // SIN DERRAME (§2): si el next_run_at calculado caería
+        // fuera de hoy, no se crea (el ciclo de mañana lo cubre).
+        // Cota conservadora con el retardo máximo (180 min):
+        // último publicado + 180, último programado + 90, ahora.
+        const bound = Math.max(
+          nowMs,
+          ch.lastPostedAtMs !== null ? ch.lastPostedAtMs + MAX_PUBLISH_SPACING_MS : 0,
+          ch.pendingMaxAtMs !== null ? ch.pendingMaxAtMs + MIN_PUBLISH_SPACING_MS : 0,
+        );
+        if (bound >= dayEndMs) return false;
+        await seedAutoEnqueueStateFromReads(env.DB, tenant, clip.id, today, Date.now());
+        const verdict = autoEnqueueAllowed(
+          getAutoEnqueueState(clip.id, today) ?? { attemptsToday: 0, lastAttemptMs: null },
+          Date.now(),
+        );
+        if (!verdict.allowed) return false;
+        considered++;
+        evaluated++;
+        const r = await tryEnqueueClipPublish(env, tenant, clip, { actor: "worker", logToWorkerEvents: true, platforms: [ch.platform] });
+        ch.blocked.push(...r.blocked);
+        blocked += r.blocked.length;
+        qualityBlocked += r.blocked.filter((b) => b.includes(": calidad:")).length;
+        if (r.jobs.length > 0) {
+          clearAutoEnqueueState(clip.id);
+          await clearAutoEnqueueAttemptPersisted(env.DB, tenant, clip.id, today);
+          enqueued += r.jobs.length;
+          for (const j of r.jobs) {
+            ch.scheduledToday++;
+            if (j.next_run_at !== null && j.next_run_at !== undefined) {
+              ch.pendingMaxAtMs = Math.max(ch.pendingMaxAtMs ?? 0, j.next_run_at);
+            }
+          }
+          await logWorkerEvent(
+            env.DB,
+            "auto_publish",
+            `Auto-enqueue (piso ${ch.floor}/día): clip #${clip.id} encolado en ${ch.platform} (${ch.language}).`,
+            tenant,
+          ).catch(() => {});
+          return true;
+        }
+        if (hasHardBlock(r.blocked)) await recordAutoEnqueueAttempt(env.DB, tenant, clip.id, Date.now(), today);
+        return false;
+      };
+      for (const ch of channels) {
+        while (ch.postedToday + ch.scheduledToday < ch.floor) {
+          if (considered >= AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE || evaluated >= AUTO_ENQUEUE_MAX_EVALUATED_PER_CYCLE || scanned >= AUTO_ENQUEUE_MAX_SCANNED_PER_CYCLE) break;
+          let progressed = false;
+          for (const clip of queue) {
+            if (ch.postedToday + ch.scheduledToday >= ch.floor) break;
+            if (considered >= AUTO_ENQUEUE_MAX_CLIPS_PER_CYCLE || evaluated >= AUTO_ENQUEUE_MAX_EVALUATED_PER_CYCLE || scanned >= AUTO_ENQUEUE_MAX_SCANNED_PER_CYCLE) break;
+            if (clipLanguage(clip) !== ch.language) continue;
+            if (await attemptClipForChannel(clip, ch)) progressed = true;
+          }
+          // Una pasada completa por la Cola sin encolar nada para
+          // este canal no se repite: el gate no cambia dentro del
+          // ciclo (los jobs creados para otros canales solo pueden
+          // endurecerlo, nunca aflojarlo).
+          if (!progressed) break;
+        }
+      }
+      // Evento de déficit por canal que sigue corto (un evento por
+      // canal y día; la deduplicación vive en floorEventLoggedDays).
+      for (const ch of channels) {
+        const have = ch.postedToday + ch.scheduledToday;
+        if (have >= ch.floor) continue;
+        const eventKey = `${tenant}|${today}|${ch.key}`;
+        if (floorEventLoggedDays.has(eventKey)) continue;
+        floorEventLoggedDays.add(eventKey);
+        const motivo = dominantFloorMotive(ch.blocked);
+        await logWorkerEvent(
+          env.DB,
+          "auto_publish",
+          `Piso ${ch.floor}/día no cubierto en ${ch.platform} ${ch.language}: ${ch.postedToday}/${ch.floor} publicados hoy, motivo: ${motivo}.`,
+          tenant,
+        ).catch(() => {});
       }
     }
     if (qualityBlocked > 0) {

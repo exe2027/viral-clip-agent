@@ -2,7 +2,7 @@
 // topes por madurez de la cuenta (0017) + verificación OAuth JSON de
 // YouTube. Lógica pura (sin red real: fetch falso) y gates.
 import { describe, expect, test, afterEach } from "bun:test";
-import { computeMaturity, effectiveSettings, validateSettingsInput, type EffectiveSettings } from "../src/db";
+import { computeMaturity, effectiveSettings, maturityOut, validateSettingsInput, type ApiAccountRow, type EffectiveSettings } from "../src/db";
 import { publishGate, type GateContext } from "../src/jobs";
 import type { ClipRow } from "../src/db";
 import { verifyCredential } from "../src/verify";
@@ -130,6 +130,52 @@ describe("escalado automático de topes (madurez)", () => {
     const yt = computeMaturity({ first_published_at: now - 60 * day, published_count: 50, strikes: 1 }, "youtube", eff, now);
     expect(yt.status).toBe("nueva");
     expect(yt.effective_daily_limit).toBe(6);
+  });
+});
+
+// Fila Meta + platformOverride (SPEC piso-3-por-dia v2 §4): la
+// fila 'meta' sirve a Instagram y a Facebook; sin override su
+// plan cae en resto_plan=2 (el bug que dejaba IG/FB en 2/día).
+// Con override, el plan/máx se resuelven con la plataforma de
+// panel que se evalúa.
+describe("maturityOut con fila Meta (piso 3/día §4)", () => {
+  const eff = effectiveSettings({}) as EffectiveSettings;
+  const now = Date.now();
+  const day = 86_400_000;
+  function metaRow(over: Partial<ApiAccountRow> = {}): ApiAccountRow {
+    return {
+      id: 12, tenant_id: "sebastian", platform: "meta", language: "es", label: "Meta ES",
+      credential: "", credential_enc: "v1:x", extra: "", extra_enc: "", status: "conectada", note: "",
+      created_at: 1, verified_at: 2000, verify_ok: 1, verify_message: "",
+      first_published_at: null, published_count: 0, strikes: 0, maturity: "nueva", maturity_checked_day: null,
+      ...over,
+    };
+  }
+  test("fila meta sin override: plan 2 (resto) — el bug de §0", () => {
+    const m = maturityOut(metaRow(), eff, now);
+    expect(m.effective_daily_plan).toBe(2);
+  });
+  test("fila meta + canal instagram_reels: plan 3 (no 2)", () => {
+    const m = maturityOut(metaRow(), eff, now, "instagram");
+    expect(m.effective_daily_plan).toBe(3);
+    expect(m.effective_daily_limit).toBe(3);
+  });
+  test("fila meta + canal facebook_reels: plan 3", () => {
+    const m = maturityOut(metaRow(), eff, now, "facebook");
+    expect(m.effective_daily_plan).toBe(3);
+    expect(m.effective_daily_limit).toBe(3);
+  });
+  test("fila youtube → 6 y fila tiktok → 3 (sin cambio)", () => {
+    const yt = maturityOut(metaRow({ platform: "youtube" }), eff, now, "youtube");
+    expect(yt.effective_daily_plan).toBe(6);
+    const tt = maturityOut(metaRow({ platform: "tiktok" }), eff, now, "tiktok");
+    expect(tt.effective_daily_plan).toBe(3);
+  });
+  test("fila meta ya establecida + canal instagram: plan 3 y etapa establecida (regresión de §0)", () => {
+    const row = metaRow({ first_published_at: now - 14 * day, published_count: 20, maturity: "establecida" });
+    const m = maturityOut(row, eff, now, "instagram");
+    expect(m.status).toBe("establecida");
+    expect(m.effective_daily_plan).toBe(3);
   });
 });
 

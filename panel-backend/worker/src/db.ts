@@ -985,14 +985,15 @@ export function extractBaseSettings(raw: Record<string, unknown>): Record<string
 // REGLAS DE PUBLICACIÓN 2026-11-19 (reemplazan las del 2026-11-18).
 // Calentamiento: una cuenta es NUEVA si tiene menos de 14 días
 // desde su primera publicación O menos de 20 publicaciones.
-// Etapas: semana 1 (0-6 días): máx 1/día; semana 2 (7-13 días):
-// máx 1/día diario; semana 3 (≥14 días pero <20 publicaciones):
-// ritmo normal de la tabla, sin acceso al máximo duro; establecida
-// (≥14 días Y ≥20 publicaciones, sin strikes): plan normal y acceso
-// al máximo duro solo si se cumple la regla 6 (ver daily-plan.ts:
-// >30 días sin restricción + cola viral alta). Si hay sanción
-// (strikes > 0), vuelve a NUEVA (1/día en semana 1/2) hasta que
-// los strikes se pongan a 0 y se vuelva a cumplir el criterio.
+// Etapas: semana 1 (0-6 días) y semana 2 (7-13 días):
+// min(new_account_daily, plan, max) por día; semana 3 (≥14 días
+// pero <20 publicaciones): ritmo normal de la tabla, sin acceso
+// al máximo duro; establecida (≥14 días Y ≥20 publicaciones, sin
+// strikes): plan normal y acceso al máximo duro solo si se cumple
+// la regla 6 (ver daily-plan.ts: >30 días sin restricción + cola
+// viral alta). Si hay sanción (strikes > 0), vuelve a NUEVA (tope
+// de semana 1/2) hasta que los strikes se pongan a 0 y se vuelva
+// a cumplir el criterio.
 // El recálculo corre como mucho UNA vez al día por cuenta
 // (maturity_checked_day, día America/Santiago); la publicación
 // solo usa el estado guardado, nunca un cálculo en caliente.
@@ -1087,7 +1088,7 @@ export function capHashtags(tags: string[], platform: string, eff: EffectiveSett
 
 /** Etapa de calentamiento a partir de días/publicaciones/strikes.
  *  Sin primera publicación (days null) es semana 1. Con strikes
- *  > 0 la cuenta vuelve al tope de 1/día (etapa semana 1/2 según
+ *  > 0 la cuenta vuelve al tope de semana 1/2 (etapa semana 1/2 según
  *  antigüedad, nunca semana 3 ni establecida) hasta que los
  *  strikes se pongan a 0: subir de nivel exige no tener avisos
  *  ni restricciones (regla 3). */
@@ -1116,6 +1117,13 @@ export function santiagoDayKeyMs(ms: number): string {
 export const MIN_PUBLISH_SPACING_MINUTES = 90;
 /** Máximo entre dos publicaciones de la misma cuenta+plataforma. */
 export const MAX_PUBLISH_SPACING_MINUTES = 180;
+/** Piso mínimo de publicaciones por día y canal (plataforma+idioma):
+ *  orden del usuario 2026-11-26 20:23 ("Mínimo 3 por día!").
+ *  Constante de código, NO un ajuste del panel (SPEC
+ *  piso-3-por-dia v2 §1). El piso efectivo por canal es
+ *  min(DAILY_FLOOR_PER_PLATFORM, effective_daily_plan): nunca
+ *  supera el tope de la etapa de calentamiento. */
+export const DAILY_FLOOR_PER_PLATFORM = 3;
 export const MIN_PUBLISH_SPACING_MS = MIN_PUBLISH_SPACING_MINUTES * 60 * 1000;
 export const MAX_PUBLISH_SPACING_MS = MAX_PUBLISH_SPACING_MINUTES * 60 * 1000;
 
@@ -1345,9 +1353,10 @@ export function withAccountPause(
 
 /** Estado que le toca a una cuenta con estos datos, sin tocar D1.
  *  El tope vigente sale de los settings efectivos (plan/máx POR
- *  PLATAFORMA) y de la etapa de calentamiento: semana 1/2 = 1/día;
- *  semana 3 = plan normal sin acceso al máx; establecida = plan y
- *  máx normales. Con strikes > 0 nunca es establecida. */
+ *  PLATAFORMA) y de la etapa de calentamiento: semana 1/2 =
+ *  min(new_account_daily, plan, max); semana 3 = plan normal sin
+ *  acceso al máx; establecida = plan y máx normales. Con strikes
+ *  > 0 nunca es establecida. */
 export function computeMaturity(
   input: MaturityInput,
   platform: string,
@@ -1362,8 +1371,9 @@ export function computeMaturity(
   const plan = platformPlan(eff, platform);
   const max = platformMax(eff, platform);
   // Tope de cuenta en CALENTAMIENTO (2026-11-19): semana 1 y 2,
-  // 1/día en TODAS las plataformas; semana 3, el plan normal
-  // (pero sin acceso al máximo duro: el límite ES el plan).
+  // min(new_account_daily, plan, max) en TODAS las plataformas;
+  // semana 3, el plan normal (pero sin acceso al máximo duro: el
+  // límite ES el plan).
   const newDaily = platform === "youtube" ? eff.new_account_daily_youtube : eff.new_account_daily;
   const warmupPlan = stage === "semana1" || stage === "semana2"
     ? Math.min(newDaily, plan, max)
@@ -1439,18 +1449,27 @@ export async function refreshAccountMaturity(
  *  actuales: es informativa y siempre coherente con los topes
  *  del estado guardado (si el cálculo difiere, se verá al
  *  recálculo diario, no antes). */
-export function maturityOut(row: ApiAccountRow, eff: EffectiveSettings, nowMs = Date.now()): MaturityInfo & { stored_status: AccountMaturity } {
+export function maturityOut(row: ApiAccountRow, eff: EffectiveSettings, nowMs = Date.now(), platformOverride?: string): MaturityInfo & { stored_status: AccountMaturity } {
+  // SPEC piso-3-por-dia v2 §4: la fila de Meta ('meta') sirve a
+  // Instagram y a Facebook; su plan/máx se resuelven con la
+  // plataforma de panel que se evalúa (platformOverride), no con
+  // 'meta' (platformPlan no conoce 'meta' y cae en resto_plan=2).
+  // Sin override, igual que antes. Solo afecta a plan/max: la
+  // etapa no cambia y newDaily tampoco (meta→instagram/facebook
+  // usan el mismo new_account_daily).
+  const effPlatform = platformOverride ?? row.platform;
   const info = computeMaturity(
     { first_published_at: row.first_published_at, published_count: row.published_count ?? 0, strikes: row.strikes ?? 0 },
-    row.platform, eff, nowMs,
+    effPlatform, eff, nowMs,
   );
   const stored = row.maturity === "establecida" ? "establecida" : "nueva";
   // El tope vigente es el del estado GUARDADO (el que aplica el
   // gate hasta el próximo recálculo diario): establecida guardada
   // = plan y máx; nueva guardada = tope de calentamiento según su
-  // etapa (semana 1/2: 1/día; semana 3: plan sin máx).
-  const plan = platformPlan(eff, row.platform);
-  const max = platformMax(eff, row.platform);
+  // etapa (semana 1/2: min(new_account_daily, plan, max); semana
+  // 3: plan sin máx).
+  const plan = platformPlan(eff, effPlatform);
+  const max = platformMax(eff, effPlatform);
   const newDaily = row.platform === "youtube" ? eff.new_account_daily_youtube : eff.new_account_daily;
   const warmupPlan = info.stage === "semana1" || info.stage === "semana2"
     ? Math.min(newDaily, plan, max)

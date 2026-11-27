@@ -59,14 +59,14 @@ export interface GateContext {
   settings: Record<string, unknown>;
   // Tope vigente por MADUREZ de la cuenta (calentamiento 0017,
   // reglas 2026-11-19): si viene, manda sobre el plan/techo de
-  // Ajustes. Semana 1/2 = 1/día en todas las plataformas;
+  // Ajustes. Semana 1/2 = min(new_account_daily, plan, max);
   // semana 3 = plan normal sin máx; establecida = plan y máx.
   // Sin cuenta (null) se usan los topes de Ajustes tal cual.
   accountDailyLimit?: number | null;
   accountDailyPlan?: number | null;
   /** Tope de CALENTAMIENTO (reglas 2026-11-19): cuando la cuenta
-   *  NO es establecida, este es su tope duro (1/día en semana
-   *  1/2, plan en semana 3). A diferencia del plan/techo, este
+   *  NO es establecida, este es su tope duro (tope de semana 1/2,
+   *  plan en semana 3). A diferencia del plan/techo, este
    *  freno NO lo salta la publicación manual: desde la orden
    *  09:25 (2026-11-21, SIN AMONTONAR) la manual no salta
    *  NINGÚN freno anti-baneo. null = establecida. */
@@ -282,8 +282,8 @@ export function publishGate(platform: PanelPlatform, g: GateContext): string | n
     const day = g.clipLastPublishedOnPlatformDay ?? "otro día";
     return `este clip ya se publicó en ${platform} el ${day}: no se repite en la misma cuenta (usa republicar si la plataforma borró el vídeo)`;
   }
-  // CALENTAMIENTO (reglas 2026-11-19): el tope de la etapa (1/día
-  // en semana 1/2, plan en semana 3) NO lo salta "Publicar ahora":
+  // CALENTAMIENTO (reglas 2026-11-19): el tope de la etapa (tope
+  // de semana 1/2, plan en semana 3) NO lo salta "Publicar ahora":
   // desde la orden 09:25 la manual no salta ningún freno.
   if (g.warmupDailyLimit !== undefined && g.warmupDailyLimit !== null && g.publishedToday >= g.warmupDailyLimit) {
     return `calentamiento: ${g.publishedToday}/${g.warmupDailyLimit} hoy en ${platform} (cuenta nueva: ni a mano se supera el tope de su etapa)`;
@@ -317,8 +317,8 @@ export function rateLimitGate(platform: PanelPlatform, g: GateContext): string |
   const s = effectiveSettings(g.settings ?? {});
   // Topes diarios desde Ajustes (techo y plan POR PLATAFORMA,
   // reglas 2026-11-19) y madurez de la cuenta (calentamiento):
-  // una cuenta en semana 1/2 publica 1/día; en semana 3, el plan
-  // sin máx; establecida, plan y máx. Sin cuenta, Ajustes.
+  // una cuenta en semana 1/2 publica su tope de etapa; en semana
+  // 3, el plan sin máx; establecida, plan y máx. Sin cuenta, Ajustes.
   // DOS COLAS (0019): publishedToday y lastPublishedAtMs ya vienen
   // contados POR plataforma+idioma (quien llama filtra los jobs por
   // jobs.language = idioma del clip): YouTube ES 1/día es
@@ -684,7 +684,10 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
   // Cuenta POR PLATAFORMA + IDIOMA DEL CLIP, como en POST /publish.
   const want = job.platform === "youtube_shorts" ? "youtube" : job.platform === "tiktok" ? "tiktok" : "meta";
   const acc = await getApiAccountByPlatform(db, job.tenant_id, want, lang);
-  const mat = acc ? maturityOut(acc, eff) : null;
+  // SPEC piso-3-por-dia v2 §4: la madurez se resuelve con la
+  // plataforma de panel del job (la fila Meta sirve a IG y FB;
+  // sin override su plan cae en resto_plan=2).
+  const mat = acc ? maturityOut(acc, eff, Date.now(), toApiPlatform(job.platform)) : null;
   // Contadores nuevos (reglas 2026-11-19): rolling 24 h, mismo
   // clip hoy en esta plataforma, mismo clip en otra plataforma.
   const now = Date.now();
@@ -824,7 +827,8 @@ export async function effectiveDailyPlanForJob(
   const eff = effectiveSettings(settings);
   const want = platform === "youtube_shorts" ? "youtube" : platform === "tiktok" ? "tiktok" : "meta";
   const acc = await getApiAccountByPlatform(db, tenant, want, language);
-  const mat = acc ? maturityOut(acc, eff) : null;
+  // SPEC piso-3-por-dia v2 §4: ver buildGateContext arriba.
+  const mat = acc ? maturityOut(acc, eff, Date.now(), toApiPlatform(platform)) : null;
   return effectiveDailyPlan(platform, settings, mat?.effective_daily_limit ?? null, mat?.effective_daily_plan ?? null);
 }
 

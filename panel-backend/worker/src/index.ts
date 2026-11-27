@@ -3297,7 +3297,7 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
           if (day === todayKey) usedToday++;
           if (last7.has(day)) publishedLast7d++;
         }
-        const mat = acc ? maturityOut(acc, eff) : null;
+        const mat = acc ? maturityOut(acc, eff, Date.now(), p) : null;
         const cap = mat ? mat.effective_daily_limit : platformMax(eff, p);
         const plan = mat ? mat.effective_daily_plan : platformPlan(eff, p);
         return {

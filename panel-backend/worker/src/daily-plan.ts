@@ -18,6 +18,7 @@ import {
   accountPausedUntilMs,
   capHashtags,
   clipLanguage,
+  DAILY_FLOOR_PER_PLATFORM,
   effectiveSettings,
   getSettings,
   isCampaignStreamer,
@@ -61,6 +62,11 @@ export interface DailyPlanAccountInput {
   restWeekday: number;
   /** Regla 6: >30 días sin restricción + cola viral alta. */
   canEscalate: boolean;
+  /** Piso mínimo de publicaciones/día del canal (SPEC
+   *  piso-3-por-dia v2 §1): min(3, plan). Lo calcula
+   *  buildDailyPlanForTenant; si no viene, el constructor lo
+   *  deriva como min(3, plan). */
+  floor?: number;
   /** Última publicación real de esta plataforma+idioma (ms
    *  epoch, null si no hay): el plan encadena desde ahí con
    *  azar(90–180 min) (SPEC quitar-franjas v2). */
@@ -132,6 +138,13 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
   const plannedClipTimes = new Map<number, number[]>(); // clipId -> minutos planificados (todas las plataformas)
   const usedClipAccount = new Set<string>(); // `${clipId}|${accountId}` (nunca 2 veces en la misma cuenta)
   const plannedIds = new Set<number>();
+  // DIVERGENCIA RECONOCIDA (SPEC piso-3-por-dia v2 §3): el plan
+  // asigna un clip COMO MUCHO a una cuenta al día (plannedIds),
+  // mientras el auto-enqueue permite el mismo clip en varias
+  // plataformas el mismo día con 15 min. El plan puede reportar
+  // un déficit que el pase del piso no tendría: la alerta del
+  // plan usa la asignación del plan (conservadora) y el evento
+  // del pase usa los enqueues reales. No se unifica en este cambio.
 
   for (const acc of accounts) {
     const label = `${acc.label} (${acc.apiPlatform === "youtube" ? "YouTube" : acc.apiPlatform === "tiktok" ? "TikTok" : acc.apiPlatform === "instagram" ? "Instagram" : "Facebook"} · ${acc.language === "en" ? "EN" : "ES"})`;
@@ -152,17 +165,28 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
     // rolling 24 h (nunca >3 por cuenta en 24 h móviles; 6 en
     // YouTube, decisión 2026-11-23).
     const target = acc.canEscalate && acc.stage === "establecida" ? acc.max : acc.plan;
-    let capacity = Math.max(0, target - acc.publishedToday);
+    // PISO 3/DÍA (SPEC piso-3-por-dia v2 §1 y §3): piso efectivo
+    // del canal; 0 = sin piso (no se alerta).
+    const floor = acc.floor ?? Math.min(DAILY_FLOOR_PER_PLATFORM, acc.plan);
+    const byPlan = Math.max(0, target - acc.publishedToday);
     const rollingMax = acc.apiPlatform === "youtube"
       ? (eff.rolling_24h_max_youtube ?? eff.rolling_24h_max)
       : eff.rolling_24h_max;
-    capacity = Math.min(capacity, Math.max(0, rollingMax - acc.publishedLast24h));
-    if (acc.publishedToday > 0 && capacity === 0) {
-      alertas.push(`Cuenta ${label}: plan del día cubierto (${acc.publishedToday}/${target}).`);
-      continue;
-    }
+    const byRolling = Math.max(0, rollingMax - acc.publishedLast24h);
+    const rollingCapped = byRolling < byPlan;
+    const capacity = Math.min(byPlan, byRolling);
     if (capacity === 0) {
-      alertas.push(`Cuenta ${label}: sin capacidad hoy (rolling 24 h o plan cubierto).`);
+      if (acc.publishedToday > 0) {
+        alertas.push(`Cuenta ${label}: plan del día cubierto (${acc.publishedToday}/${target}).`);
+      } else {
+        alertas.push(`Cuenta ${label}: sin capacidad hoy (rolling 24 h o plan cubierto).`);
+      }
+      // Piso (§3): sin capacidad por rolling y por debajo del piso
+      // → déficit visible. (El plan cubierto no puede estar por
+      // debajo del piso: floor ≤ plan ≤ target.)
+      if (floor > 0 && acc.publishedToday < floor && rollingCapped) {
+        alertas.push(`Cuenta ${label}: piso ${floor}/día no cubierto (${acc.publishedToday}/${floor} planificadas hoy): tope rolling 24 h.`);
+      }
       continue;
     }
     if (acc.stage !== "establecida") {
@@ -260,8 +284,24 @@ export function buildDailyPlan(input: DailyPlanInput): DailyPlan {
     if (campaignAssigned > 0) {
       alertas.push(`Cuenta ${label}: ${campaignAssigned}/${assigned} slots con prioridad de campaña (${pct}% reservado a streamers con campaña >= $1/1k neto).`);
     }
-    if (assigned === 0) {
+    // PISO 3/DÍA (SPEC piso-3-por-dia v2 §3): si lo planificado
+    // hoy (publicados + asignados) no llega al piso, alerta de
+    // déficit con el motivo. La genérica "sin clips" solo sale
+    // cuando ningún clip de la Cola casa con idioma+plataforma
+    // de esta cuenta.
+    const plannedToday = acc.publishedToday + assigned;
+    const hasMatchingClip = queue.some((c) => c.language === acc.language && c.platforms.includes(acc.platform));
+    if (assigned === 0 && !hasMatchingClip) {
       alertas.push(`Cuenta ${label}: sin clips en Cola para su idioma/plataforma hoy.`);
+    } else if (floor > 0 && plannedToday < floor) {
+      const motivo = !hasMatchingClip
+        ? "sin clips en Cola para su idioma/plataforma"
+        : rollingCapped
+          ? "tope rolling 24 h"
+          : acc.stage !== "establecida"
+            ? `tope de etapa en calentamiento (máx ${target}/día)`
+            : "sin clips en Cola para su idioma/plataforma";
+      alertas.push(`Cuenta ${label}: piso ${floor}/día no cubierto (${plannedToday}/${floor} planificadas hoy): ${motivo}.`);
     }
   }
 
@@ -288,7 +328,6 @@ export async function buildDailyPlanForTenant(
 
   const accounts: DailyPlanAccountInput[] = [];
   for (const acc of rows) {
-    const mat = maturityOut(acc, eff);
     // Una fila "meta" cubre Instagram Y Facebook: el plan se hace
     // por canal (plataforma del panel + idioma), no por fila.
     const panelPlatforms: PanelPlatform[] = acc.platform === "youtube"
@@ -300,6 +339,10 @@ export async function buildDailyPlanForTenant(
           : [];
     for (const panel of panelPlatforms) {
       const apiPlatform = panel === "youtube_shorts" ? "youtube" : panel === "tiktok" ? "tiktok" : panel === "instagram_reels" ? "instagram" : "facebook";
+      // SPEC piso-3-por-dia v2 §4: la madurez se resuelve POR CANAL
+      // (la fila Meta sirve a IG y FB; sin override su plan cae en
+      // resto_plan=2). El piso del canal sale de esa madurez.
+      const mat = maturityOut(acc, eff, nowMs, apiPlatform);
       const publishedTodayRow = await db.prepare(
         "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND posted_day = ?",
       )
@@ -328,6 +371,10 @@ export async function buildDailyPlanForTenant(
         stage: mat.stage,
         plan: mat.effective_daily_plan,
         max: mat.effective_daily_max,
+        /** Piso mínimo de publicaciones/día del canal (SPEC
+         *  piso-3-por-dia v2 §1): min(3, plan). Nunca supera el
+         *  tope de la etapa de calentamiento. */
+        floor: Math.min(DAILY_FLOOR_PER_PLATFORM, mat.effective_daily_plan),
         daysSinceFirst: mat.days_since_first_published,
         strikes: mat.strikes,
         publishedToday: publishedTodayRow?.n ?? 0,

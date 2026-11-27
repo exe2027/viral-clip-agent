@@ -192,3 +192,105 @@ describe("buildDailyPlan — prioridad de campaña", () => {
     expect(plan.publicaciones).toHaveLength(3);
   });
 });
+
+describe("buildDailyPlan — piso 3/día (SPEC piso-3-por-dia v2 §3)", () => {
+  test("cuenta establecida con plan 3 y stock 3: el plan trae 3 publicaciones y no hay alerta de déficit", () => {
+    const eff = effectiveSettings({});
+    const plan = buildDailyPlan({
+      fecha: "2026-11-23",
+      accounts: [acc({ lastPublishedAtMs: null })],
+      queue: [clipInput(1, 95), clipInput(2, 90), clipInput(3, 85)],
+      eff,
+      nowMs: now,
+    });
+    expect(plan.publicaciones.filter((p) => p.plataforma === "tiktok")).toHaveLength(3);
+    expect(plan.alertas.join(" ")).not.toContain("piso 3/día no cubierto");
+  });
+
+  test("stock 1: 1 publicación + alerta de déficit 'piso 3/día no cubierto (1/3…)' con motivo sin clips", () => {
+    const eff = effectiveSettings({});
+    const plan = buildDailyPlan({
+      fecha: "2026-11-23",
+      accounts: [acc({ lastPublishedAtMs: null })],
+      queue: [clipInput(1, 95)],
+      eff,
+      nowMs: now,
+    });
+    expect(plan.publicaciones.filter((p) => p.plataforma === "tiktok")).toHaveLength(1);
+    const alertas = plan.alertas.join(" ");
+    expect(alertas).toContain("piso 3/día no cubierto (1/3 planificadas hoy)");
+    expect(alertas).toContain("sin clips en Cola para su idioma/plataforma");
+  });
+
+  test("sin clips que casen idioma+plataforma: alerta genérica, sin alerta de déficit", () => {
+    const eff = effectiveSettings({});
+    const plan = buildDailyPlan({
+      fecha: "2026-11-23",
+      accounts: [acc({ lastPublishedAtMs: null })],
+      queue: [clipInput(1, 95, { language: "es" })],
+      eff,
+      nowMs: now,
+    });
+    expect(plan.publicaciones).toHaveLength(0);
+    expect(plan.en_cola).toEqual([1]);
+    const alertas = plan.alertas.join(" ");
+    expect(alertas).toContain("sin clips en Cola para su idioma/plataforma hoy");
+    expect(alertas).not.toContain("piso 3/día no cubierto");
+  });
+
+  test("cuenta en calentamiento con plan 2 y stock 2: piso efectivo 2, sin alerta de déficit por la 3ª", () => {
+    const eff = effectiveSettings({});
+    const plan = buildDailyPlan({
+      fecha: "2026-11-23",
+      accounts: [acc({ stage: "semana1", plan: 2, max: 3, lastPublishedAtMs: null })],
+      queue: [clipInput(1, 95), clipInput(2, 90)],
+      eff,
+      nowMs: now,
+    });
+    expect(plan.publicaciones.filter((p) => p.plataforma === "tiktok")).toHaveLength(2);
+    expect(plan.alertas.join(" ")).not.toContain("piso 2/día no cubierto");
+  });
+
+  test("cuenta en calentamiento con plan 2 y stock 1: alerta de déficit piso 2 con motivo de etapa", () => {
+    const eff = effectiveSettings({});
+    const plan = buildDailyPlan({
+      fecha: "2026-11-23",
+      accounts: [acc({ stage: "semana1", plan: 2, max: 3, lastPublishedAtMs: null })],
+      queue: [clipInput(1, 95)],
+      eff,
+      nowMs: now,
+    });
+    expect(plan.publicaciones.filter((p) => p.plataforma === "tiktok")).toHaveLength(1);
+    const alertas = plan.alertas.join(" ");
+    expect(alertas).toContain("piso 2/día no cubierto (1/2 planificadas hoy)");
+    expect(alertas).toContain("tope de etapa en calentamiento (máx 2/día)");
+  });
+
+  test("rolling 24 h lleno y 0 publicados hoy: alerta de déficit con motivo 'tope rolling 24 h'", () => {
+    const eff = effectiveSettings({});
+    const plan = buildDailyPlan({
+      fecha: "2026-11-23",
+      accounts: [acc({ publishedToday: 0, publishedLast24h: 3, lastPublishedAtMs: null })],
+      queue: [clipInput(1, 95), clipInput(2, 90), clipInput(3, 85)],
+      eff,
+      nowMs: now,
+    });
+    expect(plan.publicaciones.filter((p) => p.plataforma === "tiktok")).toHaveLength(0);
+    const alertas = plan.alertas.join(" ");
+    expect(alertas).toContain("piso 3/día no cubierto (0/3 planificadas hoy)");
+    expect(alertas).toContain("tope rolling 24 h");
+  });
+
+  test("plan 0: piso 0, sin alerta de déficit", () => {
+    const eff = effectiveSettings({});
+    const plan = buildDailyPlan({
+      fecha: "2026-11-23",
+      accounts: [acc({ plan: 0, max: 0, lastPublishedAtMs: null })],
+      queue: [clipInput(1, 95)],
+      eff,
+      nowMs: now,
+    });
+    expect(plan.publicaciones).toHaveLength(0);
+    expect(plan.alertas.join(" ")).not.toContain("piso");
+  });
+});

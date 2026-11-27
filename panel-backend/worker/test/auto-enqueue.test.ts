@@ -14,10 +14,12 @@ import {
   autoEnqueueTopClips,
   getAutoEnqueueState,
   resetAutoEnqueueStateForTests,
+  resetFloorEventLogForTests,
   resetQualityAlertStateForTests,
   runWorkerCycle,
 } from "../src/jobs";
 import { autoEnqueueAllowed } from "../src/retry";
+import { santiagoWeekKey } from "../src/db";
 
 const SECRET = Buffer.from("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").toString("base64"); // SOLO TEST
 const KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64"); // 32 bytes, SOLO TEST
@@ -413,6 +415,7 @@ function stubFetchYoutube500(): void {
 beforeEach(() => {
   resetAutoEnqueueStateForTests();
   resetQualityAlertStateForTests();
+  resetFloorEventLogForTests();
   stubFetchThrow();
 });
 afterEach(() => {
@@ -557,6 +560,39 @@ function jobRow(db: FakeD1, id: number): Row {
 
 function jobsForClip(db: FakeD1, clipId: number): Row[] {
   return (db.tables["jobs"] ?? []).filter((j) => j.clip_id === clipId);
+}
+
+/** Eventos de déficit del piso 3/día escritos por el pase (§2). */
+function floorEvents(db: FakeD1): Row[] {
+  return (db.tables["worker_events"] ?? []).filter((e) => typeof e.message === "string" && (e.message as string).startsWith("Piso "));
+}
+
+function scheduledJobs(db: FakeD1, platform?: string): Row[] {
+  return (db.tables["jobs"] ?? []).filter((j) => j.state === "scheduled" && (platform === undefined || j.platform === platform));
+}
+
+/** Job ya publicado (de otro clip) para contar topes del gate. */
+function seedPostedJob(db: FakeD1, over: Row = {}): void {
+  db.seed("jobs", {
+    id: 900,
+    tenant_id: "sebastian",
+    kind: "publish",
+    clip_id: 900,
+    platform: "tiktok",
+    api_account_id: 10,
+    state: "posted",
+    platform_id: "TT9",
+    evidence_url: "https://example.com/tt9",
+    language: "es",
+    posted_day: FROZEN_DAY,
+    attempts: 0,
+    last_error: null,
+    retryable: 1,
+    next_run_at: null,
+    created_at: FROZEN_MS - 3 * 3600_000,
+    updated_at: FROZEN_MS - 3 * 3600_000,
+    ...over,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,5 +1052,210 @@ describe("F6: barrido de drafts transitorios en el ciclo", () => {
     const j = jobRow(db, 1);
     expect(j?.state).toBe("draft");
     expect(j?.attempts).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Piso 3/día (SPEC piso-3-por-dia v2 §2): pase del piso en
+// autoEnqueueTopClips, después del bucle principal y del pase de
+// sellados. NOTA: en un solo ciclo el bucle principal ya intenta
+// cada (clip, canal) de la Cola, así que el pase rara vez encola
+// algo que el bucle no intentó: su aporte observable en un ciclo
+// es el evento de déficit (y el tope: YT para en 3). Estos tests
+// verifican el comportamiento integrado (canal llega al piso,
+// evento con el motivo correcto, respeto del presupuesto y salto
+// de canales no vivos), no qué clausura creó cada job.
+// ---------------------------------------------------------------------------
+describe("Piso 3/día: pase del piso en autoEnqueueTopClips (§2)", () => {
+  test("con stock 3 y puertas libres, cada canal llega al piso 3 sin evento de déficit", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    db.seed("clips", clipRow({ id: 1, score: 90 }));
+    db.seed("clips", clipRow({ id: 2, score: 80 }));
+    db.seed("clips", clipRow({ id: 3, score: 70 }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    for (const p of ALL_PLATFORMS) {
+      expect(scheduledJobs(db, p)).toHaveLength(3);
+    }
+    expect(floorEvents(db)).toHaveLength(0);
+  });
+
+  test("con stock 1 encola 1 por canal y escribe el evento de déficit con motivo 'sin clips'", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    db.seed("clips", clipRow({ id: 1 }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(r.enqueued).toBe(4);
+    for (const p of ALL_PLATFORMS) {
+      expect(scheduledJobs(db, p)).toHaveLength(1);
+    }
+    const events = floorEvents(db);
+    expect(events).toHaveLength(4);
+    for (const p of ALL_PLATFORMS) {
+      const ev = events.find((e) => (e.message as string).includes(`${p} es:`));
+      expect(ev).toBeDefined();
+      expect(ev?.message as string).toContain("Piso 3/día no cubierto");
+      expect(ev?.message as string).toContain("0/3 publicados hoy");
+      expect(ev?.message as string).toContain("motivo: sin clips");
+    }
+  });
+
+  test("el rolling 24 h frena el pase: no encola en ese canal y deja evento con motivo 'rolling'", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    db.seed("clips", clipRow({ id: 1, score: 90 }));
+    db.seed("clips", clipRow({ id: 2, score: 80 }));
+    db.seed("clips", clipRow({ id: 3, score: 70 }));
+    // 3 publicados en TikTok en las últimas 24 h, pero AYER
+    // (publishedToday=0, publishedLast24h=3): el rolling frena
+    // aunque el piso de hoy esté en 0.
+    seedPostedJob(db, { id: 901, clip_id: 901, platform_id: "TT1", posted_day: YESTERDAY, created_at: FROZEN_MS - 1 * 3600_000, updated_at: FROZEN_MS - 1 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, platform_id: "TT2", posted_day: YESTERDAY, created_at: FROZEN_MS - 2 * 3600_000, updated_at: FROZEN_MS - 2 * 3600_000 });
+    seedPostedJob(db, { id: 903, clip_id: 903, platform_id: "TT3", posted_day: YESTERDAY, created_at: FROZEN_MS - 3 * 3600_000, updated_at: FROZEN_MS - 3 * 3600_000 });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(scheduledJobs(db, "tiktok")).toHaveLength(0);
+    expect(scheduledJobs(db, "youtube_shorts")).toHaveLength(3);
+    expect(scheduledJobs(db, "instagram_reels")).toHaveLength(3);
+    expect(scheduledJobs(db, "facebook_reels")).toHaveLength(3);
+    const events = floorEvents(db);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.message as string).toContain("Piso 3/día no cubierto en tiktok es: 0/3 publicados hoy, motivo: rolling.");
+  });
+
+  test("respeta los topes MAX_*_PER_CYCLE: con el presupuesto gastado el pase no corre ni escribe evento", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    // 5 clips EN sin cuentas EN: el bucle principal gasta los 5
+    // `considered` en ellos (0 jobs) y nunca llega a los ES.
+    for (let i = 1; i <= 5; i++) {
+      db.seed("clips", clipRow({ id: i, score: 100 - i, language: "en" }));
+    }
+    // 3 clips ES con stock: el pase no los toca (sin presupuesto).
+    for (let i = 6; i <= 8; i++) {
+      db.seed("clips", clipRow({ id: i, score: 60 - (i - 6), language: "es" }));
+    }
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(r.considered).toBe(5);
+    expect(r.enqueued).toBe(0);
+    expect(scheduledJobs(db)).toHaveLength(0);
+    // Sin presupuesto no corre el pase: ni jobs ni evento de
+    // déficit, aunque los canales ES estén en 0 (limitación
+    // conocida del diseño: comparte presupuesto, no lo amplía).
+    expect(floorEvents(db)).toHaveLength(0);
+  });
+
+  test("salta el canal en pausa: sin jobs y sin evento de piso para él (los demás sí avisan)", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true, account_pauses: { "10": FROZEN_MS + 48 * 3600_000 } });
+    db.seed("clips", clipRow({ id: 1 }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(scheduledJobs(db, "tiktok")).toHaveLength(0);
+    const events = floorEvents(db);
+    expect(events.some((e) => (e.message as string).includes("tiktok es:"))).toBe(false);
+    expect(events).toHaveLength(3);
+  });
+
+  test("salta el canal en día libre: sin jobs y sin evento de piso para él", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    const weekKey = santiagoWeekKey(FROZEN_MS);
+    const weekday = new Date("2026-11-19T12:00:00Z").getUTCDay(); // jueves = 4
+    seedSettings(db, { auto_publish_top: true, rest_day_overrides: { "10": { week: weekKey, weekday } } });
+    db.seed("clips", clipRow({ id: 1 }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(scheduledJobs(db, "tiktok")).toHaveLength(0);
+    const events = floorEvents(db);
+    expect(events.some((e) => (e.message as string).includes("tiktok es:"))).toBe(false);
+    expect(events).toHaveLength(3);
+  });
+
+  test("salta el canal sin credencial verificada: sin jobs y sin evento de piso para él", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "youtube", 11);
+    await seedAccount(db, "meta", 12);
+    // TikTok sin credencial verificada (verify_ok 0, sin
+    // credential_enc): el pase lo salta sin evento.
+    db.seed("api_accounts", {
+      id: 10, tenant_id: "sebastian", platform: "tiktok", language: "es", label: "TikTok ES",
+      credential: "", credential_enc: "", extra: "", extra_enc: "", status: "conectada", note: "",
+      created_at: 1, verified_at: null, verify_ok: 0, verify_message: "",
+      first_published_at: FROZEN_MS - 40 * 86400_000, published_count: 20, strikes: 0,
+      maturity: "establecida", maturity_checked_day: FROZEN_DAY,
+    });
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    db.seed("clips", clipRow({ id: 1 }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(scheduledJobs(db, "tiktok")).toHaveLength(0);
+    const events = floorEvents(db);
+    expect(events.some((e) => (e.message as string).includes("tiktok es:"))).toBe(false);
+    expect(events).toHaveLength(3);
+  });
+
+  test("YT con 2 publicados hoy encola exactamente 1 (para en el piso 3, no hasta 6)", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    // 2 publicados en YT hoy, hace 3 y 4 h (fuera del piso de
+    // 90 min, dentro del rolling 6).
+    seedPostedJob(db, { id: 901, clip_id: 901, platform: "youtube_shorts", api_account_id: 11, platform_id: "YT1", evidence_url: "https://www.youtube.com/shorts/YT1", posted_day: FROZEN_DAY, created_at: FROZEN_MS - 3 * 3600_000, updated_at: FROZEN_MS - 3 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, platform: "youtube_shorts", api_account_id: 11, platform_id: "YT2", evidence_url: "https://www.youtube.com/shorts/YT2", posted_day: FROZEN_DAY, created_at: FROZEN_MS - 4 * 3600_000, updated_at: FROZEN_MS - 4 * 3600_000 });
+    db.seed("clips", clipRow({ id: 1, score: 90 }));
+    db.seed("clips", clipRow({ id: 2, score: 80, language: "en" }));
+    db.seed("clips", clipRow({ id: 3, score: 70, language: "en" }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(scheduledJobs(db, "youtube_shorts")).toHaveLength(1);
+    const events = floorEvents(db);
+    expect(events.some((e) => (e.message as string).includes("youtube_shorts es:"))).toBe(false);
+    expect(events).toHaveLength(3); // TT, IG, FB siguen cortos (stock ES agotado)
+  });
+
+  test("el next_run_at respeta el piso de 90 min (última + azar 90–180, no inmediato)", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    // Última subida en TikTok hace 2 h: el job nuevo nace en
+    // última + azar(90–180), nunca antes de ahora.
+    const lastPostedAt = FROZEN_MS - 2 * 3600_000;
+    seedPostedJob(db, { id: 901, clip_id: 901, platform_id: "TT1", evidence_url: "https://example.com/tt1", posted_day: FROZEN_DAY, created_at: lastPostedAt, updated_at: lastPostedAt });
+    db.seed("clips", clipRow({ id: 1 }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    const tt = scheduledJobs(db, "tiktok");
+    expect(tt).toHaveLength(1);
+    const nextRunAt = tt[0]?.next_run_at as number;
+    expect(nextRunAt).toBeGreaterThanOrEqual(FROZEN_MS);
+    expect(nextRunAt).toBeGreaterThanOrEqual(lastPostedAt + 90 * 60_000);
+    expect(nextRunAt).toBeLessThanOrEqual(lastPostedAt + 180 * 60_000 + 15 * 60_000);
   });
 });
