@@ -1,62 +1,116 @@
-# SPEC — Inglés correcto de punta a punta (v3)
+# SPEC — Inglés correcto de punta a punta (v4)
 
-**Estado:** v3 — reescritura tras la 2ª revisión goldfish (NO APROBADA) + la 2ª revisión
-goldfish del borrador sin_webcam (NO APROBADA, B7–B11) + calibración completa en la
-rejilla real del gate. **Sin implementar todavía: esta v3 necesita una 3ª revisión
-goldfish (EGM) antes de implementar.** Fecha: 2026-11-26 ~23:55 (Chile).
+**Estado:** v4 — reescritura tras la 3ª revisión goldfish (NO APROBADA, B-N1–B-N5,
+I-1–I-12, M-1–M-6) + mediciones nuevas sobre el `layout_gate` que ya existe en el
+árbol. **Sin implementar todavía: esta v4 necesita una 4ª revisión goldfish (EGM,
+solo del delta v3→v4) antes de implementar.** Fecha: 2026-11-27 ~01:30 (Chile).
 
 **Repo:** `~/workspace/gta6-clips/viral-clip-agent/`. **No borres clips. No cortes a mano.**
 **No publiques nada a mano desde este trabajo** (la publicación desde el chat la lleva
 otro agente; la salida de este trabajo son clips válidos en cola + VOD fluyendo).
+**El repo es PÚBLICO: nunca van clips, fotogramas ni capturas del usuario a git**
+(las imágenes viven en `~/workspace/gta6-clips/runs/layout-gate-calib/` y en
+`runs/layout-fix-2026-11-26/frames/`, fuera del repo; los tests que las usan se
+saltan si no están en el workspace).
 
-## v2 → v3 (qué cambió y por qué)
+## v3 → v4 (qué cambió y por qué)
 
-La v2 recibió **NO APROBADA** en su 2ª revisión goldfish (agente bf83eb8c, veredicto
-completo recuperado de `runtime.messages` 2026-11-26 23:39 UTC): B-1 (método por celdas
-no separa; ORB debe ser primario; salto por banner contradice 197; corpus 49 no 52;
-**rejilla de calibración ≠ rejilla del gate**), B-2 (contradicción 186 sin resolver;
-`cam_pura` sin definición; README contradice la spec), B-3 (cableado del re-render roto
-en 3 puntos + pre-chequeo sin mecanismo + conflicto avatar §4.2 vs §4.3), B-4 (nuevo:
-el JSON `viral` NO transporta `plantilla`/`cam_box` — `parseViralInput` es whitelist),
-B5 parcial (Burn sin coordenadas, clip 12 sin números, regla y≤0,35 perdida); I-1–I-8;
-M-1–M-6. Además la 2ª revisión del borrador sin_webcam (REVISION-GOLDFISH-2.md, NO
-APTA) añade B7–B11 + I1–I4 + M1–M5, de los que 4 golpean a esta spec (B7 transporte,
-B8 despacho de `template_gate`, B9 pisado de `cfg["mode"]`, B10 `(facecam_box, hits)`,
-B11 tercer duplicado `sfx:`).
+La v3 recibió **NO APROBADA** en su 3ª revisión goldfish (agente da11e70f, 2026-11-27
+00:15 UTC). La revisión **confirma la calibración v3** (la refutación ORB se sostiene:
+es248_t1 ORB 9 y 183_t1 ORB 8 en fotogramas correctos; SIFTct02 separa a nivel clip;
+197 se caza en la rejilla real) y bloquea por **cableado, contradicción con el árbol
+y diseño**, no por calibración:
 
-**Mediciones nuevas en esta v3 (hechas por mí 2026-11-26, no por la revisión):**
-- **Rejilla real del gate:** `extract_gate_frames` (`final_review.py:780`) muestrea
-  desde **t=1,0 con paso 2 s** (`face_sample_every_s: 2`, `config.yaml:641`) → t=1,3,5,7…
-  Calibración rehecha sobre t=1,3,5 para los 13 clips (39 fotogramas) + t=7,15,25.
-- **197 en la rejilla real: SÍ se caza.** 197_t1/t3/t5 son todos duplicados (la cámara
-  no aparece hasta ~t=7): SIFT 21/29/26, ORB-completo 16/21/7. El gate muestrea t=1,3,5.
-- **SIFT (nfeatures=2000, contrastThreshold=0,02) umbral 20 es el método que separa a
-  nivel clip:** CORRECTO máx 18 (es248_t15), DUP mín por clip 29 (197). **ORB queda
-  descartado como señal única: es248_t1 (correcto, verificado visualmente) da ORB
-  9 ≥ 7** — falso positivo. La corrección B-1 del goldfish («ORB primario, umbral 7»)
-  queda refutada por ese fotograma; la v3 shippea SIFTct02 como primario único.
-- **Clip 12 (avatar peanut):** medido. Avatar bbox x 0,27-0,77, y 0,01-0,82; píxeles
-  avatar/zona = **0,34**; centro (0,52, 0,42). 244: píxeles 0,08-0,10. Umbral
-  `avatar_share_min = 0,20` los separa (0,34 vs 0,10).
-- **Citas re-verificadas con grep contra el árbol actual** (varias estaban
-  desactualizadas en v2 Y en el borrador): `decide_layout` es `render.py:2320` (no
-  :2221); `cut_clip_with_layout` es `:3471` (no :3341); el pisado de `layout_mode` es
-  `:3494-3496` (no :3367-3368); `_cam_box_valida` existe en `:1923` (ancho <45% +
-  área <35%); `_split_params` es `:1957`, ancho en `:1996`; `extract_gate_frames`
-  es `final_review.py:780` (no :413 — ahí está la constante `_GATE_MAX_FRAMES = 24`);
-  `_criterion` es `quality_gate.py:112` (no :128-130); `config.yaml`: `validator:`
-  553/640, `templates:` 604/717, `sfx:` 366/379 (no 538/625 ni 589/682);
-  `rubius_subs_outline_frac` en :665; `parseViralInput` es `db.ts:352`,
-  `mergeViralJson` `:497`, INSERT `:1949`, POST merge `index.ts:1491` (la revisión
-  tenía razón en las 4; la resolución del borrador citaba :344/:475/:2034/:1452 —
-  erróneas, verificadas por grep). `config.py: load_config` es `:551` (no :566).
+- **B-N1 — `layout_gate` YA EXISTE en el árbol** (sin commitear, no en HEAD) y la v3
+  lo ignora. Decisión v4: **ALINEARSE con él, no reemplazarlo** (§5). El gate
+  existente combina SIFT-RANSAC (contado en **celdas distintas**, no inliers solos)
+  + geometría de la cara en 4 reglas, con fallo duro `"layout"` ya cableado en
+  `validate_final_clip`. La v3 shippeaba SIFTct02 (conteo de buenos matches, umbral
+  20): queda **retirado como método** (sus números quedan en §1/Referencias como
+  historial de medición). La estadística de celdas es estrictamente mejor: arregla
+  el colapso de inliers (170: 15 inliers en 4 celdas) y caza la captura 3 (37
+  inliers en 21 celdas), la limitación documentada de la v3.
+- **B-N2 — `_do_cut` descarta `facecam_box` top-level** (`workers.py:406-419`: solo
+  pasa `cfg.get("layout")`). El pre-chequeo de la v3 (`cfg2["facecam_box"]`) nunca
+  llegaba a `decide_layout`. Canal real en v4 (§4.2): `_do_cut` usa
+  `get_layout_config(cfg)` (`config.py:1007-1011`, fusiona el `facecam_box`
+  top-level) + copia profunda por clip. 6º call site no listado: `workers.py:955`.
+- **B-N3 — la señal (b) de `cam_pura` no tiene cableado.** Decisión v4 (§5.2):
+  **se elimina (b)**: la procedencia de la caja se controla en el render (§4.1),
+  no se re-chequea en el validador. `cam_pura` = reglas de cara (ii)+(iii)+(iv) de
+  `layout_gate`, con sus motivos propios.
+- **B-N4 — `decide_template_for_segment` no puede decidir (facecam_box, hits)** con
+  `find_facecam_box_in_source` (devuelve solo `{"box", "method"}`, descarta `hits`).
+  Decisión v4 (§4.3): la función llama **directamente a `detect_vod_facecam`**
+  (devuelve `hits` + caja en los rescates) y usa `find_facecam_box_in_source` solo
+  como segundo escalón.
+- **B-N5 — la reserva EN no es implementable como está escrita** (exige conocer el
+  pre-chequeo EN antes de listar, pero el tope debe ir antes del listado). Decisión
+  v4 (§8.1): **tope perezoso como regla única** (contadores por idioma; el tope de
+  un idioma sube a `max_vods` si el otro no tiene entradas sin visitar en `order`),
+  con relajación simétrica y `lang` calculado al inicio de la iteración.
+- **I-1–I-12, M-1–M-6**: p7775 NO es estrategia de `box_strategies` (es 4ª estrategia
+  nueva, solo Rubius); centro de p7775 corregido a (0,11, 0,56) @2560×1440 + tope de
+  borde superior `y0 < 0,50` conservado; `validate_cam_box` gana
+  `require_containment=False`; **avatar: NO hay primitiva de píxeles** — la varianza
+  temporal está refutada por medición (244 es 81% estático, clip 12 solo 15-21%) y
+  el `avatar_share` 0,20 de la v3 se **elimina**; el avatar se resuelve por caja del
+  candidato + exención de cara en `layout_gate` (§4.3/§5.2); premisa del camino
+  `"cara"` corregida (hoy va a revisión humana, no a sin_webcam); equivalente VOD de
+  B-3.2; trigger `"layout"` en el rescate; `quality_gate` SÍ se reconstruye tras el
+  re-render (matiz); gancho (b) en `:2559` y `:2601` (ambos a `"game"`); llamada
+  completa a `_game_filter` (`game_crop` 9:16 + `game_zoom` + `game_h=1920`); umbral
+  con hogar en config (`layout_dup_sift_cells`, ya existe); citas con baseline único
+  (árbol, con HEAD donde difiere); `isWorkerRunning` con try/catch; test de Burn
+  escribible (regla sobre cajas documentadas + detector con fixture explícito);
+  gancho del escaneo nombrado (`decide_layout` `:2432-2444`); resto de menores.
+
+**Mediciones nuevas en esta v4 (hechas por mí 2026-11-26/27, scripts en
+`runs/layout-gate-calib/` — durable, fuera del repo; `/tmp` se limpió entre turnos):**
+- **Calibración final con el gate ACTUAL (celdas) sobre el conjunto completo del
+  gate** (t=1,3,5,…,20 fotogramas por clip, 14 clips + 170_t7 + 3 capturas): tabla
+  en §5.1/§5.2. **186 PASA** (celdas 6, share 0,85, cx 0,475, área 0,167); **190
+  PASA** (celdas 2, share 0,55); **248 PASA** (celdas 5 — las celdas arreglan el
+  falso positivo de inliers: 9 inliers en solo 3-5 celdas); **183/184/189 FALLAN**
+  por (i) (celdas 35/51/20) — la v3 los pasaba, queda **revocada**; **197 FALLA**
+  por (iv) (área 0,106 + 6 celdas ≥5); **214** solo lo caza (i) (96 celdas, cara en
+  rango); **244 FALLA** por (i) (10 celdas, sistemático 8-12 en los 20 fotogramas);
+  **clip 12 FALLA** por (i) (42 celdas: t1 arena de juego junto al avatar, t37
+  póster de esqueleto junto al avatar — caja demasiado ancha, no exención);
+  **las 3 capturas FALLAN** por (i) (307/57/21 celdas — la limitación de la v3
+  desaparece). Limpios máx 6 celdas; DUP mín 10 celdas (244); 197 se caza por (iv).
+- **t7 a fotograma único: 15/15 coinciden con `ESPERADO_T7`** de
+  `test_layout_gate.py` (ya existe, 311 líneas, raíz del repo). **186 t7 FALLA**
+  (Haar no ve cara en ese único fotograma, share 0/1) pero **186 pasa en conjunto
+  completo** — no es contradicción: son conjuntos de fotogramas distintos; la v4 lo
+  deja explícito en un solo sitio (§5.3). La regla de corroboración funciona: 170
+  pasa (cx 0,42, área 0,080, 4 celdas < 5); 189 y 197 caen por (iii) (cara de
+  primer plano desplazada).
+- **Recorte de capturas:** mi rectángulo (107,431)-(1182,2363), 1075×1932, aspecto
+  0,556 ≈ 9:16; el de `test_layout_gate.py` (`CAPTURA_VIDEO`, filas 66-2376, cols
+  95-1195, aspecto 0,476) incluye UI. **Las 3 capturas fallan con ambos recortes**
+  (mi recorte: 307/57/21 celdas; recorte del test: 257/43/22). La v4 adopta mi
+  recorte como canónico y ordena actualizar `CAPTURA_VIDEO`.
+- **Avatar por varianza: refutado.** `static_share` (desviación típica < thr entre
+  4 fotogramas, zona de cámara): clip 12 = 0,147-0,214; 244 = 0,808-0,838. El mapa
+  del juego es más estático que el avatar animado. No se usa.
+- **face_gate NO necesita cambio para avatares (medido):** el `quality_gate` de
+  clip 12 en D1 tiene fallos `['hook', 'titulo', 'audio']` — sin fallo de cara.
+- **Repo público, imágenes fuera:** el commit 30ba071 metió las 22 imágenes en el
+  repo público; se sacaron en c6ff3e1 (movidas a
+  `runs/layout-gate-calib/fixtures-duplicacion/`). Siguen en el historial de
+  30ba071 — la limpieza del historial (BFG + force-push) queda pendiente de
+  decisión (§11). CI en verde 2026-11-26 21:21 (GHA 2200 passed, CircleCI success).
 
 ## Alcance (5 piezas, en orden)
 
-1. **Puerta en el validador** que caza la duplicación (mitad superior = mitad inferior)
-   y exige que la zona de cámara sea mayoritariamente cámara, antes de encolar.
-2. **Guardas de caja** en el corte (reutilizar `validate_cam_box`/`find_cam` y la
-   existente `_cam_box_valida`), para que no se vuelva a renderizar un duplicado.
+1. **Puerta en el validador = `layout_gate` (ya existe en el árbol)** — adoptarlo,
+   corregir su calibración a la rejilla del gate, añadir el parámetro `avatar` y
+   resolver 186 en su marco. La puerta caza la duplicación (SIFT en celdas) y exige
+   que la zona de cámara sea mayoritariamente cámara (geometría de la cara), antes
+   de encolar.
+2. **Guardas de caja** en el corte (regla reconciliada única + `validate_cam_box` /
+   `find_cam` / `_cam_box_valida`), para que no se vuelva a renderizar un duplicado.
 3. **Formato «rubius sin webcam»** (gameplay a pantalla completa) como salida cuando no
    hay cámara real — adopta el borrador revisado **con sus correcciones de ronda 2
    inlinadas** (§6), no el archivo del borrador (que vive fuera del repo y está
@@ -73,923 +127,929 @@ B11 tercer duplicado `sfx:`).
 - Piso 3/día (tiene su propia spec `docs/designs/SPEC-piso-3-por-dia-v2-2026-11-26.md`,
   aprobada por el usuario 2026-11-26 20:46, en implementación por otro agente).
 
-## Acción inmediata (estado a 2026-11-26 ~23:55, verificado en D1)
+## Acción inmediata (estado a 2026-11-27 ~01:30, verificado en D1)
 
 - **247: sin job vivo.** `SELECT … FROM jobs WHERE clip_id=247` → 0 filas (verificado
-  ~23:20). El job 165 (247 → YouTube, 2026-11-27 00:30) fue eliminado. No se reprograma
-  247 hasta que su re-make pase la puerta nueva. Job 161 (248 → Instagram,
+  2026-11-26 ~23:20). El job 165 (247 → YouTube, 2026-11-27 00:30) fue eliminado. No se
+  reprograma 247 hasta que su re-make pase la puerta nueva. Job 161 (248 → Instagram,
   2026-11-27 00:00) sigue `scheduled`.
-- **Los 10 EN re-hechos aún no están en D1** (verificado ~23:50: los 10 siguen en
-  `en_carpeta`, `updated_at` 23–26 nov). El re-render del otro chat (c02d444d) no ha
-  aterrizado; la verificación en vivo de §10.4 queda pendiente de eso.
+- **Los 10 EN re-hechos aún no están en D1** (verificado 2026-11-26 ~23:50: los 10
+  siguen en `en_carpeta`, `updated_at` 23–26 nov). El re-render del otro chat
+  (c02d444d) no ha aterrizado; la verificación en vivo de §10.4 queda pendiente.
 - **190 publicado y verificado LIMPIO en el Chrome del usuario** (YouTube Shorts
   https://www.youtube.com/shorts/FFw5ngKR0dc, job 164, 20:05; verificado por otro
   agente en solo lectura: cámara grande arriba, juego abajo, sin duplicado).
 - **Opción A aterrizada** (commit 26267d5): Workers avc fe1b2268 / avc-kaez 4324312a,
   `/api/health` ok en ambos, schedules `['*/5 * * * *']` verificados por API en ambas
   cuentas (seba 27afc37225a02fd92557f901c05dabee, kaez 30953ea4f41053a53494bc50b2a9d4a4).
+- **CI en verde** 2026-11-26 21:21 (GHA run 45914822949: 2200 passed; CircleCI success).
+  HEAD c6ff3e1 (incluye 30ba071 spec v3 + c6ff3e1 sacar imágenes del repo público).
 
 ## §1. Evidencia: la duplicación es real, por fotograma
 
-### §1.1 Cómo se midió (2026-11-26 ~20:00-20:20, ampliado 23:50-23:55)
+### §1.1 Cómo se midió (2026-11-26 ~20:00-20:20, ampliado 23:50-01:30)
 
-- MP4 finales descargados de R2 (`~/workspace/gta6-clips/runs/review-en-2026-11-26/`
-  y `runs/review-es-2026-11-26/`); fotogramas con ffmpeg en t=2,7,15,25 (calibración
-  inicial) y **t=1,3,5 (rejilla real del gate)**; las 3 capturas del usuario recortadas
-  al área de vídeo (1290×2796 → recorte `(107,431)-(1182,2363)` → 1075×1932) y
-  guardadas en `tests/fixtures/duplicacion/usuario_*.jpg` (coordenadas registradas en
-  el README de fixtures).
-- **Corpus real: 49 fotogramas** (13 clips × t=2,7,15,25; 183, 190 y 244 no tienen t=25)
-  **+ 39 fotogramas de rejilla** (13 clips × t=1,3,5) + 3 capturas. La v2 decía 52:
-  el número correcto es 49 para el corpus inicial.
-- Métodos probados y descartados (todos medidos, sin separación): MAD, NCC global y
-  grueso (16×16, 8×8), template matching, Haar, histogramas (gris/tono), NCC de bordes
-  Canny 32×32, comparación por celdas (0 coincidencias en todos los fotogramas).
-- **Método que separa: SIFT** (nfeatures=2000, contrastThreshold=0,02, BFMatcher L2,
-  knn k=2, ratio 0,75; zonas: cámara y 0-840 x 0-810, juego y 840-1920; cv2 4.11.0).
-  Umbral **20**. CORRECTO máx 18 (es248_t15); cada clip DUPLICADO tiene ≥1 fotograma
-  ≥21 (mín por clip 29 en 197, máx 471 en 199). A nivel fotograma hay solape
-  (199_t3=15 por desenfoque de transición, es248_t15=18); **a nivel clip la
-  separación es perfecta** (6/6 DUP rechazados, 7/7 CORRECTO pasan) y el gate es a
-  nivel clip (1 fotograma que falle → clip rechazado).
-- **ORB queda descartado como señal única:** con exclusión de franja y umbral 7,
-  es248_t1 (correcto, verificado visualmente: cara de IlloJuan arriba, calle abajo)
-  da **9** — falso positivo. El OR (ORB≥7 O SIFT≥20) hereda ese falso positivo.
-  ORB se documenta como medido-pero-no-shippeado.
+MP4 finales descargados de R2 (API v4 Cloudflare + surrogate del vault; nunca por
+`wrangler r2`, que ve otro bucket). Fotogramas extraídos con ffmpeg a la rejilla
+real del gate (`extract_gate_frames`, `final_review.py:780`: t=1,3,5,7,… paso 2 s,
+hasta 24 fotogramas) y a t=7 para la regresión a fotograma único. El método de la
+puerta es el del `layout_gate` existente: SIFT nfeatures=2000 + Lowe 0,75 +
+homografía RANSAC (5,0), contado en **celdas distintas de destino** (rejilla de
+20 px en la zona de juego) + cara Haar mayor por fotograma (centro-x mediano, área
+mediana, share). Zonas de la receta rubius efectiva (`config.yaml`, segundo bloque
+`templates:`): cámara x 0-1080, y 0-840; juego y 840-1920. cv2 4.11.0 (SIFT en
+opencv-python ≥4,4, sin dependencia nueva). Coste medido ~2-3 s por fotograma SIFT
++ Haar rápido; el gate evalúa SIFT sobre ≤8 fotogramas repartidos → ~20-30 s por
+clip (acotado por `layout_sift_max_frames: 8`).
 
-### §1.2 Tabla por clip (t=7 salvo indicación; rejilla t=1,3,5 medida 23:52)
+**Historia de la medición (para que nadie la repita):** la v1/v2 calibraron con
+MAD/NCC/template/Haar (ninguno separa), luego celdas NCC (0 coincidencias en
+todo: no separa), luego ORB (falso positivo en es248_t1 correcto, ORB 9 ≥ 7 —
+refuta «ORB primario»), luego SIFTct02 (conteo de buenos matches, umbral 20:
+CORRECTO máx 18, DUP mín por clip 29 — separa, pero el conteo colapsa: 170 da 15
+inliers en 4 celdas por el texto del encabezado de Twitch). El `layout_gate`
+existente resuelve el colapso contando **celdas distintas**: 170 pasa con 4 celdas.
+La captura 3, limitación documentada de la v3 con SIFTct02 (17 < 20), se caza con
+celdas (21). SIFTct02 queda como historial, no como método.
 
-| Clip | Streamer | Veredicto visual |
-|---|---|---|
-| 183 EN | Burn | CORRECTO. Cara grande arriba; sangrado leve (franja de juego a la derecha). |
-| 184 EN | Burn | CORRECTO con sangrado leve. |
-| 186 EN | Burn | **CORRECTO (decisión de esta spec, §5.2).** Cara ~75% de ancho, juego ~25% a la derecha. La zona es mayoría cámara; el mismo sangrado existe en 183/184/189, correctos sin discusión. Rechazar 186 obligaría a rechazar los renders correctos normales del canal. El borrador adoptado lo etiqueta FALLA; esta spec adopta el borrador **excepto** en 186, con la excepción escrita aquí explícitamente (resuelve B-2: una sola expectativa por fixture, en este sitio). El sangrado se corrige ajustando la caja (`find_cam` + snap al borde real), no rechazando el clip. |
-| 189 EN | Burn | CORRECTO (cuarto oscuro + escena nocturna). |
-| 190 EN | Burn | CORRECTO. Publicado 20:05 YT EN, verificado LIMPIO en el Chrome del usuario. |
-| 191 EN | Burn | DUPLICADO. Arriba = fotograma completo (camarita pequeña + cara grande del juego); abajo = mismo personaje. |
-| 197 EN | Burn | VARIABLE por tramo, **cazado en la rejilla real**: t=1,3,5 duplicados (banda de cámara = juego nocturno oscuro, sin cara; SIFT 21/29/26); t=7,15,25 correctos (SIFT 4/1/2). El CLIP se rechaza (≥1 fotograma muestreado falla). |
-| 199 EN | Burn | DUPLICADO. Arriba = fotograma completo (calle + camarita + overlays); abajo = misma calle. t=3 con desenfoque de transición (SIFT 15, por debajo del umbral — el clip se caza por t=1/t=5). |
-| 214 EN | TheBurntPeanut | DUPLICADO. Arriba = cara del personaje (club, magenta), sin streamer; abajo = mismo personaje; avatar peanut diminuto abajo-izquierda en la banda de juego. |
-| 244 EN | TheBurntPeanut | DUPLICADO. Avatar centrado sobre el mapa arriba; mismo mapa abajo. Avatar ~8-10% de píxeles de la zona (medido). |
-| 246 ES | IlloJuan | CORRECTO. |
-| 247 ES | Rubius | DUPLICADO. Arriba = fotograma completo (calle + Rubius pequeño centro-izquierda); abajo = misma calle. |
-| 248 ES | IlloJuan | CORRECTO. |
-| 12 EN | TheBurntPeanut | **CORRECTO (avatar).** El avatar llena la zona de cámara (píxeles avatar/zona = 0,34; bbox x 0,27-0,77, y 0,01-0,82; centro (0,52, 0,42)); abajo, juego desenfocado (transición). El avatar ES la cámara. Caso de regresión: sigue siendo rubius (§4.3, rama avatar). |
+### §1.2 Tabla por clip (conjunto completo del gate, n=20 fotogramas, gate actual)
+
+`cells` = máx. de celdas distintas SIFT sobre ≤8 fotogramas repartidos
+(`layout_sift_max_frames: 8`); `share` = fotogramas con cara Haar / total;
+`cx`/`area` = medianas de la cara mayor. Umbrales: celdas 8; share 0,5; cx
+[0,45, 0,65]; área 0,15 (primer plano 0,12); corroboración 5 celdas.
+
+| Clip | Streamer | Veredicto (puerta) | cells | share | cx | área | Regla que lo caza |
+|---|---|---|---|---|---|---|---|
+| 183 EN | Burn | RECHAZAR (sangrado: caja demasiado ancha) | 35 | 1,00 | 0,445 | 0,153 | (i) duplicado |
+| 184 EN | Burn | RECHAZAR (sangrado) | 51 | 0,85 | 0,435 | 0,144 | (i) duplicado |
+| 186 EN | Burn | **PASAR** (sangrado leve tolerado) | 6 | 0,85 | 0,475 | 0,167 | — |
+| 189 EN | Burn | RECHAZAR (sangrado) | 20 | 0,95 | 0,448 | 0,139 | (i) duplicado |
+| 190 EN | Burn | **PASAR** (correcto; publicado y verificado limpio) | 2 | 0,55 | 0,619 | 0,234 | — |
+| 191 EN | Burn | RECHAZAR (duplicado) | 231 | 1,00 | 0,118 | 0,044 | (i) duplicado |
+| 197 EN | Burn | RECHAZAR (duplicado t=1..5; correcto después) | 6 | 0,55 | 0,45 | 0,106 | (iv) cara + corroboración |
+| 199 EN | Burn | RECHAZAR (duplicado) | 318 | 1,00 | 0,21 | 0,038 | (i) duplicado |
+| 214 EN | TheBurntPeanut | RECHAZAR (cara del juego en banda de cámara) | 96 | 1,00 | 0,522 | 0,116 | (i) duplicado (la cara pasa) |
+| 244 EN | TheBurntPeanut | RECHAZAR (avatar sobre mapa) | 10 | 0,05 | 0,412 | 0,036 | (i) duplicado |
+| 12 EN | TheBurntPeanut | RECHAZAR (avatar, caja demasiado ancha) | 42 | 0,15 | 0,537 | 0,014 | (i) duplicado |
+| 246 ES | IlloJuan | **PASAR** (correcto) | 5 | 1,00 | 0,514 | 0,184 | — |
+| 247 ES | Rubius | RECHAZAR (duplicado) | 151 | 0,75 | 0,184 | 0,019 | (i) duplicado |
+| 248 ES | IlloJuan | **PASAR** (correcto) | 5 | 1,00 | 0,503 | 0,167 | — |
+| 170 ES | AuronPlay | **PASAR** (webcam ancha legítima; solo t7 medido) | 4 | 1,00 | 0,421 | 0,080 | — (iv) no dispara: 4 < 5 |
+| Captura 1 | (usuario) | RECHAZAR (duplicado: caja = fotograma completo) | 307 | 1,00 | 0,219 | 0,035 | (i) duplicado |
+| Captura 2 | (usuario) | RECHAZAR (duplicado: cara del juego) | 57 | 1,00 | 0,664 | 0,212 | (i) duplicado |
+| Captura 3 | (usuario) | RECHAZAR (duplicado) | 21 | 1,00 | 0,659 | 0,370 | (i) duplicado |
+
+Lecturas que importan:
+- **186 PASA en ambos marcos** (v3 y `layout_gate` actual, medido en la rejilla del
+  gate): celdas 6 < 8, share 0,85, cx 0,475 en rango, área 0,167 ≥ 0,15. Márgenes
+  finos (celdas 6 vs 8; cx 0,475 vs 0,45; área 0,167 vs 0,15): cualquier
+  recalibración debe re-verificar 186. El docstring de `layout_gate` («186 lo caza
+  la cara», cx 0,41-0,44) es un artefacto de su rejilla t2/t7/t20; la v4 ordena
+  re-anclar el docstring a la rejilla del gate (§5.5). **A t7 a fotograma único
+  186 FALLA** (Haar no ve cara en ese único fotograma, share 0/1) — ver §5.3: son
+  conjuntos de fotogramas distintos, no una contradicción.
+- **183/184/189: la v3 los pasaba; la v4 los rechaza.** El sangrado del borde
+  derecho (franja de juego ~25% de la zona de cámara) NO es tolerable: la zona
+  deja de ser mayoritariamente cámara en la medida SIFT (35/51/20 celdas). Es el
+  mismo defecto de caja demasiado ancha que §4.1 corrige con snap; el gate
+  rechaza el render y el re-render con la caja ajustada es el que debe pasar.
+  183/184/189 también fallarían (iv) (cx 0,435-0,448, área 0,139-0,153) si (i) no
+  disparase primero.
+- **248 PASA gracias a las celdas:** 9 inliers en solo 5 celdas (t17: 9 inliers en
+  3 celdas — matches colapsados). Con el conteo de inliers (umbral 8) 248 era un
+  falso positivo; con celdas (umbral 8) pasa con margen 3.
+- **197 se caza por (iv), no por (i):** celdas 6 < 8, pero cara anómala (área 0,106
+  < 0,15; cx 0,45 en el borde) + corroboración 6 ≥ 5. Su segmento duplicado dura
+  t=1..5 (SIFTct02 21/29/26 en t=1,3,5); t=7/15/25 son correctos. Por eso la
+  puerta NO salta los fotogramas de la ventana del banner: se evalúan.
+- **214 es el caso que solo caza (i):** su cara (del juego) está centrada (cx
+  0,522) y su área 0,116… pero (i) da 96 celdas. Sin (i), 214 pasaría (iv) solo si
+  las celdas fueran ≥5 — lo son (96) — en realidad 214 fallaría (iv) también
+  (área < 0,15 + 96 ≥ 5). La regla (i) es la que lo caza primero y con más margen.
+- **Clip 12: el render actual FALLA (i) con 42 celdas — no necesita exención,
+  necesita re-render con la caja ajustada.** En t1 la zona de cámara muestra
+  arena de juego junto al avatar (90 inliers); en t37 un póster de esqueleto
+  junto al avatar (71 inliers); en t7 el avatar está centrado sobre fondo oscuro
+  (10 inliers, 3 celdas). La caja es demasiado ancha: el avatar se mueve dentro
+  del fotograma fuente y la caja fija incluye juego a los lados. El arreglo es
+  la caja del candidato vtuber (§4.3), no una exención del gate. 244 (10 celdas,
+  sistemático 8-12 en los 20 fotogramas) tiene el mismo arreglo. El `avatar_share`
+  0,20 de la v3 se **elimina**: no hay primitiva reproducible (varianza refutada)
+  y no hace falta (la caja del candidato + el gate SIFT lo sustituyen).
+- **Márgenes del gate (honestos):** limpios máx 6 celdas (186); DUP mín 10 celdas
+  (244); umbral 8 → margen 2 a cada lado. Corroboración (iv): 197 con 6 vs 5
+  (margen 1). Share de 190: 0,55 vs 0,5 (margen 0,05). Son márgenes finos pero
+  reales sobre el corpus medido; §10 fija los tests que los protegen.
 
 ### §1.3 Corrección a la afirmación anterior (queda registrada)
 
-Mi afirmación inicial («la cara no falla en los 10 EN») estaba mal: miré las etiquetas
-del veredicto en D1, no los fotogramas. Las 3 capturas del usuario muestran la
-duplicación; el diagnóstico por fotograma de §1.2 la confirma. La puerta dura
-cara/formato no los frenó porque `face_gate` solo exige UNA cara visible en la zona
-(la del inset pequeño o la del juego cuentan) y nunca mide qué fracción de la zona es
-cámara ni si arriba ≠ abajo (§3).
+Mi afirmación del 2026-11-26 19:42 («la cara no falla en los 10 EN») estaba mal:
+miré las etiquetas del veredicto en D1, no los fotogramas. Las 3 capturas del
+usuario lo demuestran (gameplay duplicado arriba y abajo; la cámara nunca ocupa
+la zona superior como pide la receta rubius). Esta spec existe por esa corrección.
 
-## §2. Causa raíz (verificada en código)
+## §2. Causa raíz del duplicado (diagnóstico del padre, verificado por mí en código)
 
-- En `rubius.build_filter` (`clipagent/rubius.py:471-528`) el fotograma fuente se parte
-  en dos: arriba `crop={cover}` de `cam_box` escalado a 1080x840 (`cam_cover_crop`,
-  :505); abajo `crop={game_crop}` (`GAME_CROP = "1440:1440:560:0"`, `rubius.py:95`) a
-  1080x1080. Arriba se ve LO QUE CUBRA `cam_box`. Si la caja es mala, arriba es
-  gameplay y abajo también es gameplay.
-- Dos formas en que sale mala: (a) el detector se engancha a una CARA DEL JUEGO
-  (Haar/YuNet/estabilidad en `decide_layout` `clipagent/render.py:2320` y
-  `find_facecam_box_in_source` `clipagent/final_review.py:1667`); (b) se usa el
-  `DEFAULT_CAM_BOX = "561:365:0:0"` (`clipagent/rdjavi.py:114`) — la caja de p3220
-  (arriba-izquierda; el CLI de `rubius.py:948-953` lo dice: «usando los de p3220») —
-  en un streamer cuya cámara es un inset pequeño en otro sitio.
-- El camino en vivo NO usa `rubius.py`: `live_cutter.process_peak` →
-  `workers.cut_clip` (`clipagent/workers.py:422`) → `_do_cut` (`:406`) →
-  `render.cut_clip_with_layout` (`clipagent/render.py:3471`) → `decide_layout`
-  (`:2320`) → `segment_filter_graph` (`:2949`). `rubius.py` solo lo usan CircleCI
-  (`circle_render.py`) y el re-make (`remake_all.py:448`).
-- **El pisado (B9):** `cut_clip_with_layout` (`render.py:3494-3496`) hace
-  `if layout_mode is not None: cfg["mode"] = layout_mode` — los 5 call sites pasan
-  `layout_mode="auto"` explícito (live `live_cutter.py:1096`, re-render live `:916`,
-  re-render VOD `vod_fallback.py:732`, corte directo `youtube_cut.py:555` /
-  `facebook_cut.py:516`; el corte inicial VOD pasa `args.layout` desde
-  `auto_clips.py:1578-1581`, `--layout` en `:705`, default None). Cualquier modo
-  puesto en `cfg["layout"]["mode"]` se borra antes de `decide_layout`. El mecanismo
-  por `cfg` de la v2 NO funciona; la v3 lo elimina y pasa el modo por call site (§4.2).
-- **Guardas que ya existen y la v2 no nombraba:** `_cam_box_valida`
-  (`render.py:1923`): ancho `bw/w ≤ split_cam_max_w_frac` (0,45, `render.py:200`) Y
-  área `(bw*bh)/(w*h) ≤ cam_max_area_frac` (0,35); usada en `:1989`, `:2371`
-  (caja explícita: inválida → se ignora y se sigue al auto), `:2559`, `:2601`.
-  Su docstring: «una caja inválida no se renderiza como rubius; el tramo cae a
-  "center" (sin webcam) y el validador lo retiene» — el «center» sigue la cara
-  (Arreglo 6), por eso §4.2 lo sustituye por `"game"`.
+En `rubius.build_filter` (`clipagent/rubius.py:471-528`) el fotograma fuente se parte
+en dos: arriba `crop={cover}` de `cam_box` escalado a 1080x840, abajo
+`crop={game_crop}` (`GAME_CROP = "1440:1440:560:0"`, `rubius.py:95`, recorte 1:1
+centrado) a 1080x1080 (`GAME_Y, GAME_H = 840, 1080`, `rubius.py:93`). **Arriba se
+ve LO QUE CUBRA `cam_box`.** Si la caja es mala, arriba es gameplay y abajo también
+es gameplay. Dos mecanismos verificados:
+
+- (a) El detector se engancha a una **cara del juego** (Haar/YuNet/estabilidad en
+  `decide_layout` `clipagent/render.py:2320` y `find_facecam_box_in_source`
+  `final_review.py:1667`): en la captura 3 la cara del personaje GTA ocupa casi
+  todo el cuadro; en la 2 la cara del personaje ocupa la banda de cámara.
+- (b) Se usa el `DEFAULT_CAM_BOX = "561:365:0:0"` (`clipagent/rdjavi.py:114`) en un
+  streamer cuya cámara es un inset pequeño en otro sitio: la caja cubre
+  calle/gameplay y la camarita queda chiquita en una esquina. Esa caja es la de
+  **p3220** (arriba a la izquierda, según el propio CLI de rubius.py `:948-953`),
+  no «la de Rubius» en general: la caja de Rubius p7775 es `561:365:0:626`
+  (abajo a la izquierda).
+
+**El flujo vivo nunca llama a `rubius.py`:** `live_cutter.process_peak` →
+`workers.cut_clip` (`workers.py:422`) → `_do_cut` (`:406`) →
+`render.cut_clip_with_layout` (`render.py:3471`) → `decide_layout` (`:2320`) →
+`segment_filter_graph` (`:2949`). `rubius.py` solo lo usan el driver de CircleCI
+(`circle_render.py`) y el re-make (`remake_all.py:448`).
 
 ## §3. Por qué el validador no lo cazó
 
-- `face_gate` (`final_review.py:859-893`) exige una cara en ≥ `face_min_share` (0,5)
-  de las muestras, min ancho 0,08×1080 = 86 px — el inset pequeño cuenta, la cara del
-  juego cuenta, el avatar cuenta. Nunca mide qué fracción de la zona es cámara ni si
-  arriba ≠ abajo.
-- `template_gate` (`final_review.py:1169-1182`) despacha SOLO por `subs_style`
-  (`fixed_yellow` / `karaoke` / `word_white`); no hay rama por nombre de plantilla.
-  La receta rubius tiene `subs_style: word_white`, así que un duplicado pasa el
-  template_gate si tiene banner/subs/gameplay (los tiene).
-- `validate_final_clip` resuelve la plantilla en `:1927` y llama a `template_gate` en
-  `:1981`; `face_gate` se ejecuta sin condición en `:1978`. `hard_failures` son solo
-  `"cara"` / `"plantilla"` (`:1996-2009`); `needs_rerender = True` si `not hard_pasa`
-  (`:2043-2049`).
-- El muestreo del gate: `extract_gate_frames` (`final_review.py:780`) desde t=1,0 con
-  paso `face_sample_every_s: 2` (`config.yaml:641`), tope `_GATE_MAX_FRAMES = 24`
-  (constante en `final_review.py:413`).
+`face_gate` (`final_review.py:859-893`) exige una cara en ≥ `face_min_share` (0,5) de
+las muestras, ancho mínimo 0,08×1080 = 86 px. La camarita pequeña cuenta, la cara
+del juego cuenta, el avatar cuenta: nunca mide qué fracción de la zona es cámara
+ni si arriba ≠ abajo. `template_gate` (`:1169-1182`) despacha solo por `subs_style`
+(`fixed_yellow`/`karaoke`/`word_white`), no por nombre de plantilla.
 
-## §4. El arreglo — Fase 1: parar la sangría (Python/config + 5 call sites; el cambio del Worker es Fase 3, §6/§9)
+**Desde la v3 el árbol tiene la respuesta parcial:** `layout_gate`
+(`final_review.py:1914`) + `_sift_dup` (`:1843`) + `_layout_check_arrays`
+(`:2004`) + fallo duro `"layout"` en `validate_final_clip` (`:2334`) + llaves
+`layout_*` obligatorias en `load_validator_config` (`config.py:769-773`). La v4
+**adopta ese gate** (§5) en vez de construir uno paralelo: la tarea es
+re-anclarlo a la rejilla del gate, añadir el parámetro `avatar` y resolver los
+puntos que el propio gate deja abiertos (§4/§5.5). **No re-implementar
+`layout_gate`**: Fase 1 se construye encima del estado actual del árbol.
 
-### §4.1 Guardas de caja en el corte: reutilizar lo que existe, hacerlo obligatorio
+## §4. El arreglo (Fase 1: Python/config + 5 call sites + `_do_cut`)
 
-Existen DOS validadores de caja con reglas distintas. La v3 los distingue y usa cada
-uno donde corresponde:
+### §4.1 Guardas de caja — una regla reconciliada, un solo sitio
 
-- **`_cam_box_valida(box, w, h, cfg)`** (`render.py:1923`): aceptación en el RENDER.
-  Ancho `bw/w ≤ split_cam_max_w_frac` (0,45, `render.py:200`) Y área
-  `(bw*bh)/(w*h) ≤ cam_max_area_frac` (0,35). Ya cableada en `:1989`, `:2371`
-  (caja explícita), `:2559`, `:2601`. Es la guarda que decide si una caja se
-  renderiza como cámara.
-- **`validate_cam_box(box, face)`** (`clipagent/yunet_facecam.py:365`): validación en
-  la DETECCIÓN. Ancho 0,08-0,6, alto 0,08-0,7, área <0,45, aspecto 0,5-2,0,
-  borde superior y ≤0,35, centro fuera de 0,4-0,6, la caja contiene la cara entera.
-  **`find_cam`** (`:395-512`): YuNet en ~12 fotogramas, cara estable en ≥50%
-  (las caras del juego se mueven con la cámara), crece con mapa de bordes y valida
-  con `validate_cam_box`.
+Hoy existen **tres reglas distintas y contradictorias** sobre dónde puede estar la
+caja (verificado por grep):
+- `validate_cam_box` (`clipagent/yunet_facecam.py:365`): w 0,08-0,6; h 0,08-0,7;
+  área <0,45; aspecto 0,5-2,0; **borde superior y > 0,35 → False**; cx debe ser
+  <0,4 o >0,6 (no centrado); debe contener la cara completa (desempaquetar cara
+  vacía → False).
+- `_cam_box_valida` (`render.py:1923`): ancho `bw/w ≤ split_cam_max_w_frac` (0,45,
+  `render.py:200`) Y área `(bw*bh)/(w*h) ≤ cam_max_area_frac` (0,35); usada en
+  `:1989`, `:2371`, `:2559`, `:2601`.
+- `_detect_corner_box` (`render.py:656`): ancho 0,15-0,42 (línea 684), alto ≤0,45
+  (línea 687).
+- `decide_layout` nunca llama a `validate_cam_box` (el escaneo usa
+  `classify_frame`/`_detect_corner_box` y la corrección área <0,45).
 
-**Regla de posición reconciliada (una sola, sustituye a las dos):** el centro de la
-caja NO puede caer en el rectángulo central (x 30-70% Y y 30-70% a la vez), **Y se
-conserva un límite superior: centro y < 0,70** (una caja abajo-izquierda, centro
-(11%, 80%), pasaba la regla v2 en zona de minimapa/HUD; con el límite no pasa).
-`validate_cam_box` se actualiza a esta regla (conservando área, aspecto y contención
-de la cara). Casos reales: Rubius p3220 (arriba-izquierda) pasa; Rubius p7775
-(`561:365:0:626`, centro x 11%, y 0,435) pasa; IlloJuan (centro x ~13%) pasa; avatar
-centrado de 244 (centro ~50%, ~50%) NO pasa → sin_webcam (§4.3).
+**Regla reconciliada (normativa, única):** una caja es válida si y solo si cumple
+las 4: (1) **posición:** el centro NO cae en el rectángulo central (x 30-70% Y
+y 30-70% a la vez) **Y** centro-y < 0,70; (2) **borde superior:** `y0 < 0,50`
+(cota conservada de `validate_cam_box`, relajada de 0,35 a 0,50: la caja de
+Rubius p7775 tiene `y0 = 626/1440 = 0,435` — el 0,35 la rechaza, el 0,50 la
+acepta; bloquea la zona de minimapa/HUD ≥0,50); (3) **tamaño:** ancho
+`bw/W < split_cam_max_w_frac` (0,45) Y área < 0,35 (las dos de `_cam_box_valida`);
+(4) **contención** (solo cuando hay cara detectada: ver I-3): la caja contiene la
+cara completa.
 
-**Parámetro `face` por camino** (I-6): `validate_cam_box(box, face)` exige contención
-de la cara; con `face` vacío devuelve False. Reglas por camino:
-- Detección (Haar/YuNet/escaneo): `face` = la cara detectada en el segmento. Sin cara
-  detectada no hay caja por ese camino (no se llama a `validate_cam_box` con cara vacía).
-- `facecam_box` explícito de config: se valida SIN contención (la caja la puso un
-  humano; la contención no aplica) pero CON todo lo demás (ancho/alto/área/aspecto/
-  posición). Una caja explícita que no pase se ignora con aviso y se cae al escaneo
-  automático (gancho existente en `decide_layout`, `:2371`, vía `_cam_box_valida`).
-- `DEFAULT_CAM_BOX`: solo se aplica cuando el influencer es el dueño documentado de
-  esa caja (p3220) Y pasa las guardas contra el segmento real. En cualquier otro
-  streamer, sin detección válida no hay caja por defecto: no se inventa.
-- **p7775 como segunda estrategia:** p3220 y p7775 son ambas de Rubius
-  (arriba-izquierda vs abajo-izquierda). `box_strategies` (`remake_all.py:262-267`)
-  prueba p3220 y después p7775 (en ese orden) antes de rendirse a sin_webcam; si
-  ninguna valida, el resultado aceptado es sin_webcam (no se inventa una tercera).
+Las fracciones se calculan con el tamaño real del segmento (base declarada:
+2560×1440 para p7775 — su centro es **(0,11, 0,56)**, no (0,11, 0,435): 0,435 es
+el borde superior). **Las cajas documentadas:** Rubius p7775 `561:365:0:626`
+→ centro (0,11, 0,56) ✓ (pasa: no centrada, y0 0,435 < 0,50, ancho 0,22 < 0,45).
+Rubius p3220 `561:365:0:0` → centro (0,11, 0,13) ✓. IlloJuan: caja ~400×408
+@2560×1440 (docstring de `_detect_corner_box`), x0 no documentado, centro-x
+≈ 0,08-0,13 (aproximado — marcar como tal, no como exacto). **Burn: sin
+coordenadas documentadas en ningún sitio** — el test de Burn corre el detector
+sobre segmentos fuente reales (§10.3) y exige detección no vacía, no coordenadas
+fijadas.
 
-**Test de Burn sin coordenadas hardcodeadas:** de Burn no hay caja documentada en
-ningún sitio. El test de §10 NO hardcodea sus coordenadas: corre el detector sobre
-segmentos reales de Burn (y de Rubius p3220/p7775 e IlloJuan, con sus cajas
-documentadas) y afirma que las cajas devueltas pasan la regla reconciliada.
+**Cambios de código:**
+- `validate_cam_box(box, face, require_containment=True)` (nuevo kwarg, I-3):
+  con `require_containment=False` la cara se ignora por completo (la validación
+  sin contención no la usa); con `True` (default) la contención se exige cuando
+  hay cara. La ruta de caja explícita de config (`facecam_box` en `decide_layout`,
+  `:2371`) llama con `require_containment=False`. Test: caja explícita válida sin
+  cara detectada pasa; con cara presente pero fuera, la contención no aplica.
+- `validate_cam_box` adopta la regla reconciliada (posición + `y0 < 0,50` +
+  tamaño) en lugar de su `y ≤ 0,35` y su `cx < 0,4 o > 0,6` (sueltas, la regla
+  reconciliada las sustituye; tamaño/aspecto/área se mantienen).
+- `_cam_box_valida` (`render.py:1923`): mantiene su chequeo ancho <0,45 + área
+  <0,35 y añade la regla de posición + `y0 < 0,50` (la misma función de posición,
+  importada de `yunet_facecam` — un solo sitio, no dos copias).
+- Gancho del escaneo (I-12): la regla de posición se aplica a la caja **antes de
+  crear el pip** en la rama `s["cams"] == 1 and layout == "center" and s["boxes"]`
+  de `decide_layout` (`render.py:2432-2444`, «corregido a pip por escaneo»,
+  después de la corrección área <0,45) y en la rama vtuber inmediatamente posterior
+  (`if layout == "center" and s.get("vtuber")` → pip con `vt["box"]`), con import
+  perezoso de `validate_cam_box` (reconciliada). Una caja que no pasa la regla no
+  se convierte en pip: el segmento cae a `"game"` (ver §4.1.4).
+- Gancho (b) — pip→split y center→split (I-6): en el árbol la guarda está en
+  `:2559` (pip→split) y `:2601` (center→split) y **ambas degradan la caja
+  inválida a `"center"`, no a `"game"`** (la cita `:2448` de la v3 era de HEAD).
+  **Cambiar ambas a `"game"`** y actualizar los docstrings de `_cam_box_valida`
+  (`:1923`) y `_split_params` (`:1957`), que hoy dicen «cae a center».
 
-**Caminos que producen una caja (lista completa):**
+**§4.1.4 Invariante (B6 del borrador, normativa):** caja inválida o ausente →
+`sin_webcam` o hold, **NUNCA** el fotograma completo como cámara, **NUNCA**
+duplicado. La rama `"game"` (`render.py:3083`, recorte 9:16 centrado a pantalla
+completa, sin webcam) es la salida; `"center"` sigue la cara y no sirve como
+salida de degradado.
 
-| Camino | Guarda hoy | Cambio exigido |
-|---|---|---|
-| Escaneo por regiones estables (`decide_layout`, `render.py:2319-2325`) | área < 0,45 | Además `_cam_box_valida` (ancho+área) y la regla de posición reconciliada |
-| `_face_cam_box` Haar, center→split (`render.py:2461`) | NINGUNA (la unión de caras no tiene tope de área) | `_cam_box_valida` obligatorio sobre la caja resultante; si no pasa → no hay split (sigue §4.2) |
-| `classify_frame` / `_detect_corner_box` (`render.py:656`; ancho 0,15-0,42 en `:684`, alto ≤0,45 en `:687`) | Acotado por construcción | `_cam_box_valida` (no puede devolver fotograma completo, pero sí una caja mal centrada) |
-| `facecam_box` explícito de config (`decide_layout`, `:2371`) | `_cam_box_valida` (ya existe: inválida → se ignora) | Se conserva; además la regla de posición reconciliada (sin contención de cara) |
-| Fallback `DEFAULT_CAM_BOX` (`remake_all.py:262-267,379`; `rubius.py:611/699/948`) | NINGUNA | Solo p3220 + guardas; si no, no hay caja por defecto (§4.2) |
-| Rama YuNet (`find_facecam_box_in_source` → `detect_vod_facecam` → `_yunet_facecam_box` → `yunet_facecam_box` → `find_cam` → `validate_cam_box`; eslabón YuNet de `face_gate`, `final_review.py:1064-1065`) | Ya pasa por `validate_cam_box` (regla vieja) | Actualizar a la regla reconciliada (posición + centro y <0,70) |
+**§4.1.5 `box_strategies` — p7775 es una estrategia NUEVA (I-1):** hoy
+(`remake_all.py:271`) son detectada → AJUSTADA (`_tight_box`, `:248`, centrada
+en la cara mediana; docstring: corrige la caja demasiado ancha del refinado de
+borde en cámaras oscuras — «Burn: la cámara real es ~1,8× la cara, no 2,8×») →
+default (p3220). **`561:365:0:626` no aparece como estrategia**: solo como
+ejemplo CLI (`rdjavi.py:77`) y en comentarios (`render.py:2806`). **v4 añade la
+4ª estrategia: p7775 (`561:365:0:626`), solo para segmentos de Rubius,
+después del default p3220** (la función gana un parámetro `influencer`). Orden:
+detectada → ajustada → default p3220 → p7775 (Rubius) → (si ninguna pasa las
+guardas) sin_webcam por §4.1.4. La guarda filtra las cajas inválidas antes de
+renderizar.
 
-#### §4.1.5 Trazabilidad (obligatorio, con el hueco del Worker declarado)
+**§4.1.6 Trazabilidad (B7 parcial):** la caja usada, su fuente y sus guardas se
+registran en el cerebro (`cam_box`, `cam_box_source`, `cam_box_guardas` en el
+registro del clip). En Fase 1 viven solo en el cerebro: el Worker las descarta
+hasta Fase 3 (§6.4) y **no son diagnosticables desde D1 hasta entonces**; la
+puerta del §5 no depende de ellas.
 
-Cada render registra en el record del clip `cam_box` (x,y,w,h en px de la fuente),
-`cam_box_source` (`detectada` | `guardada` | `default_p3220` | `ninguna`) y
-`cam_box_guardas` (pasa/falla por guarda). **Transporte: JSON `viral` del record**
-(el mismo que ya lleva `plantilla` y `quality_gate`). **Hueco declarado (B-4): el
-Worker descarta `plantilla`/`cam_box*` en `parseViralInput` (`db.ts:352`, whitelist
-sin esas claves; cero ocurrencias de `plantilla` en `panel-backend/worker/src/`), así
-que esos campos viven en el cerebro (record local + JSON enviado) y NO son
-diagnosticables desde D1 hasta la Fase 3, que añade las claves al Worker (§6/§9).
-La puerta del validador (§5) no depende de D1: funciona sobre el render.
+### §4.2 El modo viaja por call site + `_do_cut` (B-N2, B9)
 
-### §4.2 Sin caja fiable no hay rubius — enganche real en el flujo live
+El mecanismo de la v2 (`cfg["layout"]["mode"]`) está **eliminado**: `cut_clip_with_layout`
+(`render.py:3471`) hace `if layout_mode is not None: cfg["mode"] = layout_mode`
+(`:3494-3496`) y los 5 call sites pasan `layout_mode="auto"` explícito, así que
+cualquier valor en config queda pisado. **El modo viaja por call site.**
 
-- Si la decisión §4.3 da sin_webcam, el momento se renderiza como
-  **`rubius_sin_webcam`** (§6), nunca como rubius con una caja inventada, nunca como
-  `center` con la cara perdida.
-- **El modo viaja por call site, no por `cfg["layout"]["mode"]`** (B9: el mecanismo
-  por `cfg` de la v2 se elimina — `cut_clip_with_layout` lo pisa en
-  `render.py:3494-3496`). Los CINCO call sites pasan el modo; `cut_clip_with_layout`
-  mantiene su contrato (CLI > config):
-  1. Live: `live_cutter.process_peak` → `cut_clip(..., layout_mode=..., cfg=cfg2, ...)`
-     (`live_cutter.py:1096`). **Pre-chequeo OBLIGATORIO (B-3.5):** antes del corte,
-     con una COPIA por clip de `self.cfg` (el `self.cfg` es compartido: poner
-     `mode="game"` ahí contaminaría los demás clips), se corre la decisión §4.3
-     sobre el segmento fuente; si da sin_webcam → `layout_mode="game"`; si da rubius
-     con caja → `layout_mode="auto"` + `cfg2["facecam_box"] = caja` (validada §4.1).
-  2. Re-render live: `_rerender_after_gate` → `cut_clip(..., layout_mode=..., ...)`
-     (`live_cutter.py:916`): `layout_mode="game"` cuando la decisión §4.3 da
-     sin_webcam, si no `"auto"` (o `None` para que mande `cfg`).
-  3. Re-render VOD: `vod_fallback.py:732`: igual que (2).
-  4. Corte inicial VOD: `auto_clips.py:1578-1581` (`layout_mode=args.layout`): se
-     añade `"game"` a los choices de `--layout` (`auto_clips.py:705`, hoy
-     `["auto","stack","pip","center"]`); la decisión §4.3 se corre dentro de
-     `auto_clips.py` antes del corte y la entrada del manifiesto lleva `"plantilla"`.
-  5. Corte directo por URL: `youtube_cut.py:555-557` / `facebook_cut.py:516-518`:
-     `_default_render` gana parámetro `layout_mode` (default `"auto"`);
-     `_default_validate` (`:560-566` / `:520-526`) gana `plantilla=None`.
-- **Modo forzado `"game"` en `decide_layout`** (`render.py:2320`): la lista de
-  forzados hoy es solo `("stack", "pip", "center")` (`:2340`); `"game"` solo llega
-  vía tramos `game_voice`. Se añade `"game"`: con `cfg["mode"] == "game"`,
-  `decide_layout` devuelve todo el clip como un solo segmento
-  `{layout: "game", params: {}, reason: "forzado: sin webcam (rubius_sin_webcam)"}`.
-  **La decisión lleva la plantilla (B-3.3):** la rama forzada añade
-  `"plantilla": "rubius_sin_webcam"` al dict que devuelve (hoy devuelve solo
-  `{"mode", "segments", "samples"}`); `cut_clip_with_layout` (`:3471`) la devuelve
-  tal cual. Discriminador entre `game` forzado y `game` por `game_voice`:
-  `decision["mode"] == "game"` (el forzado pone `mode="game"`; `game_voice` no
-  cambia `mode`). `live_cutter.py:1104` ya lee `layout.get("plantilla")` primero.
-  `config.yaml:385` (`mode: "auto"`) gana `game` como valor forzado en el comentario
-  (no configurable).
-- **Rama `game` en `segment_filter_graph` (`render.py:3083`):** ya existe (recorte
-  9:16 centrado a pantalla completa). Se le añade el zoom de gameplay llamando a
-  `rubius._game_filter` con `game_h=1920` (import perezoso dentro de
-  `segment_filter_graph`, patrón existente en `render.py:2847`; nunca a nivel de
-  módulo; `_game_filter` parametrizado por `game_h`, default 1080 — M4). NO se usa
-  `center` (sigue la cara, Arreglo 6).
-- **`resolve_split_variant` (`render.py:377`):** el formato nuevo NO pasa por aquí.
-  Un valor explícito desconocido levanta `ConfigError` (falla en voz alta, como
-  `resolve_template`). `"auto"` sigue resolviendo al default.
-- **Gancho de rechazo en el render (I2):** `decide_layout` (`:2320`), dos puntos:
-  (a) caja explícita `facecam_box` (`:2371`): inválida → se ignora y se cae al
-  escaneo automático (ya existe, vía `_cam_box_valida`); (b) conversión pip → split
-  (`:2448`): inválida → el tramo se degrada a layout `"game"` con params `{}`.
-  Comportamiento del llamador: nada dentro del render; el tramo se valida como
-  rubius, la puerta de cara falla y el rescate §4.4 enruta a `sin_webcam` (o
-  revisión humana si ambiguo). `classify_frame` no es el gancho (clasificador, no
-  punto de decisión).
-- **Nunca:** si hay cara detectable, nunca se usa sin_webcam para «esconder» una cara
-  mal encuadrada. Para cara mal puesta sigue el re-render con `facecam_box` forzado.
+**Canal de la caja (B-N2 — el punto que la v3 no veía):** `workers._do_cut`
+(`clipagent/workers.py:406-419`) hace `layout_cfg = (cfg.get("layout") or {}).copy()`
+y pasa **solo** la subsección `layout` a `cut_clip_with_layout`. `config.yaml`
+tiene `facecam_box` en el nivel superior (`:450`), fuera de `layout:` — así que
+el pre-chequeo de la v3 (`cfg2["facecam_box"]`) y el código que la v3 tomó por
+bueno (`_rerender_after_gate`, `live_cutter.py:910-916`, que hace
+`cfg2["facecam_box"] = face_box`) **pierden la caja en `_do_cut`**. Solo el VOD
+funciona (usa `get_layout_config` + `cut_clip_with_layout` directo,
+`vod_fallback.py:724-734`).
+**Fix (un solo sitio, beneficia a todos los call sites):** `_do_cut` usa
+`get_layout_config(cfg)` (`config.py:1007-1011`, fusiona el `facecam_box`
+top-level en la config de layout) en lugar de `cfg.get("layout")`. Y la copia
+por clip debe ser **profunda** (`copy.deepcopy`): `dict(self.cfg)` es superficial
+y `cfg2["layout"]` es el MISMO dict que `self.cfg["layout"]` — escribir ahí
+contamina otros clips.
 
-### §4.3 Decisión cara/no-cara — UNA sola función: `decide_template_for_segment`
+**Pre-chequeo (obligatorio, con copia profunda por clip):** antes del corte, la
+decisión §4.3 corre sobre el segmento y escribe `cfg2["facecam_box"]` (o
+`layout_mode="game"` si es sin_webcam) en una **copia profunda** de `self.cfg`.
+La rama forzada `"game"` en `decide_layout` añade `"plantilla":
+"rubius_sin_webcam"` a la decisión devuelta; el discriminador entre el `game`
+forzado y el `game` de `game_voice` es `decision["mode"] == "game"`.
 
-Nueva función **`decide_template_for_segment(segment_path, duration, cfg)`** en
-`clipagent/final_review.py` (I-5: §4.3 y §6 apuntaban a funciones distintas con
-órdenes distintos; esta es la única). Se apoya en `find_facecam_box_in_source`
-(`:1667`). Órdenes (distintos, ambos correctos en su sitio):
-- Interno de `detect_vod_facecam` (`render.py:3384`): voto (5 muestras) → rescate
-  por bordes (`_edge_rescue`, solo conf `high`) → rescate YuNet (`_yunet_rescue`).
-  Éxito de un rescate → `hits: 1` **CON** caja.
-- Externo de `find_facecam_box_in_source` (`:1667`): `detect_vod_facecam` → YuNet
-  (`yunet_facecam_box`) → bordes. El docstring de `:1667` dice otro orden: la
-  implementación lo corrige.
-- **Tabla de decisión (sobre `(facecam_box, hits)` conjuntamente, B10):**
+**Call sites (6, no 5):** live `live_cutter.py:1096`; re-render live `:916`;
+re-render VOD `vod_fallback.py:734`; corte directo `youtube_cut.py:556`;
+`facebook_cut.py:517`; **corte por job/payload `workers.py:955`**
+(`layout_mode=payload.get("layout_mode", "auto")`, pasa `cfg=cfg` completo a
+`cut_clip` `:422` → `_do_cut`) — **no listado en la v3**. Los 6 pasan el modo
+(`"game"` cuando la decisión es sin_webcam, si no `"auto"`). `config.yaml:385`
+(`mode: "auto"`) gana `game` en su comentario como valor forzado (no configurable).
 
-| Caso | Decisión |
+### §4.3 Decisión de plantilla por segmento (B10, B-N4, I-4)
+
+**Una sola función de decisión: `decide_template_for_segment(segment_path, duration,
+cfg)` en `clipagent/final_review.py`** (la misma que usa el re-render §4.4).
+Internamente llama **directamente a `detect_vod_facecam`** (`render.py:3384` /
+`:3254` HEAD — **es la que devuelve `hits` y caja**; en los rescates devuelve
+`hits: 1` CON caja, `:3290-3310`) y usa `find_facecam_box_in_source`
+(`final_review.py:1667`) solo como segundo escalón (o se extiende su retorno con
+`hits`/`samples` — una de las dos; no ambas a la vez). La decisión es conjunta
+sobre `(facecam_box, hits)` (B10): con `None` no se distingue `hits==0` (→
+sin_webcam) de `hits==1` (→ ambiguo → rubius).
+
+Tabla de decisión (normativa):
+
+| Entrada | Decisión |
 |---|---|
-| `facecam_box` presente (voto ≥2 o rescate) | rubius con caja (validada §4.1) |
-| Caja ausente + `hits == 1` | ambiguo → rubius (nunca sin_webcam). Si la puerta de cara falla después, revisión humana |
-| Caja ausente + `hits == 0` + sin avatar | `sin_webcam` |
-| Avatar detectado (ver abajo) | según rama avatar |
+| `facecam_box` presente (voto ≥2 o rescate) | rubius, con esa caja (§4.1) |
+| caja ausente + `hits==1` (sin rescate) | ambiguo → rubius (nunca sin_webcam) |
+| caja ausente + `hits==0` + sin avatar | **rubius_sin_webcam** |
+| candidato avatar + sin cara humana | rubius, **con la caja del candidato** (ajustada; debe pasar §4.1) |
+| caja presente pero inválida (§4.1) | sin_webcam o hold (§4.1.4), nunca duplicado |
 
-- **Rama avatar (primero que la posición):** la decisión consulta la heurística de
-  avatar del escaneo (`_detect_vtuber_candidates`, `render.py:973`, la misma que usa
-  `decide_layout` en `_scan_frames` `:1938`, llamada en `:1963`). Si hay avatar, la
-  regla de posición/tamaño de `validate_cam_box` NO se aplica a su caja (un avatar
-  no es una cámara PiP: puede ser centrado y grande — ES la presencia del streamer).
-  La validez del avatar es su **proporción de píxeles en la zona de cámara**:
-  `avatar_share_min = 0,20` (config `validator:` efectivo):
-  - share ≥ 0,20 → **rubius** (el avatar ES la cámara). Medido: clip 12 = 0,34
-    (bbox x 0,27-0,77, y 0,01-0,82; centro (0,52, 0,42)).
-  - share < 0,20 → **sin_webcam** (avatar pequeño sobre juego; la zona sería
-    mayoría gameplay; el avatar sigue visible dentro del gameplay a pantalla
-    completa). Medido: 244 = 0,08-0,10 (bbox 0,10; centro (0,47, 0,63)).
-  - La proporción se mide por segmentación de píxeles del avatar (no por área de
-    bbox: en 244_t2 el bbox da 0,42 por contaminación del mapa — el bbox NO vale).
-- Segmento mixto: se decide por `(facecam_box, hits)`, no por
-  `validator.face_min_share` (0,5 es umbral de la puerta de cara, no de la detección).
+**Avatar (I-4, diseño final — sin primitiva de píxeles):** la rama avatar es
+«candidato existe + no hay cara humana → rubius con la caja del candidato».
+`_detect_vtuber_candidates` (`render.py:973`) devuelve caja/`_cells`/`_states`
+(presencia por fotograma), no una proporción de píxeles; el `avatar_share_min =
+0,20` de la v3 se **elimina**. La varianza temporal como primitiva está
+**refutada por medición** (§1.2): clip 12 estático 15-21%, 244 estático 81% — el
+mapa del juego es más estático que el avatar animado. No hay medición de
+«proporción de píxeles de avatar» que sea reproducible (la bbox de 244 da 0,42
+por contaminación del mapa — la bbox NO sirve). La validación la hace el gate:
+con `avatar=True` se saltan las reglas de cara (ii)/(iii)/(iv) — Haar no ve
+avatares, son inaplicables por principio (mismo patrón que el «no aplica» de
+plantillas no-rubius) — **pero la regla (i) SIFT sigue aplicando** (§5.2). El
+clip 12 actual FALLA (i) y se re-renderiza con la caja ajustada del candidato;
+244 igual. `face_gate` no cambia (clip 12 ya lo pasa en D1: fallos
+`['hook','titulo','audio']`, sin fallo de cara).
 
-### §4.4 Re-render tras fallo de plantilla (cableado exacto, B-3)
+**Orden interno (detect_vod_facecam):** voto → bordes → YuNet (rescate); el
+externo (`find_facecam_box_in_source`) es voto → YuNet → bordes. La decisión
+§4.3 usa el interno como fuente de verdad de `(facecam_box, hits)`.
 
-- `validate_final_clip` pone `needs_rerender = True` cuando `not hard_pasa`
-  (`final_review.py:2043-2049`); `_rerender_after_gate` (`live_cutter.py:874`) se
-  llama desde `:1422` cuando `needs_rerender` es True, con `plantilla=plantilla`
-  (la ORIGINAL).
-- **(B-3.1)** En `_rerender_after_gate`, el corte (`:916`) pasa
-  `layout_mode="game"` cuando la decisión §4.3 da sin_webcam (hoy pasa
-  `layout_mode="auto"` y `_do_cut`/`cut_clip_with_layout` lo pisan).
-- **(B-3.2)** La re-validación (`:959`) usa `plantilla="rubius_sin_webcam"` cuando
-  la decisión es sin_webcam (hoy usa la `plantilla` original → se validaría contra
-  la receta rubius, con `face_gate` corriendo). Después del re-render,
-  `record["plantilla"]` (fijada una sola vez en la construcción del record,
-  `:1322`) y el `quality_gate` derivado se actualizan desde
-  `review2["plantilla"]` (hoy nada los actualiza: el re-render seguiría viajando
-  como `plantilla="rubius"` al panel).
-- **(B-3.4)** AMBOS caminos de `hard` corren la decisión §4.3 completa (incluida la
-  heurística de avatar) antes de elegir sin_webcam: `"plantilla" in hard` con motivo
-  de layout Y `"cara" in hard` con `find_facecam_box_in_source` → None (hoy el
-  segundo iba directo a sin_webcam y un clip avatar como el 12 caería ahí).
-- Un rubius que falla «plantilla» por layout → se corre §4.3. Un sin_webcam que
-  falla (banner/subs) → re-render normal, misma regla, 1 intento
-  (`max_rerenders: 1`). Si sigue fallando → revisión humana, como hoy.
-- **En Fase 1 no hay caja guardada** (Fase 2, §7): el re-render usa la caja
-  re-detectada (con guardas) o sin_webcam.
+### §4.4 Re-render tras la puerta (B-3, I-5)
 
-### §4.5 Invariante de fallback
+`_rerender_after_gate` (`live_cutter.py:874`, llamado desde `:1422` cuando
+`final_review.get("needs_rerender")`):
+- Pasa `layout_mode="game"` en `:916` cuando la decisión §4.3 es sin_webcam
+  (y la caja validada en `:910-916` via el canal §4.2, no por `cfg2["facecam_box"]`
+  directo — ese era el bug B-N2).
+- La re-validación (`:959`) usa `plantilla="rubius_sin_webcam"` cuando la decisión
+  es sin_webcam.
+- **`record["plantilla"]` (puesto una vez al construir el record, `:1322`) y el
+  `quality_gate` derivado se actualizan desde `review2["plantilla"]`.** Corrección
+  I-5(d): hoy `record["plantilla"]` NO se actualiza tras el re-render (solo
+  `record["clip"]`, `package["clip"]`, `record["rerendered"]`), **pero el
+  `quality_gate` derivado SÍ se reconstruye** (`live_cutter.py:1454`,
+  `record["quality_gate"]` en `:1464`). El bug es `record["plantilla"]`, no el
+  quality_gate.
+- **Ambos caminos `hard` corren la decisión §4.3 completa** (incluida la
+  heurística de avatar) antes de elegir sin_webcam: `"plantilla"` con motivo de
+  layout **Y** `"cara"` con `find_facecam_box_in_source` → None. **Y el rescate
+  también se dispara con `"layout"` en `hard`** (nuevo fallo duro de `layout_gate`
+  — la v3 solo contemplaba `"plantilla"`/`"cara"`).
+- Corrección de premisa (I-5a): **hoy el camino `"cara"` + sin cara en la fuente
+  NO va directo a sin_webcam — va a REVISIÓN HUMANA** (`live_cutter.py:898-908`).
+  La exigencia (correr la decisión §4.3 completa antes de elegir sin_webcam)
+  sigue en pie; la premisa de la v3 era falsa.
+- **Equivalente VOD (I-5b):** `_rerender_vod_clip` (`vod_fallback.py:658`) debe
+  devolver la plantilla nueva desde `review2` y el llamador
+  (`vod_fallback.py:917`) debe actualizar `clip["plantilla"]` (hoy conserva la
+  del manifiesto, `:897`, y el POST VOD seguiría llevando `rubius` aunque el
+  re-render sea `sin_webcam`).
 
-Recuadro inválido o ausente → sin webcam o retención, **jamás el fotograma completo
-como cámara, jamás duplicar**. Validez del recuadro = `_cam_box_valida`
-(`render.py:1923`): ancho < 45% Y área < 35% (I-8: la v2 citaba
-`split_cam_max_w_frac` como si fuera de área; es de ancho — la regla de área vive
-en `_cam_box_valida` vía `cam_max_area_frac` 0,35 y en `validate_cam_box` vía área
-<0,45). Aplicada **en el render** (§4.1) y como **red de seguridad en el validador**
-(§5). Test de la invariante en §10 (recuadro ≥45% de ancho o ≥35% de área → sin
-webcam o retención).
+### §4.5 Invariante del render (normativo)
 
-## §5. Puerta en el validador (reescrita; prioridad 1)
+Una sola medida de ancho: `bw / SAMPLE_W < split_cam_max_w_frac` (0,45;
+`render.py:200`, aplicado en `_split_params` `:1996`). La corrección del escaneo
+(`:2325` en la v2, área <0,45) se unifica a la misma regla de ancho. §4.1 añade
+el área <35% de `_cam_box_valida` como **segunda** condición de render (no como
+sustituto del ancho). La cita de la v2/v3 que decía «`split_cam_max_w_frac` es
+área» era errónea: es ancho.
 
-Dos criterios nuevos, **duros** (fallo = `rechazado`, no se encola, también frena el
-encolado a mano). Se evalúan en `final_review.py` sobre el **render final** (no sobre
-la fuente), con el muestreo existente del validador: `extract_gate_frames`
-(`final_review.py:780`) desde t=1,0 con paso `face_sample_every_s: 2`
-(`config.yaml:641`), tope `_GATE_MAX_FRAMES = 24`. **Basta 1 fotograma muestreado
-que falle para rechazar el clip.** Los fotogramas del banner (t 0,5-3,5 s) **se
-evalúan** (no se saltan): el método SIFT es robusto al banner (197_t1/t3 lo
-demuestran); saltarlos dejaría fuera justo los fotogramas que cazan 197.
+## §5. La puerta del validador = `layout_gate` (B-N1 — adopción, no reemplazo)
 
-### §5.1 `layout_duplicado`: arriba ≠ abajo — método SIFTct02 (primario único)
+**Decisión v4: la puerta ES `layout_gate`, que ya existe en el árbol**
+(`clipagent/final_review.py:1914`, `_sift_dup` `:1843`, `_layout_check_arrays`
+`:2004`, `validate_final_clip` `:2160` con `layout_fn` inyectable `:2164`, fallo
+duro `"layout"` `:2334`). No se construye un segundo gate. La v4: (a) adopta sus
+4 reglas y sus llaves como normativa; (b) corrige su docstring de calibración a
+la rejilla del gate; (c) añade el parámetro `avatar`; (d) fija las tablas de
+calibración medidas (§5.1-§5.3); (e) resuelve los puntos que el gate deja
+abiertos (186, 183/184/189, captura 3, muestreo SIFT).
 
-**Procedimiento exacto (fijado; sin él los números no son reproducibles):**
-función nueva `_cam_game_match` en `final_review.py`. Por fotograma muestreado:
-zona de cámara = y 0-840, x 0-810 (sin el 25% derecho, la franja de sangrado);
-zona de juego = y 840-1920, x 0-1080. SIFT (`cv2.SIFT_create(nfeatures=2000,
-contrastThreshold=0.02)`, BFMatcher L2, knnMatch k=2, ratio de Lowe 0,75);
-`matches` = buenos matches cámara→juego. **El fotograma falla si `matches ≥ 20`.**
-cv2 4.11.0 (ya en el venv del validador; SIFT está en opencv-python ≥4.4, no es
-dependencia nueva). Coste medido: ~3 s por fotograma (hasta ~72 s por clip con 24
-muestras); si el presupuesto de tiempo del validador lo exige, la implementación
-puede evaluar 1 de cada 2 fotogramas muestreados (t=1,5,9,…) — la separación del
-corpus se conserva (t=1 caza los 6 clips DUP por sí solo); el test usa el muestreo
-completo.
+**SIFTct02 (v3) queda retirado como método.** Sus números (CORRECTO máx 18,
+DUP mín por clip 29, umbral 20) quedan en §1.1/Referencias como historial. La
+estadística que shippea es **celdas distintas**, no buenos matches.
 
-**Calibración (medida 2026-11-26, scripts en `/tmp/en_diag/calib52.py`,
-`calib_grid.txt`, `siftct02_full.txt`):** corpus 49 fotogramas (t=2,7,15,25) + 39 de
-rejilla (t=1,3,5) + 3 capturas. SIFTct02: CORRECTO máx 18 (es248_t15); cada clip
-DUPLICADO tiene ≥1 fotograma ≥21 (mín por clip 29 en 197; 199_t3=15 por desenfoque
-de transición — el clip se caza por t=1/t=5). **A nivel clip: 6/6 DUP rechazados,
-7/7 CORRECTO pasan. Umbral 20** (entre 18 y 29; el umbral 17 cazaría la captura 3
-pero rechazaría falsamente es248_t15=18).
+### §5.1 El método (código existente, normativa)
 
-**Por qué no ORB (refuta la corrección B-1 del goldfish con evidencia):** ORB con
-exclusión de franja y umbral 7 da **9 en es248_t1, un fotograma CORRECTO verificado
-visualmente** (cara de IlloJuan arriba, calle abajo) — falso positivo a nivel clip
-(es248 se rechazaría por t=1). El OR (ORB≥7 O SIFT≥20) hereda ese falso positivo.
-ORB queda documentado como medido-pero-no-shippeado. El goldfish no vio SIFTct02
-(terminó antes de esa medición); la v3 lo incorpora y registra la discrepancia aquí.
+`_sift_dup(cam_gray, game_gray)` (`:1843`) devuelve `(inliers RANSAC, celdas
+distintas de destino)` — celdas en rejilla de 20 px en la zona de juego.
+Racional (docstring): los inliers solos engañan cuando muchos matches colapsan
+en 1-2 puntos (clip 170: 15 inliers en 4 celdas, texto del encabezado de Twitch
+vs barandilla del juego). La duplicación real reparte los inliers por la escena
+(252: 62 inliers en 22 celdas; 199: 602 en 284). SIFT nfeatures=2000 (con 800,
+252 daba 4-7 y se escapaba; con 2000 da 33-71 y los limpios se quedan ≤4),
+Lowe 0,75, RANSAC 5,0. `_sift_dup_inliers` (`:1907`) es un wrapper de
+compatibilidad que devuelve solo inliers («los tests sintéticos lo usan
+directamente») — no es la estadística de la puerta.
 
-**Por qué no celdas (B-1):** implementado `_cam_game_match` por celdas tal como lo
-describía la v2 (rejilla 32×32, celdas 4×2, búsqueda ±4 px, NCC 0,7 y 0,8): **0
-celdas coincidentes en TODOS los fotogramas, pureza 1,0 en CORRECTO y DUPLICADO.**
-Causa: las dos zonas son recortes a distinta escala (cover crop ~2× arriba, recorte
-1440×1440 a 0,75× abajo); un parche de tamaño fijo no casa aunque el contenido sea
-el mismo. Las celdas se eliminan como método (también la «pureza por celdas» de la
-v2 y la fijación del borrador en su I3 — el borrador manda per-cell NCC como método
-único; esta medición lo refuta y la v3 no lo adopta en ese punto).
+`layout_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
+template_name="rubius")` (`:1914`): aplica solo a rubius (otras plantillas →
+`pasa=True`, «no aplica»). Usa `extract_gate_frames` (t=1,3,5,…). Devuelve
+`pasa, motivo, duda, sift_max_inliers, sift_max_cells, face_share,
+face_cx_mediana, face_area_mediana, frames_total, frames_con_cara`. Nunca
+lanza excepción: sin fotogramas/cv2/SIFT/Haar FALLA ruidosamente, nunca con un
+valor inventado. Llamada desde `validate_final_clip` (`:2305-2308`) con
+`layout_fn` inyectable (mismo patrón que los detectores de cara y Gemini; stub
+`_layout_stub` en `test_final_gate.py`).
 
-**Segunda señal — procedencia de la caja (determinista):** si el `cam_box`
-registrado del render (§4.1.5) no pasa las guardas §4.1, el clip se rechaza aunque
-el píxel no lo cace.
+`_layout_check_arrays(arrays, vcfg, recipe, template_name)` (`:2004`): el
+núcleo, testeable directamente sobre fotogramas. Cuatro reglas, en orden:
 
-**Check duro en la rama rubius:** `layout_duplicado`: SIFTct02 ≥ 20 → **falla**.
-Caza 191/199/214/244/247 (+ 197 en t=1,3,5).
+- **(i) Duplicación:** `sift_cells_max >= layout_dup_sift_cells` (8,
+  `config.yaml:675`) → FALLA «layout duplicado». SIFT sobre como mucho
+  `layout_sift_max_frames` (8, `:699`) fotogramas repartidos; manda el máximo.
+  Submuestreo para n=20: índices {0,3,5,8,11,14,16,19} → t ∈ {1,7,11,17,23,29,
+  33,39} (reparto uniforme sobre los 20). El máximo se toma sobre el
+  subconjunto, no sobre los 20.
+- **(ii) Sin cara estable:** `share < face_min_share` (0,5) → FALLA «sin cara
+  estable».
+- **(iii) Cara de primer plano desplazada:** cx fuera de [0,45, 0,65] Y área ≥
+  `layout_face_area_closeup_min` (0,12, `:693`) → FALLA «cámara contaminada»
+  (sin corroboración SIFT: una cara grande desplazada basta).
+- **(iv) Cara desplazada o pequeña CON corroboración:** `cara_anomala` (cx
+  fuera de rango O área < `layout_face_area_min` 0,15, `:689`) Y
+  `sift_cells_max >= layout_face_sift_cells_min` (5, `:680`) → FALLA.
 
-### §5.2 `cam_pura`: la zona de cámara es mayoritariamente cámara (B-2 resuelto)
+Llaves en `config.yaml:675-699` (todas obligatorias en `load_validator_config`,
+`config.py:769-773` y parseadas en `:857-864`): `layout_dup_sift_cells: 8`,
+`layout_face_sift_cells_min: 5`, `layout_face_cx_min: 0,45`,
+`layout_face_cx_max: 0,65`, `layout_face_area_min: 0,15`,
+`layout_face_area_closeup_min: 0,12`, `layout_sift_max_frames: 8`. La llave
+antigua `layout_dup_sift_inliers: 8` ya no existe en config (la sustituye la de
+celdas). **I-8 resuelto: el umbral tiene hogar en config; no hay dos umbrales
+SIFT con el mismo nombre conceptual** (SIFTct02 y su «umbral 20» quedan
+retirados con el método).
 
-**Definición (no fracción de caja Haar — la v1 estaba mal: Haar da 0 caras en 186
-CORRECTO y 0,543 de falso positivo en 199 DUPLICADO):** `cam_pura` es el check que
-exige la segunda propiedad de la regla del usuario (19:59): la zona de cámara es
-mayoritariamente cámara, no gameplay. Se implementa como **la disyunción de las dos
-señales que ya existen**: (a) el test de similitud de §5.1 (si la zona de cámara
-coincide con la zona de juego, es gameplay → falla); (b) la procedencia de la caja
-(si el `cam_box` registrado no pasa las guardas §4.1, la zona no es cámara
-verificada → falla). Es un check independiente con su propio motivo («la zona de
-cámara es mayoritariamente gameplay»), que comparte el instrumento de §5.1 más la
-procedencia — no un segundo instrumento sin definir. **186 PASA `cam_pura`**
-(SIFT 3; su caja pasa las guardas; el sangrado es 25% de la zona). **244 FALLA**
-(SIFT 35/43; avatar centrado sobre mapa).
+### §5.2 `cam_pura` y `layout_duplicado` (B-N3 — señal (b) eliminada)
 
-### §5.3 Test de regresión (obligatorio, sobre la rejilla real del gate)
+La v3 definía `cam_pura` como disyunción de (a) señal de similitud + (b)
+procedencia de la caja. **(b) se elimina**: `validate_final_clip` no recibe
+`cam_box` (ni por parámetro ni por `cfg`) y corre ANTES del registro donde
+§4.1.6 registra la caja (`live_cutter.py:1322`); (b) no es evaluable por el
+validador como estaba especificada, y ningún fixture mostraba un caso donde (b)
+disparase y (a) no. La procedencia de la caja se controla **en el render**
+(§4.1), no se re-chequea en el validador.
 
-- **Fixtures:** las 3 capturas del usuario (recortadas, coordenadas en el README) +
-  los fotogramas de la rejilla del gate (t=1,3,5,7), en
-  `tests/fixtures/duplicacion/` con `README.md` de etiquetas. **Etiquetas finales:**
+- `layout_duplicado` = regla (i) de `layout_gate` (motivo propio).
+- `cam_pura` = reglas de cara (ii)+(iii)+(iv) de `layout_gate` (motivos
+  propios). La zona de cámara es mayoritariamente cámara cuando la cara está
+  estable, centrada y de tamaño suficiente, Y no hay juego en la zona (i).
+- **Parámetro `avatar` (nuevo, default False):** `validate_final_clip` /
+  `layout_gate` / `_layout_check_arrays` ganan `avatar: bool`. Cuando es True,
+  se saltan las reglas de cara (ii)/(iii)/(iv) — Haar no ve avatares, son
+  inaplicables por principio (mismo patrón que el «no aplica» de plantillas
+  no-rubius) — **pero la regla (i) SIFT sigue aplicando**. El llamador pasa
+  `avatar=True` cuando la decisión §4.3 es «rubius con caja de candidato
+  avatar». `face_gate` no cambia (clip 12 ya lo pasa; §1.2).
 
-| Fixture | Esperado |
-|---|---|
-| usuario_captura1_calle.jpg | RECHAZAR (SIFT 465) |
-| usuario_captura2_banner_chat_said_it.jpg | RECHAZAR (SIFT 110) |
-| usuario_captura3_007.jpg | **Limitación documentada (ver abajo; SIFT 17)** |
-| en183_t7, en184_t7, en186_t7, en189_t7, en190_t7 | PASAR |
-| en191_t7, en199_t7, en214_t7, en247_t7 (es247_t7) | RECHAZAR |
-| en197_t1, en197_t3, en197_t5 | RECHAZAR (SIFT 21/29/26; rejilla real del gate) |
-| en197_t7 | PASAR por fotograma (el CLIP 197 se rechaza por t=1,3,5) |
-| en244_t1, en244_t3 | RECHAZAR (SIFT 54/64; rejilla real) |
-| en244_t7 | RECHAZAR (SIFT 35) |
-| es246_t7, es248_t7 | PASAR |
-| clip12_t7 | PASAR (avatar rubius; share 0,34) |
+### §5.3 Calibración (rejilla del gate, gate actual — tabla normativa)
 
-- **197_t2 y 244_t2 se retiran del test** (t=2 no se muestrea nunca: la rejilla del
-  gate es t=1,3,5,7…; quedan en `/tmp/en_diag/` como referencia de medición, no
-  como fixtures).
-- **Limitación conocida — captura 3:** SIFT 17, por debajo del máximo CORRECTO (18).
-  Ningún método probado la caza a nivel fotograma sin rechazar falsamente un render
-  correcto (es248_t15 = 18). El CLIP del que viene (214) sí se rechaza por sus
-  otros fotogramas (SIFT 96-246). El test fija la captura 3 como limitación
-  documentada, no como RECHAZAR falso: el test afirma su valor medido (17) y que
-  el clip 214 se rechaza por sus fotogramas de render.
-- **El test es a nivel clip para el validador** (un clip con 1 fotograma muestreado
-  que falle → rechazado; un clip con todos sus fotogramas por debajo del umbral →
-  pasa) **y a nivel fotograma para la función `_cam_game_match`** (cada fixture
-  etiquetado tiene su valor SIFT de referencia; los fotogramas límite —199_t3=15,
-  es248_t15=18— se afirman por su valor, no por un pasa/falla individual).
-- **Dónde se ejecuta:** en CI, con los fixtures en el repo. Sin dependencias nuevas
-  más allá de cv2/numpy (ya en el venv del validador).
+**Conjunto completo (n=20 fotogramas por clip):** la tabla de §1.2 ES la tabla
+de calibración. Resultado: 4 limpios pasan (186, 190, 246, 248), 10
+duplicados/contaminados fallan (183, 184, 189, 191, 197, 199, 214, 244, 12, 247),
+170 pasa (t7), las 3 capturas fallan. **Separación completa a nivel clip.**
 
-### §5.4 Registro en el veredicto
+**Fotograma único t7 (regresión de `test_layout_gate.py`, 15/15 coinciden con
+`ESPERADO_T7`):**
 
-- Los dos checks nuevos aparecen en `template.checks` con `pasa`/`motivo` como los
-  demás (`layout_duplicado`, `cam_pura`). Cuando fallan, `template.pasa = False` →
-  `hard_failures` incluye `"plantilla"` (`final_review.py:1996-2009`) →
-  `needs_rerender = True` (`:2043-2049`) → `_rerender_after_gate` (§4.4). Motivos:
-  `layout_duplicado`: «la mitad superior y la inferior son la misma imagen»;
-  `cam_pura`: «la zona de cámara es mayoritariamente gameplay».
-- En `build_quality_gate` (`quality_gate.py:117`): el criterio `webcam` se resuelve
-  como hoy (cadena determinista manda; `face.get("pasa") is True` → pasa). La puerta
-  nueva no cambia `build_quality_gate` salvo §6.4 (plantilla sin_webcam).
-- `_criterion` (`quality_gate.py:112-114`): hoy guarda `"motivo": motivo if not pasa
-  else ""`. Cambio: **`"motivo": motivo` siempre** (se guarda el motivo aunque
-  pase). **Verificado 2026-11-26 (M-2): ningún test existente afirma
-  `motivo == ""`** (grep en `tests/` y `clipagent/` sin resultados); la instrucción
-  de la v2 de «actualizar esos tests» era errónea — la implementación verifica de
-  nuevo al tocar el código y no actualiza nada que no exista.
+| Clip | Pasa | inl | cells | share | cx | área | Regla |
+|---|---|---|---|---|---|---|---|
+| 170 | ✓ | 14 | 4 | 1,00 | 0,421 | 0,080 | — |
+| 183 | ✗ | 34 | 19 | 1,00 | 0,435 | 0,161 | (i) |
+| 184 | ✗ | 38 | 27 | 1,00 | 0,414 | 0,114 | (i) |
+| 186 | ✗ | 6 | 3 | 0,00 | — | — | (ii) sin cara en ese fotograma |
+| 189 | ✗ | 6 | 4 | 1,00 | 0,416 | 0,141 | (iii) primer plano desplazado |
+| 190 | ✓ | 0 | 0 | 1,00 | 0,615 | 0,235 | — |
+| 191 | ✗ | 46 | 23 | 1,00 | 0,115 | 0,048 | (i) |
+| 197 | ✗ | 10 | 5 | 1,00 | 0,422 | 0,176 | (iii) |
+| 199 | ✗ | 598 | 281 | 1,00 | 0,573 | 0,543 | (i) |
+| 214 | ✗ | 73 | 52 | 1,00 | 0,565 | 0,188 | (i) |
+| 244 | ✗ | 21 | 9 | 0,00 | — | — | (i) |
+| 246 | ✓ | 4 | 3 | 1,00 | 0,483 | 0,183 | — |
+| 247 | ✗ | 201 | 101 | 0,00 | — | — | (i) |
+| 248 | ✓ | 2 | 2 | 1,00 | 0,508 | 0,188 | — |
+| 252 | ✗ | 61 | 22 | 1,00 | 0,477 | 0,145 | (i) |
 
-## §6. Formato «rubius sin webcam» (adopta el borrador revisado, con sus correcciones de ronda 2 inlinadas)
+**186 en t7 vs en conjunto completo — no es contradicción (decisión en un solo
+sitio):** a t7 Haar no ve cara en ese único fotograma (share 0/1 → (ii));
+en los 20 fotogramas ve cara en 17 (share 0,85) con cx 0,475 y área 0,167.
+La tabla t7 usa 1 fotograma; la tabla §1.2 usa 20. El test de regresión
+(`test_layout_gate.py`) usa t7; el gate en producción usa el conjunto completo.
+Ambas tablas son normativas para su conjunto de fotogramas. **La v2/v3
+etiquetaban 186 de forma distinta según la sección; la v4 lo decide aquí y
+solo aquí: 186 PASA en producción (conjunto completo), FALLA a t7 (un solo
+fotograma sin cara).**
 
-Se adopta el diseño del borrador revisado
-(`runs/formato-rubius-sin-webcam-2026-11-26/SPEC.md`, 454 líneas tras su 2ª ronda de
-corrección) en sus §§2 (decisión), 3 (layout), 4 (miniatura), 5 (paquete), 6
-(validador), 8 (panel), 9 (flujo) y 10 (tests). **Esta spec inlina los mecanismos
-que necesita** (no depende de que el archivo del borrador esté en el repo — vive
-fuera, `~/workspace/gta6-clips/runs/…`, y está pendiente de su propia 3ª revisión +
-aprobación del usuario; I-7). Las correcciones de su ronda 2 que afectan a esta spec:
+**Muestreo SIFT — limitación documentada (no un bug):** 186 tiene un fotograma
+no muestreado con 14 celdas (t37) — si el reparto incluyese t37, 186 fallaría
+(i). El submuestreo a 8 fotogramas es un compromiso de coste (~20-30 s/clip);
+el test y la producción usan el mismo reparto, así que el test sí prueba el
+gate. Si un día se sube `layout_sift_max_frames`, 186 debe re-verificarse (su
+margen de celdas es 6 vs 8). Lo mismo para 244 (10 vs 8) y 197 (corroboración
+6 vs 5) en el otro sentido.
 
-- **B7 — Transporte `plantilla` (Worker):** `parseViralInput` (`db.ts:352`) es
-  whitelist sin `plantilla` (verificado por grep: cero ocurrencias de `plantilla`
-  en `panel-backend/worker/src/`). Cambio exigido (Fase 3, §9): `plantilla?: string`
-  en `ViralData` (`db.ts:212`); rama nueva en `parseViralInput` (string + nombre
-  conocido: rdjavi, willyrex, rubius, `rubius_sin_webcam`; desconocido → error,
-  nunca guardado en silencio); `mergeViralJson` (`db.ts:497`):
-  `if (patch.plantilla !== undefined) next.plantilla = patch.plantilla;`
-  (reemplazo, como `quality_gate`/`seo_source`; una `plantilla` en base sobrevive a
-  un PATCH que no la menciona). Cadena POST verificada: `index.ts:1412` (parse) →
-  `:1491` (`viralJson = mergeViralJson("{}", viralParsed)`) → INSERT `db.ts:1949`
-  (sin columna `plantilla`; viaja dentro del JSON `viral`). PATCH: `index.ts:1240`
-  (parse) → `:1242` (merge). **Corrección a la resolución del borrador:** sus citas
-  `:344`/`:475`/`:2034`/`:1452` son erróneas (verificadas por grep: `:344` y `:475`
-  son llaves de cierre; `:2034` no es el INSERT; `:1452` es `score = body.score;`) —
-  esta spec usa las líneas de la revisión, verificadas. Los campos de trazabilidad
-  `cam_box`/`cam_box_source`/`cam_box_guardas` (§4.1.5) entran por el mismo cambio.
-  Las tres líneas del cerebro se mantienen (live `live_cutter.py:1647` — construcción
-  de `_viral`, a la que se añade `_viral["plantilla"] = record["plantilla"]`; viral
-  `viral_source.py:740-772`, hardcodeo `plantilla="rubius"` en `:687` que pasa a ser
-  la plantilla decidida; VOD `viral_payload` `vod_fallback.py:938-951` + PATCH
-  `:1023-1035`), ahora como «el valor que el cambio del Worker acepta y guarda».
-- **B8 — Despacho de `template_gate`:** ramificación POR NOMBRE DE PLANTILLA ANTES
-  del despacho por `subs_style`: `template_name == "rubius_sin_webcam"` →
-  `_template_fullscreen_game(...)`; si no, el despacho actual
-  (`final_review.py:1169-1182`). `template_gate` recibe `template_name` como
-  parámetro (hoy no lo tiene; `validate_final_clip` lo resuelve en `:1927` y llama
-  en `:1981`). Alternativa rechazada: un valor distinto de `subs_style` (mentiría
-  sobre los subtítulos, que son `word_white` compartidos; la diferencia es el
-  layout). Test: receta sin `cam` por `template_gate` no llama a
-  `_template_word_white` (sin `KeyError`) y ejecuta la rama nueva.
-- **B9 — Modo por call site:** ver §4.2 (los 5 call sites; `cut_clip_with_layout`
-  mantiene su contrato).
-- **B10 — Decisión `(facecam_box, hits)`:** ver §4.3.
-- **B11 — Tres duplicados en `config.yaml`:** `validator:` 553/640, `templates:`
-  604/717, **`sfx:` 366/379** (idénticos). Limpieza: borrar 553–603, 604–639 y
-  366–370 (bloque `sfx:` 366–369 + blanco 370; el comentario de Layout de 371–378 se
-  conserva). Test de guardia: ninguna clave de nivel superior duplicada (mejor que
-  contar solo las tres).
-- **I1 — Una medida (ancho):** validez del recuadro por ancho
-  (`bw / SAMPLE_W < split_cam_max_w_frac`, 0,45; `render.py:200`, aplicada en
-  `_split_params` `:1996`). La corrección por escaneo (`:2325`, área <0,45) se unifica
-  a la misma regla de ancho. Ver §4.5 (que añade el área <35% de `_cam_box_valida`
-  como segunda condición en el render).
-- **I2 — Gancho nombrado:** ver §4.2 (decide_layout, puntos (a) `:2371` y (b) `:2448`).
-- **M4 — Zoom:** se LLAMA a `rubius._game_filter` desde la rama `game` (import
-  perezoso, patrón `render.py:2847`; nunca a nivel de módulo), parametrizado por
-  `game_h` (default 1080; la rama `game` lo llama con 1920).
-- **Geometría (§3 del borrador):** gameplay y 0-1920 (recorte 9:16 centrado; fuente
-  2560x1440 → 810x1440 en x=875); banner igual que rubius (x 103-967, y 811-1099,
-  `#FDD227`, t 0.5-3.5 s); subtítulos iguales (blancas Arial Black 100 px, MarginV
-  900, zona y 900-1020); punch-in desactivado; zoom gameplay 1.15x; sin whoosh.
-- **Validador (§6.1-6.4 del borrador, con B8):** receta nueva SOLO en el bloque
-  `templates:` efectivo (línea 717); `TEMPLATE_REQUIRED_KEYS`: añadir la entrada en
-  AMBAS definiciones (`config.py:378` y `:664`, contenido idéntico; gana la segunda)
-  o deduplicarlas. `TEMPLATE_BY_VARIANT` (`config.py:681`): sin entrada nueva.
-  `resolve_template` (`config.py:953`): 4º nombre aceptado, 5º desconocido sigue
-  fallando fuerte (`ConfigError`). Rama nueva `_template_fullscreen_game` (no
-  reutilizar `_template_word_white` tal cual: lee `recipe["cam"]` en su primera
-  línea, `final_review.py:1444`): checks de banner/subs/SFX extraídos a helpers
-  compartidos; **no ejecuta** `_check_full_width` (`:1463`) ni `_check_cam_live`
-  (`:1597`). **`gameplay_puro` (duro, la prueba positiva de layout que condiciona
-  la exención de cara):** similitud entre mitad superior (y 0-840) e inferior
-  (y 840-1920) BAJA (< umbral SIFTct02: un sin_webcam correcto tiene dos regiones
-  distintas del mismo juego, no la misma imagen dos veces) y sin costura de split.
-  Un rubius duplicado mal etiquetado como sin_webcam FALLA aquí. Accesos a
-  `recipe["cam"]` a guardar: `_band_video` (`:842`, cubierto al guardar `face_gate`),
-  `face_gate` (`:893`), `_template_word_white` (`:1444`). `validate_final_clip`
-  resuelve la plantilla antes (`:1927`) y **no ejecuta `face_gate`** para
-  `rubius_sin_webcam`: `face` queda como centinela `{"pasa": None, ...}` («no
-  aplica»). `build_quality_gate` recibe la plantilla sin cambiar su firma
-  (`validate_final_clip` ya devuelve `"plantilla"`): criterio `webcam` pasa con
-  motivo «sin webcam por plantilla: layout gameplay puro verificado» solo si
-  `gameplay_puro` pasó. **Un rubius normal sin cara SIGUE fallando.** Entrada
-  `RECIPE_TEXT["rubius_sin_webcam"]` (`final_review.py:120`); `webcam_visible` de
-  Gemini en `overridden` para esta plantilla (nunca duro). Docstring «una de TRES
-  recetas» (`:1862`) → «CUATRO».
-- **Panel (§8 del borrador):** la plantilla viaja en el JSON `viral` (con el cambio
-  B7). La píldora solo-lectura en la Cola/Editor es cambio de frontend; con B7 el
-  valor está en D1 dentro de `viral`; lo que se verifica es solo si el endpoint de
-  lista/detalle lo serializa. **La píldora va a Fase 3** (§9).
-- **Flujo (§9 del borrador):** live (§4.2 de esta spec); VOD: la función de corte ya
-  recibe `plantilla` (`vod_fallback.py:658`, la pasa a la validación `:754-759`); el
-  render usa `cut_clip_with_layout` con `layout_cfg` (`:724-734`); **no existe
-  parámetro `plantilla` en el job de VOD hoy** (0 ocurrencias en `youtube_cut.py`/
-  `facebook_cut.py` salvo docstrings): en v1 decide la detección. Re-make:
-  `remake_all.py` hardcodea `plantilla="rubius"` (`:481`, `:752`, `:821`): esos tres
-  puntos pasan a usar la plantilla decidida.
-- **§5.1/§5.2 no aplican a sin_webcam como «duplicado»:** no hay dos zonas que
-  comparar. `layout_duplicado`/`cam_pura` se evalúan solo cuando la plantilla tiene
-  `cam`. Un sin_webcam correcto no es rechazado por `layout_duplicado` (el test lo
-  fija). **Divergencia con el borrador (I3):** el borrador fija per-cell NCC como
-  método único de similitud; esta spec no lo adopta (medido: 0 coincidencias en
-  todo el corpus) y shippea SIFTct02 (§5.1). El borrador necesitará su propia
-  corrección en ese punto en su 3ª revisión.
+**Capturas del usuario — recorte canónico:** recorte (107,431)-(1182,2363),
+1075×1932, aspecto 0,556 ≈ 9:16 (detectado por filas/columnas oscuras). Celdas:
+307/57/21. El recorte fijo de `test_layout_gate.py` (`CAPTURA_VIDEO`, filas
+66-2376, cols 95-1195, aspecto 0,476, incluye UI) da 257/43/22 — **mismos
+veredictos**. La v4 adopta mi recorte como canónico y ordena actualizar
+`CAPTURA_VIDEO` en el test (§10.2). **La limitación de la v3 (captura 3 no se
+cazaba, SIFTct02 17 < 20) desaparece: con celdas, captura 3 da 21 ≥ 8.**
 
-## §7. Fase 2 — Cajas de cámara por influencer (después de la Fase 1)
+**Corrección del docstring de `layout_gate` (§5.5):** su calibración (15 clips,
+45 fotogramas, `runs/layout-fix-2026-11-26/frames/`, rejilla t2/t7/t20 +t35)
+dice «186 sin cara» y «186 cara de área 0,19 a cx 0,43» — en la rejilla del
+gate 186 es share 0,85, cx 0,475, área 0,167. **El docstring se re-ancla a la
+rejilla del gate** (tablas §1.2/§5.3) en Fase 1. La t2 no se muestrea nunca en
+producción (el gate empieza en t=1, paso 2 s) — los fotogramas t2 de esa
+calibración no son representativos del camino real.
 
-- **Idea:** detectar la caja de cámara **una vez por influencer** y guardarla; el
-  corte reutiliza la guardada en vez de re-detectar a ciegas en cada clip. Si la
-  detección es débil, no se inventa: sin caja fiable no hay rubius (§4.2).
-- **Almacén:** tabla D1 nueva `influencer_cam_boxes` (propiedad del panel; migración
-  siguiente a la 0045): `influencer_id`, `box_json` ([x,y,w,h] en px de la fuente de
-  referencia), `src_w`, `src_h`, `confianza` (`alta` | `media`), `muestras` (nº de
-  segmentos que votaron la misma esquina), `detectado_en`, `actualizado_en`. El
-  cerebro la lee y escribe vía la API del panel (ya lista influencers por
-  `GET /api/influencers`, `panel_bridge.py:348`).
-- **API (a implementar en Fase 2):** `GET /api/influencers/:id/cam-box` (lectura por
-  influencer; 404 si no hay caja) y `PUT /api/influencers/:id/cam-box` (escritura con
-  sesión del panel; body `{box, src_w, src_h, confianza, muestras}`; idempotente por
-  `influencer_id`: re-escrituras con la misma caja no duplican; si dos segmentos
-  votan cajas distintas, NO se guarda nada hasta que haya acuerdo). Sin configuración
-  nueva para el usuario: la caja se aprende sola.
-- **Aprendizaje:** en los primeros 3 segmentos de un influencer, la detección vota la
-  esquina; si ≥2 segmentos coinciden (±10 px) con confianza alta, la caja se guarda.
-  Si no hay acuerdo, no se guarda nada.
-- **`confianza`:** `alta` = ≥3 segmentos de acuerdo + borde confirmado (snap al borde
-  real); `media` = 2 de acuerdo, sin confirmación de borde. Una caja `media` se usa
-  pero se re-valida en cada clip hasta confirmarse `alta`.
-- **Re-aprendizaje:** si un clip con caja guardada falla la puerta §5.2 dos veces
-  seguidas, la caja se marca sospechosa y se re-detecta en el siguiente segmento (el
-  streamer puede haber movido la cámara). Nunca se re-detecta en silencio dentro del
-  mismo clip.
-- **Sin semilla en `config.yaml` (M-5):** la v2 proponía sembrar `facecam_boxes`
-  con un dry-run sin procedimiento definido. Se elimina la semilla: solo la tabla D1.
-- **Alcance:** trabajo aparte de la Fase 1; la Fase 1 no la espera. La puerta del
-  validador (§5) es la que garantiza «nunca más», con o sin cajas guardadas.
+### §5.4 Qué NO se shippea (medido, no hipotético)
 
-## §8. Arreglos VOD EN (Fase 3; desbloqueada: la opción A aterrizó)
+- **ORB como señal única:** refutado (es248_t1 ORB 9 ≥ 7 en fotograma correcto;
+  183_t1 ORBcomp 8). Queda documentado como medido-pero-no-shippeado.
+- **MAD / NCC global / template matching / fracción de cara Haar / NCC por
+  celdas / histogramas:** ninguno separa (medido en v1/v2; NCC por celdas da 0
+  coincidencias en todos los fotogramas).
+- **Varianza temporal para avatar:** refutada (§1.2).
+- **Saltar fotogramas de la ventana del banner (t 0,5-3,5 s):** rechazado — 197
+  se caza precisamente en t=1,3,5; SIFT es robusto al banner.
+- **SIFTct02 (conteo de buenos matches, umbral 20):** retirado; lo sustituye
+  el conteo en celdas.
 
-Contexto verificado 2026-11-26 19:42 + actualizado 23:20: el respaldo VOD EN está
-bloqueado en dos puntos. (a) El VOD-fallback de cerebro-live solo corre si NADIE está
-en directo en ningún idioma y prioriza ES (`clipagent/vod_fallback.py`,
-`fallback_order`, `FALLBACK_PRIORITY=["rubius","illojuan"]`), máx 2 VODs/corrida
-(`cerebro-live.yml --max-vods 2 --max-clips 2`; `--youtube` ya activado 2026-11-21).
-(b) La pasada diaria de VODs (panel-daily 09:00) muerta desde 21-nov. La opción A
-aterrizó (commit 26267d5) y los schedules son `['*/5 * * * *']` verificados por API
-en ambas cuentas: hay 12 ciclos en la hora 9, no uno.
+### §5.5 Cambios al gate existente (Fase 1, mínimos)
 
-### §8.1 Reservar 1 de 2 huecos del VOD-fallback para EN (punto del cambio: `run()`, no `fallback_order`)
+1. Parámetro `avatar` en `layout_gate` / `_layout_check_arrays` /
+   `validate_final_clip` (§5.2).
+2. Re-anclar el docstring de calibración a la rejilla del gate (§5.3).
+3. Nada más: no se tocan los umbrales (8/5/0,45-0,65/0,15/0,12/8) — la
+   calibración §5.3 los valida sobre el corpus medido.
 
-- `fallback_order` (`vod_fallback.py:193`) solo ordena (ES primero, EN al final); la
-  cuota vive en `run()` (`:1463-1465,1507`: `if enqueued >= max_clips or vods_tried
-  >= max_vods: break`). Con 2 VODs ES disponibles, el bucle nunca llega a ningún EN.
-  El cambio es en `run()`: contadores por idioma (`vods_tried_es`, `vods_tried_en`)
-  en un solo pase por `order`: tope ES = `max_vods - 1` **si existe al menos una
-  entrada EN que PASA el pre-chequeo**, tope EN = 1; si no hay entradas EN que pasen
-  el pre-chequeo, tope ES = `max_vods` (no se desperdicia capacidad). **(I-3):**
-  la v2 calculaba la reserva sobre entradas EN en `order` aunque estuvieran en
-  enfriamiento o sin VOD — el hueco reservado no se usaba nunca y ES solo intentaba
-  `max_vods - 1` (1 de 2 huecos perdido). Alternativa aceptada: tope perezoso (ES
-  rellena el hueco EN si ningún EN fue intentado). Las entradas que superan el tope
-  de su idioma se saltan (`continue`, sin contar).
-- **Colocación del chequeo (I-3):** el chequeo de tope por idioma va ANTES de
-  `latest_vod_fn` en el cuerpo del bucle (hoy la llamada a `latest_vod_fn` está
-  antes de los `continue` de pre-chequeo): si va después, las entradas ES capadas
-  siguen costando llamadas de listado.
-- **Política de consumo (ya existe, se conserva):** los VODs saltados por pre-chequeo
-  (sin VOD, en enfriamiento, `vod_clearly_not_gta6`) hacen `continue` ANTES de
-  `vods_tried += 1`: no consumen hueco. Solo los VODs realmente intentados cuentan.
-  Un VOD EN intentado que no deja clips válidos SÍ consume su hueco (fue un intento;
-  reintentarlo en la siguiente corrida es desperdicio).
-- Test: corrida simulada con candidatos ES+EN → 1 VOD EN intentado; EN solo en
-  enfriamiento → 2 ES (el hueco no se pierde); sin candidato EN → 2 ES; VOD ES en
-  enfriamiento no consume hueco.
+## §6. Formato «rubius sin webcam» (adopta el borrador revisado, con B7–B11 inlinadas)
 
-### §8.2 Dispatch diario: atender antes del trabajo pesado (el reintento ya existe)
+Se adopta el borrador `runs/formato-rubius-sin-webcam-2026-11-26/SPEC.md`
+(REVISADA, 2ª ronda de corrección, 454 líneas) **con sus correcciones inlinadas
+aquí** — no se depende del archivo del borrador (vive fuera del repo). Las
+divergencias respecto al borrador son dos y están decididas aquí:
 
-**Hechos verificados en código (corrigen la v2):**
+- **186 PASA** (no FAIL): el borrador lo etiquetaba FAIL por `cam_pura`. La
+  decisión es §1.2/§5.3 (PASA en conjunto completo). El arreglo del sangrado es
+  snap de caja (§4.1), no rechazo del render.
+- **NCC por celdas NO se adopta** (medido: 0 coincidencias en todos los
+  fotogramas). La señal de duplicación es SIFT en celdas (§5.1).
 
-- `maybeDispatchDaily` (`panel-backend/worker/src/index.ts:1779`) ya tiene el
-  reintento por diseño (docstring): «Dedupe por día en settings (clave
-  `brain_daily_dispatched_day`)… si el dispatch falla, NO se marca el día y se
-  reintenta en el próximo ciclo mientras sigan siendo las 9». La marca de día solo
-  se pone si `dispatchCerebro` devuelve ok. **(I-1): el camino `!ok` NO deja
-  rastro:** `const ok = await dispatchCerebro(env, "panel-daily", tenant); if (!ok)
-  return;` — sin log. Solo el camino de excepción loguea («Dispatch diario
-  falló»). La v2 afirmaba «el fallo ya se registra en `worker_events`»: falso para
-  el camino `!ok`.
-- **Tres hipótesis para el 26-nov** (la v2 solo consideraba una): (a) el ciclo pesado
-  agotó el presupuesto de subrequests antes de la llamada final (sin rastro porque
-  el `logWorkerEvent` del catch también es un subrequest); (b) `dispatchCerebro`
-  devolvió `false` (GitHub 4xx/5xx, token inválido) — igualmente consistente con la
-  ausencia total de filas `github_dispatch` en D1 entre las 09:00 y las 10:30 Chile;
-  (c) `runWorkerCycle` lanzó una excepción y el handler abortó antes de la llamada
-  final (`:4624`) sin dejar rastro (la llamada a `runWorkerCycle` no está envuelta
-  en try/catch visible). El diseño de mover el dispatch al principio + reintento por
-  no-marcar el día arregla los tres casos.
-- `isDailyDispatchDue` (`panel-backend/worker/src/cycle-gate.ts:211`, exportada):
-  `hour == 9` y día no marcado; devuelve True si la lectura de settings falla. La
-  puerta se evalúa en `cycleGate` (`:293-304`, que devuelve `{run, …, dailyDue, …}`).
-- **(I-2) Condición «Worker en marcha»:** hoy la llamada final está condicionada a
-  `r.ran || r.gate.dailyDue` (`index.ts:4624`), y con el Worker parado
-  `runWorkerCycle` (`jobs.ts:1974`) devuelve la puerta vacía:
-  `if (!(await isWorkerRunning(db, tenant))) return { ran: false, …,
-  gate: idleCycleGate() };` — parado ⇒ no hay dispatch diario (comentario en
-  `index.ts:4595-4601`). La v2 llamaba `isDailyDispatchDue` al principio sin
-  comprobar el estado: panel-daily se dispararía también con el Worker parado.
-  **Decisión explícita: NO se dispara con el Worker parado** (se preserva el
-  comportamiento actual).
+### §6.1 Receta y config (B11)
 
-**Cambio exigido:**
+Receta `rubius_sin_webcam` en el segundo bloque `templates:` de `config.yaml`
+(la efectiva): gameplay a pantalla completa vertical (1080×1920), sin banda de
+cámara; título y subtítulos como el rubius (`word_white`, banner y subs en las
+mismas posiciones relativas que la receta rubius — la posición del banner en
+sin_webcam es pregunta abierta §11.1: y 811-1099 vs arriba ~100-388).
+`RECIPE_TEXT` gana la entrada `rubius_sin_webcam` (`final_review.py:120`; hoy
+cae al fallback rubius en `:1740-1742`).
 
-1. DENTRO del bucle por tenant del handler `scheduled`, ANTES de `runWorkerCycle`
-   de ese tenant: `if (await isWorkerRunning(env.DB, tenant)) await
-   maybeDispatchDaily(env, tenant, event.scheduledTime)` (la función misma vuelve
-   a comprobar hora==9 y día no marcado, así que fuera de la hora 9 o con el día ya
-   marcado es no-op). Si la lectura de `isWorkerRunning` falla, se salta el dispatch
-   temprano (falla cerrada: el día sigue sin marcar y el ciclo siguiente reintenta).
-2. Eliminar la llamada del final (`index.ts:4624`): con la llamada inicial, la final
-   es redundante.
-3. Añadir log en el camino `!ok` de `maybeDispatchDaily` (hoy `if (!ok) return;` en
-   silencio): `logWorkerEvent(…, "github_dispatch", "Dispatch diario devolvió
-   ok=false …")` dentro de try/catch (si el log falla, no tumba nada).
-4. El reintento es automático por el diseño existente: con crons `*/5`, hay 12 ciclos
-   en la hora 9; un fallo no marca el día y el ciclo siguiente (5 min después)
-   reintenta. Sin cron nuevo, sin marca nueva.
-5. Test: `maybeDispatchDaily` con día no marcado y fallo de `dispatchCerebro` → día
-   sigue sin marcar (reintento posible) + fila de log `!ok`; con éxito → día marcado
-   (sin segundo dispatch); llamada al principio del handler dentro del bucle por
-   tenant en un test de `scheduled` (con Worker parado no se dispara).
-6. La verificación del arreglo es el dispatch exitoso del día siguiente en
-   `worker_events`, no re-litigar la cadena «Too many subrequests» (que viene de los
-   logs del workflow/Worker, no de D1).
+**Limpieza de duplicados (B11):** `config.yaml` tiene `validator:` dos veces
+(553 y 640), `templates:` dos veces (604 y 717) y **`sfx:` dos veces (366 y
+379)**. `yaml.safe_load` (`config.py:551`) toma la última en silencio.
+Efectivos: `validator:` 640, `templates:` 717. Borrar 553-603, 604-639 y
+366-370 (bloque 366-369 + línea en blanco 370; el comentario Layout 371-378
+se conserva). La primera `validator:` carece de `rubius_subs_outline_frac:
+0,03` (solo en la segunda, :665). **Test guarda:** ninguna llave de nivel
+superior duplicada en `config.yaml` (robusto al baseline — los rangos son del
+árbol actual; en HEAD serían 538-588 y 589-624). `TEMPLATE_REQUIRED_KEYS`
+definida dos veces en `config.py` (:378 y :664, idénticas; efectiva :664) —
+consolidar en una.
 
-### §8.3 Fuera de esta spec
+### §6.2 Render sin webcam (B9, I-7, M-4, M-5)
 
-- Watcher en vivo de YouTube para Speed (`clipagent/live_scan.py` solo mira
-  Twitch/Kick). Queda como trabajo aparte; el VOD es el respaldo de Speed.
+- **Modo forzado `"game"` en `decide_layout`:** la v2 lo pasaba por
+  `cfg["layout"]["mode"]` — **eliminado** (B9: `cut_clip_with_layout` pisa
+  `cfg["mode"]` con `layout_mode="auto"`). El modo viaja por call site (§4.2).
+  `decide_layout` gana el modo forzado `"game"`; la rama `game` existente
+  (`render.py:3083`, recorte 9:16 centrado a pantalla completa, sin webcam) es
+  la salida (no `center`, que sigue la cara). La decisión devuelta lleva
+  `"plantilla": "rubius_sin_webcam"`.
+- **Zoom del juego (I-7, M-4):** llamar a `rubius._game_filter` desde la rama
+  `game` con **import perezoso dentro de `segment_filter_graph`** (patrón en
+  `render.py:2977`, `from .rubius import _game_filter as _rubius_game_filter`;
+  nunca a nivel de módulo) y con los **tres** argumentos que `_game_filter`
+  (`rubius.py:443-467`) exige: `game_crop` (recorte 9:16 a pantalla completa,
+  distinto del `1440:1440:560:0` de rubius — nuevo helper paralelo a
+  `_rubius_game_crop` `:2934`, que devuelve el recorte 1:1), `game_zoom`
+  (ventanas hype/18-24 s) y `game_h=1920` (enhebrado en los TRES sitios donde
+  `_game_filter` usa `GAME_H`: escala, recorte final y `y_coef` — no solo
+  `y_coef`). La llamada en `:3026` es `_rubius_game_filter(
+  _rubius_game_crop(src_w, src_h), game_zoom)`; la rama `game` la llama con
+  su propio recorte 9:16 + `game_h=1920`.
+- **`_crop_rects_for_frame` tiene su propia rama `game` (`render.py:3609`):**
+  si la rama `game` gana zoom, la hoja de contacto no lo refleja. No bloquea;
+  se anota explícitamente o se ignora (M-5).
+- **`_criterion` conserva `motivo` siempre** (`quality_gate.py:112-114`): hoy
+  borra `motivo` cuando pasa. Verificado por grep: **ningún test existente
+  afirma `motivo == ""`** (la instrucción de la v2 de actualizar esos tests
+  era errónea — M-2 de la 2ª revisión).
 
-## §9. Secuenciación y regla de commit
+### §6.3 Puerta para sin_webcam (diseño del borrador, adoptado)
 
-- **Fase 1 (primero):** guardas de caja (§4.1) + puerta del validador (§5) + test de
-  regresión (§5.3) + formato sin_webcam (§6, sin el cambio del Worker) + invariante
-  (§4.5) + payload `plantilla` en los caminos live (`live_cutter.py`) y viral
-  (`viral_source.py`). Solo Python/config + los 5 call sites de §4.2. **No toca
-  ningún archivo del Worker.** Los campos `plantilla`/`cam_box*` se mandan en el JSON
-  `viral` y el Worker los descarta hasta la Fase 3 (hueco declarado en §4.1.5).
-  Archivos previstos: `clipagent/render.py`, `clipagent/final_review.py`,
-  `clipagent/rubius.py` (parametrizar `_game_filter`), `clipagent/live_cutter.py`,
-  `clipagent/workers.py`, `clipagent/remake_all.py`, `clipagent/config.py`,
-  `clipagent/quality_gate.py`, `clipagent/yunet_facecam.py` (regla reconciliada),
-  `clipagent/viral_source.py`, `clipagent/youtube_cut.py`,
-  `clipagent/facebook_cut.py`, `auto_clips.py` (raíz),
-  `config.yaml` (receta + limpieza de duplicados), `tests/fixtures/duplicacion/*`,
-  tests nuevos. (La lista exacta la fija la implementación; lo que NO se toca en
-  Fase 1: nada de `panel-backend/`.)
-- **Fase 2:** cajas por influencer (§7). Migración D1 + endpoints del panel + lectura
-  en el cerebro. Después de la Fase 1.
-- **Fase 3 (desbloqueada):** cambio del Worker B7 (`ViralData` + `parseViralInput` +
-  `mergeViralJson`, con tests) + camino VOD del payload (`vod_fallback.py`) + píldora
-  solo-lectura del panel (§6, frontend; Worker solo si el endpoint de lista no
-  devuelve ya `viral`) + VOD EN (§8). **La opción A ya aterrizó** (commit 26267d5,
-  Workers avc fe1b2268 / avc-kaez 4324312a, `/api/health` ok en ambos, schedules
-  `['*/5 * * * *']` verificados por API en ambas cuentas): no hay que esperar a nada
-  para tocar `panel-backend/worker/src/index.ts`.
-- **Regla de commit (usuario, 2026-11-26 20:02):** todo cambio terminado y verificado
-  se commitea y se sube a main (commit + push), no queda solo en memoria. Antes de
-  commitear, separar lo terminado y verificado de lo que otro agente sigue editando
-  en el mismo árbol: **commitear solo los archivos de esta spec** (`git add` por
-  ruta, nunca `git add -A`). **Estado del árbol a 2026-11-26 ~23:55 (M-3):** además
-  de esta spec + sus fixtures, hay sin commitear `?? docs/designs/SPEC-piso-3-por-dia-2026-11-26.md`,
-  `?? docs/designs/SPEC-piso-3-por-dia-v2-2026-11-26.md`,
-  `?? docs/designs/SPEC-arreglo-5-tests-ci-2026-11-26.md` y
-  `M test_fanout.py` (de otros agentes) — re-verificar `git status` antes del commit.
-  HEAD a 23:55: e0964e9 (3 commits de arreglo de CI encima de 26267d5).
-- **Verificación tras cada deploy:** `/api/health` en ambos Workers (TENANT
-  obligatorio; crons intactos — verificar schedules por API en ambas cuentas, no
-  solo en el toml; nunca desplegar con config nocron sin reponer crons — PUT array
-  JSON al endpoint schedules). Kaez SIEMPRE con `wrangler.kaez.toml` SIN [triggers]
-  (preserva crons); el deploy de kaez usa su propia cuenta
-  (30953ea4f41053a53494bc50b2a9d4a4, conector custom.cloudflare-kaez). El deploy del
-  Worker (Fase 3) se hace fuera de la ventana de publicaciones programadas de la
-  noche (22:14-23:01 Chile) o verificando que ningún job en vuelo se ve afectado.
+`_cam_game_match` + chequeos duros `layout_duplicado` (rama rubius) y
+`gameplay_puro` (rama nueva: prueba positiva de layout que condiciona la
+exención de cara) + `cam_pura` (§5.2). `face_gate`: sentencia `pasa=None`
+(cuando no aplica), el criterio webcam pasa solo si `gameplay_puro` pasó.
+Gemini `webcam_visible` queda **anulado** por el gate (no es señal de layout).
+
+### §6.4 Transporte de `plantilla` (B7 — Fase 3)
+
+`parseViralInput` (`panel-backend/worker/src/db.ts:352`) es una whitelist: copia
+SOLO llaves conocidas (`seo_scores`, `score_kind`, `viral_score`, `hype_score`,
+`priority`, `viral_breakdown`, `quality_gate`, `platforms`, `seo_inputs`,
+`seo_source`, `hold_reason`). **Cero ocurrencias de `plantilla` en todo
+`panel-backend/worker/src/`.** La resolución del borrador citaba :344/:475/
+:2034/:1452 — **verificado erróneo por grep** (:344 y :475 son llaves de cierre;
+:2034 no es el INSERT; :1452 es `score = body.score;`). Líneas correctas
+(verificadas): `ViralData` `db.ts:212`; `parseViralInput` `:352`;
+`mergeViralJson` `:497`; INSERT `:1949` (HEAD; `:1968` en el árbol);
+POST parse `index.ts:1412` → merge `:1491`; PATCH parse `:1241` → merge `:1242`.
+
+Fix (Fase 3): `plantilla?: string` en `ViralData` (`db.ts:212`); nueva rama en
+`parseViralInput` (string + nombre conocido: rdjavi, willyrex, rubius,
+`rubius_sin_webcam`; desconocido → error, nunca guardado en silencio);
+`mergeViralJson`: `if (patch.plantilla !== undefined) next.plantilla =
+patch.plantilla;`. El mismo cambio lleva `cam_box`/`cam_box_source`/
+`cam_box_guardas` (§4.1.6). Consecuencia: en Fase 1 esos campos viven solo en
+el cerebro y NO son diagnosticables desde D1 hasta Fase 3; la puerta §5 no
+depende de D1.
+
+**`plantilla` en el JSON `viral` (Fase 1, sin archivos del Worker):** 3 caminos
+— live `live_cutter.py:~1640`; `viral_source.py:~771` (hoy hardcodea
+`plantilla="rubius"` en `:684-687`); VOD `vod_fallback.py:938-951` + PATCH
+`:1023` (Fase 3, con el cambio B7). En Fase 1 la `plantilla` se envía en el JSON
+`viral` y el Worker la descarta hasta Fase 3.
+
+### §6.5 `template_gate` despacha por nombre de plantilla (B8)
+
+`template_gate` (`final_review.py:1169-1182`) despacha hoy solo por
+`subs_style`. **Rama POR NOMBRE DE PLANTILLA antes del despacho por
+`subs_style`:** `template_name == "rubius_sin_webcam"` →
+`_template_fullscreen_game(...)`; si no, el despacho actual.
+`template_gate` gana `template_name` como parámetro (hoy no tiene ninguno;
+`validate_final_clip` lo resuelve en `:1927` y llama en `:1981`). Alternativa
+rechazada: un valor distinto de `subs_style` (mentiría sobre los subtítulos,
+que son el mismo `word_white` compartido).
+
+## §7. Fase 2 — cajas de cámara por influencer (después de Fase 1)
+
+Tabla D1 `influencer_cam_boxes` (caja + `confianza` alta/media + fecha),
+API del panel GET/PUT, `confianza` definida (alta = caja validada en ≥3 clips
+distintos; media = 1-2 clips). **La semilla `facecam_boxes` en `config.yaml`
+se ELIMINA** (M-5 de la 2ª revisión: sin procedimiento definido — solo tabla D1).
+Procedimiento de medición con muestra etiquetada por humano (30-50 segmentos)
++ matriz de confusión (§11.3: medir la tasa real de sin-facecam antes de
+decidir; <10% → aprobación con el coste escrito, no pre-decidido).
+
+## §8. VOD EN + dispatch diario (Fase 3)
+
+### §8.1 Reserva EN en el VOD-fallback — tope perezoso (B-N5, I-3 de la 2ª revisión)
+
+Hechos verificados: la cuota vive en `run()` (`clipagent/vod_fallback.py:
+1463-1465,1507`: `if enqueued >= max_clips or vods_tried >= max_vods: break`),
+NO en `fallback_order` (`:193`, solo ordena ES primero y luego EN). Los saltos
+por pre-chequeo (sin VOD / cooldown / claramente-no-GTA6) hacen `continue` SIN
+incrementar `vods_tried` — los VODs saltados no consumen huecos. `lang` se
+calcula DESPUÉS de `vods_tried += 1` (`:~1510`) y `latest_vod_fn` se llama
+ANTES de cualquier tope por idioma — por eso la v3 no era implementable como
+estaba escrita (B-N5): el predicado «existe al menos una entrada EN que PASE el
+pre-chequeo» exige listar los VODs EN antes de decidir el tope, pero el tope
+debe ir antes del listado para no gastar listados en entradas ES capadas.
+
+**Regla única — tope perezoso (normativa):**
+- Contadores por idioma: `intentados = {"es": 0, "en": 0}`; topes iniciales
+  `tope = {"es": 1, "en": 1}` (con `max_vods = 2`).
+- Al inicio de cada iteración, `lang` se calcula desde `entry.get("language")`
+  **antes** de `latest_vod_fn`. El chequeo de tope va al inicio de la iteración,
+  antes del listado.
+- **Relajación:** si el otro idioma no tiene entradas sin visitar en `order`,
+  el tope de este idioma sube a `max_vods` (2). Una entrada saltada por
+  pre-chequeo cuenta como visitada y levanta la reserva del otro idioma.
+- Simétrico: sin entradas ES → 2 EN; sin entradas EN → 2 ES; una entrada EN
+  saltada por pre-chequeo → ES puede usar el 2º hueco.
+- El corte VOD ya lleva `plantilla` (`vod_fallback.py:658` re-render, pasado a
+  validación `:754-759`; `clip.get("plantilla")` `:897`; `layout_cfg` con
+  `facecam_box` `:724-734`; `viral_payload` `:938-951`).
+
+Los tests cubren «sin candidato ES → 2 EN» (el caso que la v3 no cubría).
+
+### §8.2 Dispatch diario — mover al inicio, con guarda y log (I-1, I-2, I-10 de la 2ª revisión)
+
+Hechos verificados: `maybeDispatchDaily` (`panel-backend/worker/src/index.ts:
+1779`, dedupe por día en settings `brain_daily_dispatched_day`; si el dispatch
+falla, el día NO se marca y reintenta en el siguiente ciclo mientras siga la
+hora 9). `isDailyDispatchDue` (`cycle-gate.ts:211-220`, exportada): hora==9 +
+marca ≠ día; devuelve true si la lectura de settings falla. Gate en
+`cycle-gate.ts:293-304` (`cycleGate` devuelve `{run, …, dailyDue, …}`).
+Llamada final en `index.ts:4624` condicionada a `r.ran || r.gate.dailyDue`.
+
+**Tres hipótesis del fallo 2026-11-26 09:02** («Too many subrequests», sin
+reintento, sin rastro en D1 `worker_events` 09:00-10:30 — solo 3 eventos
+`auto_publish` del clip #57 a las 09:01, ningún `github_dispatch`):
+(1) el dispatch se lanzó tarde en el ciclo y el Worker murió por subrequests
+antes de llegar a `:4624`; (2) el camino `!ok` hace `if (!ok) return;` **sin
+log** (solo el camino de excepción loguea «Dispatch diario falló»), así que un
+`dispatchCerebro` que devuelve false (GitHub 4xx/5xx, token inválido) es
+igualmente consistente con la ausencia; (3) `runWorkerCycle` (`jobs.ts:1974`)
+no está envuelto en try/catch — si lanza, el handler aborta antes de `:4624`
+sin rastro. **La corrección de la v2 («failure already logged in
+`worker_events`») era falsa para el camino `!ok`.**
+
+**Cambios (Fase 3):**
+1. El dispatch se mueve al **inicio del handler, DENTRO del bucle por tenant,
+   ANTES del `runWorkerCycle` de ese tenant** (I-2: la v2 lo ponía fuera del
+   bucle y perdía la condición «Worker en marcha»).
+2. **Guarda explícita: NO despachar con el Worker parado.** Con el Worker
+   parado, `runWorkerCycle` devuelve `{ran: false, gate: idleCycleGate()}` —
+   parado ⇒ sin dispatch diario (comentario en `index.ts:4595-4601`). La
+   condición es `isWorkerRunning` (`jobs.ts:1874`, exportada; early-return en
+   `:1980` árbol / `:1727` HEAD).
+3. **try/catch alrededor de `isWorkerRunning`** (I-10): si la lectura D1 lanza,
+   se loguea y se salta el dispatch temprano (peor que hoy sería abortar el
+   handler para ese tenant). Precedente: `index.ts:2008` `.catch(() => null)`.
+4. **Log en el camino `!ok`** (hoy silencioso).
+5. Se **borra la llamada final** (`:4624`) — el dispatch vive solo al inicio.
+
+**Ya desbloqueado:** la opción A aterrizó 2026-11-26 20:07 (commit 26267d5,
+schedules `*/5 * * * *` verificados, health ok) — hay 12 ciclos en la hora 9.
+
+## §9. Secuenciación y baseline
+
+**Baseline único (I-9):** «árbol a 2026-11-27 ~01:30, HEAD `c6ff3e1` + trabajo sin
+commitear». Las citas dan líneas del árbol, con líneas HEAD donde difieren.
+Trabajo sin commitear que esta spec toca o sobre el que se construye:
+`clipagent/final_review.py` (+293/+358 líneas, el `layout_gate`),
+`clipagent/render.py` (+166), `clipagent/remake_all.py` (+84),
+`clipagent/live_cutter.py` (+33), `clipagent/config.py` (+14),
+`clipagent/config.yaml` (+37), `panel-backend/worker/src/*` (piso 3, otro
+agente), `clipagent/compilation.py` (+197, compilación de vídeos largos, otro
+agente), `test_layout_gate.py` (nuevo, raíz del repo), `test_final_gate.py`
+(+23). `git diff --stat` a 2026-11-27 ~01:00: 27 archivos, 1791 inserciones,
+115 borrados. **Fase 1 se implementa ENCIMA del estado actual del árbol
+(layout-gate incluido; no se re-implementa `layout_gate`)**; si el árbol se
+commitea antes, re-verificar las citas.
+
+**Fase 1 — Python/config + 5 call sites + `_do_cut` (NO archivos del Worker):**
+guardas §4.1 (regla reconciliada, `require_containment`, p7775 como 4ª
+estrategia, ganchos `:2432-2444` / `:2559` / `:2601` → `"game"`); modo por call
+site + `_do_cut` con `get_layout_config` + `deepcopy` (§4.2, 6 call sites);
+`decide_template_for_segment` (§4.3, avatar por caja de candidato, sin
+primitiva de píxeles); `_rerender_after_gate` (§4.4, trigger `"layout"` +
+`record["plantilla"]` desde `review2` + parámetro `avatar`); parámetro
+`avatar` en `layout_gate` + re-anclar su docstring (§5.5); `template_gate`
+despacha por nombre de plantilla (§6.5); receta `rubius_sin_webcam` + borrar
+los 3 bloques duplicados de `config.yaml` + test guarda (§6.1); `plantilla` en
+el JSON `viral` en los caminos live y viral (NO Worker; el Worker la descarta
+hasta Fase 3, §6.4). **Antes de implementar: 4ª revisión goldfish del delta
+v3→v4 (EGM) + aprobación del usuario.**
+
+**Fase 2 — cajas por influencer** (§7, después de Fase 1).
+
+**Fase 3 — Worker + VOD + dispatch:** cambio B7 (`ViralData` +
+`parseViralInput` + `mergeViralJson` para `plantilla`/`cam_box*`); camino
+payload VOD; pill en el panel; `vod_fallback.py` `run()` con topes perezosos
+(§8.1); `index.ts` mover-al-inicio + borrar llamada final + log `!ok` + guarda
+Worker-en-marcha con try/catch (§8.2); `cerebro-live.yml` sin cambios de caps
+(`--max-vods 2 --max-clips 2`).
+
+**Regla de commit (orden del usuario 2026-11-26 20:02):** todo cambio terminado
+y verificado se commitea y se sube (commit + push a main), nunca queda solo en
+memoria. Antes de commitear, separar lo terminado y verificado de lo que otro
+agente sigue editando en el mismo árbol: commitear solo lo terminado, `git add`
+por ruta, nunca `git add -A`. **El repo es PÚBLICO: nunca commitear clips,
+fotogramas ni capturas** (regla añadida tras 30ba071/c6ff3e1). Verificar
+`/api/health` tras cada deploy (TENANT obligatorio, crons intactos); nunca
+desplegar con config nocron sin reponer crons (PUT array JSON al endpoint de
+schedules; GET devuelve `{"result": {"schedules": [...]}}`).
 
 ## §10. Tests y aceptación
 
-- **Tests nuevos (Fase 1):** guardas de caja (caja de fotograma completo rechazada;
-  cara del juego centrada rechazada; caja PiP válida aceptada; `DEFAULT_CAM_BOX` en
-  no-p3220 rechazada sin detección; `facecam_box` explícito inválido ignorado con
-  aviso; cajas reales p3220/p7775/IlloJuan pasan la regla reconciliada — Burn se
-  prueba corriendo el detector sobre segmentos reales de Burn, sin coordenadas
-  hardcodeadas; p7775 como segunda estrategia); invariante §4.5 (recuadro ≥45% de
-  ancho o ≥35% de área → sin webcam o retención); decisión §4.3 (caja presente →
-  rubius; `hits==1` sin caja → ambiguo → rubius; avatar share 0,34 (clip 12) →
-  rubius; avatar share 0,08 (244) → sin_webcam; clip 12 sigue rubius); modo forzado
-  `game` (los 5 call sites llegan a `decide_layout` con modo `game`; decisión con
-  `plantilla=rubius_sin_webcam`; `decision["mode"]=="game"` discrimina del `game`
-  por `game_voice`; sin seguimiento de cara; zoom con `game_h` 1920 en pantalla
-  completa y 1080 en rubius); puerta §5 (las 22 etiquetas de §5.3; SIFTct02 ≥20
-  FALLA 191/199/214/244/247/197 (t=1,3,5) y PASA 183/184/186/189/190/246/248;
-  **186 PASAR fijado aquí**; un rubius duplicado mal etiquetado como sin_webcam
-  FALLA `gameplay_puro`; captura 3 como limitación documentada con su valor 17);
-  sin_webcam (rama `template_gate` nueva por nombre antes de `subs_style`;
-  `quality_gate` salta la cara solo para esta plantilla; rubius normal sin cara
-  sigue fallando; `resolve_template` acepta el 4º nombre y rechaza un 5º;
-  `resolve_split_variant` con nombre explícito desconocido levanta `ConfigError`);
-  `config.yaml` sin claves duplicadas de nivel superior (validator/templates/sfx);
-  payload con `plantilla` en el JSON `viral` (live y viral: dos tests — el VOD va a
-  Fase 3); `record["plantilla"]` se actualiza desde `review2["plantilla"]` tras el
-  re-render; `_criterion` conserva el motivo cuando pasa (verificado: ningún test
-  existente afirma `motivo == ""`).
-- **Tests nuevos (Fase 3):** Worker (`parseViralInput` acepta `plantilla` conocida y
-  rechaza desconocida; `mergeViralJson` la conserva/reemplaza; round-trip POST →
-  GET); payload VOD con `plantilla`; VOD (§8.1: reserva EN sobre entradas que pasan
-  pre-chequeo, hueco no perdido; §8.2: día no marcado tras fallo + log `!ok`,
-  marcado tras éxito, sin dispatch con Worker parado).
-- **Suites completas en verde vs baselines RE-MEDIDAS al implementar** (las citadas
-  en el borrador — Python CI 2011 pass / 0 fail; Worker 1023 pass / 13 fallos
-  pre-existentes — son afirmación del borrador, no verificadas por ninguna revisión:
-  hay otros agentes commiteando a la vez; la implementación re-comprueba la baseline
-  antes de afirmar verde). `tsc` limpio; Ruff limpio.
-- **Aceptación en vivo (verificación final del trabajo):** (1) los 10 EN re-hechos por
-  c02d444d pasan la puerta nueva (o se reporta cuáles no y por qué); (2) un VOD EN
-  entra por el hueco reservado (§8.1); (3) el dispatch diario del día siguiente
-  aparece exitoso en `worker_events` (§8.2); (4) el clip 247 re-hecho pasa la puerta
-  y solo entonces se reprograma su publicación. Sin inventar nada: ids, veredictos y
-  links en el reporte.
-- **Criterio de «correcto»:** ningún clip con layout duplicado se encola ni se
-  publica; un render futuro que duplique es rechazado por el validador antes de
-  encolar, sin depender de que nadie lo mire.
+### §10.1 Puerta (`test_layout_gate.py` — ya existe, raíz del repo; NO sobrescribir: extender)
 
-## §11. Preguntas abiertas para el usuario + trabajo relacionado pendiente
+- **Tabla t7 (`ESPERADO_T7`):** 15 casos de §5.3 (170 ✓; 183/184/186/189 ✗;
+  190 ✓; 191/197/199/214/244 ✗; 246 ✓; 247 ✗; 248 ✓; 252 ✗). **186 t7 es
+  ✗ (sin cara en ese fotograma) — es el comportamiento correcto a t7.**
+- **Tabla de conjunto completo (nueva):** los 14 clips de §1.2 con sus 20
+  fotogramas de la rejilla del gate (las extracciones viven en
+  `runs/layout-gate-calib/`): 186/190/246/248 ✓; 183/184/189/191/197/199/214/
+  244/12/247 ✗. **186 en conjunto completo es ✓** — las dos tablas coexisten
+  porque usan conjuntos de fotogramas distintos (§5.3).
+- **Capturas del usuario:** las 3 fallan por (i) con **ambos recortes** (canónico
+  307/57/21 celdas; recorte del test 257/43/22). `CAPTURA_VIDEO` se actualiza
+  al recorte canónico (107,431)-(1182,2363) y los valores esperados se
+  re-verifican (§5.3).
+- **Avatar:** clip 12 y 244 fallan (i) con `avatar=False`; con `avatar=True`
+  las reglas de cara se saltan pero (i) sigue fallando (42/10 celdas) —
+  el re-render con la caja ajustada del candidato es el que debe pasar.
+- **170:** pasa con `avatar=False` (4 celdas < 5, regla (iv) no dispara) — el
+  caso que protege la corroboración.
+- **248:** pasa con celdas (5) aunque tenga 9 inliers — el caso que protege
+  la estadística de celdas frente al conteo de inliers.
+- **Sintéticos:** `_sift_dup_inliers` sigue usándose directamente en los tests
+  sintéticos (wrapper de compatibilidad).
 
-1. **Banner en sin_webcam:** ¿se queda en y 811-1099 (marca, igual que rubius, tapa
-   gameplay 3 s) o se sube arriba del todo (y ~100-388)? La spec propone quedarlo
-   donde está. Si lo quiere arriba, cambia §6 (coordenadas del banner en la receta y
-   en la rama del validador). **No bloquea la implementación del resto.**
-2. **Clip 247:** ¿se re-hace con el arreglo y se reprograma, o se descarta? (Sin job
-   vivo desde ~23:20; la spec no decide por él.)
-3. **Medición de la tasa real sin-facecam:** dry-run con muestra etiquetada por humano
-   (30-50 segmentos) + matriz de confusión. Si sale <10%, el valor del formato va a
-   la aprobación con el coste escrito (no pre-decidido).
-4. **PISO 3 POR DÍA (orden suya 2026-11-26 20:23, fuera de esta spec):** cada
-   plataforma (YT/TT/IG/FB) publica como MÍNIMO 3 vídeos al día en cada cuenta (seba
-   y kaez); excepción real: cuentas en calentamiento con tope de etapa 2/día. Esta
-   noche solo 4 de 8 canales llegan a 3 (seba YT, seba TT, kaez YT, kaez TT); los 4
-   de Meta NO llegan por un bug (la fila Meta resuelve su plan a resto_plan=2 en vez
-   de 3) — corrección 20:37 en MEMORY.md. Tiene su propia spec
-   (`docs/designs/SPEC-piso-3-por-dia-v2-2026-11-26.md`), aprobada por el usuario
-   2026-11-26 20:46 («Sí, impleméntalo así»), en implementación por otro agente.
-   Esta spec no lo implementa ni lo diseña.
+### §10.2 Guardas y render
 
-## Referencias verificadas (código y datos, 2026-11-26)
+- Regla reconciliada (§4.1) sobre las cajas documentadas: p7775 ✓
+  (centro (0,11, 0,56), y0 0,435 < 0,50, ancho 0,22); p3220 ✓; caja centrada
+  grande ✗; caja con y0 ≥ 0,50 ✗.
+- `validate_cam_box(..., require_containment=False)`: caja explícita válida sin
+  cara detectada pasa; con cara presente pero fuera, la contención no aplica.
+- Los 6 call sites llegan a `decide_layout` con modo `game` cuando la decisión
+  es sin_webcam (incluido `workers.py:955`).
+- `record["plantilla"]` se actualiza desde `review2` tras el re-render (live y
+  VOD); el POST VOD lleva la plantilla nueva.
+- Invariante §4.1.4: caja inválida/ausente → `"game"` o hold, nunca el
+  fotograma completo como cámara, nunca duplicado.
+- `config.yaml`: ninguna llave de nivel superior duplicada (guarda).
 
-- `clipagent/rubius.py:93` (`GAME_Y, GAME_H = 840, 1080`), `:95` (`GAME_CROP =
-  "1440:1440:560:0"`), `:443-467` (`_game_filter`, `y_coef = GAME_H × 0,15`),
-  `:471-528` (`build_filter`), `:611/699/948` (defaults `cam_box=DEFAULT_CAM_BOX`;
-  CLI `:948-953`: «usando los de p3220»).
-- `clipagent/rdjavi.py:114` (`DEFAULT_CAM_BOX = "561:365:0:0"`).
-- `clipagent/remake_all.py:262-267` (`box_strategies`), `:379`
-  (`cam_box=cam_box or DEFAULT_CAM_BOX`), `:481/:752/:821` (hardcodean
-  `plantilla="rubius"`).
-- `clipagent/render.py:187` (`DEFAULTS`, `mode: auto`), `:1923` (`_cam_box_valida`:
-  ancho ≤0,45 Y área ≤0,35), `:1957` (`_split_params`), `:1996` (ancho en
-  `_split_params`), `:200` (`split_cam_max_w_frac: 0.45` en DEFAULTS), `:2320`
-  (`decide_layout`), `:2340` (forzados `("stack","pip","center")`), `:2371`
-  (caja explícita + `_cam_box_valida`), `:2448` (pip→split), `:656`
-  (`_detect_corner_box`), `:684` (ancho 0,15-0,42), `:687` (alto ≤0,45), `:973`
-  (`_detect_vtuber_candidates`), `:1938` (`_scan_frames` def; llamada `:1963`),
-  `:3083` (rama `game`), `:3384` (`detect_vod_facecam`: voto → bordes → YuNet;
-  rescates `_edge_rescue` → `_yunet_rescue`, éxito → `hits: 1` CON caja), `:3471`
-  (`cut_clip_with_layout`), `:3494-3496` (pisado `cfg["mode"] = layout_mode`),
-  `:377` (`resolve_split_variant`).
-- `clipagent/yunet_facecam.py:365` (`validate_cam_box`), `:395` (`find_cam`, cara
-  estable ≥50% de 12 fotogramas), `:507-512` (aplica `validate_cam_box`).
-- `clipagent/final_review.py:120` (`RECIPE_TEXT`, 3 entradas), `:780`
-  (`extract_gate_frames`: t=1,0, paso `every_s`), `:842` (`_band_video`), `:859-893`
-  (`face_gate`), `:1064-1065` (eslabón YuNet), `:1169-1182` (`template_gate` por
-  `subs_style`), `:1444` (`_template_word_white`, `cam = recipe["cam"]`), `:1463`
-  (`_check_full_width`), `:1597` (`_check_cam_live`), `:1667`
-  (`find_facecam_box_in_source`: `detect_vod_facecam` → YuNet → bordes), `:1740-1742`
-  (caída a texto rubius), `:1862` (docstring «TRES recetas»), `:1927` (resuelve
-  plantilla), `:1981` (llama a `template_gate`), `:1978` (`face_gate` sin
-  condición), `:1996-2009` (`hard_failures`: solo `cara`/`plantilla`),
-  `:2043-2049` (`needs_rerender = True` si `not hard_pasa`), `:413`
-  (`_GATE_MAX_FRAMES = 24`, constante).
-- `clipagent/live_cutter.py:874` (`_rerender_after_gate`), `:916` (corte re-render,
-  `layout_mode="auto"`), `:959` (re-validación con `plantilla` original), `:1096`
-  (corte live, `layout_mode="auto"`), `:1104` (`plantilla = layout.get("plantilla")
-  or …`), `:1322` (`"plantilla": plantilla` en la construcción del record), `:1422`
-  (llamada si `needs_rerender`, con `plantilla=plantilla`), `:1454`
-  (`build_quality_gate(final_review, ...)` sin `plantilla`), `:1647` (construcción
-  de `_viral`).
-- `clipagent/workers.py:406` (`_do_cut`, pasa `layout_mode`), `:422` (`cut_clip`).
-- `clipagent/quality_gate.py:112-114` (`_criterion`), `:117`
-  (`build_quality_gate`), `:167-179` (rama `webcam`).
-- `clipagent/config.py:378` y `:664` (`TEMPLATE_REQUIRED_KEYS`, duplicado; efectiva
-  `:664`), `:681` (`TEMPLATE_BY_VARIANT`), `:953` (`resolve_template`), `:551`
-  (`load_config`, `yaml.safe_load`).
-- `config.yaml`: `sfx:` 366/379; `layout:` 384, `mode: "auto"` :385; `facecam_box:
-  null` :450; `validator:` 553/640; `templates:` 604/717 (efectivos: 640 y 717);
-  `rubius_subs_outline_frac: 0.03` en 665 (solo en el segundo `validator:`);
-  `face_sample_every_s: 2` en 554 y 641; `signals:` 747 (en el segundo bloque
-  `templates:`); receta rubius efectiva en 717+ (cam 0,0,1080,840; game 840–1920;
-  banner 103–967/811–1099; subs 900–1020).
-- `clipagent/vod_fallback.py:193` (`fallback_order`), `:658`
-  (`_rerender_vod_clip`), `:724-734` (`cut_clip_with_layout` con `layout_cfg`),
-  `:732` (re-render VOD, `layout_mode="auto"`), `:754-759` (plantilla a validación),
-  `:897` (`clip.get("plantilla")`), `:938-951` (`viral_payload`), `:1023-1035`
-  (PATCH), `:1463-1465,1507` (cuota en `run()`).
-- `clipagent/viral_source.py:687` (hardcodeo `plantilla="rubius"`), `:740-772`
-  (construcción del payload).
-- `auto_clips.py` (raíz): `:705` (`--layout` choices `["auto","stack","pip","center"]`,
-  default None), `:1578-1581` (corte, `layout_mode=args.layout`).
-- `clipagent/youtube_cut.py:555-557` (`_default_render`, `layout_mode="auto"`),
-  `:560-566` (`_default_validate`); `clipagent/facebook_cut.py:516-518`
-  (`_default_render`), `:520-526` (`_default_validate`).
-- `panel-backend/worker/src/db.ts:212` (`ViralData`, sin `plantilla`), `:352`
-  (`parseViralInput`, whitelist sin `plantilla`), `:497` (`mergeViralJson`), `:1949`
-  (INSERT INTO clips).
-- `panel-backend/worker/src/index.ts:1240` (PATCH parse), `:1242` (PATCH merge),
-  `:1412` (POST parse), `:1491` (POST merge), `:1779` (`maybeDispatchDaily`),
-  `:4595-4601` (comentario Worker parado → puerta vacía), `:4624` (llamada final
-  `r.ran || r.gate.dailyDue`).
-- `panel-backend/worker/src/cycle-gate.ts:211` (`isDailyDispatchDue`), `:293-304`
-  (`cycleGate`, devuelve `{run, …, dailyDue, …}`); `panel-backend/worker/src/jobs.ts:1974`
-  (`runWorkerCycle`: parado → `{ran: false, gate: idleCycleGate()}`).
-- `panel-backend/worker/src/quality-gate.ts:152` (`qualityGateForClip`); `gate.ts:230`
-  (llamada real).
-- `panel-backend/wrangler.toml:37` (`crons = ["*/5 * * * *"]`); schedules verificados
-  por API 2026-11-26 ~23:20: seba (cuenta 27afc37225a02fd92557f901c05dabee, script
-  `avc`) `[{"cron": "*/5 * * * *"}]`; kaez (cuenta 30953ea4f41053a53494bc50b2a9d4a4,
-  script `avc-kaez`) `[{"cron": "*/5 * * * *"}]`. `/api/health` ok en ambos (tenant
-  sebastian/kaez, `worker_running: true`).
-- Opción A aterrizada: commit 26267d5 («quitar franjas, publicar aleatorio 1:30–3 h,
-  crons 24/7»), Workers avc fe1b2268 / avc-kaez 4324312a. HEAD a 23:55: e0964e9.
-- D1 `clips-avc` (tenant sebastian): `SELECT id, kind, clip_id, platform, state,
-  next_run_at, deleted_at FROM jobs WHERE clip_id=247` → 0 filas (2026-11-26 ~23:20);
-  job 161 (248 → instagram_reels, `scheduled`, 2026-11-27 00:00). Los 10 EN siguen en
-  `en_carpeta` (~23:50). `SELECT id, kind, message, datetime(at/1000,'unixepoch','-3
-  hours') FROM worker_events WHERE at BETWEEN <2026-11-26 12:00 UTC> AND <13:30 UTC>`
-  → sin filas `github_dispatch` de panel-daily (ni éxito ni fallo); últimas filas:
-  auto_publish clip #57 09:01. Clip 12: `video_r2_key`
-  `clips/sebastian/12/67109e8d6d650e39_clip_12.mp4`, `en_carpeta`, influencer 15.
-- `runs/formato-rubius-sin-webcam-2026-11-26/SPEC.md` (REVISADA 2ª ronda, 454 líneas)
-  + `REVISION-GOLDFISH-2.md` (NO APTA: B7–B11, I1–I4, M1–M5) +
-  `REVISION-RESOLUCION.md` (mapeo de las dos rondas; esta spec corrige sus 4 citas
-  Worker erróneas con grep).
-- `~/workspace/gta6-clips/runs/review-en-2026-11-26/clip_{183,184,186,189,190,191,197,199,214,244}.mp4`,
-  `runs/review-es-2026-11-26/clip_{246,247,248}.mp4`, `/tmp/en_diag/clip_12.mp4`;
-  fotogramas en `tests/fixtures/duplicacion/` (22 imágenes + README.md) y
-  `/tmp/en_diag/` (`{clip}_t{1,3,5,7,15,25}.jpg`, `calib52.py`, `calib_grid.txt`,
-  `siftct02_full.txt`).
-- Capturas del usuario: `~/workspace/user/files/779DA4C6-…-B10FF8C1…jpg`,
-  `~/workspace/user/files/90C42C8E-…-D3D0DB27…jpg`,
-  `~/workspace/user/files/A9AD4C7F-…-D9D1B64B…jpg`.
-- Mediciones propias de calibración (2026-11-26): SIFTct02 (nfeatures=2000,
-  contrastThreshold=0,02) CORRECTO máx 18 / DUP por clip mín 29, umbral 20; ORB
-  (franja excluida, thr 7) CORRECTO 0/29 FP en t=2,7,15,25 pero **9 en es248_t1**
-  (rejilla real) — falso positivo; celdas NCC 0 en todo; NCC/MAD/Haar/histogramas/
-  bordes sin separación. Avatar: clip 12 píxeles 0,34 / bbox 0,40, centro
-  (0,52, 0,42); 244 píxeles 0,08-0,10 / bbox 0,10, centro (0,47, 0,63);
-  `avatar_share_min = 0,20`.
+### §10.3 Detector de Burn
+
+**Burn no tiene coordenadas documentadas.** El test corre el detector sobre
+segmentos fuente reales de Burn (fixtures fijados en el test) y afirma que las
+cajas devueltas pasan la regla §4.1. **El test exige detección no vacía y falla
+explícitamente si no encuentra ninguna** (I-11) — nunca se salta en silencio.
+Si los fixtures no están en el workspace, el test falla con mensaje explícito
+(«fixtures de Burn ausentes en runs/…»), no se marca como pasado.
+
+### §10.4 Verificación en vivo (pendiente del re-render)
+
+- Los 10 EN re-hechos pasan la puerta nueva (o se reporta cuáles no y por qué).
+- Un VOD EN entra por el hueco reservado (§8.1).
+- El dispatch diario del día siguiente tiene éxito (o reintenta dentro de la
+  hora 9).
+- 247 re-hecho pasa la puerta antes de cualquier re-programación.
+- Clip 12 y 244 re-renderizados con la caja ajustada del candidato pasan la
+  puerta.
+- **Líneas base antes de afirmar verde:** suite Python, suite Worker, tsc,
+  ruff (medir primero, no asumir).
+
+## §11. Preguntas abiertas
+
+1. **Posición del banner en sin_webcam:** y 811-1099 (como rubius) vs arriba
+   ~100-388. No bloquea la implementación (la receta usa la de rubius hasta
+   decidir).
+2. **247: re-make vs descarte.** No hay job vivo; el re-make necesita decisión.
+3. **Tasa real de sin-facecam:** medirla con muestra etiquetada (30-50
+   segmentos) + matriz de confusión; si <10%, aprobación con el coste escrito,
+   no pre-decidido.
+4. **Piso 3/día:** spec aparte, aprobada 2026-11-26 20:46, en implementación por
+   otro agente.
+5. **Limpieza del historial del repo público:** las 22 imágenes siguen en el
+   historial de 30ba071 (sacadas del árbol en c6ff3e1, no del historial).
+   BFG + force-push necesita decisión explícita del usuario — no se hace
+   unilateralmente.
+6. **Recorte de capturas en el test:** `CAPTURA_VIDEO` de `test_layout_gate.py`
+   se actualiza al recorte canónico (§5.3); los valores esperados se re-verifican.
+
+## Referencias
+
+- Repo: `~/workspace/gta6-clips/viral-clip-agent/` (HEAD `c6ff3e1` a 2026-11-27
+  ~01:30; árbol con `layout_gate` + piso-3 + compilación sin commitear).
+- Spec v3 (mismo archivo, commit `30ba071`): SIFTct02 (retirado), ORB refutado,
+  avatar_share 0,20 (eliminado), 183/184/189 PASAR (revocado).
+- Borrador sin_webcam: `~/workspace/gta6-clips/runs/formato-rubius-sin-webcam-2026-11-26/SPEC.md`
+  (REVISADA, 454 líneas) + `REVISION-GOLDFISH-2.md` (NO APTA: B7-B11) +
+  `REVISION-RESOLUCION.md` (sus 4 citas Worker son erróneas — ver §6.4).
+- Fixtures README: `tests/fixtures/duplicacion/README.md` (solo texto en el
+  repo; imágenes en `runs/layout-gate-calib/fixtures-duplicacion/`).
+- Calibración: `runs/layout-gate-calib/` (fotogramas de la rejilla del gate,
+  `calib_final.txt`, `perframe_cells.txt`, `t7_check.txt`); `runs/layout-fix-2026-11-26/frames/`
+  (calibración t2/t7/t20 del `layout_gate` — rejilla no representativa, §5.3);
+  `runs/review-en-2026-11-26/` (14 mp4 EN) y `runs/review-es-2026-11-26/`
+  (246/247/248).
+- Código (árbol; HEAD donde difiere): `clipagent/render.py` (decide_layout
+  :2320 / :2221 HEAD; `cut_clip_with_layout` :3471 / :3341 HEAD; pisado
+  `:3494-3496`; `_cam_box_valida` :1923; `_split_params` :1957; escaneo
+  `:2432-2444`; guardas `:2559`/`:2601`; rama game :3083;
+  `detect_vod_facecam` :3384 / :3254 HEAD; `_detect_vtuber_candidates` :973;
+  `_scan_frames` def :2037, llamadas :2197/:2397);
+  `clipagent/rubius.py` (`build_filter` :471-528; `GAME_CROP` :95; `GAME_Y/H`
+  :93; `_game_filter` :443-467); `clipagent/rdjavi.py` (`DEFAULT_CAM_BOX` :114;
+  ejemplo p7775 :77); `clipagent/final_review.py` (`face_gate` :859-893;
+  `template_gate` :1169-1182; `find_facecam_box_in_source` :1667;
+  `extract_gate_frames` :780; `_sift_dup` :1843; `_sift_dup_inliers` :1907;
+  `layout_gate` :1914; `_layout_check_arrays` :2004; `validate_final_clip`
+  :2160, `layout_fn` :2164, llamada :2305-2308, `"layout"` :2334;
+  `RECIPE_TEXT` :120, fallback :1740-1742); `clipagent/quality_gate.py`
+  (`_criterion` :112-114); `clipagent/live_cutter.py` (`_rerender_after_gate`
+  :874, revisión humana :898-908, `cfg2["facecam_box"]` :910-916, re-validación
+  :975-984, corte live :1096, plantilla :1104, record :1322, llamador :1422,
+  `build_quality_gate` :1454, `record["quality_gate"]` :1464);
+  `clipagent/workers.py` (`_do_cut` :406-419, `cut_clip` :422, job :955);
+  `clipagent/remake_all.py` (`box_strategies` :271, `_tight_box` :248);
+  `clipagent/yunet_facecam.py` (`validate_cam_box` :365, `find_cam` :395);
+  `clipagent/vod_fallback.py` (`fallback_order` :193, cuota :1463-1507,
+  re-render :658, corte :724-734/:754-759, `clip.get("plantilla")` :897,
+  llamador :915-917, `viral_payload` :938-951, PATCH :1023-1035);
+  `clipagent/viral_source.py` (hardcode `:684-687`, payload :740-772);
+  `clipagent/config.py` (`load_config` :551, `get_layout_config` :1007-1011,
+  `resolve_template` :967 / :953 HEAD, `layout_*` :769-773/:857-864);
+  `config.yaml` (`sfx:` :366/:379, `layout:` :384, `mode` :385, `facecam_box`
+  :450, `validator:` :553/:640, `templates:` :604/:717, `layout_*` :675-699);
+  `panel-backend/worker/src/db.ts` (`ViralData` :212, `parseViralInput` :352,
+  `mergeViralJson` :497, INSERT :1949 HEAD / :1968 árbol);
+  `panel-backend/worker/src/index.ts` (PATCH :1241/:1242, POST :1412/:1491,
+  `maybeDispatchDaily` :1779, comentario parado :4595-4601, llamada final
+  :4624, `isWorkerRunning` import :152, usos :1966/:1984/:2008);
+  `cycle-gate.ts` (`isDailyDispatchDue` :211, `cycleGate` def :292, :293-304);
+  `jobs.ts` (`isWorkerRunning` :1874, `runWorkerCycle` :1974, early-return
+  :1980 árbol / :1727 HEAD).
+- D1 (seba `d1q.py`, db `clips-avc`; kaez `query_kaez_d1.py`): clips 12
+  (en_carpeta, 51, fallos hook/titulo/audio), 244 (en_carpeta, 51), 252
+  (en_carpeta, 57), 170 (publicado, 0); jobs 161 (248 IG 00:00, scheduled),
+  164 (190 YT EN publicado 20:05), 165 (247 eliminado, 0 filas).
+- Goldfish: v1 (5d857a24), v2 (bf83eb8c), v3 (da11e70f) — las tres NO APROBADA.
+  4ª revisión (delta v3→v4) pendiente antes de implementar.
