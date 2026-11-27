@@ -33,8 +33,10 @@ class _FrozenDatetime(datetime.datetime):
     order_queue calcula la edad del clip con datetime.now()
     real; sin congelarlo, la edad crece con el calendario y la
     regla de archivado (6B.2: 3+ días sin subir y prioridad
-    < 70) archiva los ítems antes de publicarlos. fromisoformat
-    se hereda de datetime y devuelve datetimes reales.
+    < 70) archiva los ítems antes de publicarlos. now() devuelve
+    NOW (datetime plano) y fromisoformat devuelve instancias de
+    esta subclase; ambas se comportan como datetime para la
+    aritmética y comparación que usa _clip_age_days.
     """
 
     @classmethod
