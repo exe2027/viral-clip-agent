@@ -703,6 +703,32 @@ class TestRemakePlantilla(_PatchBannerAss):
             )
         return rec, bridge
 
+    def test_decision_avatar_llega_a_la_validacion(self):
+        # §5.2/I-23: la 4-tupla trae el flag avatar y remake_one
+        # lo enhebra en validate_final_clip (sin él, 12 y 244 se
+        # validarían como humanos y face_gate/layout (ii) los
+        # tumbarían; el re-make no lo pasaba antes del fix).
+        seen = {}
+        bridge = _FakeBridge()
+        with mock.patch(
+            "clipagent.template_decision"
+            ".decide_template_for_segment",
+            return_value=("rubius", None, "firme", True),
+        ):
+            rec = self._remake(
+                _clip(7), bridge,
+                download_fn=_fake_download(),
+                transcribe_fn=_fake_transcribe(),
+                render_fn=_fake_render(),
+                validate_fn=lambda *a, **kw: (
+                    seen.update(kw), _veredicto(True),
+                )[1],
+                detect_fn=lambda *a: None,
+            )
+        self.assertEqual(rec["outcome"], "rehecho")
+        self.assertIs(seen.get("avatar"), True)
+        self.assertEqual(rec["intentos"][0]["avatar"], True)
+
     def test_decision_rubius_valida_con_rubius(self):
         calls = []
         rec, _ = self._remake_con_decision(
