@@ -5,6 +5,9 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { D1Database } from "../src/cloudflare";
+import type { Env } from "../src/cloudflare";
+import type { PublishResult } from "../src/publish/index";
+import { retryAtForGateBlock } from "../src/gate";
 import {
   autoEnqueueAllowed,
   canRetryToday,
@@ -30,8 +33,10 @@ import {
 } from "../src/retry";
 import {
   alertQuotaExhausted,
+  applyPublishResult,
   clearAutoEnqueueAttemptPersisted,
   clearAutoEnqueueState,
+  detectStalledJobs,
   getAutoEnqueueState,
   markFailed,
   recordAutoEnqueueAttempt,
@@ -109,8 +114,41 @@ function makeDb(): { d1: D1Database; raw: Database } {
       "day TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, " +
       "last_at INTEGER, PRIMARY KEY (tenant_id, clip_id, day))",
   );
+  // B2 (spec 2026-11-27): las tablas que el reintento y el gate
+  // necesitan para probar la aritmética del piso (publish_slots),
+  // los ajustes (settings) y la cuenta (api_accounts).
+  raw.exec(
+    "CREATE TABLE publish_slots (" +
+      "tenant_id TEXT NOT NULL, platform TEXT NOT NULL, " +
+      "language TEXT NOT NULL, day TEXT NOT NULL, " +
+      "reserved_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, " +
+      "PRIMARY KEY (tenant_id, platform, language, day))",
+  );
+  raw.exec(
+    "CREATE TABLE settings (" +
+      "tenant_id TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+  );
+  raw.exec(
+    "CREATE TABLE api_accounts (" +
+      "id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, platform TEXT NOT NULL, " +
+      "language TEXT NOT NULL, label TEXT NOT NULL, credential TEXT NOT NULL DEFAULT '', " +
+      "credential_enc TEXT, extra TEXT, extra_enc TEXT, status TEXT, note TEXT, " +
+      "created_at INTEGER, verified_at INTEGER, verify_ok INTEGER, verify_message TEXT, " +
+      "first_published_at INTEGER, published_count INTEGER, strikes INTEGER, " +
+      "maturity TEXT, maturity_checked_day TEXT)",
+  );
   const d1 = { prepare: (sql: string) => new SqliteStmt(raw, sql) } as unknown as D1Database;
   return { d1, raw };
+}
+
+/** Env mínimo para applyPublishResult: solo usa env.DB (vía db)
+ *  y env para el aviso de Telegram en markDraft (sin bot, no envía). */
+function makeEnv(d1: D1Database): Env {
+  return { DB: d1 } as unknown as Env;
+}
+
+function seedClip(raw: Database): void {
+  raw.query("INSERT INTO clips (id, tenant_id, publish_states, created_at, updated_at) VALUES (1, 'sebastian', '{}', ?, ?)").run(NOW, NOW);
 }
 
 function count(raw: Database, table: string): number {
@@ -402,5 +440,188 @@ describe("freno del auto-enqueue por clip", () => {
     const st = getAutoEnqueueState(102, today);
     expect(st?.attemptsToday).toBe(3);
     expect(autoEnqueueAllowed(st ?? { attemptsToday: 0, lastAttemptMs: null }, NOW + 60 * MIN).allowed).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B1.2 (spec 2026-11-27): limpiar el contador por éxito no resucita
+// intentos viejos tras un reinicio del isolate.
+// NOTA: la limpieza persistida ya estaba cableada en el éxito de
+// attemptClip (jobs.ts), así que este test es de regresión: pasa
+// antes y después del arreglo, y caza si alguien quita la
+// limpieza persistida. El fail-before de la spec asumía que no
+// existía; la verificación del código mostró que sí existe.
+// ---------------------------------------------------------------------------
+describe("B1.2: limpiar por éxito no resucita intentos tras reinicio", () => {
+  test("2 intentos + limpieza persistida + reinicio simulado + siembra = 0", async () => {
+    resetAutoEnqueueStateForTests();
+    const { d1, raw } = makeDb();
+    const today = santiagoDayKeyOf(NOW);
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW - 10 * MIN, today);
+    await recordAutoEnqueueAttempt(d1, "sebastian", 102, NOW - 5 * MIN, today);
+    expect(getAutoEnqueueState(102, today)?.attemptsToday).toBe(2);
+    // Éxito: se limpia memoria + D1.
+    clearAutoEnqueueState(102);
+    await clearAutoEnqueueAttemptPersisted(d1, "sebastian", 102, today);
+    expect(count(raw, "auto_enqueue_attempts")).toBe(0);
+    // Reinicio simulado del isolate: la memoria se vacía, la D1 no.
+    resetAutoEnqueueStateForTests();
+    await seedAutoEnqueueStateFromReads(d1, "sebastian", 102, today, NOW);
+    expect(getAutoEnqueueState(102, today)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2.4 (spec 2026-11-27): el piso de 90 min usa el reloj del gate
+// (marca de la reserva), la espera no consume intentos y el
+// retryAtMs nunca cae en el pasado (tabla B2.3 por kind).
+// ---------------------------------------------------------------------------
+describe("B2.4: el piso usa el reloj del gate y la espera no consume intentos", () => {
+  const MIN90_REASON = "menos de 90 min desde la última subida en esta plataforma";
+
+  test("reserva sin subir: retryAtMs = marca de la reserva + azar 90–180 (nunca en el pasado)", async () => {
+    const { d1, raw } = makeDb();
+    seedClip(raw);
+    // Subida posted hace 5 h (clip 900, otra fila).
+    const lastPostedAt = NOW - 5 * 3600_000;
+    raw.query("INSERT INTO jobs (tenant_id, kind, clip_id, platform, state, attempts, created_at, updated_at) VALUES ('sebastian', 'publish', 900, 'tiktok', 'posted', 0, ?, ?)").run(lastPostedAt, lastPostedAt);
+    const jobId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "scheduled", created_at: NOW, updated_at: NOW });
+    const env = makeEnv(d1);
+    // Reserva de cupo hace 10 min: la marca que el gate usa como
+    // última subida (el re-chequeo frena por el piso, hueco 10 min).
+    const reservationMark = NOW - 10 * MIN;
+    const rng = () => 0; // azar mínimo: 90 min exactos.
+    const retryAt = await retryAtForGateBlock(env, await readJob(d1, jobId), MIN90_REASON, NOW, rng, reservationMark);
+    expect(retryAt).toBe(reservationMark + 90 * MIN);
+    expect(retryAt).toBeGreaterThan(NOW);
+    // Sin el instante del gate (llamador viejo, fallback B2.3):
+    // ahora + azar(90–180), nunca la subida real en el pasado.
+    const retryAtFallback = await retryAtForGateBlock(env, await readJob(d1, jobId), MIN90_REASON, NOW, rng);
+    expect(retryAtFallback).toBe(NOW + 90 * MIN);
+    expect(retryAtFallback).toBeGreaterThan(NOW);
+  });
+
+  test("espera no consume: 3 rechazos por min90 → sigue scheduled, attempts=0, next_run_at futuro, nunca draft", async () => {
+    const { d1, raw } = makeDb();
+    seedClip(raw);
+    const jobId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "scheduled", attempts: 0, created_at: NOW - 60 * MIN, updated_at: NOW });
+    const env = makeEnv(d1);
+    for (let i = 0; i < 3; i++) {
+      const job = await readJob(d1, jobId);
+      const r: PublishResult = { mode: "retry", reason: MIN90_REASON, retryAtMs: NOW + (90 + i) * MIN };
+      await applyPublishResult(env, d1, job, r);
+      const after = await readJob(d1, jobId);
+      expect(after.state).toBe("scheduled");
+      expect(after.attempts).toBe(0);
+      expect(after.next_run_at).toBeGreaterThan(NOW);
+    }
+    const job = await readJob(d1, jobId);
+    expect(job.state).toBe("scheduled");
+    expect(job.attempts).toBe(0);
+  });
+
+  test("invariante: retryAtMs > now para todos los kinds, con el fallback de cada kind (tabla B2.3)", async () => {
+    const { d1, raw } = makeDb();
+    seedClip(raw);
+    const jobId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "scheduled", created_at: NOW, updated_at: NOW });
+    const env = makeEnv(d1);
+    const rng = () => 0;
+    const job = await readJob(d1, jobId);
+    // min90 sin subida previa → ahora + azar(90–180) = ahora + 90 min.
+    expect(await retryAtForGateBlock(env, job, MIN90_REASON, NOW, rng)).toBe(NOW + 90 * MIN);
+    // spacing sin subida previa → ahora + piso de Ajustes (5 min).
+    expect(await retryAtForGateBlock(env, job, "espaciamiento: menos de 5 min desde la última subida en esta plataforma", NOW, rng)).toBe(NOW + 5 * MIN);
+    // cross15 sin subida del clip en otra plataforma → ahora + 15 min.
+    expect(await retryAtForGateBlock(env, job, "mismo clip en otra plataforma hace 0 min: mínimo 15 min entre plataformas", NOW, rng)).toBe(NOW + 15 * MIN);
+    // rolling sin subida previa → ahora + 60 min.
+    expect(await retryAtForGateBlock(env, job, "tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)", NOW, rng)).toBe(NOW + 60 * MIN);
+    // tomorrow sin subida previa → mañana 00:00 Chile (siempre futuro).
+    const tomorrow = await retryAtForGateBlock(env, job, "tope diario alcanzado: 3/3 en tiktok", NOW, rng);
+    expect(tomorrow).toBeGreaterThan(NOW);
+    expect(santiagoDayKeyOf(tomorrow)).not.toBe(santiagoDayKeyOf(NOW));
+    // backoff → ahora + 1 min (escalera, 0 usados).
+    expect(await retryAtForGateBlock(env, job, "reserva de cupo perdida: el job cambió de manos antes de publicar", NOW, rng)).toBe(NOW + 1 * MIN);
+  });
+
+  test("sin regresión: backoff consume y al 4.º va a draft; atascado en processing consume 1 intento", async () => {
+    const { d1, raw } = makeDb();
+    seedClip(raw);
+    const env = makeEnv(d1);
+    // backoff: 3 reintentos consumen (attempts 1, 2, 3) y el 4.º va a draft.
+    const jobId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "scheduled", attempts: 0, created_at: NOW - 60 * MIN, updated_at: NOW });
+    for (let i = 0; i < 3; i++) {
+      const job = await readJob(d1, jobId);
+      const r: PublishResult = { mode: "retry", reason: "reserva de cupo perdida: el job cambió de manos antes de publicar", retryAtMs: NOW + (i + 1) * MIN };
+      await applyPublishResult(env, d1, job, r);
+      const after = await readJob(d1, jobId);
+      expect(after.state).toBe("scheduled");
+      expect(after.attempts).toBe(i + 1);
+    }
+    const job3 = await readJob(d1, jobId);
+    const r4: PublishResult = { mode: "retry", reason: "reserva de cupo perdida: el job cambió de manos antes de publicar", retryAtMs: NOW + 10 * MIN };
+    await applyPublishResult(env, d1, job3, r4);
+    const drafted = await readJob(d1, jobId);
+    expect(drafted.state).toBe("draft");
+    expect(String(drafted.last_error ?? "")).toContain("tope de reintentos por hoy agotado por fallos previos");
+    // Atascado: processing >30 min consume 1 intento y vuelve a scheduled.
+    const stallId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "processing", attempts: 0, created_at: NOW - 60 * MIN, updated_at: NOW - 31 * MIN });
+    await detectStalledJobs(d1, "sebastian", env);
+    const stalled = await readJob(d1, stallId);
+    expect(stalled.state).toBe("scheduled");
+    expect(stalled.attempts).toBe(1);
+    expect(stalled.next_run_at).toBeGreaterThan(NOW);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2.5 (spec 2026-11-27): un job bloqueado por una espera con
+// created_at >24 h deja UN evento en el Worker por job y día.
+// ---------------------------------------------------------------------------
+describe("B2.5: evento de espera larga, una vez por job y día", () => {
+  const MIN90_REASON = "menos de 90 min desde la última subida en esta plataforma";
+
+  function longWaitEvents(raw: Database): Array<{ message: string }> {
+    return raw.query("SELECT message FROM worker_events WHERE kind = 'auto_publish' AND message LIKE 'espera larga: job #%'").all() as Array<{ message: string }>;
+  }
+
+  test("job con created_at >24 h que espera → 1 evento; el 2.º reintento el mismo día no repite", async () => {
+    const { d1, raw } = makeDb();
+    seedClip(raw);
+    const env = makeEnv(d1);
+    const jobId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "scheduled", attempts: 0, created_at: NOW - 25 * 3600_000, updated_at: NOW });
+    const r: PublishResult = { mode: "retry", reason: MIN90_REASON, retryAtMs: NOW + 90 * MIN };
+    await applyPublishResult(env, d1, await readJob(d1, jobId), r);
+    const r2: PublishResult = { mode: "retry", reason: MIN90_REASON, retryAtMs: NOW + 100 * MIN };
+    await applyPublishResult(env, d1, await readJob(d1, jobId), r2);
+    const events = longWaitEvents(raw);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.message).toContain(`espera larga: job #${jobId} lleva >24 h esperando por ${MIN90_REASON}`);
+  });
+
+  test("job con created_at <24 h que espera → sin evento de espera larga", async () => {
+    const { d1, raw } = makeDb();
+    seedClip(raw);
+    const env = makeEnv(d1);
+    const jobId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "scheduled", attempts: 0, created_at: NOW - 60 * MIN, updated_at: NOW });
+    const r: PublishResult = { mode: "retry", reason: MIN90_REASON, retryAtMs: NOW + 90 * MIN };
+    await applyPublishResult(env, d1, await readJob(d1, jobId), r);
+    expect(longWaitEvents(raw)).toHaveLength(0);
+  });
+
+  test("un evento de espera larga ya dejado hoy (otro motivo) no se repite aunque cambie el motivo", async () => {
+    const { d1, raw } = makeDb();
+    seedClip(raw);
+    const env = makeEnv(d1);
+    const jobId = insertJob(raw, { clip_id: 1, platform: "tiktok", state: "scheduled", attempts: 0, created_at: NOW - 25 * 3600_000, updated_at: NOW });
+    // Evento previo hoy, hace 2 h, con otro motivo (el dedupe del
+    // log es por mensaje exacto, así que no lo suprimiría: es el
+    // dedupe por job/día de B2.5 el que debe frenarlo).
+    raw.query("INSERT INTO worker_events (tenant_id, at, kind, message) VALUES ('sebastian', ?, 'auto_publish', ?)").run(
+      NOW - 2 * 3600_000,
+      `espera larga: job #${jobId} lleva >24 h esperando por tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)`,
+    );
+    const r: PublishResult = { mode: "retry", reason: MIN90_REASON, retryAtMs: NOW + 90 * MIN };
+    await applyPublishResult(env, d1, await readJob(d1, jobId), r);
+    expect(longWaitEvents(raw)).toHaveLength(1);
   });
 });

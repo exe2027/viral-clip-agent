@@ -36,6 +36,11 @@ const TRANSIENT: Case[] = [
   // Tope rolling 24 h.
   { reason: "tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)", transient: true, retry: "rolling" },
   { reason: "tope rolling 24 h alcanzado: 6/6 en youtube_shorts (últimas 24 h)", transient: true, retry: "rolling" },
+  // B3 (spec 2026-11-27): el conteo proyectado puede superar el
+  // tope (posted + programados): el literal es el mismo y el regex
+  // debe casarlo igual.
+  { reason: "tope rolling 24 h alcanzado: 4/3 en tiktok (últimas 24 h)", transient: true, retry: "rolling" },
+  { reason: "tope rolling 24 h alcanzado: 5/3 en facebook_reels (últimas 24 h)", transient: true, retry: "rolling" },
   // Tope diario / plan cubierto / calentamiento / día libre.
   { reason: "tope diario alcanzado: 3/3 en tiktok", transient: true, retry: "tomorrow" },
   { reason: "plan del día cubierto: 1/1 en tiktok (techo 3)", transient: true, retry: "tomorrow" },

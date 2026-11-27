@@ -448,19 +448,21 @@ export function classifyGateBlock(reason: string): { transient: boolean; retry: 
 }
 
 /** Calcula el `next_run_at` al que reprogramar un job frenado por
- *  un motivo transitorio (F2). Re-consulta lo que necesita (la
- *  función recibe `env`+`job`, no depende de que el re-chequeo le
- *  pase los contadores — el re-chequeo los descarta tras llamar a
- *  `publishGate`). Solo lee subidas `posted` reales, NUNCA reservas
- *  de cupo: `lastPublishedAtMs` del re-chequeo está contaminado por
- *  `max(lastPosted, slot.updated_at)` y una reserva que nunca
- *  publicó no es una subida. Fallbacks si no se puede calcular:
- *  `tomorrow` sin última subida es mañana 00:00 Chile; las de
- *  contador (`spacing`, `cross15`, `rolling`, `min90`) caen a
- *  `now + nextRetryDelayMs(retriesUsedToday)`. `rng` es el
- *  generador de azar (Math.random() por defecto; los tests pasan
- *  uno falso para probar determinísticamente). */
-export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string, now: number, rng: () => number = Math.random): Promise<number> {
+ *  un motivo transitorio (F2). El reloj es el MISMO que el del
+ *  gate (B2.1): `lastPublishedAtMs` es la marca que el gate ya
+ *  calculó — `max(última subida real, reserva de cupo)` — y la
+ *  pasa el re-chequeo; sin ese parámetro (reserva que nunca se
+ *  hizo, o llamador viejo) se re-consulta la última subida real
+ *  `posted`. `cross15` usa su propio reloj (mismo clip, otra
+ *  plataforma). Invariante (B2.3): el resultado es siempre > now;
+ *  si el cálculo primario cae en el pasado o no hay desde qué
+ *  contar, se usa el fallback de cada kind (min90 → now +
+ *  azar(90–180); spacing → now + piso de Ajustes; cross15 → now +
+ *  15 min; rolling → now + 60 min; tomorrow → próximo 00:00
+ *  Chile; backoff → now + escalera). `rng` es el generador de
+ *  azar (Math.random() por defecto; los tests pasan uno falso
+ *  para probar determinísticamente). */
+export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string, now: number, rng: () => number = Math.random, lastPublishedAtMs?: number | null): Promise<number> {
   const { retry } = classifyGateBlock(reason);
   const db = env.DB;
   const platform = job.platform;
@@ -472,6 +474,22 @@ export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string
     language = clip ? clipLanguage(clip) : "es";
   }
   language ??= "es";
+  // Ajustes (una sola lectura, para los fallbacks de spacing/cross15).
+  const settings = await getSettings(db, job.tenant_id).catch(() => ({} as Record<string, unknown>));
+  const eff = effectiveSettings(settings);
+  // Última subida real (solo si el re-chequeo no pasó su marca).
+  const lastRealPosted = async (): Promise<number | null> => {
+    const row = await db.prepare(
+      "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted'",
+    )
+      .bind(job.tenant_id, platform, language)
+      .first<{ last_at: number | null }>()
+      .catch(() => null);
+    return row?.last_at ?? null;
+  };
+  // Base del piso 90 min / espaciamiento: la marca del gate si
+  // viene, si no la última subida real.
+  const floorBase = async (): Promise<number | null> => lastPublishedAtMs ?? (await lastRealPosted());
   const backoffFallback = async (): Promise<number> => {
     let used = 0;
     try {
@@ -484,52 +502,42 @@ export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string
     }
     return now + (nextRetryDelayMs(used) ?? 60_000);
   };
+  // Invariante B2.3: el resultado es siempre futuro; si el
+  // cálculo primario cae en el pasado (o no hay desde qué
+  // contar), el fallback de cada kind.
+  const futureOr = (primary: number | null, fallback: () => number): number => {
+    if (primary !== null && primary > now) return primary;
+    return fallback();
+  };
   switch (retry) {
     case "spacing": {
-      const lastPosted = await db.prepare(
-        "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted'",
-      )
-        .bind(job.tenant_id, platform, language)
-        .first<{ last_at: number | null }>()
-        .catch(() => null);
-      if (!lastPosted?.last_at) return backoffFallback();
+      const base = await floorBase();
       // Solo queda el piso de 5 min ("menos de {min} min"): el
       // motivo de horas murió con el espaciamiento fijo (SPEC
       // quitar-franjas v2). Sin número en el motivo, el piso de
       // Ajustes.
-      const settings = await getSettings(db, job.tenant_id).catch(() => ({} as Record<string, unknown>));
-      const eff = effectiveSettings(settings);
       const mMatch = /^espaciamiento: menos de (\d+) min /.exec(reason);
       const spacingMs = mMatch ? Number(mMatch[1]) * 60 * 1000 : eff.min_spacing_minutes * 60 * 1000;
-      return lastPosted.last_at + spacingMs;
+      return futureOr(base === null ? null : base + spacingMs, () => now + eff.min_spacing_minutes * 60 * 1000);
     }
     case "min90": {
       // Piso 90 min o motivo viejo de franja (transitorio una
-      // versión): última subida real + azar(90–180 min). Sin
-      // subida previa, backoff (no hay desde qué contar).
-      const lastPosted = await db.prepare(
-        "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted'",
-      )
-        .bind(job.tenant_id, platform, language)
-        .first<{ last_at: number | null }>()
-        .catch(() => null);
-      if (!lastPosted?.last_at) return backoffFallback();
-      return lastPosted.last_at + randomPublishDelayMs(rng);
+      // versión): la marca del gate + azar(90–180 min). Sin
+      // marca ni subida previa, el fallback (now + azar).
+      const base = await floorBase();
+      return futureOr(base === null ? null : base + randomPublishDelayMs(rng), () => now + randomPublishDelayMs(rng));
     }
     case "cross15": {
-      if (!job.clip_id) return backoffFallback();
+      if (!job.clip_id) return now + eff.cross_platform_spacing_minutes * 60 * 1000;
       const lastOther = await db.prepare(
         "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND clip_id = ? AND platform <> ? AND state IN ('posted','processing')",
       )
         .bind(job.tenant_id, job.clip_id, platform)
         .first<{ last_at: number | null }>()
         .catch(() => null);
-      if (!lastOther?.last_at) return backoffFallback();
-      const settings = await getSettings(db, job.tenant_id).catch(() => ({} as Record<string, unknown>));
-      const eff = effectiveSettings(settings);
       const crossMatch = /mínimo (\d+) min entre plataformas/.exec(reason);
       const crossMin = crossMatch ? Number(crossMatch[1]) : eff.cross_platform_spacing_minutes;
-      return lastOther.last_at + crossMin * 60 * 1000;
+      return futureOr(lastOther?.last_at == null ? null : lastOther.last_at + crossMin * 60 * 1000, () => now + eff.cross_platform_spacing_minutes * 60 * 1000);
     }
     case "tomorrow": {
       // "Mañana" sin horario por plataforma (SPEC quitar-franjas
@@ -537,15 +545,11 @@ export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string
       // subida + azar(90–180) — el piso de 90 min también vale
       // para el día siguiente.
       const tomorrow = santiagoDayKeyMs(now + 24 * 3600 * 1000);
-      const base = santiagoWallToUtcMs(tomorrow, "00:00");
-      const lastPosted = await db.prepare(
-        "SELECT MAX(updated_at) AS last_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted'",
-      )
-        .bind(job.tenant_id, platform, language)
-        .first<{ last_at: number | null }>()
-        .catch(() => null);
-      if (!lastPosted?.last_at) return base;
-      return Math.max(base, lastPosted.last_at + randomPublishDelayMs(rng));
+      let base = santiagoWallToUtcMs(tomorrow, "00:00");
+      const lastPosted = await lastRealPosted();
+      if (lastPosted !== null) base = Math.max(base, lastPosted + randomPublishDelayMs(rng));
+      if (base <= now) base += 24 * 3600 * 1000;
+      return base;
     }
     case "rolling": {
       const oldest = await db.prepare(
@@ -554,8 +558,7 @@ export async function retryAtForGateBlock(env: Env, job: GateJob, reason: string
         .bind(job.tenant_id, platform, language, now - 24 * 3600 * 1000)
         .first<{ oldest_at: number | null }>()
         .catch(() => null);
-      if (!oldest?.oldest_at) return backoffFallback();
-      return oldest.oldest_at + 24 * 3600 * 1000;
+      return futureOr(oldest?.oldest_at == null ? null : oldest.oldest_at + 24 * 3600 * 1000, () => now + 60 * 60 * 1000);
     }
     case "backoff":
     default: {
@@ -615,11 +618,21 @@ export interface GateJob {
  *  null si pasa, o el motivo si frena (el job va a draft, no se
  *  publica). El gate de enqueue queda solo como aviso temprano:
  *  nunca más decide solo. Las reglas de publishGate no cambian. */
-export async function recheckPublishGate(env: Env, job: GateJob): Promise<string | null> {
-  if (job.kind !== "publish" || !job.platform) return null;
+/** Resultado del re-chequeo en ejecución (B2.1): el motivo si
+ *  frena (null si pasa) y la marca que el gate usó como última
+ *  subida — `max(última subida real, reserva de cupo)` — para
+ *  que `retryAtForGateBlock` use el MISMO reloj y no reprograme
+ *  en el pasado. */
+export interface RecheckResult {
+  reason: string | null;
+  lastPublishedAtMs: number | null;
+}
+
+export async function recheckPublishGate(env: Env, job: GateJob): Promise<RecheckResult> {
+  if (job.kind !== "publish" || !job.platform) return { reason: null, lastPublishedAtMs: null };
   const db = env.DB;
   const clip = job.clip_id ? await getClip(db, job.clip_id, job.tenant_id) : null;
-  if (!clip) return "clip no encontrado";
+  if (!clip) return { reason: "clip no encontrado", lastPublishedAtMs: null };
   // CHEQUEO DE INFLUENCER ACTIVO (spec 2026-11-24, §3.5): en
   // producción no había ningún chequeo de influencer activo al
   // publicar — desactivar una entrada NO frenaba lo ya encolado.
@@ -637,7 +650,7 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
     const inf = await getInfluencer(db, clip.influencer_id, job.tenant_id).catch(() => null);
     if (inf) {
       streamerAllowed = inf.permission === 1 && inf.active === 1;
-      if (!streamerAllowed) return "streamer desactivado en el panel";
+      if (!streamerAllowed) return { reason: "streamer desactivado en el panel", lastPublishedAtMs: null };
     }
   } else {
     await logWorkerEvent(
@@ -729,12 +742,13 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
   // menos de 90 min entre sí.
   const pausedUntilMs = acc ? accountPausedUntilMs(settings, acc.id) : null;
   const restDay = acc ? isRestDayEffective(`acc-${acc.id}`, now, settings, acc.id) : false;
-  return publishGate(job.platform, {
-    clip,
-    seoScore: seo.score,
-    seoOverride: seo.override,
-    publishedToday,
-    lastPublishedAtMs,
+  return {
+    reason: publishGate(job.platform, {
+      clip,
+      seoScore: seo.score,
+      seoOverride: seo.override,
+      publishedToday,
+      lastPublishedAtMs,
     streamerAllowed, // el permiso se verifica arriba, contra la fila del influencer del clip
     settings,
     accountDailyLimit: mat?.effective_daily_limit ?? null,
@@ -755,7 +769,9 @@ export async function recheckPublishGate(env: Env, job: GateJob): Promise<string
     // la orden 09:25 (SIN AMONTONAR) el re-chequeo aplica tope,
     // piso 90 min y rolling también a manuales.
     manual: job.manual === 1,
-  });
+    }),
+    lastPublishedAtMs,
+  };
 }
 
 // ---------------------------------------------------------------------------

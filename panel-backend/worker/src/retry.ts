@@ -14,7 +14,9 @@
 //   - Backoff y tope por job/día: se derivan de la fila del job
 //     (attempts + updated_at, leídos) — ver retriesToday().
 //   - Auto-enqueue: memoria del Worker + siembra por lectura de
-//     clip_events (MAX(at)) — ver jobs.ts.
+//     `auto_enqueue_attempts` (migración 0045, ver jobs.ts:
+//     `seedAutoEnqueueStateFromReads` lee el intento persistido,
+//     no `clip_events`).
 //   - Circuito 7500: memoria del Worker (tripQuotaBreaker) +
 //     lectura de jobs.last_error / worker_events (hasRecentQuotaError).
 //
@@ -22,9 +24,13 @@
 // pierde. El freno se reconstruye por lectura en el siguiente ciclo:
 //   - jobs: attempts + updated_at siguen en D1 (las filas se leyeron,
 //     no se escribieron), así que el tope por día sigue vigente.
-//   - auto-enqueue: la siembra por lectura asume 1 intento ya hecho
-//     hoy si hay un evento de intento hoy (conservador: el clip
-//     espera el backoff del 2.º intento antes de reintentarse).
+//   - auto-enqueue: la siembra por lectura lee el intento
+//     persistido en `auto_enqueue_attempts` (migración 0045): si
+//     hay una fila de hoy, el estado se reconstruye con sus
+//     intentos reales (no se asume 1 desde los eventos); si no la
+//     hay, el clip parte de 0. Al publicar, la fila se BORRA
+//     (`clearAutoEnqueueAttemptPersisted`), así que un éxito no
+//     resucita intentos viejos.
 //   - circuito 7500: la lectura de last_error/worker_events lo
 //     re-dispara si hay un 7500 reciente (< 1 h); si no hay rastro
 //     legible (el propio 7500 impidió registrarlo), el primer

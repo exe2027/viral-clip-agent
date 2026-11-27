@@ -44,6 +44,7 @@ import {
   logWorkerEvent,
   maturityOut,
   parsePlatforms,
+  platformMax,
   queueClipCompare,
   randomPublishDelayMs,
   MAX_PUBLISH_SPACING_MS,
@@ -59,6 +60,7 @@ import {
   updateClipPublishStates,
   withAccountPause,
   type ClipRow,
+  type EffectiveSettings,
   type PanelPlatform,
   type PlatformPublishEntry,
 } from "./db";
@@ -104,13 +106,14 @@ import { cycleGate, idleCycleGate, markCycleReview, type CycleGateDecision } fro
 // gate.ts desde 2026-11-18 (hallazgo M1) para que el dispatch
 // pueda re-chequear sin importación circular. Se re-exportan para
 // que index.ts y los tests sigan importando desde aquí.
-import { classifyGateBlock, recheckPublishGate, releasePublishSlot, santiagoDayKey, publishGate, rateLimitGate, seoForPlatform } from "./gate";
+import { classifyGateBlock, effectiveDailyPlan, recheckPublishGate, releasePublishSlot, santiagoDayKey, publishGate, rateLimitGate, seoForPlatform } from "./gate";
 export { classifyGateBlock, publishGate, rateLimitGate, santiagoDayKey, seoForPlatform, type GateContext } from "./gate";
 // Puerta de calidad B4 (2026-11-20): los umbrales y el veredicto
 // viven en quality-gate.ts (única fuente); aquí solo se aplica.
 import {
   QUALITY_ALERT_MIN_SAMPLE,
   QUALITY_DISCARD_ALERT_PCT,
+  qualityGateForClip,
 } from "./quality-gate";
 
 export type JobKind = "vod_check" | "cut" | "subtitle" | "package" | "publish" | "metrics";
@@ -699,6 +702,179 @@ export interface EnqueuePublishResult {
   scheduledForMs?: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Proyección rolling (B3), tope diario proyectado (B3.6) y ancla de
+// 24 h (D2) — spec 2026-11-27. Un job no nace para rebotar en
+// ejecución: el planificador proyecta lo que habrá publicado o
+// programado cuando llegue su hora, y si no cabe, no se crea.
+// ---------------------------------------------------------------------------
+
+/** Tope rolling 24 h vigente para una plataforma (mismo cálculo
+ *  que el gate: YouTube usa su propio tope). */
+function rollingMaxFor(platform: PanelPlatform, eff: EffectiveSettings): number {
+  return platform === "youtube_shorts"
+    ? (eff.rolling_24h_max_youtube ?? eff.rolling_24h_max)
+    : eff.rolling_24h_max;
+}
+
+/** Ventana rolling proyectada en un instante C: publicados con
+ *  `updated_at` en (C-24 h, C] + programados/en curso con
+ *  `next_run_at` en (C-24 h, C]. Un `next_run_at` NULL es "para
+ *  ahora": cuenta (si `now` cae en la ventana) y su instante es
+ *  `now`. Devuelve el conteo, su desglose y el instante más viejo
+ *  de la ventana (V), para empujar a V+24 h. */
+async function projectedRolling(
+  db: D1Database,
+  tenant: Tenant,
+  platform: PanelPlatform,
+  language: string,
+  candidate: number,
+  now: number,
+): Promise<{ count: number; posted: number; scheduled: number; oldest: number | null }> {
+  const from = candidate - 24 * 3600 * 1000;
+  const posted = await db.prepare(
+    "SELECT COUNT(*) AS n, MIN(updated_at) AS oldest_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ? AND updated_at <= ?",
+  )
+    .bind(tenant, platform, language, from, candidate)
+    .first<{ n: number; oldest_at: number | null }>()
+    .catch(() => null);
+  const sched = await db.prepare(
+    "SELECT COUNT(*) AS n, MIN(next_run_at) AS oldest_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at > ? AND next_run_at <= ?",
+  )
+    .bind(tenant, platform, language, from, candidate)
+    .first<{ n: number; oldest_at: number | null }>()
+    .catch(() => null);
+  const nullSched = await db.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at IS NULL",
+  )
+    .bind(tenant, platform, language)
+    .first<{ n: number }>()
+    .catch(() => null);
+  // Un NULL es "para ahora": solo cuenta si `now` cae en la
+  // ventana (el job publicará en el próximo ciclo, ~now).
+  const nullCounts = (nullSched?.n ?? 0) > 0 && candidate - now < 24 * 3600 * 1000;
+  const postedN = posted?.n ?? 0;
+  const schedN = (sched?.n ?? 0) + (nullCounts ? (nullSched?.n ?? 0) : 0);
+  const instants = [posted?.oldest_at ?? null, sched?.oldest_at ?? null, nullCounts ? now : null]
+    .filter((v): v is number => v !== null);
+  return { count: postedN + schedN, posted: postedN, scheduled: schedN, oldest: instants.length > 0 ? Math.min(...instants) : null };
+}
+
+/** Proyección B3 (spec 2026-11-27): empuja el candidato a V+24 h
+ *  (V = instante más viejo de la ventana proyectada) mientras la
+ *  ventana siga llena, máx 3 empujes. Un candidato empujado fuera
+ *  del día actual de Santiago no se crea (no-derrame): el
+ *  candidato INICIAL sí puede caer pasada la medianoche. Si no
+ *  cabe, devuelve el motivo de bloqueo con el literal exacto del
+ *  gate (el conteo es el de la evaluación que frenó la
+ *  colocación: pre-empuje en el no-derrame, P(C') tras 3
+ *  empujes). Si cabe, `projected` es P(C') para el gate. */
+async function projectRollingCandidate(
+  db: D1Database,
+  tenant: Tenant,
+  platform: PanelPlatform,
+  language: string,
+  candidate: number,
+  rollingMax: number,
+  now: number,
+): Promise<{ candidate: number; blocked: string | null; projected: number; posted: number; scheduled: number }> {
+  const todayKey = santiagoDayKeyMs(now);
+  let c = candidate;
+  for (let push = 0; push < 3; push++) {
+    const w = await projectedRolling(db, tenant, platform, language, c, now);
+    if (w.count < rollingMax) return { candidate: c, blocked: null, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+    // Ventana llena: empujar a V+24 h. Sin V el conteo no puede
+    // bajar solo con el tiempo: no se crea.
+    if (w.oldest === null) {
+      return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+    }
+    const next = w.oldest + 24 * 3600 * 1000;
+    if (santiagoDayKeyMs(next) !== todayKey) {
+      // No-derrame: el empuje sacó el candidato del día actual;
+      // el conteo que frena es el de ANTES del empuje.
+      return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+    }
+    c = next;
+  }
+  // Tras 3 empujes, una última evaluación en C'.
+  const w = await projectedRolling(db, tenant, platform, language, c, now);
+  if (w.count < rollingMax) return { candidate: c, blocked: null, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+  return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+}
+
+/** Tope diario proyectado B3.6 (spec 2026-11-27): publicados de
+ *  hoy (posted_day = día del candidato) + programados/en curso
+ *  con next_run_at en (now, C']. Si llega al techo o al plan, no
+ *  se crea el job, con el literal exacto del gate (techo antes
+ *  que plan, como el gate). */
+async function projectedDailyBlock(
+  db: D1Database,
+  tenant: Tenant,
+  platform: PanelPlatform,
+  language: string,
+  candidate: number,
+  now: number,
+  max: number,
+  plan: number,
+): Promise<string | null> {
+  const dayKey = santiagoDayKeyMs(candidate);
+  const posted = await db.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND posted_day = ?",
+  )
+    .bind(tenant, platform, language, dayKey)
+    .first<{ n: number }>()
+    .catch(() => null);
+  const sched = await db.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at > ? AND next_run_at <= ?",
+  )
+    .bind(tenant, platform, language, now, candidate)
+    .first<{ n: number }>()
+    .catch(() => null);
+  const projected = (posted?.n ?? 0) + (sched?.n ?? 0);
+  if (projected >= max) return `tope diario alcanzado: ${projected}/${max} en ${platform}`;
+  if (projected >= plan) return `plan del día cubierto: ${projected}/${plan} en ${platform} (techo ${max})`;
+  return null;
+}
+
+/** Ancla D2 (orden del usuario 2026-11-27 06:43, ventana 24 h):
+ *  el primer job del día del tenant se ancla a ~00:00 (inicio del
+ *  día + azar 0–30 min), no deriva con el retardo 90–180 min desde
+ *  la última subida de ayer. Solo rama automática (no manual ni
+ *  programado). Si el día del candidato ya tiene algún job
+ *  (publicado o programado, cualquier plataforma), no hay ancla.
+ *  El ancla respeta el piso de 90 min desde la última subida y
+ *  nunca cae en el pasado. */
+async function anchorFirstJobOfDay(
+  db: D1Database,
+  tenant: Tenant,
+  candidate: number,
+  lastPostedAtMs: number | null,
+  now: number,
+  rng: () => number,
+): Promise<number> {
+  const dayKey = santiagoDayKeyMs(candidate);
+  const dayStart = santiagoWallToUtcMs(dayKey, "00:00");
+  const dayEnd = dayStart + 24 * 3600 * 1000;
+  const postedToday = await db.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND state = 'posted' AND posted_day = ?",
+  )
+    .bind(tenant, dayKey)
+    .first<{ n: number }>()
+    .catch(() => null);
+  if ((postedToday?.n ?? 0) > 0) return candidate;
+  const schedToday = await db.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND state IN ('scheduled','processing') AND next_run_at >= ? AND next_run_at < ?",
+  )
+    .bind(tenant, dayStart, dayEnd)
+    .first<{ n: number }>()
+    .catch(() => null);
+  if ((schedToday?.n ?? 0) > 0) return candidate;
+  const jitter = Math.floor(rng() * 30) * 60 * 1000;
+  let anchored = dayStart + jitter;
+  if (lastPostedAtMs !== null) anchored = Math.max(anchored, lastPostedAtMs + MIN_PUBLISH_SPACING_MS);
+  anchored = Math.max(anchored, now);
+  return anchored;
+}
 export async function tryEnqueueClipPublish(
   env: Env,
   tenant: Tenant,
@@ -840,6 +1016,12 @@ export async function tryEnqueueClipPublish(
     refDayKey = santiagoDayKeyMs(refMs);
   }
   // Gates por plataforma: la que frena queda pendiente con motivo.
+  // ORDEN (spec 2026-11-27, B3 + D2): primero el candidato C
+  // (con ancla D2 si es el primer job del día), luego la
+  // proyección rolling (B3) y el tope diario proyectado (B3.6), y
+  // SOLO entonces el gate, evaluado en refMs = C' con el conteo
+  // rolling proyectado. Así un job no nace para rebotar en
+  // ejecución: si no cabe, no se crea.
   const jobs: JobRow[] = [];
   const blocked: string[] = [];
   const warnings: string[] = [];
@@ -851,33 +1033,84 @@ export async function tryEnqueueClipPublish(
   // `blocked` por plataforma, con el motivo del gate.)
   for (const platform of targetPlatforms) {
     const seo = seoForPlatform(clip, platform);
-    // Topes POR plataforma+idioma (0019): solo cuentan las
-    // publicaciones de ESE DÍA en este idioma (jobs.language).
-    // Al programar a futuro, el día es el del instante
-    // programado, no hoy.
-    const publishedToday = await db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND posted_day = ?",
-      )
-      .bind(tenant, platform, clipLang, refDayKey)
-      .first<{ n: number }>();
-    // Espaciamiento POR plataforma+idioma (0019): la última
-    // subida en este idioma; sin publicaciones, sin freno.
+    const rng = opts.rng ?? Math.random;
+    // Última subida real (para el candidato y el ancla D2).
     const lastPosted = await db
       .prepare(
         "SELECT updated_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' ORDER BY updated_at DESC LIMIT 1",
       )
       .bind(tenant, platform, clipLang)
       .first<{ updated_at: number }>();
-    // Contadores nuevos (reglas 2026-11-19): rolling 24 h, mismo
-    // clip hoy en esta plataforma, mismo clip en otra plataforma.
-    // Al programar a futuro, el rolling se mide en las 24 h
-    // anteriores al instante programado.
-    const last24h = await db
+    const lastPostedAtMs = lastPosted?.updated_at ?? null;
+    // --- 1. Candidato C ---
+    let candidate: number;
+    if (effectiveScheduledForMs !== null && effectiveScheduledForMs > now) {
+      // Manual programado: el instante pedido (ya ajustado al
+      // piso de 90 min arriba).
+      candidate = effectiveScheduledForMs;
+    } else if (manual) {
+      // Manual inmediato: C = ahora (el job nace con
+      // next_run_at = null y corre en cuanto el ciclo lo toma).
+      candidate = now;
+    } else {
+      // Automático (SPEC quitar-franjas v2, opción A): última
+      // publicación + azar(90–180 min) de SU plataforma+idioma
+      // (nunca antes de ahora).
+      candidate = lastPostedAtMs !== null ? lastPostedAtMs + randomPublishDelayMs(rng) : now;
+      candidate = Math.max(candidate, now);
+      // D2: ancla del primer job del día a ~00:00.
+      candidate = await anchorFirstJobOfDay(db, tenant, candidate, lastPostedAtMs, now, rng);
+      // (1) Invariante del programador: no crear un job pendiente
+      // a menos de 90 min de otro pendiente de la misma
+      // plataforma+idioma.
+      const pending = await db.prepare(
+        "SELECT MAX(next_run_at) AS max_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'scheduled' AND next_run_at IS NOT NULL",
+      ).bind(tenant, platform, clipLang).first<{ max_at: number | null }>();
+      if (pending?.max_at) candidate = Math.max(candidate, pending.max_at + MIN_PUBLISH_SPACING_MS);
+      // (2) Escalonado entre plataformas del mismo clip en esta
+      // llamada: ≥15 min desde el último job creado aquí.
+      const lastCreatedAt = jobs.length > 0 ? jobs[jobs.length - 1]!.next_run_at : null;
+      if (lastCreatedAt) candidate = Math.max(candidate, lastCreatedAt + 15 * 60 * 1000);
+    }
+    // --- 2. Proyección rolling B3 ---
+    const proj = await projectRollingCandidate(db, tenant, platform, clipLang, candidate, rollingMaxFor(platform, eff), now);
+    if (proj.blocked) {
+      blocked.push(`${platform}: ${proj.blocked}`);
+      await logClipEvent(db, clip.id, "publicado", actor, `Publicación frenada en ${platform}: ${proj.blocked}. (proyectado: ${proj.posted} posted + ${proj.scheduled} programados)`, true, tenant);
+      if (opts.logToWorkerEvents) {
+        await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado en ${platform}: ${proj.blocked}. (proyectado: ${proj.posted} posted + ${proj.scheduled} programados)`, tenant);
+      }
+      continue;
+    }
+    candidate = proj.candidate;
+    // --- 3. Tope diario proyectado B3.6 ---
+    const accountDailyLimit = maturityByPlatform[platform]?.limit ?? null;
+    const accountDailyPlan = maturityByPlatform[platform]?.plan ?? null;
+    const maxBase = platformMax(eff, toApiPlatform(platform));
+    const max = accountDailyLimit !== null ? Math.min(accountDailyLimit, maxBase) : maxBase;
+    const plan = effectiveDailyPlan(platform, settings, accountDailyLimit, accountDailyPlan);
+    const dailyBlock = await projectedDailyBlock(db, tenant, platform, clipLang, candidate, now, max, plan);
+    if (dailyBlock) {
+      blocked.push(`${platform}: ${dailyBlock}`);
+      await logClipEvent(db, clip.id, "publicado", actor, `Publicación frenada en ${platform}: ${dailyBlock}.`, true, tenant);
+      if (opts.logToWorkerEvents) {
+        await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado en ${platform}: ${dailyBlock}.`, tenant);
+      }
+      continue;
+    }
+    // --- 4. Gate, evaluado en refMs = C' ---
+    // Al programar a futuro, el día es el del instante
+    // programado, no hoy; la key de idempotencia pertenece al día
+    // de la PUBLICACIÓN, no al del enqueue.
+    refMs = candidate;
+    refDayKey = santiagoDayKeyMs(candidate);
+    // Topes POR plataforma+idioma (0019): solo cuentan las
+    // publicaciones de ESE DÍA en este idioma (jobs.language).
+    const publishedToday = await db
       .prepare(
-        "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ?",
+        "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND posted_day = ?",
       )
-      .bind(tenant, platform, clipLang, refMs - 24 * 3600 * 1000)
+      .bind(tenant, platform, clipLang, refDayKey)
       .first<{ n: number }>();
     const clipToday = await db
       .prepare(
@@ -913,15 +1146,17 @@ export async function tryEnqueueClipPublish(
       seoScore: seo.score,
       seoOverride: seo.override,
       publishedToday: publishedToday?.n ?? 0,
-      lastPublishedAtMs: lastPosted?.updated_at ?? null,
+      lastPublishedAtMs: lastPostedAtMs,
       streamerAllowed: true, // el permiso se verifica en el puente con streamers.yaml
       settings,
-      accountDailyLimit: maturityByPlatform[platform]?.limit ?? null,
-      accountDailyPlan: maturityByPlatform[platform]?.plan ?? null,
+      accountDailyLimit,
+      accountDailyPlan,
       // Calentamiento (reglas 2026-11-19): si la cuenta no es
       // establecida, su tope de etapa frena TAMBIÉN a mano.
       warmupDailyLimit: mat && mat.stage !== "establecida" ? mat.plan : null,
-      publishedLast24h: last24h?.n ?? 0,
+      // Rolling PROYECTADO (B3): lo que habrá en la ventana
+      // cuando llegue C', no solo lo publicado hasta ahora.
+      publishedLast24h: proj.projected,
       clipPublishedTodayOnPlatform: (clipToday?.n ?? 0) > 0,
       clipPublishedEverOnPlatform: clipEver !== null,
       clipLastPublishedOnPlatformDay: clipEver?.posted_day ?? null,
@@ -950,6 +1185,7 @@ export async function tryEnqueueClipPublish(
       }
       continue;
     }
+    // --- 5. Crear el job ---
     const title = clip.seo_title || clip.title;
     const caption = clip.seo_description || clip.seo_title || clip.title;
     // La key del MP4 vive en el clip desde la 0016 (la guarda el
@@ -962,44 +1198,18 @@ export async function tryEnqueueClipPublish(
           .prepare("SELECT r2_key FROM jobs WHERE clip_id = ? AND tenant_id = ? AND r2_key IS NOT NULL LIMIT 1")
           .bind(clip.id, tenant)
           .first<{ r2_key: string }>();
-    // next_run_at (SPEC quitar-franjas v2, opción A, 2026-11-26):
-    // el job automático nace en última_publicación + azar(90–180
-    // min) de SU plataforma+idioma (nunca antes de ahora), así
-    // cada plataforma sube a su hora aunque el ciclo corra cada
-    // 5 min. Dos invariantes del programador: (1) ningún job
-    // pendiente de la misma plataforma+idioma con next_run_at a
-    // menos de 90 min de otro pendiente; (2) los jobs de este
-    // mismo clip creados en esta llamada se escalonan ≥15 min
-    // entre plataformas (reemplazo del escalonado F1.3, spec
-    // 2026-11-24, que era sobre nextPlatformHourMs). El manual
-    // inmediato nace con null (corre en cuanto el ciclo lo toma);
-    // el manual PROGRAMADO, con el instante pedido (ya ajustado
-    // al piso de 90 min arriba; el ciclo lo toma cuando llegue la
-    // hora, y el re-chequeo vuelve a aplicar todo al ejecutar).
-    // Solo se encola ESTA plataforma (la que pasó el gate):
-    // enqueuePublishJobs ya no re-encola todas las del clip.
+    // next_run_at: el candidato proyectado C'. El manual inmediato
+    // nace con null (corre en cuanto el ciclo lo toma); el manual
+    // PROGRAMADO, con el instante pedido (o su empuje por B3, si
+    // el tope rolling lo movió). Solo se encola ESTA plataforma
+    // (la que pasó el gate): enqueuePublishJobs ya no re-encola
+    // todas las del clip.
     let nextRunAt: number | null;
     if (effectiveScheduledForMs !== null && effectiveScheduledForMs > now) {
-      nextRunAt = effectiveScheduledForMs;
+      nextRunAt = candidate;
     } else if (manual) {
       nextRunAt = null;
     } else {
-      const rng = opts.rng ?? Math.random;
-      let candidate = lastPosted?.updated_at
-        ? lastPosted.updated_at + randomPublishDelayMs(rng)
-        : now;
-      candidate = Math.max(candidate, now);
-      // (1) Invariante del programador: no crear un job pendiente
-      // a menos de 90 min de otro pendiente de la misma
-      // plataforma+idioma.
-      const pending = await db.prepare(
-        "SELECT MAX(next_run_at) AS max_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'scheduled' AND next_run_at IS NOT NULL",
-      ).bind(tenant, platform, clipLang).first<{ max_at: number | null }>();
-      if (pending?.max_at) candidate = Math.max(candidate, pending.max_at + MIN_PUBLISH_SPACING_MS);
-      // (2) Escalonado entre plataformas del mismo clip en esta
-      // llamada: ≥15 min desde el último job creado aquí.
-      const lastCreatedAt = jobs.length > 0 ? jobs[jobs.length - 1]!.next_run_at : null;
-      if (lastCreatedAt) candidate = Math.max(candidate, lastCreatedAt + 15 * 60 * 1000);
       nextRunAt = candidate;
     }
     const blockedOut: string[] = [];
@@ -1287,6 +1497,11 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
     // y llama a tryEnqueueClipPublish con ese conjunto como
     // override. Devuelve true si encoló al menos un job.
     const attemptClip = async (clip: ClipRow, countEvaluated: boolean): Promise<boolean> => {
+      // B4.1 (spec 2026-11-27): un clip con veredicto rechazado
+      // FIRME no se evalúa: ni considered/evaluated, ni intento
+      // A4, ni evento de freno. El salto va ANTES de la siembra
+      // A4, del chequeo A4 y del cálculo de `need`.
+      if (qualityGateForClip(clip).hard === true) return false;
       const need = await platformsNeedingWork(env.DB, tenant, clip);
       if (need.length === 0) return false;
       // Freno A4 por clip (memoria + siembra por lectura): un clip
@@ -1441,6 +1656,10 @@ export async function autoEnqueueTopClips(env: Env, tenant: Tenant): Promise<Aut
       // la cota de no-derrame. Comparte los contadores del ciclo
       // y el freno A4.
       const attemptClipForChannel = async (clip: ClipRow, ch: FloorChannelState): Promise<boolean> => {
+        // B4.1 (spec 2026-11-27): como en attemptClip — un
+        // rechazado firme no se evalúa (ni `tried`, ni `need`, ni
+        // A4, ni evento).
+        if (qualityGateForClip(clip).hard === true) return false;
         if (ch.tried.has(clip.id)) return false;
         ch.tried.add(clip.id);
         let need = needCache.get(clip.id);
@@ -1698,8 +1917,8 @@ export async function sweepTransientDrafts(env: Env, tenant: Tenant, now: number
     // Tope de F2.5: si ya agotó sus 3 reintentos hoy, el barrido
     // no lo reviviría en bucle.
     if (retriesToday(job, today) >= MAX_RETRIES_PER_DAY) continue;
-    const gate = await recheckPublishGate(env, job).catch(() => "sweep: re-chequeo no disponible");
-    if (gate) continue;
+    const r = await recheckPublishGate(env, job).catch(() => ({ reason: "sweep: re-chequeo no disponible", lastPublishedAtMs: null }));
+    if (r.reason) continue;
     const clipId = job.clip_id ?? 0;
     const idx = staggerByClip.get(clipId) ?? 0;
     staggerByClip.set(clipId, idx + 1);
@@ -2173,7 +2392,24 @@ export async function runWorkerCycle(
   return { ran: true, processed, stalled: stalled.length, autoEnqueued: auto.enqueued, gate, retention };
 }
 
-async function applyPublishResult(env: Env, db: D1Database, job: JobRow, r: PublishResult): Promise<void> {
+/** B2.5 (spec 2026-11-27): un job que lleva >24 h esperando deja
+ *  UN evento `espera larga` por job y día. Best-effort: la lectura
+ *  previa evita repetirlo ese día aunque cambie el motivo (el
+ *  dedupe del log es por mensaje exacto, así que no bastaría); si
+ *  la lectura o la escritura fallan, el ciclo sigue igual. */
+async function logLongWaitOnce(db: D1Database, job: JobRow, reason: string, env: Env): Promise<void> {
+  const dayStart = santiagoDayStartMs(Date.now());
+  const prior = await db.prepare(
+    "SELECT id FROM worker_events WHERE tenant_id = ? AND kind = 'auto_publish' AND message LIKE ? AND at >= ? LIMIT 1",
+  )
+    .bind(job.tenant_id, `espera larga: job #${job.id} %`, dayStart)
+    .first<{ id: number }>()
+    .catch(() => null);
+  if (prior) return;
+  await logWorkerEvent(db, "auto_publish", `espera larga: job #${job.id} lleva >24 h esperando por ${reason}`, job.tenant_id);
+}
+
+export async function applyPublishResult(env: Env, db: D1Database, job: JobRow, r: PublishResult): Promise<void> {
   switch (r.mode) {
     case "posted":
       // El cupo se suelta ANTES de marcar posted: el publicado ya
@@ -2202,27 +2438,39 @@ async function applyPublishResult(env: Env, db: D1Database, job: JobRow, r: Publ
       // Freno TRANSITORIO en ejecución (F2, spec 2026-11-24): el
       // job no va a draft, se reprograma a `retryAtMs`. El cupo se
       // suelta ANTES de la transición (como el caso "draft") y se
-      // limpian run_token/slot_day (como markDraft). `attempts` se
-      // escribe con el valor absoluto correcto:
-      // `retriesToday(job, todayKey) + 1` — no `job.attempts + 1`:
-      // `attempts` arrastra el conteo de ayer y solo
-      // `retriesToday` resetea por día. Si ya se agotaron los 3
-      // reintentos de hoy, en vez de reprogramar va a markDraft
-      // (draft terminal, como hoy). El caso "draft" queda solo
-      // para frenos duros.
+      // limpian run_token/slot_day (como markDraft). Las ESPERAS
+      // (B2.2, spec 2026-11-27) NO consumen intentos — el job solo
+      // espera a que pase el tiempo (min90, spacing, cross15,
+      // rolling, tomorrow) — así un piso no quema los 3 reintentos
+      // en 15 min: `attempts` se escribe con `retriesToday(job,
+      // todayKey)` (sin +1). Solo los FALLOS reales (`backoff`,
+      // `null`) consumen: +1. La válvula a draft solo se abre para
+      // fallos reales: si ya se agotaron los 3 reintentos de hoy
+      // POR FALLOS, va a markDraft con el mensaje nuevo; una espera
+      // con los 3 fallos ya gastados se reprograma igual (el tiempo
+      // la resuelve, no un reintento). `attempts` arrastra el conteo
+      // de ayer y solo `retriesToday` resetea por día.
       await releasePublishSlot(db, job);
       const todayKey = santiagoDayKey();
-      if (retriesToday(job, todayKey) >= MAX_RETRIES_PER_DAY) {
-        await markDraft(db, job, `gate de publicación: ${r.reason} (tope de reintentos por hoy: ${MAX_RETRIES_PER_DAY}/día)`, env);
+      const { retry: blockKind } = classifyGateBlock(r.reason ?? "");
+      const isWait = blockKind !== null && blockKind !== "backoff";
+      if (!isWait && retriesToday(job, todayKey) >= MAX_RETRIES_PER_DAY) {
+        await markDraft(db, job, `gate de publicación: ${r.reason} (tope de reintentos por hoy agotado por fallos previos: ${MAX_RETRIES_PER_DAY}/día)`, env);
         break;
       }
       const changed = await fencedJobUpdate(
         db,
         job,
         "state = 'scheduled', next_run_at = ?, retryable = 1, last_error = ?, attempts = ?, updated_at = ?, run_token = ?, slot_day = ?",
-        [r.retryAtMs, `gate de publicación: ${r.reason}`, retriesToday(job, todayKey) + 1, nowMs(), null, null],
+        [r.retryAtMs, `gate de publicación: ${r.reason}`, isWait ? retriesToday(job, todayKey) : retriesToday(job, todayKey) + 1, nowMs(), null, null],
       );
       if (!changed) break;
+      // B2.5: espera larga — el job lleva >24 h esperando (creado
+      // hace más de un día y aún sin publicar): un evento, una vez
+      // por job y día, para que el usuario lo vea en Tracking.
+      if (isWait && job.created_at && nowMs() - job.created_at > 24 * 3600 * 1000) {
+        await logLongWaitOnce(db, job, r.reason ?? "", env).catch(() => {});
+      }
       // Sin notify: un reintento transitorio es rutinario (como
       // markFailed); el motivo queda en last_error y el job en
       // scheduled con su próximo intento.

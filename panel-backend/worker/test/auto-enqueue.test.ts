@@ -17,9 +17,10 @@ import {
   resetFloorEventLogForTests,
   resetQualityAlertStateForTests,
   runWorkerCycle,
+  tryEnqueueClipPublish,
 } from "../src/jobs";
 import { autoEnqueueAllowed } from "../src/retry";
-import { santiagoWeekKey } from "../src/db";
+import { santiagoWallToUtcMs, santiagoWeekKey, type ClipRow } from "../src/db";
 
 const SECRET = Buffer.from("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").toString("base64"); // SOLO TEST
 const KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64"); // 32 bytes, SOLO TEST
@@ -65,8 +66,8 @@ function parseWhere(where: string, params: unknown[]): (r: Row) => boolean {
     const eqLit = /^(\w+)\s*=\s*'([^']*)'$/.exec(c);
     const isNotNull = /^(\w+)\s+IS\s+NOT\s+NULL$/i.exec(c);
     const nextRunOr = /^\(?(\w+)\s+IS\s+NULL\s+OR\s+\1\s*<=\s*\?\)?$/i.exec(c);
-    const lt = /^(\w+)\s*<=?\s*\?$/.exec(c);
-    const gt = /^(\w+)\s*>=?\s*\?$/.exec(c);
+    const lt = /^(\w+)\s*(<=?)\s*\?$/.exec(c);
+    const gt = /^(\w+)\s*(>=?)\s*\?$/.exec(c);
     const eqNum = /^(\w+)\s*=\s*(\d+)$/.exec(c);
     const inList = /^(\w+)\s+IN\s*\(([^)]+)\)$/i.exec(c);
     if (eq) {
@@ -75,12 +76,14 @@ function parseWhere(where: string, params: unknown[]): (r: Row) => boolean {
       tests.push((r) => r[col] === val);
     } else if (lt) {
       const col = lt[1] as string;
+      const op = (lt as RegExpExecArray)[2] as string;
       const val = params[pi++];
-      tests.push((r) => (r[col] as number) < (val as number));
+      tests.push((r) => (op === "<=" ? (r[col] as number) <= (val as number) : (r[col] as number) < (val as number)));
     } else if (gt) {
       const col = gt[1] as string;
+      const op = (gt as RegExpExecArray)[2] as string;
       const val = params[pi++];
-      tests.push((r) => (r[col] as number) > (val as number));
+      tests.push((r) => (op === ">=" ? (r[col] as number) >= (val as number) : (r[col] as number) > (val as number)));
     } else if (neq) {
       const col = neq[1] as string;
       const val = params[pi++];
@@ -207,6 +210,16 @@ class FakeD1 {
     if (cols === "*") return rows;
     const countMatch = /^COUNT\(\*\) AS (\w+)$/i.exec(cols);
     if (countMatch) return [{ [countMatch[1] as string]: rows.length }];
+    // Agregado combinado COUNT(*) + MIN/MAX (proyección B3, spec
+    // 2026-11-27): un solo viaje para el conteo y el instante más
+    // viejo de la ventana.
+    const comboMatch = /^COUNT\(\*\) AS (\w+),\s*(MAX|MIN)\((\w+)\) AS (\w+)$/i.exec(cols);
+    if (comboMatch) {
+      const [, countAlias, fn, col, alias] = comboMatch as [string, string, string, string, string];
+      const vals = rows.map((r) => r[col]).filter((v): v is number => typeof v === "number");
+      const value = vals.length === 0 ? null : fn.toUpperCase() === "MAX" ? Math.max(...vals) : Math.min(...vals);
+      return [{ [countAlias as string]: rows.length, [alias as string]: value }];
+    }
     // Agregados MAX/MIN (retryAtForGateBlock, F2; siembra A4):
     // la subida más reciente / más vieja. Sin filas, null.
     const aggMatch = /^(MAX|MIN)\((\w+)\) AS (\w+)$/i.exec(cols);
@@ -595,6 +608,30 @@ function seedPostedJob(db: FakeD1, over: Row = {}): void {
   });
 }
 
+/** Job programado (de otro clip) para contar la ventana rolling y el tope diario. */
+function seedScheduledJob(db: FakeD1, over: Row = {}): void {
+  db.seed("jobs", {
+    id: 950,
+    tenant_id: "sebastian",
+    kind: "publish",
+    clip_id: 900,
+    platform: "tiktok",
+    api_account_id: 10,
+    state: "scheduled",
+    platform_id: null,
+    evidence_url: null,
+    language: "es",
+    posted_day: null,
+    attempts: 0,
+    last_error: null,
+    retryable: 1,
+    next_run_at: null,
+    created_at: FROZEN_MS,
+    updated_at: FROZEN_MS,
+    ...over,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // F0 — el hueco YT 00:00 es alcanzable por el auto-enqueue
 // ---------------------------------------------------------------------------
@@ -735,15 +772,16 @@ describe("F1b: clips sellados como publicado vuelven a evaluarse", () => {
 // F2 — el freno transitorio en ejecución reprograma, no manda a draft
 // ---------------------------------------------------------------------------
 describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", () => {
-  test("(a) job frenado por el piso de 90 min → scheduled con next_run_at = última subida posted + azar 90–180 (no la marca de la reserva)", async () => {
+  test("(a) job frenado por el piso de 90 min → scheduled con next_run_at = marca del gate (reserva) + azar 90–180, sin consumir intento (B2.1/B2.2)", async () => {
     const db = new FakeD1();
     await seedAccount(db, "youtube", 11);
     seedRunning(db);
     db.seed("clips", clipRow({ id: 1, platforms: JSON.stringify(["youtube_shorts"]) }));
     // Subida posted en YT a las 11:30. La reserva de cupo tiene
     // marca MÁS RECIENTE (12:50): el re-chequeo frena por el piso
-    // (hueco 10 min < 90 min) pero el retryAt se calcula desde la
-    // subida posted (11:30), no desde la marca de la reserva.
+    // (hueco 10 min < 90 min) y el retryAt se calcula desde la
+    // MARCA DEL GATE (12:50, max(subida, reserva)) — B2.1: el
+    // mismo reloj del gate, no solo la subida posted.
     const lastPostedAt = FROZEN_MS - 90 * 60_000;
     db.seed("jobs", {
       id: 90, tenant_id: "sebastian", kind: "publish", clip_id: 900, platform: "youtube_shorts",
@@ -752,10 +790,11 @@ describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", 
       next_run_at: null, created_at: lastPostedAt, updated_at: lastPostedAt,
     });
     // Reserva de cupo con marca MÁS RECIENTE (12:50): el retryAt
-    // NO puede ser la marca de la reserva, sino la subida posted.
+    // se calcula desde ella (B2.1), no desde la subida posted.
+    const reservationMark = FROZEN_MS - 10 * 60_000;
     db.seed("publish_slots", {
       tenant_id: "sebastian", platform: "youtube_shorts", language: "es", day: FROZEN_DAY,
-      reserved_count: 1, updated_at: FROZEN_MS - 10 * 60_000,
+      reserved_count: 1, updated_at: reservationMark,
     });
     seedJob(db, { id: 1, clip_id: 1, platform: "youtube_shorts", api_account_id: 11, r2_key: "clips/sebastian/1/aaa_x.mp4" });
     const bucket = new FakeR2();
@@ -767,12 +806,12 @@ describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", 
     const j = jobRow(db, 1);
     expect(j?.state).toBe("scheduled");
     expect(j?.retryable).toBe(1);
-    expect(j?.attempts).toBe(1);
-    // 11:30 + azar(90–180 min) (no 12:50 + azar, la reserva; el
-    // retry min90 solo lee jobs posted). Rango, no valor exacto:
-    // el azar es Math.random en el ciclo.
-    expect(j?.next_run_at).toBeGreaterThanOrEqual(lastPostedAt + 90 * 60_000);
-    expect(j?.next_run_at).toBeLessThanOrEqual(lastPostedAt + 180 * 60_000);
+    // B2.2: la espera NO consume intento (antes era 1).
+    expect(j?.attempts).toBe(0);
+    // 12:50 + azar(90–180 min) (la marca del gate, no 11:30).
+    // Rango, no valor exacto: el azar es Math.random en el ciclo.
+    expect(j?.next_run_at).toBeGreaterThanOrEqual(reservationMark + 90 * 60_000);
+    expect(j?.next_run_at).toBeLessThanOrEqual(reservationMark + 180 * 60_000);
     expect(String(j?.last_error ?? "")).toContain("menos de 90 min");
   });
 
@@ -798,13 +837,15 @@ describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", 
     expect(String(j?.last_error ?? "")).toContain("calidad: sin cara visible");
   });
 
-  test("(c) job con 3 intentos hoy frenado por el piso de 90 min → draft (tope de intentos)", async () => {
+  test("(c) job con 3 intentos hoy frenado por el piso de 90 min → sigue scheduled (la espera no va a draft, B2.2)", async () => {
     const db = new FakeD1();
     await seedAccount(db, "youtube", 11);
     seedRunning(db);
     db.seed("clips", clipRow({ id: 1, platforms: JSON.stringify(["youtube_shorts"]) }));
     // Subida posted en YT hace 30 min (< 90 min de piso): el
-    // re-chequeo frena y, con 3 intentos ya usados, va a draft.
+    // re-chequeo frena. B2.2: la espera NO va a draft aunque ya
+    // haya 3 intentos usados hoy (la válvula a draft es solo para
+    // fallos reales); se reprograma y los intentos quedan en 3.
     const lastPostedAt = FROZEN_MS - 30 * 60_000;
     db.seed("jobs", {
       id: 90, tenant_id: "sebastian", kind: "publish", clip_id: 900, platform: "youtube_shorts",
@@ -821,9 +862,11 @@ describe("F2: el freno transitorio en ejecución reprograma, no manda a draft", 
     const r = await withFrozenDate(FROZEN_ISO, () => runWorkerCycle(env, "sebastian"));
     expect(r.ran).toBe(true);
     const j = jobRow(db, 1);
-    expect(j?.state).toBe("draft");
-    expect(j?.retryable).toBe(0);
-    expect(String(j?.last_error ?? "")).toContain("tope de reintentos por hoy");
+    expect(j?.state).toBe("scheduled");
+    expect(j?.retryable).toBe(1);
+    expect(j?.attempts).toBe(3);
+    expect(j?.next_run_at).toBeGreaterThan(FROZEN_MS);
+    expect(String(j?.last_error ?? "")).toContain("menos de 90 min");
   });
 });
 
@@ -872,26 +915,38 @@ describe("F2b: el 15 min también ve a los hermanos en processing", () => {
 // F3 — el freno A4 solo cuenta bloqueos duros
 // ---------------------------------------------------------------------------
 describe("F3: el freno A4 solo cuenta bloqueos duros", () => {
-  test("todas las plataformas frenadas solo por el piso de 90 min durante 3 ciclos → al 4.º sigue permitiendo (0 intentos A4)", async () => {
+  test("todas las plataformas frenadas solo por el tope rolling 24 h durante 3 ciclos → al 4.º sigue permitiendo (0 intentos A4)", async () => {
     const db = new FakeD1();
     await seedAllAccounts(db);
     seedRunning(db);
     seedSettings(db, { auto_publish_top: true });
     db.seed("clips", clipRow({ id: 1 }));
-    // Una subida posted en cada plataforma hace 30 min (< 90 min
-    // de piso en los 4 ciclos: T, T+1, T+6 y T+21 min). El freno
-    // es el piso de 90 min, no un bloqueo duro: no consume A4.
+    // B3 (spec 2026-11-27): el piso de 90 min ya NO frena la
+    // creación en el auto-enqueue (el gate se evalúa en C', donde
+    // el piso ya pasó, y el job nace programado para después del
+    // piso). El freno transitorio que sí frena en creación es el
+    // tope rolling 24 h: 6 publicados hoy por plataforma llenan
+    // la ventana (tope 3 en TT/IG/FB, 6 en YT) y la proyección no
+    // encuentra hueco hoy (no-derrame). El freno es transitorio,
+    // no un bloqueo duro: no consume A4.
+    // 6 publicados hoy por plataforma: 11:00, 11:15, 11:30, 12:00,
+    // 12:15 y 12:30 (FROZEN_MS = 13:00). La ventana rolling está
+    // llena (6/6 en YT, 6/3 en el resto) y el empuje a V+24 h cae
+    // mañana (no-derrame).
+    const postedAt = [FROZEN_MS - 2 * 3600_000, FROZEN_MS - 105 * 60_000, FROZEN_MS - 90 * 60_000, FROZEN_MS - 1 * 3600_000, FROZEN_MS - 45 * 60_000, FROZEN_MS - 30 * 60_000];
     for (let i = 0; i < ALL_PLATFORMS.length; i++) {
-      db.seed("jobs", {
-        id: 90 + i, tenant_id: "sebastian", kind: "publish", clip_id: 900 + i, platform: ALL_PLATFORMS[i] as string,
-        api_account_id: 10, state: "posted", platform_id: `P${i}`, evidence_url: `https://example.com/${i}`,
-        language: "es", posted_day: FROZEN_DAY, attempts: 0, last_error: null, retryable: 1,
-        next_run_at: null, created_at: FROZEN_MS - 30 * 60_000, updated_at: FROZEN_MS - 30 * 60_000,
-      });
+      for (let k = 0; k < 6; k++) {
+        const at = postedAt[k] as number;
+        db.seed("jobs", {
+          id: 90 + i * 10 + k, tenant_id: "sebastian", kind: "publish", clip_id: 900 + i, platform: ALL_PLATFORMS[i] as string,
+          api_account_id: 10, state: "posted", platform_id: `P${i}${k}`, evidence_url: `https://example.com/${i}${k}`,
+          language: "es", posted_day: FROZEN_DAY, attempts: 0, last_error: null, retryable: 1,
+          next_run_at: null, created_at: at, updated_at: at,
+        });
+      }
     }
     const env = makeEnv(db, new FakeR2());
-    // 4 ciclos con el reloj avanzando (como exige el backoff si
-    // hubiera intentos): T, T+1 min, T+6 min, T+21 min.
+    // 4 ciclos con el reloj avanzando: T, T+1 min, T+6 min, T+21 min.
     const times = [FROZEN_MS, FROZEN_MS + 60_000, FROZEN_MS + 6 * 60_000, FROZEN_MS + 21 * 60_000];
     for (const t of times) {
       const iso = new Date(t).toISOString();
@@ -911,16 +966,21 @@ describe("F3: el freno A4 solo cuenta bloqueos duros", () => {
     expect(autoEnqueueAllowed(st ?? { attemptsToday: 0, lastAttemptMs: null }, FROZEN_MS + 21 * 60_000).allowed).toBe(true);
   });
 
-  test("mismo escenario con bloqueo por calidad → al 4.º ciclo está aparcado (3 intentos)", async () => {
+  test("mismo escenario con bloqueo por calidad (sin veredicto válido) → al 4.º ciclo está aparcado (3 intentos)", async () => {
     const db = new FakeD1();
     await seedAllAccounts(db);
     seedRunning(db);
     seedSettings(db, { auto_publish_top: true });
+    // B4.1 (spec 2026-11-27): un veredicto RECHAZADO firme ya no
+    // llega aquí (se salta antes de evaluar, sin intento A4 — ver
+    // B4.3). El bloqueo duro que sí aparca es el clip SIN veredicto
+    // válido: el gate lo frena por calidad en cada ciclo y A4 lo
+    // aparca al 3.er intento.
     db.seed("clips", clipRow({
       id: 1,
       viral: JSON.stringify({
         platforms: { youtube_shorts: { score: 95 }, tiktok: { score: 95 }, instagram_reels: { score: 95 }, facebook_reels: { score: 95 } },
-        quality_gate: { decision: "rechazado", pasa: false, fallos: ["sin_cara"], motivo: "sin cara visible" },
+        quality_gate: { decision: "pendiente_revision", pasa: false, fallos: ["sin_veredicto"], motivo: "validación pendiente" },
       }),
     }));
     const env = makeEnv(db, new FakeR2());
@@ -951,10 +1011,15 @@ describe("F4: el presupuesto de evaluación no lo consumen los saltos", () => {
     // completo: con un job en solo una plataforma, F1 encolaría
     // las demás vinculadas); el válido (score 80) queda en la
     // posición 11.
+    // B3 (spec 2026-11-27): los saltados ya NO pueden ser jobs
+    // `scheduled` de hoy — 10 programados por plataforma llenan
+    // la ventana rolling y el clip válido no podría crearse. Se
+    // siembran como `posted` de ayer (>24 h): hasVigente los sigue
+    // cubriendo por completo, pero no cuentan en la proyección.
     for (let i = 1; i <= 10; i++) {
       db.seed("clips", clipRow({ id: i, score: 90, platforms: JSON.stringify(["tiktok"]) }));
       for (let p = 0; p < ALL_PLATFORMS.length; p++) {
-        seedJob(db, { id: 100 + i * 10 + p, clip_id: i, platform: ALL_PLATFORMS[p] as string, state: "scheduled", next_run_at: FROZEN_MS + 3600_000, idempotency_key: `skip-${i}-${p}` });
+        seedJob(db, { id: 100 + i * 10 + p, clip_id: i, platform: ALL_PLATFORMS[p] as string, state: "posted", posted_day: YESTERDAY, next_run_at: null, created_at: FROZEN_MS - 25 * 3600_000, updated_at: FROZEN_MS - 25 * 3600_000, idempotency_key: `skip-${i}-${p}` });
       }
     }
     db.seed("clips", clipRow({ id: 11, score: 80 }));
@@ -974,7 +1039,7 @@ describe("F4: el presupuesto de evaluación no lo consumen los saltos", () => {
       for (let i = 1; i <= skipped; i++) {
         db.seed("clips", clipRow({ id: i, score: 90, platforms: JSON.stringify(["tiktok"]) }));
         for (let p = 0; p < ALL_PLATFORMS.length; p++) {
-          seedJob(db, { id: 100 + i * 10 + p, clip_id: i, platform: ALL_PLATFORMS[p] as string, state: "scheduled", next_run_at: FROZEN_MS + 3600_000, idempotency_key: `skip-${i}-${p}` });
+          seedJob(db, { id: 100 + i * 10 + p, clip_id: i, platform: ALL_PLATFORMS[p] as string, state: "posted", posted_day: YESTERDAY, next_run_at: null, created_at: FROZEN_MS - 25 * 3600_000, updated_at: FROZEN_MS - 25 * 3600_000, idempotency_key: `skip-${i}-${p}` });
         }
       }
       const validId = skipped + 1;
@@ -1259,3 +1324,189 @@ describe("Piso 3/día: pase del piso en autoEnqueueTopClips (§2)", () => {
     expect(nextRunAt).toBeLessThanOrEqual(lastPostedAt + 180 * 60_000 + 15 * 60_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B3.5 (spec 2026-11-27): el planificador proyecta la ventana rolling
+// al crear (posted + programados), empuja a V+24 h (máx 3) y no
+// derrama fuera del día.
+// ---------------------------------------------------------------------------
+describe("B3.5: el planificador proyecta la ventana rolling al crear", () => {
+  test("ventana llena por programados: el candidato se empuja fuera de hoy → no se crea (no-derrame)", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    // 2 posted hoy (11:00, 12:00) + 1 scheduled (12:30): ventana llena (tope 3).
+    seedPostedJob(db, { id: 901, clip_id: 901, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 2 * 3600_000, updated_at: FROZEN_MS - 2 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 1 * 3600_000, updated_at: FROZEN_MS - 1 * 3600_000 });
+    seedScheduledJob(db, { id: 903, clip_id: 903, next_run_at: FROZEN_MS - 30 * 60_000, created_at: FROZEN_MS - 30 * 60_000, updated_at: FROZEN_MS - 30 * 60_000 });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(0);
+    expect(r.blocked).toEqual(["tiktok: tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)"]);
+  });
+
+  test("ventana llena por programados: el candidato se empuja a V+24 h dentro de hoy", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    // 2 posted ayer (14:00, 15:00) + 1 scheduled ayer (16:00): ventana llena a las 13:00.
+    seedPostedJob(db, { id: 901, clip_id: 901, posted_day: YESTERDAY, created_at: FROZEN_MS - 23 * 3600_000, updated_at: FROZEN_MS - 23 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, posted_day: YESTERDAY, created_at: FROZEN_MS - 22 * 3600_000, updated_at: FROZEN_MS - 22 * 3600_000 });
+    seedScheduledJob(db, { id: 903, clip_id: 903, next_run_at: FROZEN_MS - 21 * 3600_000, created_at: FROZEN_MS - 21 * 3600_000, updated_at: FROZEN_MS - 21 * 3600_000 });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(1);
+    expect(r.blocked).toEqual([]);
+    // V = posted más viejo (ayer 14:00) → V+24 h = hoy 14:00.
+    expect(r.jobs[0]?.next_run_at).toBe(FROZEN_MS + 60 * 60_000);
+  });
+
+  test("3 empujes sin liberar dentro de hoy → no se crea", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    seedPostedJob(db, { id: 901, clip_id: 901, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 2 * 3600_000, updated_at: FROZEN_MS - 2 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 1 * 3600_000, updated_at: FROZEN_MS - 1 * 3600_000 });
+    // 8 programados en el pasado, cada 3 h: cada empuje libera solo
+    // el más viejo y la ventana sigue llena (P=10 → 9 → 8 → 7).
+    const hoursAgo = [23, 20, 17, 14, 11, 8, 5, 2];
+    hoursAgo.forEach((h, i) => {
+      seedScheduledJob(db, { id: 910 + i, clip_id: 910 + i, next_run_at: FROZEN_MS - h * 3600_000, created_at: FROZEN_MS - h * 3600_000, updated_at: FROZEN_MS - h * 3600_000 });
+    });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(0);
+    // P final (a las 20:00, tras 3 empujes): 2 posted + 5 programados = 7.
+    expect(r.blocked).toEqual(["tiktok: tope rolling 24 h alcanzado: 7/3 en tiktok (últimas 24 h)"]);
+  });
+
+  test("sin regresión: con ventana libre, el candidato es idéntico a hoy", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(1);
+    expect(r.blocked).toEqual([]);
+    expect(r.jobs[0]?.next_run_at).toBe(FROZEN_MS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B3.6 (spec 2026-11-27): el tope diario también se proyecta
+// (posted de hoy + programados hasta el candidato).
+// ---------------------------------------------------------------------------
+describe("B3.6: el tope diario proyectado frena la creación", () => {
+  test("plan proyectado: 2 programados cubren el plan 2 → no se crea", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, { tiktok_plan: 2 });
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    seedScheduledJob(db, { id: 903, clip_id: 903, next_run_at: FROZEN_MS + 1 * 3600_000, created_at: FROZEN_MS, updated_at: FROZEN_MS });
+    seedScheduledJob(db, { id: 904, clip_id: 904, next_run_at: FROZEN_MS + 2 * 3600_000, created_at: FROZEN_MS, updated_at: FROZEN_MS });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(0);
+    expect(r.blocked).toEqual(["tiktok: plan del día cubierto: 2/2 en tiktok (techo 3)"]);
+  });
+
+  test("techo proyectado: 3 programados llegan al techo 3 con rolling 6 → no se crea", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, { rolling_24h_max: 6 });
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    [1, 2, 3].forEach((h, i) => {
+      seedScheduledJob(db, { id: 903 + i, clip_id: 903 + i, next_run_at: FROZEN_MS + h * 3600_000, created_at: FROZEN_MS, updated_at: FROZEN_MS });
+    });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(0);
+    expect(r.blocked).toEqual(["tiktok: tope diario alcanzado: 3/3 en tiktok"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B4.3 (spec 2026-11-27): un clip con veredicto rechazado no se
+// evalúa en el auto-enqueue (no consume considered/evaluated, no
+// deja intento A4 ni evento de freno); sin veredicto, igual que hoy.
+// ---------------------------------------------------------------------------
+describe("B4.3: el rechazado no se evalúa en el auto-enqueue", () => {
+  test("clip con veredicto rechazado: no consume considered, no deja intento A4 ni evento de freno", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    db.seed("clips", clipRow({
+      id: 1,
+      viral: JSON.stringify({
+        platforms: { youtube_shorts: { score: 95 }, tiktok: { score: 95 }, instagram_reels: { score: 95 }, facebook_reels: { score: 95 } },
+        quality_gate: { decision: "rechazado", pasa: false, fallos: ["sin_cara"], motivo: "sin cara visible" },
+      }),
+    }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(r.considered).toBe(0);
+    expect(r.enqueued).toBe(0);
+    expect(r.blocked).toBe(0);
+    expect(getAutoEnqueueState(1, FROZEN_DAY)).toBeNull();
+    expect((db.tables["clip_events"] ?? [])).toHaveLength(0);
+  });
+
+  test("clip sin veredicto sigue igual que hoy: se encola", async () => {
+    const db = new FakeD1();
+    await seedAllAccounts(db);
+    seedRunning(db);
+    seedSettings(db, { auto_publish_top: true });
+    db.seed("clips", clipRow({ id: 1 }));
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => autoEnqueueTopClips(env, "sebastian"));
+    expect(r.enabled).toBe(true);
+    expect(r.considered).toBe(1);
+    expect(r.enqueued).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D2 (orden del usuario 2026-11-27 06:43, ventana 24 h): el primer
+// job del día siguiente se ancla a ~00:00, no deriva a las 03:07.
+// ---------------------------------------------------------------------------
+describe("D2: el primer job del día se ancla a ~00:00", () => {
+  test("última subida 22:00 + retardo máximo → el job nace a las 00:30 de mañana, no a la 01:00", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    // Última subida hoy 22:00 (Santiago). Ahora son las 23:00.
+    const lastPostedAt = Date.parse("2026-11-19T01:00:00.000Z"); // 2026-11-18 22:00 -03
+    seedPostedJob(db, { id: 901, clip_id: 901, posted_day: "2026-11-18", created_at: lastPostedAt, updated_at: lastPostedAt });
+    const env = makeEnv(db, new FakeR2());
+    // rng=1: retardo máximo (180 min) → sin el ancla el candidato caería a la 01:00 de mañana.
+    const r = await withFrozenDate("2026-11-19T02:00:00.000Z", () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 1 }));
+    expect(r.jobs).toHaveLength(1);
+    expect(r.blocked).toEqual([]);
+    // Ancla: 00:00 de mañana + jitter (rng=1 → 30 min) = 00:30.
+    expect(r.jobs[0]?.next_run_at).toBe(Date.parse("2026-11-19T03:30:00.000Z"));
+    // El ancla respeta el piso de 90 min desde la última subida (22:00 → 23:30).
+    expect(r.jobs[0]?.next_run_at as number).toBeGreaterThanOrEqual(lastPostedAt + 90 * 60_000);
+  });
+});
+

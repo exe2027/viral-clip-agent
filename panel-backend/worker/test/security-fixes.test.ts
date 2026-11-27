@@ -588,10 +588,11 @@ describe("M1 gate re-check en runWorkerCycle", () => {
       const j = jobs.find((x) => x.id === i);
       // F2 (spec 2026-11-24): el freno transitorio (rolling) ya no
       // manda a draft: el job queda scheduled con next_run_at = el
-      // posted más viejo + 24 h, retryable=1 y 1 intento usado.
+      // posted más viejo + 24 h, retryable=1. B2.2 (spec
+      // 2026-11-27): la espera NO consume intento (antes era 1).
       expect(j?.state).toBe("scheduled");
       expect(j?.retryable).toBe(1);
-      expect(j?.attempts).toBe(1);
+      expect(j?.attempts).toBe(0);
       expect(j?.next_run_at).toBe(postedAt + 24 * 3600_000);
       expect(String(j?.last_error ?? "")).toContain("tope rolling 24 h alcanzado");
     }

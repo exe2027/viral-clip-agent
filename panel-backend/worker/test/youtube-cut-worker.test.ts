@@ -526,7 +526,7 @@ describe("gate.ts: streamer desactivado bloquea el job (spec §3.5)", () => {
     db.seed("clips", gateClipRow());
     seedYoutubeAccount(db);
     const env = makeEnv(db);
-    const reason = await recheckPublishGate(env as unknown as Env, gateJob(1));
+    const { reason } = await recheckPublishGate(env as unknown as Env, gateJob(1));
     expect(reason).toBe("streamer desactivado en el panel");
   });
 
@@ -536,7 +536,7 @@ describe("gate.ts: streamer desactivado bloquea el job (spec §3.5)", () => {
     db.seed("clips", gateClipRow());
     seedYoutubeAccount(db);
     const env = makeEnv(db);
-    const reason = await recheckPublishGate(env as unknown as Env, gateJob(1));
+    const { reason } = await recheckPublishGate(env as unknown as Env, gateJob(1));
     expect(reason).toBe("streamer desactivado en el panel");
   });
 
@@ -546,7 +546,7 @@ describe("gate.ts: streamer desactivado bloquea el job (spec §3.5)", () => {
     db.seed("clips", gateClipRow());
     seedYoutubeAccount(db);
     const env = makeEnv(db);
-    const reason = await recheckPublishGate(env as unknown as Env, gateJob(1));
+    const { reason } = await recheckPublishGate(env as unknown as Env, gateJob(1));
     expect(reason).toBeNull();
   });
 
@@ -556,7 +556,7 @@ describe("gate.ts: streamer desactivado bloquea el job (spec §3.5)", () => {
     db.seed("clips", gateClipRow({ influencer_id: null }));
     seedYoutubeAccount(db);
     const env = makeEnv(db);
-    const reason = await recheckPublishGate(env as unknown as Env, gateJob(1));
+    const { reason } = await recheckPublishGate(env as unknown as Env, gateJob(1));
     expect(reason).toBeNull();
     const logged = (db.tables.worker_events ?? []).some(
       (e) => e.kind === "gate" && String(e.message ?? "").includes("fail-open"),

@@ -54,6 +54,8 @@ function parseWhere(where: string, params: unknown[]): (r: Row) => boolean {
     const isNotNull = /^(\w+)\s+IS\s+NOT\s+NULL$/i.exec(c);
     const lt = /^(\w+)\s*<\s*\?$/.exec(c);
     const gt = /^(\w+)\s*>\s*\?$/.exec(c);
+    const le = /^(\w+)\s*<=\s*\?$/.exec(c);
+    const ge = /^(\w+)\s*>=\s*\?$/.exec(c);
     const eqNum = /^(\w+)\s*=\s*(\d+)$/.exec(c);
     const inList = /^(\w+)\s+IN\s*\(([^)]+)\)$/i.exec(c);
     if (eq) {
@@ -68,6 +70,14 @@ function parseWhere(where: string, params: unknown[]): (r: Row) => boolean {
       const col = gt[1] as string;
       const val = params[pi++];
       tests.push((r) => (r[col] as number) > (val as number));
+    } else if (le) {
+      const col = le[1] as string;
+      const val = params[pi++];
+      tests.push((r) => (r[col] as number) <= (val as number));
+    } else if (ge) {
+      const col = ge[1] as string;
+      const val = params[pi++];
+      tests.push((r) => (r[col] as number) >= (val as number));
     } else if (neq) {
       const col = neq[1] as string;
       const val = params[pi++];
@@ -153,6 +163,16 @@ class FakeD1 {
     // de filas filtradas.
     const countMatch = /^COUNT\(\*\) AS (\w+)$/i.exec(cols);
     if (countMatch) return [{ [countMatch[1] as string]: rows.length }];
+    // COUNT(*) + MIN/MAX combinados (proyección rolling B3, spec
+    // 2026-11-27): conteo y el instante más viejo/nuevo de la
+    // ventana en una sola lectura.
+    const aggMatch = /^COUNT\(\*\) AS (\w+),\s*(MIN|MAX)\((\w+)\) AS (\w+)$/i.exec(cols);
+    if (aggMatch) {
+      const [, nAlias, fn, col, aggAlias] = aggMatch as [string, string, string, string, string];
+      const vals = rows.map((r) => r[col] as number | null).filter((v): v is number => v !== null && v !== undefined);
+      const agg = vals.length > 0 ? (fn.toUpperCase() === "MIN" ? Math.min(...vals) : Math.max(...vals)) : null;
+      return [{ [nAlias as string]: rows.length, [aggAlias as string]: agg }];
+    }
     const wanted = cols.split(",").map((c) => c.trim());
     return rows.map((r) => {
       const out: Row = {};
@@ -618,6 +638,7 @@ describe("topes por plataforma+idioma (0019)", () => {
     seedEsAccounts(db);
     seedEnYoutube(db, ESTABLISHED_EN);
     const restore = patchNow(SLOT_NOW_MS);
+    try {
     const today = santiagoDayKey();
     // Tope diario YT (6, orden 2026-11-21 21:09) lleno en EN:
     // desde SIN AMONTONAR la manual EN TAMBIÉN frena por el tope
@@ -643,9 +664,14 @@ describe("topes por plataforma+idioma (0019)", () => {
     // cuentas ES vinculadas → 4 jobs, todos en español.
     const idEs = await setupUnblockedClip(db, env, token, clipBody({ language: "es", title: "Clip ES sin tope" }));
     const ok = await call(env, "POST", `/api/clips/${idEs}/publish`, { token });
-    restore();
     expect(ok.status).toBe(200);
     expect((db.tables["jobs"] ?? []).filter((j) => j.language === "es")).toHaveLength(4);
+    } finally {
+      // Sin try/finally, el fallo de este test (preexistente: el
+      // 400 esperado) dejaba Date.now congelado y contaminaba
+      // retry-a4.test.ts en la suite completa.
+      restore();
+    }
   });
 
   test("rolling 24 h: 6 publicados en 24 h en YouTube EN frenan hasta la manual (YouTube 6, orden 2026-11-23)", async () => {

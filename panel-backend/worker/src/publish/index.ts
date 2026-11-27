@@ -208,10 +208,12 @@ export async function dispatchPublishStep(env: Env, job: JobRow): Promise<Publis
   // desactivado), va a draft como hoy. Los retornos directos que
   // no pasan por el gate (sin MP4, cuenta inexistente o en otro
   // idioma) siguen devolviendo "draft" sin cambio.
-  const gateReason = await recheckPublishGate(env, job);
+  const { reason: gateReason, lastPublishedAtMs } = await recheckPublishGate(env, job);
   if (gateReason) {
     if (classifyGateBlock(gateReason).transient) {
-      const retryAtMs = await retryAtForGateBlock(env, job, gateReason, Date.now());
+      // B2.1: el re-chequeo pasa la marca del gate (max(subida
+      // real, reserva)) para que el retry use el mismo reloj.
+      const retryAtMs = await retryAtForGateBlock(env, job, gateReason, Date.now(), Math.random, lastPublishedAtMs);
       return { mode: "retry", reason: gateReason, retryAtMs };
     }
     return { mode: "draft", reason: `gate de publicación: ${gateReason}` };

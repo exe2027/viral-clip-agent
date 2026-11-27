@@ -606,7 +606,11 @@ describe("tryEnqueueClipPublish + auto-enqueue B4 (D1 falso)", () => {
       const r = await autoEnqueueTopClips(makeEnv(db), TENANT);
       expect(r.enabled).toBe(true);
       expect(r.enqueued).toBe(1);
-      expect((r.qualityBlocked ?? 0)).toBeGreaterThanOrEqual(2);
+      // B4.1 (spec 2026-11-27): el rechazado (clip 22) ya NO
+      // cuenta como bloqueado por calidad — se salta antes de
+      // evaluar, sin evento ni intento A4. Solo el sin veredicto
+      // (clip 21) frena por calidad en el gate.
+      expect((r.qualityBlocked ?? 0)).toBeGreaterThanOrEqual(1);
       const jobClipIds = db.rows("jobs").map((j) => j.clip_id);
       expect(jobClipIds).toEqual([20]);
     } finally {
