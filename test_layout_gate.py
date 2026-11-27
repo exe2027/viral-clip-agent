@@ -450,6 +450,9 @@ class TestLayoutConfig(unittest.TestCase):
         self.assertEqual(vcfg["layout_face_area_closeup_min"], 0.12)
         self.assertEqual(vcfg["layout_sift_max_frames"], 8)
 
+    @unittest.skipUnless(
+        os.path.isfile(os.path.join(FRAMES_DIR, "170_t7.jpg")),
+        "fotograma real fuera del repo (workspace)")
     def test_170_webcam_ancha_pasa(self):
         # El 170 (AuronPlay lejos de la cámara, cara pequeña
         # cx 0.43) es el falso positivo que obligó a contar
