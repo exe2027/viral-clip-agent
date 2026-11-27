@@ -85,6 +85,7 @@ import sys
 import time
 
 from .final_review import (
+    _acepta_kw,
     find_facecam_box_in_source,
     transcript_text_for_srt,
     validate_final_clip,
@@ -539,13 +540,22 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
     # rubius — el render sin webcam por cut_clip_with_layout es
     # un cambio aparte, no de §9.4 — y la validación lo cazaría:
     # fail-closed, nunca un clip con formato equivocado).
+    # La 4-tupla trae también el flag avatar (§4.3, I-23): un
+    # avatar reactivo sin cara humana se valida con avatar=True
+    # (face_gate centinela + layout sin reglas de cara, SIFT
+    # intacta). Sin él, el clip avatar se valida como humano y
+    # face_gate lo tumbaría (mismo patrón que live_cutter y
+    # vod_fallback, que sí lo enhebran).
     plantilla_decidida = "rubius"
+    avatar_decidido = False
     try:
         from .template_decision import decide_template_for_segment
         _dec = decide_template_for_segment(seg_path, duration, cfg)
         plantilla_decidida = _dec[0]
+        avatar_decidido = bool(_dec[3])
     except Exception:  # noqa: BLE001 - sin decisión, rubius
         plantilla_decidida = "rubius"
+        avatar_decidido = False
     # p7775 dispara con clip.get("streamer") (§4.1.5): el clip
     # construido por load_blocked_clips solo trae "streamer" (de
     # c.get("streamer") o c.get("influencer_name") o
@@ -596,6 +606,8 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
                     rendered.get("srt") or ""),
                 srt_path=rendered.get("srt") or "",
                 cfg=cfg or {}, plantilla=plantilla_decidida,
+                **({"avatar": avatar_decidido}
+                   if _acepta_kw(validate_fn, "avatar") else {}),
             )
         except ConfigError:
             raise
@@ -615,6 +627,7 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
             "estrategia": nombre,
             "pasa": pasa,
             "decision": decision,
+            "avatar": avatar_decidido,
             "motivo": (last_review.get("motivo")
                        or last_review.get("rerender_reason") or ""),
             "hard_failures": list(last_review.get("hard_failures") or []),

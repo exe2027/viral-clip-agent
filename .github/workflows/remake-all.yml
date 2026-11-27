@@ -30,8 +30,12 @@
 #   panel-remake-all (falta el cambio en el panel, parte del
 #   release): hasta que exista, se dispara con workflow_dispatch.
 # - workflow_dispatch manual (tenant obligatorio). Sin token de
-#   un solo uso el bootstrap falla con mensaje claro: dispara
-#   desde el panel. No hay secreto PANEL_BRAIN_TOKEN en el repo
+#   un solo uso el bootstrap usa el login de servicio del
+#   entorno `sebastian` (secretos PANEL_USERNAME/PANEL_PASSWORD,
+#   como cerebro-sebastian.yml): el canje del panel no es la
+#   única vía — PanelBridge cae al login cuando no hay
+#   PANEL_BRAIN_TOKEN (panel_bridge.py: from_env). No hay
+#   secreto PANEL_BRAIN_TOKEN en el repo
 #   (total_count 0, 2026-11-19): el diseño genérico no mete
 #   secretos por tenant en GitHub.
 #
@@ -84,6 +88,10 @@ jobs:
     name: Re-hacer a rubius los clips bloqueados
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    # Entorno `sebastian`: sus secretos PANEL_USERNAME /
+    # PANEL_PASSWORD alimentan el bootstrap cuando el dispatch
+    # no trae token de un solo uso (workflow_dispatch manual).
+    environment: sebastian
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -141,6 +149,11 @@ jobs:
         env:
           PANEL_TENANT: ${{ github.event.client_payload.tenant || inputs.tenant }}
           PANEL_BRAIN_TOKEN: ${{ github.event.client_payload.brain_token }}
+          # Fallback workflow_dispatch: login de servicio del
+          # entorno `sebastian` (sin token de un solo uso el
+          # bootstrap canjea con estas; ver panel_bridge.from_env).
+          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
         run: python -m clipagent.panel_credentials
       - name: Re-hacer a rubius los clips bloqueados
         env:
