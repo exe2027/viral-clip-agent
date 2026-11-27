@@ -1,10 +1,12 @@
 # SPEC — Inglés correcto de punta a punta (v7)
 
-**Estado:** v7 — reescritura tras la 6ª revisión goldfish (NO APROBADA, B-N6 y
-B-N8 siguen abiertos, I-13 parcial, I-24 casi, M-11/M-17 parciales, M-18–M-21
-nuevos). **Sin implementar todavía: esta v7 necesita una 7ª revisión goldfish
-(EGM, solo del delta v6→v7) + aprobación del usuario antes de implementar.**
-Fecha: 2026-11-27 ~03:30 (Chile). **OJO:** la implementación sin_webcam ya
+**Estado:** v7 — **APROBADA por la 7ª revisión goldfish** (agente 60fb9c6d,
+`~/workspace/gta6-clips/runs/revision-goldfish-v7-2026-11-27.md`: sin
+bloqueadores ni importantes abiertos; solo M-17 parcial y M-22 nuevo,
+menores). v7.1 aplica esas dos correcciones editoriales (solo citas, ninguna
+prescripción cambia). **Sin implementar todavía: necesita aprobación del
+usuario antes de implementar.** Fecha: 2026-11-27 ~03:30 (Chile).
+**OJO:** la implementación sin_webcam ya
 está en main (commit `51fcb71`, ver v6→v7) sin esa revisión ni aprobación
 registradas — esta v7 no la re-prescribe, la adopta como estado y deja la
 decisión de mantenerla al usuario.
@@ -16,6 +18,34 @@ otro agente; la salida de este trabajo son clips válidos en cola + VOD fluyendo
 (las imágenes viven en `~/workspace/gta6-clips/runs/layout-gate-calib/` y en
 `runs/layout-fix-2026-11-26/frames/`, fuera del repo; los tests que las usan se
 saltan si no están en el workspace).
+
+## v7 → v7.1 (corrección editorial, 2026-11-27 ~03:35)
+
+La v7 recibió **APROBADA** en su 7ª revisión goldfish (agente 60fb9c6d,
+`~/workspace/gta6-clips/runs/revision-goldfish-v7-2026-11-27.md`): **sin
+bloqueadores ni importantes abiertos**. La revisión verifica con mediciones
+propias B-N6 completo (transporte `_cells`, coords de muestra, retirada de la
+vía (a)), B-N8 completo (Worker `plantilla` + payload VOD + pill en main
+`51fcb71`, pendiente real solo `cam_box*`, 9º call site listado), I-13,
+I-23, I-24, I-25, I-26, I-18 y M-11/M-18/M-19/M-20/M-21 resueltos, y reproduce
+las bases (4 suites 24 passed; Worker `quality-gate.test.ts` 38 pass).
+Quedaban solo dos menores, ambos de citas, que esta v7.1 corrige (verificados
+por mí en el árbol antes de corregirlos; ninguna prescripción cambia):
+
+- **M-17 (deriva restante):** tests de plantilla en
+  `quality-gate.test.ts` son `:463`/`:470`/`:478`/`:486` (cierran `:494`), no
+  `:483-487`; `_cells` está en `render.py:1080`, no `:1083`; el consumidor de
+  estrategias es `remake_all.py:531` (`attempts = strategies[: max(1, ...)]`),
+  no `:516`; el dedup de detectada es `:324-325` (condición `:324`, append
+  `:325`), no `:325-327`; y el docstring de `_split_params` (`:1957`) NO dice
+  «cae a center» (cero ocurrencias de "center" en `:1957-2000`) — solo el de
+  `_cam_box_valida` (`:1923`) lo dice; la orden de actualizar ambos docstrings
+  se mantiene, con la premisa corregida.
+- **M-22 (baseline):** el árbol tiene además modificados sin commitear
+  `test_final_gate.py`, `test_final_review.py` y `test_validator_fp.py`,
+  que la lista de trabajo concurrente no nombraba; se añaden en §9 y en
+  Referencias (la cláusula "si el árbol se commitea antes, re-verificar las
+  citas" ya cubría la deriva en general).
 
 ## v6 → v7 (qué cambió y por qué)
 
@@ -75,7 +105,7 @@ usuario; el despliegue a Workers/panel NO se ha hecho (solo commit).
   el cambio `plantilla` del Worker y del payload VOD, que YA EXISTEN en
   main (`51fcb71`): `ViralData.plantilla?: string` (`db.ts:219`),
   `parseViralInput` (`:377-382`), `mergeViralJson` (`:549`), tests
-  (`quality-gate.test.ts:483-487`); VOD POST `:989-990`, PATCH `:1068-1074`;
+  (`quality-gate.test.ts:463`/`:470`/`:478`/`:486`); VOD POST `:989-990`, PATCH `:1068-1074`;
   pill del panel en `dist/app.js`. Aplicar §6.4 v6 literalmente duplicaría
   el campo (error de TypeScript). **Decisión v7: §6.4 y §9 Fase 3 se
   reescriben al estado real** — de `plantilla` queda HECHO; lo pendiente es
@@ -122,7 +152,7 @@ usuario; el despliegue a Workers/panel NO se ha hecho (solo commit).
 - **I-18 resuelto en sustancia; deriva + hueco menor.** `load_blocked_clips`
   es `:697` (no `:681`), `"streamer"` en `:712-716` (no `:702-703`).
   p7775 se dedupa contra detectada/ajustada cuando coinciden (patrón
-  existente `:325-327`, `:341-344`): sin regla, un Rubius con caja detectada
+  existente `:324-325`, `:341-344`): sin regla, un Rubius con caja detectada
   = p7775 quemaría dos intentos en el mismo render.
 - **M-10 resuelto; M-11 sigue abierto** (`_layout_stub` aún sin `avatar` —
   es un delta de Fase 1 ya ordenado en §4.3.2/§5.5, no un hueco de spec);
@@ -748,7 +778,7 @@ fijadas.
   `"_cells": vt["_cells"]` (el tercer sitio, `:2184`, copia
   `s.get("vtuber")` y lo hereda). `_vtuber_for_frame` devuelve el dict
   completo del candidato (`render.py:1090-1105`, `return best` sobre el
-  candidato), que YA lleva `_cells` (`:1083`) — el transporte es añadir la
+  candidato), que YA lleva `_cells` (`:1080`) — el transporte es añadir la
   llave, no re-detectar candidatos en `decide_layout`. **Coords (B-N6b,
   normativo): la caja ajustada va en coords de MUESTRA 160×90, SIN
   escalado.** La fórmula es `[min(cs)*CELL, min(rs)*CELL,
@@ -771,8 +801,10 @@ fijadas.
   r["reason"] += (motivo); continue`. La guarda pip→split pasa
   `avatar=params.get("avatar", False)` a `_cam_box_valida` (la center→split
   no necesita el flag: su caja viene de `_face_cam_box`, cara humana). Y se
-  actualizan los docstrings de `_cam_box_valida` (`:1923`) y `_split_params`
-  (`:1957`), que hoy dicen «cae a center», y los comentarios de guarda de
+  actualizan los docstrings de `_cam_box_valida` (`:1923`) — el único que hoy
+  dice «cae a center» — y `_split_params` (`:1957`, cuyo docstring NO lo
+  dice: habla de ValueError por fotograma completo y del achicado a 480 px),
+  y los comentarios de guarda de
   ambas ramas («el tramo queda en "center" (sin webcam) y el validador lo
   retiene»).
 
@@ -795,7 +827,7 @@ la 4ª estrategia: p7775 (`561:365:0:626`, cuadrado `365:365:90:626` —
 `rdjavi.py:77`), solo para segmentos de Rubius, en el orden detectada →
 ajustada → p7775 → default** (p7775 ANTES del default para que se pruebe
 dentro de `max_intentos=3`: el consumidor hace `strategies[:max_intentos]`,
-`remake_all.py:516`). La función gana el parámetro `influencer_name=None`;
+`remake_all.py:531`). La función gana el parámetro `influencer_name=None`;
 el consumidor pasa **`clip.get("streamer")`** — I-18: `load_blocked_clips`
 (`remake_all.py:697`) construye el dict con solo `"streamer"` (de
 `c.get("streamer") or c.get("influencer_name") or c.get("influencer")`,
@@ -806,7 +838,7 @@ portador (la v5 lo citaba como si fueran campos del clip — erróneo). La
 condición es nombre en minúsculas == `"rubius"` (D1: id 2, nombre "Rubius").
 **Dedup (I-18, hueco menor de la 6ª revisión):** p7775 se dedupa contra
 detectada/ajustada cuando coinciden (el patrón existente dedupa por caja,
-`:325-327` y `:341-344`): sin regla, un Rubius con caja detectada = p7775
+`:324-325` y `:341-344`): sin regla, un Rubius con caja detectada = p7775
 quemaría dos intentos en el mismo render.
 **El fallback "→ sin_webcam" NO es una estrategia:** `box_strategies`
 siempre devuelve al menos el default (append incondicional, `:345`) y el
@@ -1580,7 +1612,7 @@ literalmente duplicaría el campo (error de TypeScript). Estado real
   en silencio — exactamente lo que prescribía la v6).
 - `mergeViralJson`: `if (patch.plantilla !== undefined) next.plantilla =
   patch.plantilla;` en `:549` (la v6 citaba `:497`).
-- Tests: `panel-backend/worker/test/quality-gate.test.ts:483-487` (4 tests
+- Tests: `panel-backend/worker/test/quality-gate.test.ts:463`/`:470`/`:478`/`:486` (4 tests
   nuevos; medido por mí: el archivo da **38 pass, 0 fail** y `tsc --noEmit`
   limpio — §10.5).
 - INSERT en `:1987` (la v6 citaba `:1968`); POST parse `index.ts:1487` →
@@ -1808,7 +1840,10 @@ schedules `*/5 * * * *` verificados, health ok) — hay 12 ciclos en la hora 9.
 ## §9. Secuenciación y baseline
 
 **Baseline único (I-9, I-22, B-N8):** «árbol a 2026-11-27 ~03:30, HEAD
-`51fcb71` + trabajo sin commitear». Las citas dan líneas del árbol (sin
+`51fcb71` + trabajo sin commitear» (M-22: además de los 5 archivos de
+Python/config que nombra la lista de abajo, el árbol tiene modificados sin
+commitear `test_final_gate.py`, `test_final_review.py` y
+`test_validator_fp.py`). Las citas dan líneas del árbol (sin
 líneas HEAD: el árbol se mueve por ediciones concurrentes y la v5 arrastró
 números de tres estados distintos — M-17). **Trabajo concurrente ADOPTADO
 por esta spec (no pendiente, no a re-implementar):**
@@ -1825,7 +1860,7 @@ por esta spec (no pendiente, no a re-implementar):**
 en `live_cutter.py` (`:1757`); `plantilla` en el POST viral
 (`viral_source.py:790`) y en el payload VOD (`vod_fallback.py:989-990`,
 PATCH `:1068-1074`); `plantilla` en el Worker (`db.ts:219/:377-382/:549`,
-tests `quality-gate.test.ts:483-487`); pill "Rubius sin webcam" en el panel
+tests `quality-gate.test.ts:463`/`:470`/`:478`/`:486`); pill "Rubius sin webcam" en el panel
 (`dist/app.js`, `templatePill`); `_default_validate(..., plantilla=None)` en
 `youtube_cut.py:582` / `facebook_cut.py:543`; ramas sin_webcam en los
 re-renders live (`live_cutter.py:948-960`) y VOD (`vod_fallback.py:743-765`);
@@ -2046,7 +2081,9 @@ antes de implementar; si el árbol se commitea antes, se re-mide.
 - Repo: `~/workspace/gta6-clips/viral-clip-agent/` (HEAD `51fcb71` a 2026-11-27
   ~03:30; árbol con `template_decision.py` + 9 call sites + `plantilla` en el
   Worker + payload VOD + pill del panel en main; layout_gate en
-  `final_review.py`/`render.py`/`config.yaml` sin commitear).
+  `final_review.py`/`render.py`/`config.yaml` sin commitear; también sin
+  commitear `test_final_gate.py`, `test_final_review.py` y
+  `test_validator_fp.py` (M-22)).
 - Spec v6 (mismo archivo, commit `8d5dd9b`): adopta el árbol concurrente,
   centinela `pasa=True`, tope en dos fases, avatar con `_cam_box_valida(...,
   avatar=False)` + caja ajustada (con escalado ×sw/160 — RETIRADO en v7 — y
@@ -2112,7 +2149,7 @@ antes de implementar; si el árbol se commitea antes, se re-mide.
   `cut_clip` `:422`, `_h_corte` `:934`, decisión `:963-969`, corte `:972`,
   validación `:1297`);
   `clipagent/remake_all.py` (`box_strategies` `:271`, `_tight_box` `:248`,
-  consumidor `:516`, 9º call site `:525-527`, `load_blocked_clips` `:697`,
+  consumidor `:531`, 9º call site `:525-527`, `load_blocked_clips` `:697`,
   `streamer` `:712-716`);
   `clipagent/yunet_facecam.py` (`validate_cam_box` `:365`, `find_cam`
   `:395`); `clipagent/vod_fallback.py` (`fallback_order` `:193`, `run()`
