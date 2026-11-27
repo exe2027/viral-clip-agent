@@ -53,7 +53,7 @@ import sys
 from datetime import datetime, timezone
 
 from .config import load_config
-from .final_review import find_facecam_box_in_source, validate_final_clip
+from .final_review import validate_final_clip
 from .jobs import PLATFORMS
 from .hook_formulas import formula_name
 from .hookscore import WEAK_BELOW, score_hook
@@ -668,12 +668,30 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
         ass_path = os.path.join(cdir, "subs.ass")
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_text or "")
-        cam_box = find_facecam_box_in_source(segment, duration,
-                                             cfg=cfg)
+        # Decisión §2.1 (spec rubius sin webcam): la plantilla la
+        # decide la fuente, no se asume rubius. Este camino solo
+        # re-hace a rubius (rubius_render exige cam_box): una
+        # fuente sin facecam no se re-hace aquí (el formato sin
+        # webcam va por el camino live/VOD, con el render de
+        # segment_filter_graph); una ambigua tampoco (sin caja
+        # no hay re-make fiable).
+        from .template_decision import decide_template_for_segment
+        _dec = decide_template_for_segment(segment, duration, cfg=cfg)
+        if _dec[0] == "rubius_sin_webcam":
+            return None, ("sin webcam en la fuente: este camino "
+                          "solo re-hace a rubius (la plantilla "
+                          "exige la cara arriba); el formato sin "
+                          "webcam va por el camino live/VOD"), report
+        if len(_dec) == 3 and _dec[2] == "ambiguo":
+            return None, ("sin webcam detectable en el vídeo: no se "
+                          "puede re-hacer a rubius (la plantilla "
+                          "exige la cara arriba)"), report
+        cam_box = _dec[1]
         if cam_box is None:
             return None, ("sin webcam detectable en el vídeo: no se "
                           "puede re-hacer a rubius (la plantilla "
                           "exige la cara arriba)"), report
+        plantilla = "rubius"
         banner_path = os.path.join(cdir, "banner.png")
         make_banner_png(title, banner_path)
         out_path = os.path.join(cdir, f"{video_id}_rubius.mp4")
@@ -684,7 +702,7 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
         review = validate_final_clip(
             final_video, title,
             transcript_text=_transcript_text(transcript),
-            srt_path=srt_path or None, cfg=cfg, plantilla="rubius")
+            srt_path=srt_path or None, cfg=cfg, plantilla=plantilla)
     except ConfigError:
         raise
     except Exception as exc:  # noqa: BLE001 - un candidato no tumba la corrida
@@ -767,6 +785,9 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
     }
     if thumb_text:
         payload["thumbnail_text"] = thumb_text
+    # Spec §8: la plantilla del render viaja al panel dentro de
+    # viral (el Worker la guarda; sin ella la píldora no ve nada).
+    payload["viral"] = {"plantilla": plantilla}
     try:
         clip = bridge.create_clip(payload)
         bridge.upload_video(clip["id"], final_video)

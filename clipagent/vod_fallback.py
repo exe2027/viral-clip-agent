@@ -686,6 +686,7 @@ def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
         return review, final_video
 
     hard = final_review.get("hard_failures") or []
+    motivo = final_review.get("motivo") or ""
     idx = clip.get("n")
     seg_glob = ""
     if idx is not None:
@@ -709,17 +710,46 @@ def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
     if cut_start < 0 or cut_dur <= 0:
         return _human_review(
             "inicio/duración del pico no reconstruible")
+    # Rescate de layout (spec §2.2B, formato sin webcam): el fallo
+    # de plantilla por duplicación o cámara contaminada (§6.3)
+    # también dispara el rescate — igual que en live_cutter.
+    layout_fallo = ("plantilla" in hard
+                    and ("layout" in motivo
+                         or "cámara contaminada" in motivo))
+    sin_webcam = False
     face_box = None
-    if "cara" in hard:
+    if "cara" in hard or layout_fallo:
         try:
             from .thumbnails import get_duration
             seg_dur = get_duration(seg_path) or 0
         except Exception:  # noqa: BLE001 - sin duración no hay caja
             seg_dur = 0
+    if "cara" in hard:
         found = find_facecam_box_in_source(seg_path, seg_dur, cfg)
-        if not found:
+        if found:
+            face_box = found["box"]
+        elif not layout_fallo:
             return _human_review("sin cara detectable en la fuente")
-        face_box = found["box"]
+        # Sin caja y con fallo de layout: cae al rescate de
+        # layout de abajo (quizá no hay cara en la fuente).
+    if face_box is None and layout_fallo:
+        from .template_decision import decide_template_for_segment
+        try:
+            _dec = decide_template_for_segment(
+                seg_path, seg_dur, cfg)
+        except Exception:  # noqa: BLE001 - sin decisión,
+            # revisión humana, como hoy.
+            _dec = ("rubius", None, "ambiguo")
+        if _dec[0] == "rubius_sin_webcam":
+            sin_webcam = True
+            plantilla = "rubius_sin_webcam"
+        elif len(_dec) == 3 and _dec[2] == "ambiguo":
+            return _human_review(
+                "sin decisión concluyente sobre la fuente")
+        elif _dec[1]:
+            face_box = _dec[1]
+        else:
+            return _human_review("rubius sin caja en la fuente")
     try:
         from .config import get_layout_config
         from .render import cut_clip_with_layout
@@ -731,7 +761,8 @@ def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
         out2 = os.path.splitext(video)[0] + "_r1.mp4"
         cut_clip_with_layout(
             seg_path, cut_start, cut_dur, out2,
-            layout_mode="auto", cfg=layout_cfg)
+            layout_mode="game" if sin_webcam else "auto",
+            cfg=layout_cfg)
     except Exception:  # noqa: BLE001 - sin re-render, no tumba
         return _human_review("el re-corte falló")
     burned2 = os.path.splitext(out2)[0] + "_subs.mp4"
@@ -764,6 +795,10 @@ def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
     review2 = dict(review2)
     review2["rerendered_from"] = final_video
     review2["rerender_facecam_box"] = face_box
+    if sin_webcam:
+        # La plantilla definitiva del re-render: el llamador la
+        # usa en el PATCH (§8) si difiere de la del POST.
+        review2["plantilla"] = "rubius_sin_webcam"
     if review2.get("decision") == "rechazado":
         review2["needs_human_review"] = True
     return review2, final2
@@ -949,6 +984,10 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
         total, seo, chat_multiple)
     if clip.get("score_kind"):
         viral_payload["score_kind"] = clip.get("score_kind")
+    # Spec §8: la plantilla del render viaja al panel dentro de
+    # viral (el Worker la guarda; sin ella la píldora no ve nada).
+    if plantilla:
+        viral_payload["plantilla"] = plantilla
     payload = {
         "title": title,
         "start_sec": start,
@@ -1026,6 +1065,13 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
                 no_speech=no_speech),
             "seo_source": "corte",
         }}
+        # Spec §8: el PATCH lleva la plantilla solo cuando la del
+        # render definitivo difiere de la del POST (el merge la
+        # reemplaza); si no difiere, el valor del POST sobrevive.
+        _plantilla_def = final_review.get("plantilla")
+        if (_plantilla_def
+                and _plantilla_def != viral_payload.get("plantilla")):
+            _fields["viral"]["plantilla"] = _plantilla_def
         if _scores:
             _fields["seo_scores"] = _scores
         bridge.update_clip(panel_id, _fields)

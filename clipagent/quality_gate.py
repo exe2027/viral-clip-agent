@@ -118,8 +118,11 @@ def _template_check(template, name):
 
 
 def _criterion(name, pasa, duro, motivo=""):
-    return {"pasa": bool(pasa), "duro": bool(duro),
-            "motivo": motivo if not pasa else ""}
+    # Spec rubius sin webcam (§6.4): el motivo se guarda SIEMPRE,
+    # también cuando pasa — el criterio webcam de un sin_webcam
+    # pasa con motivo («sin webcam por plantilla: ...») y ese motivo
+    # es lo que muestra la píldora del panel y lo que queda en D1.
+    return {"pasa": bool(pasa), "duro": bool(duro), "motivo": motivo}
 
 
 def build_quality_gate(final_review, thumbnail_text=None,
@@ -199,7 +202,22 @@ def _build(final_review, thumbnail_text, no_speech):
 
     # 2. webcam: la cadena determinista manda (duro); sin ella,
     # el score de Gemini (suave).
-    if face.get("pasa") is True:
+    # Spec rubius sin webcam (§6.4): para esta plantilla NO se
+    # ejecuta la puerta de cara — el criterio es pasa=True SOLO si
+    # la rama de plantilla pasó su prueba positiva de layout
+    # (`gameplay_puro`). La exención NO es un bypass: un duplicado
+    # mal etiquetado ya es rechazado a nivel de plantilla.
+    if (review.get("plantilla") == "rubius_sin_webcam"
+            and _template_check(template, "gameplay_puro") is True):
+        criterios["webcam"] = _criterion(
+            "webcam", True, True,
+            "sin webcam por plantilla: layout gameplay puro verificado")
+    elif (review.get("plantilla") == "rubius_sin_webcam"
+          and _template_check(template, "gameplay_puro") is not True):
+        criterios["webcam"] = _criterion(
+            "webcam", False, True,
+            "layout gameplay puro no verificado")
+    elif face.get("pasa") is True:
         criterios["webcam"] = _criterion("webcam", True, True)
     elif face.get("pasa") is False:
         criterios["webcam"] = _criterion(
@@ -212,9 +230,14 @@ def _build(final_review, thumbnail_text, no_speech):
         criterios["webcam"] = _criterion("webcam", True, True)
 
     # 3. hook: el momento se entiende sin contexto (Gemini, suave).
+    # El motivo de fallo solo se adjunta cuando falla: _criterion
+    # conserva el motivo también al pasar (§6.4), así que un
+    # motivo redactado como fallo no puede pasarse incondicional
+    # (un hook que pasa quedaría con "momento no comprensible").
+    _hook_ok = _score_ok(scores, "momento_comprensible")
     criterios["hook"] = _criterion(
-        "hook", _score_ok(scores, "momento_comprensible"), False,
-        "momento no comprensible")
+        "hook", _hook_ok, False,
+        "" if _hook_ok else "momento no comprensible")
 
     # 4. título: el banner/banda de la receta en píxeles (duro,
     # cuando la receta lo mide) + legibilidad según Gemini (suave).

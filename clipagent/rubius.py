@@ -440,7 +440,7 @@ def make_word_ass_from_transcript(transcript, duration=None, **kw):
     return make_word_ass(blocks, duration=duration, **kw)
 
 
-def _game_filter(game_crop, game_zoom):
+def _game_filter(game_crop, game_zoom, game_h=GAME_H):
     """Filtro de la rama del gameplay: recorte fijo + zoom SUAVE
     en el payoff (scale con eval=frame + crop con ventana
     animada). Misma tecnica que rdjavi._game_filter (el crop
@@ -449,9 +449,15 @@ def _game_filter(game_crop, game_zoom):
     El zoom es 1,15x centrado en horizontal y anclado abajo:
     el borde inferior del recorte no se mueve (no se recorta
     la zona de dialogo del juego). Sin game_zoom, recorte fijo
-    + escala estatica."""
+    + escala estatica.
+
+    ``game_h`` (spec rubius sin webcam, §3.4): altura del lienzo
+    de juego. Rubius sigue con 1080 (``y_coef`` = 162); el formato
+    sin webcam llama con 1920 (``y_coef`` = 288). Una sola función,
+    altura como parámetro — nunca una copia con el 288 hardcodeado.
+    """
     if not game_zoom:
-        return f"crop={game_crop},scale={W}:{GAME_H},setsar=1"
+        return f"crop={game_crop},scale={W}:{game_h},setsar=1"
     z0, z1 = (float(v) for v in game_zoom)
     f = (
         f"if(between(t,{z0:g},{z0 + 2:g}),(t-{z0:g})/2,"
@@ -460,11 +466,11 @@ def _game_filter(game_crop, game_zoom):
     )
     k = GAME_ZOOM_FACTOR - 1  # 0.15
     x_coef = W * k / 2  # 81: centra la ventana en horizontal
-    y_coef = GAME_H * k  # 162: ancla la ventana abajo
+    y_coef = game_h * k  # 162 con 1080, 288 con 1920: ancla abajo
     return (
         f"crop={game_crop},"
-        f"scale=w='{W}*(1+{k:g}*{f})':h='{GAME_H}*(1+{k:g}*{f})':eval=frame,"
-        f"crop={W}:{GAME_H}:'{x_coef:g}*{f}':'{y_coef:g}*{f}',setsar=1"
+        f"scale=w='{W}*(1+{k:g}*{f})':h='{game_h}*(1+{k:g}*{f})':eval=frame,"
+        f"crop={W}:{game_h}:'{x_coef:g}*{f}':'{y_coef:g}*{f}',setsar=1"
     )
 
 

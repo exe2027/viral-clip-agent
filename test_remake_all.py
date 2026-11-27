@@ -641,5 +641,89 @@ class TestMainDryRun(unittest.TestCase):
             self.assertFalse(os.path.exists(out))
 
 
+class TestRemakePlantilla(_PatchBannerAss):
+    """Spec §9.4 (rubius sin webcam): la plantilla la decide la
+    fuente antes de renderizar y se propaga a la validación, al
+    registro por clip y a los payloads de informe."""
+
+    def _remake_con_decision(self, clip, decision, validate_calls):
+        bridge = _FakeBridge()
+        with mock.patch(
+            "clipagent.template_decision"
+            ".decide_template_for_segment",
+            return_value=decision,
+        ):
+            rec = self._remake(
+                clip, bridge,
+                download_fn=_fake_download(),
+                transcribe_fn=_fake_transcribe(),
+                render_fn=_fake_render(),
+                validate_fn=lambda *a, **kw: (
+                    validate_calls.append(kw.get("plantilla")),
+                    _veredicto(True),
+                )[1],
+                detect_fn=lambda *a: None,
+            )
+        return rec, bridge
+
+    def test_decision_rubius_valida_con_rubius(self):
+        calls = []
+        rec, _ = self._remake_con_decision(
+            _clip(7), ("rubius", [100, 50, 400, 300], "vote"), calls)
+        self.assertEqual(rec["outcome"], "rehecho")
+        self.assertEqual(calls, ["rubius"])
+        self.assertEqual(rec["plantilla"], "rubius")
+
+    def test_decision_sin_webcam_valida_con_sin_webcam(self):
+        calls = []
+        rec, _ = self._remake_con_decision(
+            _clip(7),
+            ("rubius_sin_webcam", None, "sin cara en las 5"),
+            calls)
+        self.assertEqual(rec["outcome"], "rehecho")
+        self.assertEqual(calls, ["rubius_sin_webcam"])
+        self.assertEqual(rec["plantilla"], "rubius_sin_webcam")
+
+    def test_batch_mixto_y_batch_acuerdo(self):
+        for decisiones, esperada in (
+            ([("rubius", [1, 1, 2, 2], "vote"),
+              ("rubius_sin_webcam", None, "sin cara")], "mixto"),
+            ([("rubius", [1, 1, 2, 2], "vote"),
+              ("rubius", [1, 1, 2, 2], "vote")], "rubius"),
+        ):
+            bridge = _FakeBridge()
+            with mock.patch(
+                "clipagent.template_decision"
+                ".decide_template_for_segment",
+                side_effect=list(decisiones),
+            ):
+                payload = ra.run_batch(
+                    [_clip(7), _clip(8)], bridge,
+                    out_path=self.out, work_dir=self.work,
+                    tenant="sebastian", cfg=CFG,
+                    download_fn=_fake_download(),
+                    transcribe_fn=_fake_transcribe(),
+                    render_fn=_fake_render(),
+                    validate_fn=lambda *a, **kw: _veredicto(True),
+                    detect_fn=lambda *a: None,
+                )
+            self.assertEqual(payload["plantilla"], esperada)
+            self.assertEqual(
+                [r["plantilla"] for r in payload["clips"]],
+                [d[0] for d in decisiones])
+
+    def test_dry_run_omite_plantilla(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "dry.json")
+            payload = ra.run_dry_run(
+                [{"id": 16, "title": "t", "streamer": "Rubius",
+                  "origin": "live", "status": "en_carpeta",
+                  "publish_blocked": 1, "language": "es"}],
+                {16: {"source_id": 2932415021, "start_sec": 3200,
+                      "end_sec": 3248}},
+                out, "sebastian")
+            self.assertNotIn("plantilla", payload)
+
+
 if __name__ == "__main__":
     unittest.main()

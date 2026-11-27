@@ -702,8 +702,8 @@ def main() -> int:
                    "componentes humanos quedan estimados y el total es BETA")
     p.add_argument("--lang", choices=["es", "en", "both"], default="both")
     p.add_argument("--crop", choices=["center", "left", "right"], default="center")
-    p.add_argument("--layout", choices=["auto", "stack", "pip", "center"], default=None,
-                   help="Layout del clip: auto (decide por fotogramas, default), o forzar stack/pip/center")
+    p.add_argument("--layout", choices=["auto", "stack", "pip", "center", "game"], default=None,
+                   help="Layout del clip: auto (decide por fotogramas, default), o forzar stack/pip/center/game (game: gameplay a pantalla completa, formato rubius sin webcam)")
     p.add_argument("--crf", type=int, default=23)
     p.add_argument("--preset", default="fast")
     p.add_argument("--dry-run", action="store_true", help="Solo descarga el chat y lista picos, sin video ni cortes")
@@ -733,7 +733,7 @@ def main() -> int:
                         "config.yaml signals.heatmap.enabled, true)")
     p.add_argument("--no-motion", dest="motion", action="store_false",
                    default=None,
-                   help="No medir el % de juego en movimiento (default: "
+                   help="No medir el %% de juego en movimiento (default: "
                         "config.yaml signals.motion.enabled, true)")
     p.add_argument("--no-game-voice", dest="game_voice", action="store_false",
                    default=None,
@@ -1559,6 +1559,28 @@ def main() -> int:
                 print(f"    Voz del juego: no se pudo estimar ({e}); "
                       "se sigue sin ella.", file=sys.stderr)
                 game_voice_clip = []
+        # Decisión §2.1 (spec rubius sin webcam): sobre el segmento
+        # descargado, antes del corte; sin facecam en la fuente ->
+        # layout "game" (gameplay a pantalla completa) y la entrada
+        # del manifiesto lleva la plantilla. Un layout forzado por
+        # flag se respeta (la decisión ni se corre).
+        plantilla_decidida = None
+        if not args.layout or args.layout == "auto":
+            try:
+                from clipagent.precise_cut import (
+                    get_video_duration as _gvd_dec)
+                from clipagent.template_decision import (
+                    decide_template_for_segment)
+                _seg_dur = _gvd_dec(cut_source) or 0
+                _dec = decide_template_for_segment(
+                    cut_source, _seg_dur, cfg=cfg)
+                if _dec[0] == "rubius_sin_webcam":
+                    args.layout = "game"
+                    plantilla_decidida = "rubius_sin_webcam"
+            except Exception as e:  # noqa: BLE001 - sin decisión,
+                # rubius normal (la puerta de cara decide después).
+                print(f"    Decisión de plantilla: no se pudo "
+                      f"decidir ({e}); rubius normal.", file=sys.stderr)
         # Corte con layout responsive (regla del proyecto): decide por
         # fotogramas muestreados (stack / pip / center, por tramos si
         # cambia dentro del clip). Sin layout.py, recorte centrado.
@@ -1841,6 +1863,13 @@ def main() -> int:
                 "mode": layout_decision.get("mode"),
                 "segments": layout_decision.get("segments", []),
             }
+        # Spec §9.1/§9.3: la plantilla decidida (§2.1) o la que
+        # declara el render viaja en el manifiesto; vod_fallback
+        # la lee (clip.get("plantilla")) y valida con ella.
+        _plantilla_entry = (plantilla_decidida
+                            or (layout_decision or {}).get("plantilla"))
+        if _plantilla_entry:
+            clip_entry["plantilla"] = _plantilla_entry
         manifest["clips"].append(clip_entry)
         # 7.1: candidato para la selección con LLM (transcripción de
         # la ventana + chat). Los datos para recalcular el viral_score

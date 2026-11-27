@@ -757,13 +757,16 @@ class TestRunFacebookClips(unittest.TestCase):
             f.write(b"fake-mp4")
         return out
 
-    def _render(self, seg_path, clip_path, duration, cfg):
+    def _render(self, seg_path, clip_path, duration, cfg,
+                layout_mode="auto"):
         self.calls["renders"].append(clip_path)
+        self.calls.setdefault("render_layout", []).append(layout_mode)
         with open(clip_path, "wb") as f:
             f.write(b"fake-mp4")
         return {"mode": "rubius", "segments": []}
 
-    def _validate(self, clip_path, title, text, cfg):
+    def _validate(self, clip_path, title, text, cfg, plantilla=None):
+        self.calls.setdefault("validate_plantilla", []).append(plantilla)
         return {"decision": "aprobado"}
 
     def _layout(self, seg_path, duration, cfg):
@@ -940,6 +943,49 @@ class TestRunFacebookClips(unittest.TestCase):
         self.assertEqual(clip["start"], 20)
         self.assertEqual(clip["duration"], 50)
         self.assertEqual(self.calls["segments"], [(20, 70)])
+
+    def test_sin_webcam_render_game_y_plantilla_en_manifiesto(self):
+        # Decisión §2.1 sin_webcam: el render recibe layout_mode
+        # "game", la validación la plantilla y el manifiesto la
+        # lleva (spec §9.1/§9.3).
+        def _transcribe70(path):
+            if "full_audio" in path:
+                return _transcript([
+                    (0, "hablando normal del juego y del directo"),
+                    (30, "jaja qué jugada brutal increíble vamos"),
+                    (60, "hablando normal del juego y del directo")])
+            return _segment_transcript()
+
+        def _rms70(path):
+            if "full_audio" in path:
+                values = [-30.0] * 70
+                for s in range(40, 45):
+                    values[s] = -15.0
+                return [(s, v) for s, v in enumerate(values)]
+            return [(s, -40.0 if s < 25 else -15.0)
+                    for s in range(50)]
+
+        with mock.patch(
+                "clipagent.template_decision.decide_template_for_segment",
+                return_value=("rubius_sin_webcam", None)):
+            manifest = run_facebook_clips(
+                REEL_URL, self.out, top_n=2, lang="es",
+                single_url=True,
+                metadata_fn=lambda url: _meta(duration=70),
+                audio_fn=self._audio,
+                sample_fn=self._sample,
+                transcribe_fn=_transcribe70,
+                rms_fn=_rms70, segment_fn=self._segment,
+                render_fn=self._render, validate_fn=self._validate,
+                layout_fn=self._layout, titles_fn=_titles_passing,
+                llm_client=FakeLLM(FB_PACKAGE_70S))
+        self.assertEqual(len(manifest["clips"]), 1)
+        self.assertEqual(self.calls["render_layout"], ["game"])
+        self.assertEqual(
+            self.calls["validate_plantilla"], ["rubius_sin_webcam"])
+        self.assertEqual(
+            manifest["clips"][0].get("plantilla"),
+            "rubius_sin_webcam")
 
     def test_hashtags_sin_gta_se_salta(self):
         manifest = run_facebook_clips(

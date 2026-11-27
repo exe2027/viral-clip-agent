@@ -917,11 +917,24 @@ class LiveCutterSession(LiveSession):
         from .validate import ConfigError
         from .workers import apply_sfx, cut_clip, subtitle_clip
         hard = final_review.get("hard_failures") or []
+        motivo = final_review.get("motivo") or ""
         face_box = None
+        # Rescate de layout (spec §2.2B, formato sin webcam): el
+        # fallo de plantilla por duplicación o cámara contaminada
+        # (§6.3) también dispara el rescate — antes solo lo hacía
+        # "cara" en hard, y en los 10 EN cara no estaba en los
+        # fallos duros. La decisión sobre el segmento fuente dice
+        # si el re-render es rubius con caja forzada o sin webcam.
+        layout_fallo = ("plantilla" in hard
+                        and ("layout" in motivo
+                             or "cámara contaminada" in motivo))
+        sin_webcam = False
         if "cara" in hard:
             found = find_facecam_box_in_source(
                 video_for_cut, CLIP_DURATION_S, self.cfg)
-            if not found:
+            if found:
+                face_box = found["box"]
+            elif not layout_fallo:
                 review = dict(final_review)
                 review["needs_human_review"] = True
                 review["motivo"] = (
@@ -929,14 +942,47 @@ class LiveCutterSession(LiveSession):
                     + " — sin cara detectable en la fuente: "
                     "revisión humana")
                 return review, final_clip, sub
-            face_box = found["box"]
+            # Sin caja y con fallo de layout: cae al rescate de
+            # layout de abajo (quizá no hay cara en la fuente).
+        if face_box is None and layout_fallo:
+            from .template_decision import (
+                decide_template_for_segment)
+            try:
+                _dec = decide_template_for_segment(
+                    video_for_cut, CLIP_DURATION_S, cfg=self.cfg)
+            except Exception:  # noqa: BLE001 - sin decisión,
+                # revisión humana, como hoy.
+                _dec = ("rubius", None, "ambiguo")
+            if _dec[0] == "rubius_sin_webcam":
+                sin_webcam = True
+                plantilla = "rubius_sin_webcam"
+            elif len(_dec) == 3 and _dec[2] == "ambiguo":
+                review = dict(final_review)
+                review["needs_human_review"] = True
+                review["motivo"] = (
+                    (motivo or "")
+                    + " — sin decisión concluyente sobre la fuente: "
+                    "revisión humana")
+                return review, final_clip, sub
+            elif _dec[1]:
+                face_box = _dec[1]
+            else:
+                review = dict(final_review)
+                review["needs_human_review"] = True
+                review["motivo"] = (
+                    (motivo or "")
+                    + " — rubius sin caja en la fuente: "
+                    "revisión humana")
+                return review, final_clip, sub
         cfg2 = dict(self.cfg or {})
         if face_box is not None:
             cfg2["facecam_box"] = face_box
         raw2 = os.path.join(work_dir, f"clip_{n:02d}_r1.mp4")
         try:
             cut_clip(video_for_cut, cut_start, CLIP_DURATION_S,
-                     raw2, layout_mode="auto", cfg=cfg2, hype_s=hype_s)
+                     raw2,
+                     layout_mode="game" if sin_webcam else "auto",
+                     cfg=cfg2, hype_s=hype_s)
         except Exception:  # noqa: BLE001 - sin re-render, no tumba
             review = dict(final_review)
             review["needs_human_review"] = True
@@ -1115,8 +1161,28 @@ class LiveCutterSession(LiveSession):
         except Exception:
             pass
         raw_clip = os.path.join(work_dir, f"clip_{n:02d}.mp4")
+        # Pre-chequeo §2.2A (spec rubius sin webcam): la decisión
+        # sobre el segmento fuente se toma ANTES del primer render.
+        # Si la fuente no tiene facecam, se corta directo como
+        # rubius_sin_webcam (layout "game", gameplay a pantalla
+        # completa); si es ambiguo, rubius normal (la puerta de
+        # cara decide después). La decisión se guarda: hasta que
+        # el render devuelva la clave "plantilla" en la decisión
+        # (§9.1, render.py), el validador usa la decidida aquí.
+        layout_mode = "auto"
+        plantilla_decidida = None
+        try:
+            from .template_decision import (
+                decide_template_for_segment)
+            _dec = decide_template_for_segment(
+                video_for_cut, CLIP_DURATION_S, cfg=self.cfg)
+            if _dec[0] == "rubius_sin_webcam":
+                layout_mode = "game"
+                plantilla_decidida = "rubius_sin_webcam"
+        except Exception:  # noqa: BLE001 - sin decisión, rubius
+            layout_mode = "auto"
         cut = cut_clip(video_for_cut, cut_start, CLIP_DURATION_S,
-                       raw_clip, layout_mode="auto", cfg=self.cfg,
+                       raw_clip, layout_mode=layout_mode, cfg=self.cfg,
                        hype_s=hype_s)
         layout = cut.get("layout") or {}
         # Plantilla del clip (2026-11-19): la que produce el render
@@ -1124,7 +1190,7 @@ class LiveCutterSession(LiveSession):
         # "plantilla", manda. Sin ella, el validador usa el default
         # de config.yaml (rubius).
         from .config import template_for_variant
-        plantilla = (layout.get("plantilla")
+        plantilla = (layout.get("plantilla") or plantilla_decidida
                      or template_for_variant(
                          layout.get("split_variant")))
         # 5b. TRANSCRIPCIÓN ANTES DEL PAQUETE (spec títulos-verdad
@@ -1682,6 +1748,13 @@ class LiveCutterSession(LiveSession):
                 _viral["hold_reason"] = (
                     (record.get("viral") or {}).get("hold_reason")
                     or HOLD_REASON)
+            # Spec §8: la plantilla del render viaja al panel
+            # dentro de viral (el Worker la guarda; sin ella la
+            # píldora no ve nada). Solo si hay plantilla decidida:
+            # un None no se manda (el merge del Worker conservaría
+            # el valor anterior).
+            if record.get("plantilla"):
+                _viral["plantilla"] = record["plantilla"]
             if _viral:
                 payload["viral"] = _viral
             clip = self.bridge.create_clip(payload)

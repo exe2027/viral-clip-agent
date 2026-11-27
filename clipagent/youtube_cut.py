@@ -546,22 +546,48 @@ def _default_transcribe(path, model="tiny"):
     return transcript or {"segments": []}
 
 
-def _default_render(seg_path, clip_path, duration, cfg):
+def _acepta_kw(fn, nombre):
+    """True si fn acepta el kwarg `nombre` (o **kwargs).
+
+    Las funciones inyectadas (tests, otros caminos) pueden tener
+    la firma vieja sin el kwarg: en ese caso el llamador no lo
+    pasa (compatibilidad), en vez de romper con TypeError — que
+    el bucle tragaría como "render falló" / "sin veredicto".
+    """
+    try:
+        import inspect
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return (nombre in params
+            or any(p.kind == inspect.Parameter.VAR_KEYWORD
+                   for p in params.values()))
+
+
+def _default_render(seg_path, clip_path, duration, cfg,
+                    layout_mode="auto"):
+    """Render por defecto: mismo nombre y semántica de layout_mode
+    que cut_clip_with_layout ("auto" decide por fotogramas;
+    "game" es gameplay a pantalla completa, formato rubius sin
+    webcam, spec §9.1)."""
     from .config import get_layout_config
     from .render import cut_clip_with_layout
 
     layout_cfg = get_layout_config(cfg or {})
     return cut_clip_with_layout(
         seg_path, 0, duration, clip_path,
-        layout_mode="auto", cfg=layout_cfg)
+        layout_mode=layout_mode, cfg=layout_cfg)
 
 
-def _default_validate(clip_path, title, transcript_txt, cfg):
+def _default_validate(clip_path, title, transcript_txt, cfg,
+                      plantilla=None):
+    """Validación por defecto: plantilla decidida (§2.1); sin ella
+    el validador usa el default de config.yaml (rubius)."""
     from .final_review import validate_final_clip
 
     return validate_final_clip(
         clip_path, title, transcript_text=transcript_txt,
-        srt_path="", cfg=cfg or {})
+        srt_path="", cfg=cfg or {}, plantilla=plantilla)
 
 
 def _default_layout(seg_path, duration, cfg):
@@ -729,6 +755,8 @@ def run_youtube_clips(vod_url, out_dir, top_n=2, lang="es",
     download_segment = segment_fn or download_youtube_segment
     render = render_fn or _default_render
     validate = validate_fn or _default_validate
+    _render_kw = _acepta_kw(render, "layout_mode")
+    _validate_kw = _acepta_kw(validate, "plantilla")
     titles = titles_fn or build_youtube_package
     layout_detect = layout_fn or _default_layout
 
@@ -973,8 +1001,23 @@ def run_youtube_clips(vod_url, out_dir, top_n=2, lang="es",
                  f"_s{cand['points']}_r{cand['risas']}"
                  f"h{cand['hype']}.mp4")
         clip_path = os.path.join(clips_dir, fname)
+        # Decisión §2.1 (spec rubius sin webcam): sobre el segmento
+        # descargado, antes del corte; sin facecam -> layout "game"
+        # y validación contra rubius_sin_webcam.
+        layout_mode = "auto"
+        plantilla = None
         try:
-            render(seg_path, clip_path, dur, cfg)
+            from .template_decision import decide_template_for_segment
+            _dec = decide_template_for_segment(seg_path, dur, cfg=cfg)
+            if _dec[0] == "rubius_sin_webcam":
+                layout_mode = "game"
+                plantilla = "rubius_sin_webcam"
+        except Exception:  # noqa: BLE001 - sin decisión, auto
+            pass
+        try:
+            render(seg_path, clip_path, dur, cfg,
+                   **({"layout_mode": layout_mode}
+                      if _render_kw else {}))
         except Exception as exc:  # noqa: BLE001 - sin render no hay clip
             _log(f"render {idx} falló ({exc}); se sigue")
             manifest["descartados"].append({
@@ -1031,7 +1074,9 @@ def run_youtube_clips(vod_url, out_dir, top_n=2, lang="es",
         # veredicto «rechazado» no se guarda sin revisar los
         # fotogramas: el clip rechazado no entra en el manifiesto.
         try:
-            verdict = validate(clip_path, title, seg_text, cfg)
+            verdict = validate(clip_path, title, seg_text, cfg,
+                               **({"plantilla": plantilla}
+                                  if _validate_kw else {}))
         except Exception:  # noqa: BLE001 - sin veredicto, pendiente
             verdict = {"decision": "pendiente_revision"}
         if (verdict or {}).get("decision") == "rechazado":
@@ -1070,6 +1115,10 @@ def run_youtube_clips(vod_url, out_dir, top_n=2, lang="es",
             "vod_id": video_id,
             "vod_layout": None,
         }
+        # Spec §9.3: la plantilla decidida (§2.1) viaja en el
+        # manifiesto; vod_fallback la lee y valida con ella.
+        if plantilla:
+            clip_entry["plantilla"] = plantilla
         manifest["clips"].append(clip_entry)
         _write_manifest(out_dir, manifest)
     # Layout del VOD (facecam): lo lee run() para el log. Si no se

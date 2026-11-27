@@ -459,6 +459,40 @@ describe("viral.quality_gate (db.ts: ida y vuelta)", () => {
   });
 });
 
+describe("viral.plantilla (spec rubius sin webcam, db.ts)", () => {
+  test("parseViralInput acepta los 4 nombres conocidos", () => {
+    for (const name of ["rdjavi", "willyrex", "rubius", "rubius_sin_webcam"]) {
+      const r = parseViralInput({ viral: { plantilla: name } });
+      expect(typeof r).not.toBe("string");
+      expect((r as { plantilla?: string }).plantilla).toBe(name);
+    }
+  });
+  test("parseViralInput rechaza un nombre desconocido y un no-string", () => {
+    const r = parseViralInput({ viral: { plantilla: "clakea" } });
+    expect(typeof r).toBe("string");
+    expect(r as string).toMatch(/plantilla/);
+    const r2 = parseViralInput({ viral: { plantilla: 7 } });
+    expect(typeof r2).toBe("string");
+    expect(r2 as string).toMatch(/plantilla/);
+  });
+  test("mergeViralJson conserva base.plantilla sin mención y la reemplaza con mención", () => {
+    const first = mergeViralJson("{}", { plantilla: "rubius" });
+    expect(JSON.parse(first).plantilla).toBe("rubius");
+    const kept = mergeViralJson(first, { viral_score: 60 });
+    expect(JSON.parse(kept).plantilla).toBe("rubius");
+    const replaced = mergeViralJson(first, { plantilla: "rubius_sin_webcam" });
+    expect(JSON.parse(replaced).plantilla).toBe("rubius_sin_webcam");
+  });
+  test("POST → GET: mergeViralJson desde vacío guarda la plantilla (round-trip del JSON)", () => {
+    const parsed = parseViralInput({ viral: { plantilla: "rubius_sin_webcam", viral_score: 60 } });
+    expect(typeof parsed).not.toBe("string");
+    const stored = mergeViralJson("{}", parsed as never);
+    const back = JSON.parse(stored);
+    expect(back.plantilla).toBe("rubius_sin_webcam");
+    expect(back.viral_score).toBe(60);
+  });
+});
+
 describe("publishGate + calidad B4", () => {
   test("clip sin validar → frena en automático", () => {
     const c = clip({ viral: '{"platforms":{"youtube_shorts":{"score":95}}}', preview_seen: 0 });

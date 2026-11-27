@@ -1732,10 +1732,16 @@ ni como fallido.
 
 Suite Python, suite Worker, tsc, ruff (medir primero, no asumir). Re-verificar
 por grep que ningún test afirma `motivo == ""` (M-2: verificado por el goldfish
-de la v5 — grep vacío). **Medido en v6 (2026-11-27 ~03:00, árbol actual):**
+de la v5 — grep vacío). **Medido en v6 (2026-11-27 ~03:00–03:20, árbol actual):**
 `test_template_decision.py` + `test_quality_gate_sin_webcam.py` +
-`test_config_sin_webcam.py` + `test_game_filter.py`: **24 passed**. El resto de
-la suite (incluidos `test_layout_gate.py` y `test_final_gate.py`) se mide
+`test_config_sin_webcam.py` + `test_game_filter.py`: **24 passed**; y la
+corrida de referencia de los 9 archivos de la puerta/sin_webcam
+(`test_layout_gate.py`, `test_final_gate.py`,
+`test_template_decision.py`, `test_live_cutter_sin_webcam.py`,
+`test_vod_sin_webcam.py`, `test_auto_clips_layout.py`,
+`test_config_sin_webcam.py`, `test_quality_gate_sin_webcam.py`,
+`test_game_filter.py`): **92 passed, 22 subtests passed** (1181,50 s, VM
+cargada). La suite Python completa, la suite Worker, tsc y ruff se miden
 antes de implementar; si el árbol se commitea antes, se re-mide.
 
 ## §11. Preguntas abiertas

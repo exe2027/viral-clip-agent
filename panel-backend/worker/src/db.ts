@@ -211,6 +211,12 @@ export interface QualityGateVerdict {
 
 export interface ViralData {
   score_kind?: "ia" | "manual";
+  // Plantilla del render (spec rubius sin webcam, 2026-11-26):
+  // la decide el cerebro por detección en la fuente y viaja en
+  // el JSON viral del POST /api/clips; el Worker solo valida la
+  // forma (conjunto cerrado) y la guarda. Valores: rdjavi,
+  // willyrex, rubius, rubius_sin_webcam.
+  plantilla?: string;
   viral_score?: number;
   viral_breakdown?: Record<string, unknown>;
   hype_score?: number;
@@ -364,6 +370,15 @@ export function parseViralInput(body: Record<string, unknown>): Partial<ViralDat
     if (v.score_kind !== undefined) {
       if (v.score_kind !== "ia" && v.score_kind !== "manual") return "score_kind debe ser \"ia\" o \"manual\".";
       out.score_kind = v.score_kind;
+    }
+    // Plantilla del render (spec rubius sin webcam, 2026-11-26):
+    // conjunto cerrado, el mismo que resolve_template del cerebro.
+    // Un nombre desconocido nunca se guarda en silencio.
+    if (v.plantilla !== undefined) {
+      if (typeof v.plantilla !== "string" || !["rdjavi", "willyrex", "rubius", "rubius_sin_webcam"].includes(v.plantilla)) {
+        return "viral.plantilla debe ser una plantilla conocida: rdjavi, willyrex, rubius o rubius_sin_webcam.";
+      }
+      out.plantilla = v.plantilla;
     }
     const numField = (key: "viral_score" | "hype_score" | "priority", max: number): string | null => {
       if (v[key] === undefined) return null;
@@ -528,6 +543,10 @@ export function mergeViralJson(existing: string | null | undefined, patch: Parti
   // Puerta de calidad B4: el veredicto reemplaza al anterior (no
   // se fusiona por criterio: cada render tiene su propio veredicto).
   if (patch.quality_gate !== undefined) next.quality_gate = patch.quality_gate;
+  // Plantilla del render (spec rubius sin webcam): reemplaza a la
+  // anterior — cada render tiene su propia plantilla. Sin mención
+  // en el patch, la de base sobrevive (el spread inicial).
+  if (patch.plantilla !== undefined) next.plantilla = patch.plantilla;
   // Entradas y procedencia del SEO (2026-11-24, auto-seo): se
   // guardan tal cual (reemplazan a las anteriores, como el gate).
   if (patch.seo_inputs !== undefined) next.seo_inputs = patch.seo_inputs;

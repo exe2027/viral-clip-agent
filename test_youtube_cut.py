@@ -548,12 +548,15 @@ class TestRunYoutubeClips(unittest.TestCase):
             f.write(b"fake-mp4")
         return out
 
-    def _render(self, seg_path, clip_path, duration, cfg):
+    def _render(self, seg_path, clip_path, duration, cfg,
+                layout_mode="auto"):
+        self.calls.setdefault("render_layout", []).append(layout_mode)
         with open(clip_path, "wb") as f:
             f.write(b"fake-mp4")
         return {"mode": "rubius", "segments": []}
 
-    def _validate(self, clip_path, title, text, cfg):
+    def _validate(self, clip_path, title, text, cfg, plantilla=None):
+        self.calls.setdefault("validate_plantilla", []).append(plantilla)
         return {"decision": "aprobado"}
 
     def _layout(self, seg_path, duration, cfg):
@@ -696,6 +699,31 @@ class TestRunYoutubeClips(unittest.TestCase):
         clip = manifest["clips"][0]
         self.assertEqual(clip["start"], 0)
         self.assertEqual(clip["duration"], 50)
+
+    def test_sin_webcam_render_game_y_plantilla_en_manifiesto(self):
+        # Decisión §2.1 sin_webcam: el render recibe layout_mode
+        # "game", la validación la plantilla y el manifiesto la
+        # lleva (spec §9.1/§9.3).
+        with mock.patch(
+                "clipagent.template_decision.decide_template_for_segment",
+                return_value=("rubius_sin_webcam", None)):
+            manifest = run_youtube_clips(
+                VIDEO_URL, self.out, top_n=2, lang="es",
+                single_url=True,
+                metadata_fn=lambda url: _meta(duration=50),
+                audio_fn=self._audio,
+                transcribe_fn=lambda p: _transcript_short(),
+                rms_fn=lambda p: _rms_short(),
+                segment_fn=self._segment,
+                render_fn=self._render, validate_fn=self._validate,
+                layout_fn=self._layout, llm_client=FakeLLM(YT_PACKAGE))
+        self.assertEqual(len(manifest["clips"]), 1)
+        self.assertEqual(self.calls["render_layout"], ["game"])
+        self.assertEqual(
+            self.calls["validate_plantilla"], ["rubius_sin_webcam"])
+        self.assertEqual(
+            manifest["clips"][0].get("plantilla"),
+            "rubius_sin_webcam")
 
     def test_no_gta_se_salta(self):
         manifest = run_youtube_clips(

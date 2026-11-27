@@ -507,6 +507,17 @@ function langPill(c) {
   const l = clipLanguage(c);
   return `<span class="pill ${l === "en" ? "violet" : "ok"}" title="Idioma del clip: ${langName(l)}">${l.toUpperCase()}</span>`;
 }
+// Plantilla del render (spec rubius sin webcam, 2026-11-26):
+// píldora solo-lectura en la Cola y el Editor. El valor vive en
+// viral.plantilla (lo guarda el Worker); el motivo sale del
+// criterio webcam del quality_gate (§6.4).
+function templatePill(c) {
+  const v = parseViral(c) || {};
+  if (String(v.plantilla || "") !== "rubius_sin_webcam") return "";
+  const gate = (v.quality_gate && v.quality_gate.criterios) || {};
+  const motivo = String(((gate.webcam || {}).motivo || "").trim() || "sin webcam en la fuente");
+  return `<span class="pill warn" title="${esc(motivo)}">Rubius sin webcam</span>`;
+}
 // Bloqueo visible en la Cola (2026-11-19): un clip con
 // publish_blocked=1 no se publica; la lista lo muestra con su motivo
 // en vez de esconderlo en el detalle. Sin voz = necesita
@@ -682,7 +693,7 @@ function clipCardHtml(c, open) {
         <h3>${esc(clipTitleOf(c))}</h3>
         ${c.seo_title && c.seo_title !== c.title ? `<p class="dim">${esc(c.seo_title)}</p>` : ""}
         ${c.seo_description ? `<p class="dim clip-desc">${esc(c.seo_description)}</p>` : ""}
-        <div class="clip-meta">${statusPill(c.status)}${retentionPill(c)}${blockedPill(c)}${langPill(c)}${c.streamer ? `<span>${esc(c.streamer)}</span>` : ""}${c.game ? `<span class="pill ${c.game === "GTA VI" ? "ok" : "bad"}">${esc(c.game)}</span>` : `<span class="pill bad">Sin categoría</span>`}${open ? `<span class="pill ok">Abierto</span>` : ""}<span>Creado ${fmtDate(c.created_at)}</span></div>
+        <div class="clip-meta">${statusPill(c.status)}${retentionPill(c)}${blockedPill(c)}${langPill(c)}${templatePill(c)}${c.streamer ? `<span>${esc(c.streamer)}</span>` : ""}${c.game ? `<span class="pill ${c.game === "GTA VI" ? "ok" : "bad"}">${esc(c.game)}</span>` : `<span class="pill bad">Sin categoría</span>`}${open ? `<span class="pill ok">Abierto</span>` : ""}<span>Creado ${fmtDate(c.created_at)}</span></div>
       </div>
     </div>
     ${platformMatrix(c, "cols-2")}
@@ -694,7 +705,7 @@ function clipCardHtml(c, open) {
 }
 function clipRowHtml(c) {
   const score = c.score;
-  return `<tr><td><button type="button" class="ghost clip-title-btn" data-clip="${c.id}"><b>${esc(clipTitleOf(c))}</b></button>${c.seo_title && c.seo_title !== c.title ? `<br><span class="dim">${esc(c.seo_title)}</span>` : ""}${c.seo_description ? `<br><span class="dim clip-desc">${esc(c.seo_description)}</span>` : ""}<br><span class="dim">Categoría: ${esc(c.game || "sin categoría")}</span><br>${platformMatrix(c)}${scoreChipsHtml(c)}<br><button type="button" class="ghost" data-queue-preview="${c.id}">▶ Ver preview</button><div class="queue-preview-frame" data-queue-frame="${c.id}" hidden></div></td><td>${esc(c.streamer || "—")}</td><td>${statusPill(c.status)}${retentionPill(c) ? `<br>${retentionPill(c)}` : ""}${blockedPill(c) ? `<br>${blockedPill(c)}` : ""}<br>${langPill(c)}</td><td class="num">${score ?? "—"}</td><td>${esc(parsePlatforms(c.platforms).join(", "))}</td><td>${fmtDate(c.created_at)}</td></tr>`;
+  return `<tr><td><button type="button" class="ghost clip-title-btn" data-clip="${c.id}"><b>${esc(clipTitleOf(c))}</b></button>${c.seo_title && c.seo_title !== c.title ? `<br><span class="dim">${esc(c.seo_title)}</span>` : ""}${c.seo_description ? `<br><span class="dim clip-desc">${esc(c.seo_description)}</span>` : ""}<br><span class="dim">Categoría: ${esc(c.game || "sin categoría")}</span><br>${platformMatrix(c)}${scoreChipsHtml(c)}<br><button type="button" class="ghost" data-queue-preview="${c.id}">▶ Ver preview</button><div class="queue-preview-frame" data-queue-frame="${c.id}" hidden></div></td><td>${esc(c.streamer || "—")}</td><td>${statusPill(c.status)}${retentionPill(c) ? `<br>${retentionPill(c)}` : ""}${blockedPill(c) ? `<br>${blockedPill(c)}` : ""}${templatePill(c) ? `<br>${templatePill(c)}` : ""}<br>${langPill(c)}</td><td class="num">${score ?? "—"}</td><td>${esc(parsePlatforms(c.platforms).join(", "))}</td><td>${fmtDate(c.created_at)}</td></tr>`;
 }
 function bindBreakdownButtons() {
   document.querySelectorAll("[data-breakdown]").forEach((b) => b.addEventListener("click", () => {
@@ -1008,7 +1019,7 @@ async function selectClip(id, opts) {
     ring.textContent = c.score ?? "—";
     ring.className = "score-ring lg " + scoreClass(c.score);
     $("clipDetail").innerHTML =
-      `<p>${statusPill(c.status)} ${langPill(c)} · Idioma: <b>${langName(clipLanguage(c))} (${clipLanguage(c).toUpperCase()})</b> · Categoría: <b>${esc(c.game || "sin categoría")}</b> · Puntos: <b>${c.score ?? "—"}</b> · Plataformas: ${esc(parsePlatforms(c.platforms).join(", "))}</p>` +
+      `<p>${statusPill(c.status)} ${langPill(c)} ${templatePill(c)} · Idioma: <b>${langName(clipLanguage(c))} (${clipLanguage(c).toUpperCase()})</b> · Categoría: <b>${esc(c.game || "sin categoría")}</b> · Puntos: <b>${c.score ?? "—"}</b> · Plataformas: ${esc(parsePlatforms(c.platforms).join(", "))}</p>` +
       scoreChipsHtml(c) +
       scoreBar(c) +
       platformMatrix(c) +

@@ -437,6 +437,20 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
             clip, OUTCOME_ERROR, ACCION_HUMANO,
             f"descarga del segmento falló: {exc}",
         )
+    # Decisión §2.1 (spec rubius sin webcam): la plantilla la
+    # decide la fuente, antes de renderizar. No se fuerza: si la
+    # fuente no tiene facecam, la plantilla decidida es
+    # rubius_sin_webcam (el render de este camino sigue siendo
+    # rubius — el render sin webcam por cut_clip_with_layout es
+    # un cambio aparte, no de §9.4 — y la validación lo cazaría:
+    # fail-closed, nunca un clip con formato equivocado).
+    plantilla_decidida = "rubius"
+    try:
+        from .template_decision import decide_template_for_segment
+        _dec = decide_template_for_segment(seg_path, duration, cfg)
+        plantilla_decidida = _dec[0]
+    except Exception:  # noqa: BLE001 - sin decisión, rubius
+        plantilla_decidida = "rubius"
     strategies = box_strategies(seg_path, duration, cfg, detect_fn)
     attempts = strategies[: max(1, int(max_intentos))]
     intentos = []
@@ -478,7 +492,7 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
                 transcript_text=transcript_text_for_srt(
                     rendered.get("srt") or ""),
                 srt_path=rendered.get("srt") or "",
-                cfg=cfg or {}, plantilla="rubius",
+                cfg=cfg or {}, plantilla=plantilla_decidida,
             )
         except ConfigError:
             raise
@@ -577,7 +591,8 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
             "se borran y se republican a mano (TikTok no tiene "
             "API de borrado)",
             {"intentos": intentos, "final": final,
-             "no_speech": no_speech, "quality_gate": new_gate},
+             "no_speech": no_speech, "quality_gate": new_gate,
+             "plantilla": plantilla_decidida},
         )
     try:
         bridge.update_clip(clip_id, {
@@ -598,7 +613,8 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
         "sin voz verificable: se publica igual sin subtítulos "
         "(pasa las puertas)",
         {"intentos": intentos, "final": final,
-         "no_speech": no_speech, "quality_gate": new_gate},
+         "no_speech": no_speech, "quality_gate": new_gate,
+         "plantilla": plantilla_decidida},
     )
 
 
@@ -745,11 +761,16 @@ def run_batch(clips, bridge, *, out_path, work_dir, tenant, cfg,
             flush=True,
         )
     summary = _summary(results)
+    # Spec §9.4: la plantilla de la corrida sale de los registros
+    # por clip (rec["plantilla"]): se conserva la clave solo
+    # cuando todo el batch acuerda una plantilla; "mixto" si
+    # mezcla; se omite si ningún registro la trae.
+    _plantillas = {r.get("plantilla") for r in results
+                   if r.get("plantilla")}
     payload = {
         "modo": "panel",
         "tenant": tenant,
         "generado_en": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "plantilla": "rubius",
         "max_intentos": max_intentos,
         "resumen": summary,
         "notas": [
@@ -763,6 +784,10 @@ def run_batch(clips, bridge, *, out_path, work_dir, tenant, cfg,
         ],
         "clips": results,
     }
+    if len(_plantillas) == 1:
+        payload["plantilla"] = _plantillas.pop()
+    elif len(_plantillas) > 1:
+        payload["plantilla"] = "mixto"
     _write_json(out_path, payload)
     _print_summary(summary)
     print(f"JSON: {out_path}", flush=True)
@@ -818,7 +843,9 @@ def run_dry_run(records, source_map, out_path, tenant):
         "modo": "dry-run",
         "tenant": tenant,
         "generado_en": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "plantilla": "rubius",
+        # Spec §9.4: en dry-run no se decide ninguna plantilla (no
+        # se descarga ni se renderiza ningún segmento), así que el
+        # payload OMITE la clave en vez de afirmar "rubius".
         "resumen": summary,
         "notas": [
             "Dry-run: clasifica los bloqueados de la auditoría "

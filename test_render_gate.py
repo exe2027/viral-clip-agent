@@ -230,6 +230,67 @@ def test_h_corte_pasa_y_sin_scores_corta(monkeypatch):
     assert len(calls) == 2
 
 
+def test_h_corte_sin_webcam_corta_game(monkeypatch):
+    """Decisión §2.1 sin_webcam -> layout_mode "game" y plantilla
+    rubius_sin_webcam en el resultado (spec §9.1)."""
+    from clipagent import template_decision, workers
+    calls = []
+    monkeypatch.setattr(
+        workers, "cut_clip",
+        lambda *a, **k: calls.append((a, k)) or {
+            "output": "x.mp4", "layout": {"mode": "game"}})
+    monkeypatch.setattr(
+        template_decision, "decide_template_for_segment",
+        lambda *a, **k: ("rubius_sin_webcam", None))
+    job = {"payload": {"video": "v.mp4", "start_sec": 0,
+                       "duration": 40, "output": "o.mp4"}}
+    assert workers._h_corte(None, job, cfg={}) == {
+        "output": "x.mp4", "layout": {"mode": "game"},
+        "plantilla": "rubius_sin_webcam"}
+    assert calls[0][1]["layout_mode"] == "game"
+
+
+def test_h_corte_modo_explicito_respeta_sin_decidir(monkeypatch):
+    """Un layout_mode explícito del productor se respeta: la
+    decisión §2.1 ni se corre."""
+    from clipagent import template_decision, workers
+    calls = []
+    monkeypatch.setattr(
+        workers, "cut_clip",
+        lambda *a, **k: calls.append((a, k)) or {"output": "x.mp4"})
+    decide_calls = []
+    monkeypatch.setattr(
+        template_decision, "decide_template_for_segment",
+        lambda *a, **k: decide_calls.append(1)
+        or ("rubius_sin_webcam", None))
+    job = {"payload": {"video": "v.mp4", "start_sec": 0,
+                       "duration": 40, "output": "o.mp4",
+                       "layout_mode": "stack"}}
+    workers._h_corte(None, job, cfg={})
+    assert decide_calls == []
+    assert calls[0][1]["layout_mode"] == "stack"
+
+
+def test_h_corte_decision_que_falla_no_tumba(monkeypatch):
+    """Si la decisión §2.1 levanta, el corte sigue en auto."""
+    from clipagent import template_decision, workers
+    calls = []
+    monkeypatch.setattr(
+        workers, "cut_clip",
+        lambda *a, **k: calls.append((a, k)) or {"output": "x.mp4"})
+
+    def _boom(*a, **k):
+        raise RuntimeError("sin vídeo")
+
+    monkeypatch.setattr(
+        template_decision, "decide_template_for_segment", _boom)
+    job = {"payload": {"video": "v.mp4", "start_sec": 0,
+                       "duration": 40, "output": "o.mp4"}}
+    assert workers._h_corte(None, job, cfg={}) == {
+        "output": "x.mp4", "plantilla": None}
+    assert calls[0][1]["layout_mode"] == "auto"
+
+
 @pytest.fixture()
 def store(tmp_path):
     s = StepJobs(str(tmp_path / "jobs.db"))

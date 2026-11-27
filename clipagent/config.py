@@ -371,23 +371,6 @@ DEFAULT_CONFIG = {
 }
 
 
-# Claves obligatorias de cada receta de plantilla en config.yaml
-# (``templates.<nombre>``). Portado de main para la plantilla
-# rubius: load_rubius_recipe() falla fuerte si falta alguna
-# (ConfigError con el nombre), nunca default silencioso.
-TEMPLATE_REQUIRED_KEYS = {
-    "rdjavi": ("cam", "karaoke_band", "game", "subs_band",
-               "subs_style", "subs_over_game", "cam_full_width",
-               "blurred_bg"),
-    "willyrex": ("cam", "title_band", "game", "subs_band",
-                 "subs_style", "subs_over_game", "cam_full_width",
-                 "blurred_bg"),
-    "rubius": ("cam", "game", "title_banner", "subs_zone",
-               "subs_style", "subs_over_game", "cam_full_width",
-               "blurred_bg"),
-}
-
-
 # REGLAS OBVIAS DEL PROYECTO (decisiones del usuario 2026-11-16/17).
 # Canónicas en config.yaml `rules:`; estos valores son el espejo en
 # código cuando no hay config.yaml. Si una regla cambia, cambia en
@@ -654,13 +637,23 @@ def resolve_subtitle_task(detected_lang, subtitle_lang="auto",
 
 
 TEMPLATE_NAMES = ("rdjavi", "willyrex", "rubius")
+# NOTA (spec §6.2, implementación por fases): "rubius_sin_webcam"
+# entra en TEMPLATE_NAMES EN EL MISMO CAMBIO que su receta en
+# config.yaml (§6.1) — load_validator_config exige una receta por
+# cada nombre de esta tupla, y la receta aún no está en el archivo
+# (el coordinador del fix de layout edita config.yaml ahora mismo).
+# resolve_template YA acepta el 4º nombre (lee vcfg["templates"]
+# directamente) y TEMPLATE_REQUIRED_KEYS YA trae sus claves; lo
+# que falta es solo el alta en el loader, que va con la receta.
 
 # Recetas de plantilla (2026-11-19): claves obligatorias por
 # receta en config.yaml (sección `templates`). `cam` y `game`
-# las llevan las tres; el resto depende del estilo de subtítulos:
-# karaoke (rdjavi v1) exige karaoke_band + subs_band; fixed_yellow
-# (willyrex v2) exige title_band + subs_band; word_white (rubius)
-# exige title_banner + subs_zone.
+# las llevan las tres con cámara; el resto depende del estilo de
+# subtítulos: karaoke (rdjavi v1) exige karaoke_band + subs_band;
+# fixed_yellow (willyrex v2) exige title_band + subs_band;
+# word_white (rubius) exige title_banner + subs_zone.
+# rubius_sin_webcam (2026-11-26, spec formato sin webcam) NO lleva
+# `cam`: el gameplay ocupa todo el marco.
 TEMPLATE_REQUIRED_KEYS = {
     "rdjavi": ("cam", "karaoke_band", "game", "subs_band",
                "subs_style", "subs_over_game", "cam_full_width",
@@ -671,6 +664,9 @@ TEMPLATE_REQUIRED_KEYS = {
     "rubius": ("cam", "game", "title_banner", "subs_zone",
                "subs_style", "subs_over_game", "cam_full_width",
                "blurred_bg"),
+    "rubius_sin_webcam": ("game", "title_banner", "subs_zone",
+                          "subs_style", "subs_over_game",
+                          "cam_full_width", "blurred_bg"),
 }
 
 # Variante de render -> plantilla que produce. El render de hoy
@@ -703,8 +699,9 @@ def load_validator_config(cfg=None):
     modo observación era un default silencioso de "pasa" y el
     camino VOD ni cargaba la config.
 
-    TRES plantillas (2026-11-19 19:07): rdjavi (v1), willyrex
-    (v2) y rubius. El default (`templates.default`) es
+    CUATRO plantillas: rdjavi (v1), willyrex
+    (v2) y rubius (2026-11-19 19:07), más rubius_sin_webcam
+    (2026-11-26, sin cámara). El default (`templates.default`) es
     rubius (decisión del usuario 2026-11-19 19:09): un clip sin
     plantilla declarada se valida contra rubius.
 
@@ -965,7 +962,8 @@ def resolve_template(vcfg, plantilla=None):
     recipe = (vcfg.get("templates") or {}).get(name)
     if recipe is None:
         raise ConfigError(
-            f"plantilla {name!r}: no es rdjavi, willyrex ni rubius "
+            f"plantilla {name!r}: no es rdjavi, willyrex, rubius "
+            "ni rubius_sin_webcam "
             "(revisa el campo plantilla del clip o "
             "templates.default en config.yaml)")
     return name, recipe

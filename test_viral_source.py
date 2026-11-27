@@ -583,8 +583,11 @@ def _patch_pipeline(test, decision="aprobado", seo=90):
                       return_value=(True, 0)).start()
     mock.patch.object(vs, "make_word_ass_from_transcript",
                       return_value="[Script Info]\n").start()
-    mock.patch.object(vs, "find_facecam_box_in_source",
-                      return_value=(0, 0, 1080, 840)).start()
+    # Decisión §2.1 (spec rubius sin webcam): la plantilla la
+    # decide la fuente; este camino solo re-hace a rubius.
+    mock.patch(
+        "clipagent.template_decision.decide_template_for_segment",
+        return_value=("rubius", (0, 0, 1080, 840))).start()
     mock.patch.object(vs, "make_banner_png",
                       return_value="/tmp/banner.png").start()
     mock.patch.object(vs, "rubius_render",
@@ -652,6 +655,8 @@ class TestProcessCandidate(unittest.TestCase):
         self.assertIn("abc123", payload["reason"])
         self.assertEqual(payload["subtitles_complete"], 1)
         self.assertEqual(bridge.uploaded, [(1001, "/tmp/final.mp4")])
+        # Spec §8: la plantilla del render viaja dentro de viral.
+        self.assertEqual(payload["viral"], {"plantilla": "rubius"})
 
     def test_rechazado_no_se_encola(self):
         bridge = _patch_pipeline(self, decision="rechazado")
@@ -690,8 +695,21 @@ class TestProcessCandidate(unittest.TestCase):
 
     def test_sin_webcam_no_se_puede_rehacer(self):
         bridge = _patch_pipeline(self)
-        with mock.patch.object(vs, "find_facecam_box_in_source",
-                               return_value=None):
+        with mock.patch(
+                "clipagent.template_decision.decide_template_for_segment",
+                return_value=("rubius_sin_webcam", None)):
+            panel_id, motivo, _report = vs.process_candidate(
+                bridge, _candidate(), self.tmp.name, self.cfg,
+                self.vcfg, "sebastian")
+        self.assertIsNone(panel_id)
+        self.assertIn("sin webcam", motivo)
+        self.assertEqual(bridge.created, [])
+
+    def test_ambiguo_no_se_puede_rehacer(self):
+        bridge = _patch_pipeline(self)
+        with mock.patch(
+                "clipagent.template_decision.decide_template_for_segment",
+                return_value=("rubius", None, "ambiguo")):
             panel_id, motivo, _report = vs.process_candidate(
                 bridge, _candidate(), self.tmp.name, self.cfg,
                 self.vcfg, "sebastian")

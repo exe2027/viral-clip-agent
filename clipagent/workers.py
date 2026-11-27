@@ -950,11 +950,29 @@ def _h_corte(store, job, cfg):
             raise StepError(
                 f"puerta de render: {gate['motivo']} (sin render)",
                 kind="permanent")
+    # Decisión §2.1 (spec rubius sin webcam): si el productor del
+    # job no decidió modo (layout_mode ausente o "auto"), se decide
+    # sobre el vídeo del job antes de cortar; sin facecam en la
+    # fuente -> layout_mode "game" (gameplay a pantalla completa).
+    # Un modo explícito del productor se respeta.
+    layout_mode = payload.get("layout_mode", "auto")
+    plantilla_decidida = None
+    if not payload.get("layout_mode") \
+            or payload.get("layout_mode") == "auto":
+        try:
+            from .template_decision import (
+                decide_template_for_segment)
+            _dec = decide_template_for_segment(
+                payload["video"], float(payload["duration"]), cfg=cfg)
+            if _dec[0] == "rubius_sin_webcam":
+                layout_mode = "game"
+                plantilla_decidida = "rubius_sin_webcam"
+        except Exception:  # noqa: BLE001 - sin decisión, auto
+            pass
     result = cut_clip(payload["video"], float(payload["start_sec"]),
                     float(payload["duration"]), payload["output"],
-                    layout_mode=payload.get("layout_mode", "auto"),
-                    crf=int(payload.get("crf", 23)), cfg=cfg,
-                    hype_s=payload.get("hype_s"))
+                    layout_mode=layout_mode, crf=int(payload.get("crf", 23)),
+                    cfg=cfg, hype_s=payload.get("hype_s"))
     # Plantilla del clip (2026-11-19): la explícita del job manda;
     # si no, la que declara el render o la que produce su variante
     # ("rdjavi" -> willyrex v2). Fluye al paso empaquetar, donde el
@@ -965,6 +983,7 @@ def _h_corte(store, job, cfg):
     result["plantilla"] = (
         payload.get("plantilla")
         or layout.get("plantilla")
+        or plantilla_decidida
         or template_for_variant(layout.get("split_variant")))
     return result
 
