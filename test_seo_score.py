@@ -71,7 +71,11 @@ class TestFloorAndStatus(unittest.TestCase):
         self.assertEqual(status_of(95), "ideal")
         self.assertEqual(status_of(94), "publicable")
         self.assertEqual(status_of(90), "publicable")
-        self.assertEqual(status_of(89), "override")
+        # Umbral alineado a la puerta del pipeline (seo_gate 80,
+        # config.yaml): 80-89 es publicable sin override.
+        self.assertEqual(status_of(89), "publicable")
+        self.assertEqual(status_of(80), "publicable")
+        self.assertEqual(status_of(79), "override")
         self.assertEqual(status_of(70), "override")
         self.assertEqual(status_of(69), "bloqueado")
         self.assertEqual(status_of(0), "bloqueado")
@@ -275,6 +279,32 @@ class TestCanPublishAndOverride(unittest.TestCase):
     def test_blocked_never_publishes(self):
         r = {"platform": "tiktok", "status": "bloqueado"}
         self.assertFalse(can_publish(r, overrides={"tiktok"}))
+
+    def test_score_80_89_publishes_without_override(self):
+        # Puerta del pipeline (seo_gate 80): un SEO 80-89 es
+        # publicable tal cual, sin override registrado. Paquete
+        # bueno con descripción corta (sin CTA/pregunta): YT 86.
+        pkg = dict(GOOD_PKG, description=(
+            "GTA 6: el chat explotó en segundos con esta jugada."))
+        r = score_platform("youtube_shorts", **pkg)
+        self.assertEqual(r["score"], 86)
+        self.assertEqual(r["status"], "publicable")
+        self.assertTrue(r["can_publish"])
+        self.assertTrue(can_publish(r))
+
+    def test_score_70_79_needs_override(self):
+        # 70-79 sigue exigiendo override registrado. Paquete bueno
+        # con descripción corta y miniatura larga: YT 79.
+        pkg = dict(GOOD_PKG, description=(
+            "GTA 6: el chat explotó en segundos con esta jugada."),
+            thumbnail_text="NO PUEDE SER CREERLO AHORA MISMO")
+        r = score_platform("youtube_shorts", **pkg)
+        self.assertEqual(r["score"], 79)
+        self.assertEqual(r["status"], "override")
+        self.assertFalse(r["can_publish"])
+        self.assertFalse(can_publish(r))
+        self.assertTrue(can_publish(
+            r, overrides={"youtube_shorts"}))
 
     def test_register_override(self):
         manifest = {"clips": []}

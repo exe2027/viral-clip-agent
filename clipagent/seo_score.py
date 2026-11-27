@@ -24,13 +24,18 @@ Reglas que se verifican (todas locales, sin APIs):
     y -20% en Título.
 
 El total es entero SIN redondeo hacia arriba (89,6 es 89, no 90).
-Estados: ideal 95-100 / publicable 90-94 / override 70-89 /
+Estados: ideal 95-100 / publicable 80-94 / override 70-79 /
 bloqueado 0-69.
 
-``can_publish`` dice si se puede publicar tal cual; un 70-89 solo
+``can_publish`` dice si se puede publicar tal cual; un 70-79 solo
 se publica con un override registrado (``register_override``), que
 guarda {platform, score, motivo, timestamp} en el manifiesto SIN
 cambiar el score. Un 0-69 es bloqueo duro, sin override.
+
+El umbral 80 es la puerta del pipeline (``scoring.seo_gate`` en
+config.yaml, orden del usuario 2026-11-19): ``can_publish`` y
+``publish_status`` (priority.py) coinciden. Antes era 90 y
+discrepaba de la puerta (COMPARACION lluvia-skills 2026-11-26).
 
 "Rellenar con IA" (``retry_best``): hasta 3 reintentos cambiando
 solo el bloque que más puntos pierde, quedándose con la mejor
@@ -110,7 +115,7 @@ def status_of(score: int) -> str:
     """Estado de publicación de un total entero 0-100."""
     if score >= 95:
         return "ideal"
-    if score >= 90:
+    if score >= 80:
         return "publicable"
     if score >= 70:
         return "override"
@@ -494,7 +499,7 @@ def score_all_platforms(pkg):
 def can_publish(result, overrides=None):
     """¿Se puede publicar con este resultado?
 
-    ideal/publicable: sí. override (70-89): solo si hay un override
+    ideal/publicable: sí. override (70-79): solo si hay un override
     registrado para esa plataforma. bloqueado (0-69): no, sin excepción.
     """
     status = result.get("status") if isinstance(result, dict) else None

@@ -130,7 +130,7 @@ def register_override_for_clip(clip_path, platform, motivo):
 
     Es la ÚNICA forma de registrar un override: ningún código
     automático lo hace (la política solo lo lee). El override
-    permite publicar un clip con SEO 70-89 en esa plataforma;
+    permite publicar un clip con SEO 70-79 en esa plataforma;
     con SEO < 70 sigue siendo bloqueo duro.
     Devuelve (ok, mensaje).
     """
@@ -197,7 +197,7 @@ def _render(data):
         f"value='{_esc(i['platform'])}'>"
         f"<input name='motivo' size='24' "
         f"placeholder='motivo del override'>"
-        f"<button>Override (publicar con SEO 70-89)</button></form></td>"
+        f"<button>Override (publicar con SEO 70-79)</button></form></td>"
         f"</tr>" for i in data["retained"])
     rows_err = "".join(
         f"<tr><td>#{e['job_id']}</td><td>{_esc(e['ts'])}</td>"
