@@ -1,5 +1,14 @@
 # Fixtures de regresión — duplicación de layout (SPEC-ingles-correcto-2026-11-26 v3, §5.3)
 
+> **REGLA DEL REPO (2026-11-27): el repo es PÚBLICO — las imágenes NO van a
+> git.** Las 22 imágenes vivieron en este directorio en el commit 30ba071 y se
+> sacaron el 2026-11-27 (quedan en el historial de ese commit; la limpieza del
+> historial está pendiente de decisión). Ubicación actual:
+> `~/workspace/gta6-clips/runs/layout-gate-calib/fixtures-duplicacion/`.
+> Este README queda en el repo porque solo contiene mediciones y etiquetas
+> (texto), no imágenes. Los tests que usan las imágenes
+> (`test_layout_gate.py`) las leen del workspace y se saltan si no están.
+
 Fotogramas extraídos de los renders finales (MP4 de R2). **Todos en la rejilla real
 del gate** (`extract_gate_frames`, `final_review.py:780`: t=1,3,5,7,… con paso 2 s).
 Etiquetas según §5.3 de la spec v3 (verificadas visualmente 2026-11-26).
