@@ -140,6 +140,11 @@ jobs:
           # 2026-11-18 en cerebro-live).
           PANEL_URL: https://avc.vikingosfoodspa.workers.dev
           PANEL_WORKER_URL: https://avc.vikingosfoodspa.workers.dev
+          # runs_for_clips baja las corridas con `gh api`: en
+          # Actions gh exige GH_TOKEN explícito (sin él: "To use
+          # GitHub CLI in a GitHub Actions workflow, set the
+          # GH_TOKEN environment variable", run 45978006810).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TENANT="${{ github.event.client_payload.tenant || inputs.tenant }}"
           ARGS="--from-panel --clip-video panel --out-map runs/recover-vod-source-map-${TENANT}.json --out-report runs/recover-vod-${TENANT}.json --out-sql runs/recover-vod-update-d1-${TENANT}.sql --vod-cache runs/recover-vod-cache-${TENANT}.json"
