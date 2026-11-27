@@ -4,7 +4,8 @@
 Antes de este módulo, el vivo solo detectaba picos y avisaba
 (``clipagent/live.py``: "BLOQUEADO (grabación)"). Este módulo es
 el cutter que faltaba: graba el directo mientras pasa, detecta el
-pico por ráfaga de chat, corta el clip 40-60 s, le pone subtítulos
+pico por ráfaga de chat, corta el clip (objetivo 40 s, sin mínimo,
+tope duro 60 s), le pone subtítulos
 completos, lo empaqueta y lo encola en la Cola LIVE del panel, sin
 aprobación humana por clip y con las puertas de seguridad intactas.
 
@@ -55,8 +56,8 @@ que el vivo no alcanzó a cortar se recupera del VOD al cerrar
 (modo replay con el mismo código).
 
 Límites que NO se tocan: cooldown y tope por directo
-(``live:`` en config), filtros duros (viralidad < 50 descartado,
-SEO < 90 sin override, duración 40-60 s, rango 25-35 prohibido),
+(``live:`` en config), filtros duros (viralidad < 45 descartado,
+SEO < 80 sin override, sin mínimo de duración, tope duro 60 s),
 fórmula de prioridad, subtítulos siempre y completos.
 """
 import json
@@ -77,7 +78,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SEGMENT_S = 60            # cada segmento grabado dura 60 s
 KEEP_SEGMENTS = 12        # ring buffer: últimos 12 segmentos (12 min)
 CLIP_PRE_S = 20           # pre-roll antes del pico (regla del usuario)
-CLIP_DURATION_S = 40      # objetivo del corte (40-60 s, nunca menos)
+CLIP_DURATION_S = 40      # objetivo 40 s (20 pre + 20 post); sin mínimo
 DEFAULT_LATENCY_S = 12    # latencia HLS Twitch (chat vs vídeo)
 CATEGORY_REFRESH_S = 60   # re-leer la categoría como mucho cada 60 s
 
