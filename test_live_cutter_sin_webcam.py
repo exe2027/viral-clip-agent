@@ -65,7 +65,7 @@ class TestRerenderAfterGateLayout(unittest.TestCase):
             "plantilla: layout (layout duplicado: el juego aparece "
             "también en la zona de cámara)")
         (out, m_decide, m_cut, m_val) = self._run(
-            review, ("rubius_sin_webcam", None))
+            review, ("rubius_sin_webcam", None, "firme", False))
         self.assertEqual(m_cut.call_args.kwargs["layout_mode"], "game")
         self.assertEqual(
             m_val.call_args.kwargs["plantilla"], "rubius_sin_webcam")
@@ -77,7 +77,7 @@ class TestRerenderAfterGateLayout(unittest.TestCase):
             "plantilla: layout (layout: sin cara estable en la zona "
             "de cámara)")
         (out, m_decide, m_cut, m_val) = self._run(
-            review, ("rubius", None, "ambiguo"))
+            review, ("rubius", None, "ambiguo", False))
         self.assertTrue(out[0].get("needs_human_review"))
         m_cut.assert_not_called()
 
@@ -88,7 +88,7 @@ class TestRerenderAfterGateLayout(unittest.TestCase):
             "primer plano está desplazada)")
         box = {"x": 10, "y": 5, "w": 60, "h": 40}
         (out, m_decide, m_cut, m_val) = self._run(
-            review, ("rubius", box))
+            review, ("rubius", box, "firme", False))
         self.assertEqual(m_cut.call_args.kwargs["layout_mode"], "auto")
         self.assertEqual(
             m_cut.call_args.kwargs["cfg"]["facecam_box"], box)
@@ -99,9 +99,22 @@ class TestRerenderAfterGateLayout(unittest.TestCase):
             ["plantilla"],
             "plantilla: titulo (el título no está en el banner)")
         (out, m_decide, m_cut, m_val) = self._run(
-            review, ("rubius_sin_webcam", None))
+            review, ("rubius_sin_webcam", None, "firme", False))
         m_decide.assert_not_called()
         self.assertEqual(m_cut.call_args.kwargs["layout_mode"], "auto")
+
+    def test_cara_sin_layout_fallo_decide_y_avatar_revalida(self):
+        # §4.4: "cara" en hard SIN fallo de layout ya no va directo
+        # a revisión humana: corre la decisión §4.3; con avatar,
+        # re-corta en "auto" y la re-validación lleva avatar=True.
+        review = _final_review(["cara"], "cara: sin cara estable")
+        (out, m_decide, m_cut, m_val) = self._run(
+            review, ("rubius", None, "firme", True))
+        m_decide.assert_called_once()
+        self.assertEqual(m_cut.call_args.kwargs["layout_mode"], "auto")
+        self.assertTrue(m_val.call_args.kwargs["avatar"])
+        self.assertTrue(out[0].get("avatar"))
+        self.assertFalse(out[0].get("needs_human_review"))
 
 
 class TestEnqueuePanelPlantilla(unittest.TestCase):

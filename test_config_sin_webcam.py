@@ -4,14 +4,13 @@
 - resolve_template acepta el 4º nombre y rechaza un 5º
   desconocido en voz alta.
 - load_validator_config exige la receta en cuanto el nombre
-  entra en TEMPLATE_NAMES (hoy por monkeypatch: el alta real va
-  en el mismo cambio que la receta en config.yaml, §6.1).
+  entra en TEMPLATE_NAMES (§6.1: el alta va en el mismo cambio
+  que la receta en config.yaml; la receta ya está en disco, así
+  que el caso "falta la receta" se simula quitándola del dict).
 """
 import unittest
-from unittest.mock import patch
 
 from clipagent.config import (
-    TEMPLATE_NAMES,
     TEMPLATE_REQUIRED_KEYS,
     load_config,
     load_validator_config,
@@ -21,8 +20,9 @@ from clipagent.validate import ConfigError
 
 
 def _vcfg_with_recipe(recipe=True):
-    """Cfg real de disco + receta sin_webcam inyectada (la
-    receta en config.yaml aún no existe: §6.1, bloqueado)."""
+    """Cfg real de disco, con la receta sin_webcam inyectada o
+    quitada (la receta YA está en config.yaml, §6.1: quitarla del
+    dict simula el estado previo al alta)."""
     cfg = load_config()
     cfg = {k: (dict(v) if isinstance(v, dict) else v)
            for k, v in cfg.items()}
@@ -65,13 +65,15 @@ class TestSinWebcamConfig(unittest.TestCase):
         self.assertIn("rubius_sin_webcam", str(cm.exception))
 
     def test_loader_exige_receta_cuando_el_nombre_entra(self):
-        four = TEMPLATE_NAMES + ("rubius_sin_webcam",)
-        with patch("clipagent.config.TEMPLATE_NAMES", four):
-            vcfg = load_validator_config(_vcfg_with_recipe(recipe=True))
-            self.assertIn("rubius_sin_webcam", vcfg["templates"])
-            with self.assertRaises(ConfigError) as cm:
-                load_validator_config(_vcfg_with_recipe(recipe=False))
-            self.assertIn("rubius_sin_webcam", str(cm.exception))
+        # TEMPLATE_NAMES ya trae rubius_sin_webcam (§6.1): el
+        # loader exige su receta en config.yaml.
+        vcfg = load_validator_config(_vcfg_with_recipe(recipe=True))
+        self.assertIn("rubius_sin_webcam", vcfg["templates"])
+        sin_receta = _vcfg_with_recipe(recipe=False)
+        sin_receta["templates"].pop("rubius_sin_webcam", None)
+        with self.assertRaises(ConfigError) as cm:
+            load_validator_config(sin_receta)
+        self.assertIn("rubius_sin_webcam", str(cm.exception))
 
 
 if __name__ == "__main__":

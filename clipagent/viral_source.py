@@ -682,7 +682,7 @@ def process_candidate(bridge, candidate, out_dir, cfg, vcfg, tenant,
                           "solo re-hace a rubius (la plantilla "
                           "exige la cara arriba); el formato sin "
                           "webcam va por el camino live/VOD"), report
-        if len(_dec) == 3 and _dec[2] == "ambiguo":
+        if _dec[2] == "ambiguo":
             return None, ("sin webcam detectable en el vídeo: no se "
                           "puede re-hacer a rubius (la plantilla "
                           "exige la cara arriba)"), report

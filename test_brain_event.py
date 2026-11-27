@@ -472,10 +472,13 @@ class TestLiveCutterEvents(unittest.TestCase):
 
     def test_puerta_dura_sin_cara_no_encola_ni_en_observacion(self):
         # 2026-11-19: la puerta dura de cara frena el encolado
-        # aunque el modo observación esté ON. El re-render no es
-        # posible aquí (ventana falsa, sin cara en la fuente): el
-        # clip queda para revisión humana con motivo visible,
-        # nunca bloqueado en silencio.
+        # aunque el modo observación esté ON. 2026-11-27 (§4.4):
+        # sin caja + "cara" en hard YA NO va directo a revisión
+        # humana: la decisión §4.3 cae en sin_webcam y el clip
+        # tiene UN re-corte en modo game (clip_rehecho); la
+        # re-validación vuelve a rechazar y solo entonces se
+        # descarta, para revisión humana con motivo visible,
+        # nunca bloqueado en silencio y nunca encolado.
         rec = _RecordingBridge()
         session = self._session(rec)
         hard_fail = {"decision": "rechazado", "pasa": False,
@@ -496,8 +499,12 @@ class TestLiveCutterEvents(unittest.TestCase):
         self.assertIsNotNone(record)
         self.assertEqual(len(rec.created), 0)
         self.assertEqual(self._kinds(rec),
-                         ["clip_cortado", "clip_descartado"])
+                         ["clip_cortado", "clip_rehecho",
+                          "clip_descartado"])
         _kind, msg = rec.events[1]
+        self.assertEqual(_kind, "clip_rehecho")
+        self.assertIn("re-hecho", msg)
+        _kind, msg = rec.events[2]
         self.assertIn("revisión humana", msg)
         self.assertTrue(record["final_review"]["needs_human_review"])
 

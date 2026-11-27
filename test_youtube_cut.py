@@ -706,7 +706,7 @@ class TestRunYoutubeClips(unittest.TestCase):
         # lleva (spec §9.1/§9.3).
         with mock.patch(
                 "clipagent.template_decision.decide_template_for_segment",
-                return_value=("rubius_sin_webcam", None)):
+                return_value=("rubius_sin_webcam", None, "firme", False)):
             manifest = run_youtube_clips(
                 VIDEO_URL, self.out, top_n=2, lang="es",
                 single_url=True,
@@ -724,6 +724,41 @@ class TestRunYoutubeClips(unittest.TestCase):
         self.assertEqual(
             manifest["clips"][0].get("plantilla"),
             "rubius_sin_webcam")
+
+    def test_validate_sin_avatar_no_pierde_plantilla(self):
+        # §4.2 (I-13): guarda POR KWARG — un inyectable que acepta
+        # `plantilla` pero no `avatar` recibe plantilla (no se
+        # pierde por la conjuntiva) y NO recibe avatar (si lo
+        # recibiera, TypeError -> sin veredicto -> sin llamada).
+        seen = []
+
+        def _validate_viejo(clip_path, title, text, cfg,
+                            plantilla=None):
+            seen.append(plantilla)
+            return {"decision": "aprobado"}
+
+        with mock.patch(
+                "clipagent.template_decision.decide_template_for_segment",
+                return_value=("rubius", None, "firme", True)):
+            manifest = self._run(validate_fn=_validate_viejo)
+        self.assertEqual(len(seen), 1)
+        self.assertIsNone(seen[0])
+        self.assertEqual(len(manifest["clips"]), 1)
+
+    def test_validate_con_avatar_recibe_ambos(self):
+        seen = []
+
+        def _validate_nuevo(clip_path, title, text, cfg,
+                            plantilla=None, avatar=False):
+            seen.append((plantilla, avatar))
+            return {"decision": "aprobado"}
+
+        with mock.patch(
+                "clipagent.template_decision.decide_template_for_segment",
+                return_value=("rubius", None, "firme", True)):
+            manifest = self._run(validate_fn=_validate_nuevo)
+        self.assertEqual(seen, [(None, True)])
+        self.assertEqual(len(manifest["clips"]), 1)
 
     def test_no_gta_se_salta(self):
         manifest = run_youtube_clips(

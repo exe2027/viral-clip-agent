@@ -1,19 +1,30 @@
-"""Decisión de plantilla por segmento (spec «rubius sin webcam», §2.1).
+"""Decisión de plantilla por segmento (spec inglés correcto v7.1, §4.3).
 
-Una sola función de decisión, compartida por el pre-chequeo (§2.2A) y
-el rescate (§2.2B). Devuelve uno de:
+Una sola función de decisión, compartida por el pre-chequeo (§4.2) y
+el rescate (§4.4). Vive en este módulo de forma permanente (la v7
+retira el traslado a ``final_review.py``: moverla removería 9 call
+sites sin ganancia conductual) y ``final_review.py`` NO la
+re-exporta. Devuelve SIEMPRE una 4-tupla
+``(plantilla, caja, estado, avatar)``:
 
-- ``("rubius", caja)`` — hay facecam; la caja es la de la fuente, en px.
-- ``("rubius_sin_webcam", None)`` — no hay facecam (prueba en pasos 1-4).
-- ``("rubius", None, "ambiguo")`` — la detección no es concluyente;
-  nunca ``sin_webcam`` sobre una señal débil (regla M5).
+- ``("rubius", caja, "firme", False)`` — hay facecam (voto >= 2 o
+  rescate); la caja es la de la fuente, en px.
+- ``("rubius", None, "ambiguo", avatar)`` — la detección no es
+  concluyente; nunca ``sin_webcam`` sobre una señal débil (M5).
+  El flag ``avatar`` se calcula igual en esta fila (I-25): un
+  voto único + candidato avatar es evidencia contradictoria
+  (ambiguo), pero si hay avatar la validación lo sabe.
+- ``("rubius", None, "firme", True)`` — candidato avatar sin cara
+  humana; la caja la pone el render (§4.3.1), no la decisión.
+- ``("rubius_sin_webcam", None, "firme", False)`` — no hay
+  facecam (prueba en pasos 1-4) ni avatar.
 
-Ubicación: la spec prescribe ``final_review.py``, junto a
-``find_facecam_box_in_source``. Este módulo existe porque ese archivo
-está en vuelo con el coordinador del fix de layout (puerta SIFT, B15):
-cuando aterrice, la función se mueve allí (o ``final_review.py`` la
-re-exporta desde aquí). La decisión es la misma en cualquier caso:
-un solo detector, un solo resultado.
+El orden de filas ES el orden de evaluación: avatar DESPUÉS de
+ambiguo (I-25). La fila "caja presente pero inválida (§4.1)" NO
+es rama de esta función: si ``detect_vod_facecam`` devuelve caja,
+la decisión devuelve rubius con caja siempre; el desenlace
+sin_webcam para caja inválida vive en las guardas de
+``decide_layout``, no en esta tabla.
 
 La decisión se toma sobre ``(facecam_box, hits)`` CONJUNTAMENTE,
 nunca sobre ``hits`` solo: un rescate con éxito devuelve ``hits == 1``
@@ -23,6 +34,7 @@ CON caja, y un solo voto sin rescate devuelve ``hits == 1`` SIN caja.
 RUBIUS = "rubius"
 SIN_WEBCAM = "rubius_sin_webcam"
 AMBIGUO = "ambiguo"
+FIRME = "firme"
 
 
 def _a_px_fuente(box_muestra, segment_path, cfg=None):
@@ -43,7 +55,7 @@ def _a_px_fuente(box_muestra, segment_path, cfg=None):
             int(round(box_muestra[3] * sh / 90))]
 
 
-def _hay_avatar(segment_path, duration, cfg=None):
+def hay_avatar(segment_path, duration, cfg=None):
     """True si hay avatar reactivo en el segmento (paso 4).
 
     Misma heurística que usa ``decide_layout``: ``_scan_frames``
@@ -59,26 +71,32 @@ def _hay_avatar(segment_path, duration, cfg=None):
         return False
 
 
+# Alias privado (nombre histórico): la misma primitiva.
+_hay_avatar = hay_avatar
+
+
 def decide_template_for_segment(segment_path, duration, cfg=None,
                                 detect_fn=None, avatar_fn=None):
-    """Decide la plantilla de un segmento fuente (spec §2.1).
+    """Decide la plantilla de un segmento fuente (spec §4.3).
 
     ``segment_path``: vídeo fuente ya descargado. ``duration``: segundos.
     ``detect_fn``/``avatar_fn``: inyectables en tests (por defecto, la
-    cadena real). Nunca levanta: ante duda devuelve ambiguo (rubius).
+    cadena real). Devuelve siempre la 4-tupla
+    ``(plantilla, caja, estado, avatar)``. Nunca levanta: ante duda
+    devuelve ambiguo (rubius).
     """
     cfg = cfg or {}
     if (not segment_path or not duration or float(duration) <= 0
             or not __import__("os").path.isfile(str(segment_path))):
         # Sin segmento no hay señal: default rubius ante duda (M5).
-        return (RUBIUS, None, AMBIGUO)
+        return (RUBIUS, None, AMBIGUO, False)
     try:
         from .render import detect_vod_facecam
 
         detect = detect_fn or detect_vod_facecam
         res = detect(str(segment_path), float(duration), cfg=cfg) or {}
     except Exception:  # noqa: BLE001 - sin detección no hay decisión
-        return (RUBIUS, None, AMBIGUO)
+        return (RUBIUS, None, AMBIGUO, False)
     box = res.get("facecam_box")
     hits = res.get("hits", 0) or 0
     if box:
@@ -90,8 +108,8 @@ def decide_template_for_segment(segment_path, duration, cfg=None,
         else:
             caja = _a_px_fuente(box, segment_path, cfg)
             if caja is None:
-                return (RUBIUS, None, AMBIGUO)
-        return (RUBIUS, caja)
+                return (RUBIUS, None, AMBIGUO, False)
+        return (RUBIUS, caja, FIRME, False)
     # Paso 2: rescates EXTERNOS (YuNet directo -> bordes fijos),
     # en el orden de `find_facecam_box_in_source`.
     try:
@@ -99,7 +117,7 @@ def decide_template_for_segment(segment_path, duration, cfg=None,
 
         ybox = yunet_facecam_box(str(segment_path), 0, float(duration))
         if ybox:
-            return (RUBIUS, [int(v) for v in ybox[:4]])
+            return (RUBIUS, [int(v) for v in ybox[:4]], FIRME, False)
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -108,16 +126,21 @@ def decide_template_for_segment(segment_path, duration, cfg=None,
         found = _edge_detect(str(segment_path))
         if found and found.get("conf") == "high":
             return (RUBIUS, [int(found["x"]), int(found["y"]),
-                             int(found["w"]), int(found["h"])])
+                             int(found["w"]), int(found["h"])],
+                    FIRME, False)
     except Exception:  # noqa: BLE001
         pass
     # Paso 3: ambiguo — una sola muestra con caja, sin rescate.
+    # El flag avatar se calcula igual (I-25): la validación lo
+    # sabe aunque la decisión no fuerce caja.
     if hits == 1:
-        return (RUBIUS, None, AMBIGUO)
+        avatar = (avatar_fn() if avatar_fn is not None
+                  else hay_avatar(segment_path, duration, cfg))
+        return (RUBIUS, None, AMBIGUO, bool(avatar))
     # Paso 4: avatar reactivo -> rubius (pip -> split), nunca sin_webcam.
-    avatar = avatar_fn() if avatar_fn is not None else _hay_avatar(
-        segment_path, duration, cfg)
+    avatar = (avatar_fn() if avatar_fn is not None
+              else hay_avatar(segment_path, duration, cfg))
     if avatar:
-        return (RUBIUS, None)
+        return (RUBIUS, None, FIRME, True)
     # Paso 5: sin caja, hits 0, sin rescate y sin avatar -> sin_webcam.
-    return (SIN_WEBCAM, None)
+    return (SIN_WEBCAM, None, FIRME, False)

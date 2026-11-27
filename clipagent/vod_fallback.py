@@ -656,8 +656,16 @@ def _parse_fmt_ts(text):
 
 
 def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
-                       clip, cfg, lang, title, plantilla=None):
+                       clip, cfg, lang, title, plantilla=None,
+                       avatar=False):
     """UN re-render VOD tras un fallo de la puerta dura (2026-11-19).
+
+    ``avatar``: flag de la decisión §4.3 del clip (4º elemento de
+    la 4-tupla, o ``clip["avatar"]`` del manifiesto); viaja a la
+    re-validación. La decisión que corre aquí puede actualizarlo
+    (rubius con avatar, sin caja: el render pone la caja) y el
+    valor usado queda en ``review2["avatar"]`` para que el
+    llamador actualice el manifiesto.
 
     Re-corta el mismo pico desde su segmento fuente
     (segments/seg_{n:02d}_t*.mp4) con la cara forzada (facecam_box
@@ -728,26 +736,32 @@ def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
         found = find_facecam_box_in_source(seg_path, seg_dur, cfg)
         if found:
             face_box = found["box"]
-        elif not layout_fallo:
-            return _human_review("sin cara detectable en la fuente")
-        # Sin caja y con fallo de layout: cae al rescate de
-        # layout de abajo (quizá no hay cara en la fuente).
-    if face_box is None and layout_fallo:
+        # Sin caja: ya NO se va directo a revisión humana — cae a
+        # la decisión §4.3 de abajo TAMBIÉN sin fallo de layout
+        # (§4.4): sin_webcam -> re-corte "game", ambiguo ->
+        # revisión humana, con caja -> rubius con caja forzada,
+        # con avatar -> rubius con avatar.
+    if face_box is None and ("cara" in hard or layout_fallo):
         from .template_decision import decide_template_for_segment
         try:
             _dec = decide_template_for_segment(
                 seg_path, seg_dur, cfg)
         except Exception:  # noqa: BLE001 - sin decisión,
             # revisión humana, como hoy.
-            _dec = ("rubius", None, "ambiguo")
+            _dec = ("rubius", None, "ambiguo", False)
         if _dec[0] == "rubius_sin_webcam":
             sin_webcam = True
             plantilla = "rubius_sin_webcam"
-        elif len(_dec) == 3 and _dec[2] == "ambiguo":
+        elif _dec[2] == "ambiguo":
             return _human_review(
                 "sin decisión concluyente sobre la fuente")
         elif _dec[1]:
             face_box = _dec[1]
+        elif _dec[3]:
+            # Rubius con avatar, sin caja: el render pone la caja
+            # (rama vtuber de decide_layout); el re-corte sigue en
+            # "auto" y la re-validación lleva el flag.
+            avatar = True
         else:
             return _human_review("rubius sin caja en la fuente")
     try:
@@ -787,7 +801,7 @@ def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
             transcript_text=transcript_text_for_srt(
                 sub2.get("srt") or ""),
             srt_path=sub2.get("srt") or "",
-            cfg=cfg or {}, plantilla=plantilla)
+            cfg=cfg or {}, plantilla=plantilla, avatar=avatar)
     except ConfigError:
         raise
     except Exception:  # noqa: BLE001 - sin veredicto, no tumba
@@ -795,6 +809,7 @@ def _rerender_vod_clip(final_review, final_video, video, sub, out_dir,
     review2 = dict(review2)
     review2["rerendered_from"] = final_video
     review2["rerender_facecam_box"] = face_box
+    review2["avatar"] = avatar
     if sin_webcam:
         # La plantilla definitiva del re-render: el llamador la
         # usa en el PATCH (§8) si difiere de la del POST.
@@ -941,7 +956,8 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
             transcript_text=transcript_text_for_srt(
                 sub.get("srt") or ""),
             srt_path=sub.get("srt") or "",
-            cfg=cfg or {}, plantilla=plantilla)
+            cfg=cfg or {}, plantilla=plantilla,
+            avatar=clip.get("avatar", False))
     except ConfigError:
         raise
     except Exception:  # noqa: BLE001 - sin veredicto no se aprueba
@@ -949,7 +965,14 @@ def burn_and_enqueue(bridge, streamer, vod_id, out_dir, clip, cfg=None,
     if final_review.get("needs_rerender"):
         final_review, final_video = _rerender_vod_clip(
             final_review, final_video, video, sub, out_dir, clip,
-            cfg, lang, title, plantilla=plantilla)
+            cfg, lang, title, plantilla=plantilla,
+            avatar=clip.get("avatar", False))
+        # §4.4: la plantilla y el avatar del re-render son los que
+        # valen (el POST VOD usa clip["plantilla"]).
+        plantilla = final_review.get("plantilla", plantilla)
+        clip["plantilla"] = plantilla
+        clip["avatar"] = final_review.get(
+            "avatar", clip.get("avatar", False))
     if final_review.get("decision") == "rechazado":
         human = bool(final_review.get("needs_human_review"))
         return None, (f"validación final: "

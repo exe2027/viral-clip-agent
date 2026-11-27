@@ -406,11 +406,21 @@ def gate_peak_for_render(chat_path, peak_ts, score, multiple, detail,
 def _do_cut(video, start_sec, duration, output, layout_mode="auto",
             crf=23, cfg=None, hype_s=None):
     """Un corte 9:16 con layout (render.cut_clip_with_layout).
-    Función separada para poder sustituirla en tests."""
+    Función separada para poder sustituirla en tests.
+
+    La config de layout sale de ``get_layout_config`` (§4.2, B-N2):
+    fusiona el ``facecam_box`` top-level de config.yaml en la
+    config de layout — con ``cfg.get("layout")`` solo, esa caja se
+    perdía y solo el VOD funcionaba. La caja se copia por valor
+    DEL VALOR FUSIONADO (el top-level solo manda si la subsección
+    ``layout`` no lo trae: no se redefine esa precedencia)."""
+    from .config import get_layout_config
     from .render import cut_clip_with_layout
     layout_cfg = None
     if cfg:
-        layout_cfg = (cfg.get("layout") or {}).copy()
+        layout_cfg = get_layout_config(cfg)
+        if "facecam_box" in layout_cfg:
+            layout_cfg["facecam_box"] = list(layout_cfg["facecam_box"])
     if hype_s is not None:
         layout_cfg = dict(layout_cfg or {})
         layout_cfg["hype_s"] = list(hype_s)
@@ -967,6 +977,10 @@ def _h_corte(store, job, cfg):
             if _dec[0] == "rubius_sin_webcam":
                 layout_mode = "game"
                 plantilla_decidida = "rubius_sin_webcam"
+            # §4.3.2: el flag avatar viaja en el payload hasta la
+            # validación del job (el merge de pasos copia todo el
+            # payload, no solo el resultado).
+            payload["avatar"] = bool(_dec[3])
         except Exception:  # noqa: BLE001 - sin decisión, auto
             pass
     result = cut_clip(payload["video"], float(payload["start_sec"]),
@@ -1298,7 +1312,8 @@ def _advance_empaquetar_to_publish(store, job, result, cfg=None):
         clip, payload.get("title") or "",
         transcript_text=transcript,
         srt_path=payload.get("srt"), cfg=cfg,
-        plantilla=payload.get("plantilla"))
+        plantilla=payload.get("plantilla"),
+        avatar=payload.get("avatar", False))
     decision = final_review.get("decision")
     store._log(job["id"], "pipeline_advance",
                f"validación final del preview: {decision} "

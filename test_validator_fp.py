@@ -413,6 +413,18 @@ class TestTituloRescateE2E(unittest.TestCase):
                 transcript_text="intensita hoy",
                 plantilla="rubius",
                 gemini_fn=lambda _parts: payload,
+                # La puerta de layout se prueba en
+                # test_layout_gate.py con fotogramas reales: este
+                # test es del rescate del título, no del layout
+                # (el 170, webcam ancha de AuronPlay, PASA la
+                # puerta: 15 inliers en solo 4 celdas, cara cx
+                # 0.43 sin corroboración SIFT).
+                layout_fn=lambda _p, _v, _r, frames=None, out_dir=None, template_name="rubius": {  # noqa: E501
+                    "pasa": True, "motivo": "", "duda": False,
+                    "sift_max_inliers": 0, "sift_max_cells": 0,
+                    "face_share": 1.0,
+                    "face_cx_mediana": 0.5, "face_area_mediana": 0.2,
+                    "frames_total": 1, "frames_con_cara": 1},
                 facecrop_fn=lambda _b, _w: {
                     "available": True,
                     "frames_with_face": 20,

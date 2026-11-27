@@ -1,5 +1,5 @@
 """Puerta final DURA (2026-11-19): cara + plantilla sobre el VÍDEO
-FINAL, y re-render automático en vivo y VOD. TRES plantillas.
+FINAL, y re-render automático en vivo y VOD. CUATRO plantillas.
 
 Un clip sin cara en el vídeo final NO se encola ni se publica, NI
 SIQUIERA en modo observación, EN NINGUNA plantilla; un clip con
@@ -50,6 +50,16 @@ def _templates():
             "subs_zone": {"y0": 900, "y1": 1020},
             "subs_style": "word_white", "subs_over_game": True,
             "cam_full_width": True, "blurred_bg": False},
+        # 4ª receta (§6.1): sin `cam`, gameplay a pantalla completa.
+        # load_validator_config exige una receta por cada nombre de
+        # TEMPLATE_NAMES; sin ella _vcfg() levanta ConfigError.
+        "rubius_sin_webcam": {
+            "game": {"y0": 0, "y1": 1920},
+            "title_banner": {"x0": 103, "x1": 967,
+                             "y0": 811, "y1": 1099},
+            "subs_zone": {"y0": 900, "y1": 1020},
+            "subs_style": "word_white", "subs_over_game": True,
+            "cam_full_width": True, "blurred_bg": False},
     }
 
 
@@ -68,6 +78,16 @@ def _cfg_dict(**over):
             "rubius_subs_edge_w": 150, "rubius_subs_edge_cov": 0.10,
             "rubius_subs_outline_frac": 0.03,
             "sfx_min_ncc": 0.5,
+            # Puerta de layout (2026-11-26): mismos valores
+            # calibrados que config.yaml (SIFT 2000 puntos,
+            # limpios <= 4 celdas, duplicados >= 8).
+            "layout_dup_sift_cells": 8,
+            "layout_face_sift_cells_min": 5,
+            "layout_face_cx_min": 0.45,
+            "layout_face_cx_max": 0.65,
+            "layout_face_area_min": 0.15,
+            "layout_face_area_closeup_min": 0.12,
+            "layout_sift_max_frames": 8,
             "chain": ["facecrop", "edge", "yunet"],
         },
         "final_review": {"enabled": True, "observe_only": True},
@@ -298,6 +318,22 @@ def _yunet_stub(fired):
     return _fn
 
 
+def _layout_stub(pasa=True):
+    """Puerta de layout que pasa (mock): los vídeos sintéticos
+    de estos tests no tienen cámara ni juego reales; la puerta
+    real se prueba en test_layout_gate.py con fotogramas reales."""
+    def _fn(clip_path, vcfg, recipe, frames=None, out_dir=None,
+            template_name="rubius", avatar=False):
+        return {"pasa": pasa,
+                "motivo": "" if pasa else "layout: stub",
+                "duda": False, "sift_max_inliers": 0,
+                "sift_max_cells": 0,
+                "face_share": 1.0, "face_cx_mediana": 0.5,
+                "face_area_mediana": 0.2, "frames_total": 1,
+                "frames_con_cara": 1}
+    return _fn
+
+
 class _SrtCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -454,6 +490,7 @@ class TestValidateFinalClip(_SrtCase):
         kwargs = {"facecrop_fn": _face_stub(4),
                   "edge_fn": _edge_stub(False),
                   "yunet_fn": _yunet_stub(False),
+                  "layout_fn": _layout_stub(True),
                   "gemini_fn": _gemini_ok,
                   "srt_path": self.srt,
                   "plantilla": plantilla}
@@ -548,6 +585,7 @@ class TestValidateFinalClip(_SrtCase):
             srt_path=self.srt,
             facecrop_fn=_face_stub(4), edge_fn=_edge_stub(False),
             yunet_fn=_yunet_stub(False),
+            layout_fn=_layout_stub(True),
             gemini_fn=_gemini_rechaza("momento_comprensible"))
         self.assertFalse(res["pasa"])
         self.assertEqual(res["decision"], "rechazado")
@@ -619,6 +657,28 @@ class TestConfigUnSoloSitio(unittest.TestCase):
         valor calibrado (R9: scooter 0.034-0.092, FP <= 0.015)."""
         vcfg = load_validator_config(_cfg_dict())
         self.assertEqual(vcfg["rubius_subs_outline_frac"], 0.03)
+
+    def test_quitar_clave_layout_falla_en_voz_alta(self):
+        """Sin validator.layout_dup_sift_cells el run para en
+        voz alta: la puerta no puede medir duplicación sin su
+        umbral (calibrado 2026-11-26: limpios <= 4 celdas,
+        duplicados >= 8 con SIFT de 2000 puntos)."""
+        from clipagent.validate import ConfigError
+        cfg = _cfg_dict()
+        del cfg["validator"]["layout_dup_sift_cells"]
+        with self.assertRaises(ConfigError) as ctx:
+            load_validator_config(cfg)
+        self.assertIn("layout_dup_sift_cells", str(ctx.exception))
+
+    def test_claves_layout_resueltas(self):
+        vcfg = load_validator_config(_cfg_dict())
+        self.assertEqual(vcfg["layout_dup_sift_cells"], 8)
+        self.assertEqual(vcfg["layout_face_sift_cells_min"], 5)
+        self.assertEqual(vcfg["layout_face_cx_min"], 0.45)
+        self.assertEqual(vcfg["layout_face_cx_max"], 0.65)
+        self.assertEqual(vcfg["layout_face_area_min"], 0.15)
+        self.assertEqual(vcfg["layout_face_area_closeup_min"], 0.12)
+        self.assertEqual(vcfg["layout_sift_max_frames"], 8)
 
     def test_sin_seccion_templates_falla_en_voz_alta(self):
         from clipagent.validate import ConfigError

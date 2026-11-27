@@ -362,29 +362,60 @@ def _snap_edges(frames, box, search=SNAP_RANGE, shrink=SNAP_SHRINK,
     return nL, nT, nR, nB, out
 
 
-def validate_cam_box(box, face, tol=0.02):
+def _caja_en_esquina(box_frac):
+    """True si la caja (fracciones 0..1) está en una esquina.
+
+    SOLO posición + borde superior (regla reconciliada §4.1 de la
+    spec de inglés correcto v7.1, un solo sitio): el centro NO cae
+    en el rectángulo central (x 30-70% Y y 30-70% a la vez) Y el
+    centro-y < 0,70 Y el borde superior y0 < 0,50 (abajo están el
+    minimapa y el HUD). No mira tamaño, aspecto ni cara.
+    """
+    try:
+        x, y, w, h = [float(v) for v in box_frac[:4]]
+    except (TypeError, ValueError, IndexError):
+        return False
+    cx, cy = x + w / 2, y + h / 2
+    if 0.30 <= cx <= 0.70 and 0.30 <= cy <= 0.70:
+        return False
+    if cy >= 0.70:
+        return False
+    if y >= 0.50:
+        return False
+    return True
+
+
+def validate_cam_box(box, face, tol=0.02, require_containment=True):
     """Valida una caja de webcam candidata (fracciones 0..1).
 
     ``box`` y ``face``: [x, y, w, h] en fracciones del fotograma.
-    La caja debe estar en una esquina SUPERIOR (abajo están el
-    minimapa y el HUD), ocupar < 45% del fotograma, tener aspecto
-    entre 0,5 y 2,0, y contener la cara entera. Devuelve bool.
+    Regla reconciliada (§4.1, spec inglés correcto v7.1): posición
+    vía :func:`_caja_en_esquina` (centro fuera del rectángulo
+    central, centro-y < 0,70, y0 < 0,50); tamaño w 0,08-0,6 /
+    h 0,08-0,7, aspecto 0,5-2,0 y área < 0,35; y contención de la
+    cara completa, solo cuando ``require_containment`` es True.
+    Con ``require_containment=False`` la cara se ignora por
+    completo (ni se desempaqueta: ``face`` puede venir vacía) —
+    es el caso de la caja explícita de config, humana y sin cara
+    detectada. Devuelve bool.
     """
     try:
         x, y, w, h = [float(v) for v in box[:4]]
-        fx, fy, fw, fh = [float(v) for v in face[:4]]
     except (TypeError, ValueError, IndexError):
         return False
     if not (0.08 <= w <= 0.6 and 0.08 <= h <= 0.7):
         return False
-    if w * h >= 0.45:
+    if w * h >= 0.35:
         return False
     if not (0.5 <= w / h <= 2.0):
         return False
-    if y > 0.35:  # esquina superior: borde superior en el tercio de arriba
+    if not _caja_en_esquina([x, y, w, h]):
         return False
-    cx = x + w / 2
-    if not (cx < 0.4 or cx > 0.6):  # izquierda o derecha, no centrada
+    if not require_containment:
+        return True
+    try:
+        fx, fy, fw, fh = [float(v) for v in face[:4]]
+    except (TypeError, ValueError, IndexError):
         return False
     if (fx < x - tol or fy < y - tol or fx + fw > x + w + tol
             or fy + fh > y + h + tol):

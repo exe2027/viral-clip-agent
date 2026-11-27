@@ -587,7 +587,7 @@ def _patch_pipeline(test, decision="aprobado", seo=90):
     # decide la fuente; este camino solo re-hace a rubius.
     mock.patch(
         "clipagent.template_decision.decide_template_for_segment",
-        return_value=("rubius", (0, 0, 1080, 840))).start()
+        return_value=("rubius", (0, 0, 1080, 840), "firme", False)).start()
     mock.patch.object(vs, "make_banner_png",
                       return_value="/tmp/banner.png").start()
     mock.patch.object(vs, "rubius_render",
@@ -697,7 +697,8 @@ class TestProcessCandidate(unittest.TestCase):
         bridge = _patch_pipeline(self)
         with mock.patch(
                 "clipagent.template_decision.decide_template_for_segment",
-                return_value=("rubius_sin_webcam", None)):
+                return_value=("rubius_sin_webcam", None, "firme",
+                              False)):
             panel_id, motivo, _report = vs.process_candidate(
                 bridge, _candidate(), self.tmp.name, self.cfg,
                 self.vcfg, "sebastian")
@@ -709,7 +710,7 @@ class TestProcessCandidate(unittest.TestCase):
         bridge = _patch_pipeline(self)
         with mock.patch(
                 "clipagent.template_decision.decide_template_for_segment",
-                return_value=("rubius", None, "ambiguo")):
+                return_value=("rubius", None, "ambiguo", False)):
             panel_id, motivo, _report = vs.process_candidate(
                 bridge, _candidate(), self.tmp.name, self.cfg,
                 self.vcfg, "sebastian")

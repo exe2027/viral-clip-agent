@@ -897,8 +897,16 @@ class LiveCutterSession(LiveSession):
 
     def _rerender_after_gate(self, final_review, final_clip, sub,
                              work_dir, video_for_cut, cut_start,
-                             title, n, hype_s=None, plantilla=None):
+                             title, n, hype_s=None, plantilla=None,
+                             avatar=False):
         """UN re-render tras un fallo de la puerta dura (2026-11-19).
+
+        ``avatar``: flag de la decisión §4.3 del clip (4º elemento
+        de la 4-tupla); viaja a la re-validación. La decisión que
+        corre aquí puede actualizarlo (rubius con avatar, sin caja:
+        el render pone la caja) y el valor usado queda en
+        ``review2["avatar"]`` para que el llamador actualice el
+        registro.
 
         Re-corta el mismo tramo con la cara forzada (facecam_box de
         la cadena face-crop -> bordes -> YuNet en el segmento
@@ -935,17 +943,12 @@ class LiveCutterSession(LiveSession):
                 video_for_cut, CLIP_DURATION_S, self.cfg)
             if found:
                 face_box = found["box"]
-            elif not layout_fallo:
-                review = dict(final_review)
-                review["needs_human_review"] = True
-                review["motivo"] = (
-                    (final_review.get("motivo") or "")
-                    + " — sin cara detectable en la fuente: "
-                    "revisión humana")
-                return review, final_clip, sub
-            # Sin caja y con fallo de layout: cae al rescate de
-            # layout de abajo (quizá no hay cara en la fuente).
-        if face_box is None and layout_fallo:
+            # Sin caja: ya NO se va directo a revisión humana —
+            # cae a la decisión §4.3 de abajo TAMBIÉN sin fallo de
+            # layout (§4.4): sin_webcam -> re-corte "game",
+            # ambiguo -> revisión humana, con caja -> rubius con
+            # caja forzada, con avatar -> rubius con avatar.
+        if face_box is None and ("cara" in hard or layout_fallo):
             from .template_decision import (
                 decide_template_for_segment)
             try:
@@ -953,11 +956,11 @@ class LiveCutterSession(LiveSession):
                     video_for_cut, CLIP_DURATION_S, cfg=self.cfg)
             except Exception:  # noqa: BLE001 - sin decisión,
                 # revisión humana, como hoy.
-                _dec = ("rubius", None, "ambiguo")
+                _dec = ("rubius", None, "ambiguo", False)
             if _dec[0] == "rubius_sin_webcam":
                 sin_webcam = True
                 plantilla = "rubius_sin_webcam"
-            elif len(_dec) == 3 and _dec[2] == "ambiguo":
+            elif _dec[2] == "ambiguo":
                 review = dict(final_review)
                 review["needs_human_review"] = True
                 review["motivo"] = (
@@ -967,6 +970,11 @@ class LiveCutterSession(LiveSession):
                 return review, final_clip, sub
             elif _dec[1]:
                 face_box = _dec[1]
+            elif _dec[3]:
+                # Rubius con avatar, sin caja: el render pone la
+                # caja (rama vtuber de decide_layout); el re-corte
+                # sigue en "auto" y la re-validación lleva el flag.
+                avatar = True
             else:
                 review = dict(final_review)
                 review["needs_human_review"] = True
@@ -1026,7 +1034,7 @@ class LiveCutterSession(LiveSession):
                 srt_path=sub2.get("srt"),
                 out_dir=os.path.join(work_dir, "final_review_r1"),
                 cfg=self.cfg, gemini_fn=self.final_review_fn,
-                plantilla=plantilla,
+                plantilla=plantilla, avatar=avatar,
                 sfx_events=(_sfx2 or {}).get("events"))
         except ConfigError:
             raise
@@ -1037,6 +1045,7 @@ class LiveCutterSession(LiveSession):
         review2 = dict(review2)
         review2["rerendered_from"] = final_clip
         review2["rerender_facecam_box"] = face_box
+        review2["avatar"] = avatar
         if review2.get("decision") == "rechazado":
             review2["needs_human_review"] = True
         return review2, final2, sub2
@@ -1172,6 +1181,7 @@ class LiveCutterSession(LiveSession):
         # (§9.1, render.py), el validador usa la decidida aquí.
         layout_mode = "auto"
         plantilla_decidida = None
+        avatar_decidido = False
         try:
             from .template_decision import (
                 decide_template_for_segment)
@@ -1180,6 +1190,7 @@ class LiveCutterSession(LiveSession):
             if _dec[0] == "rubius_sin_webcam":
                 layout_mode = "game"
                 plantilla_decidida = "rubius_sin_webcam"
+            avatar_decidido = bool(_dec[3])
         except Exception:  # noqa: BLE001 - sin decisión, rubius
             layout_mode = "auto"
         cut = cut_clip(video_for_cut, cut_start, CLIP_DURATION_S,
@@ -1494,7 +1505,7 @@ class LiveCutterSession(LiveSession):
                 srt_path=sub.get("srt"),
                 out_dir=os.path.join(work_dir, "final_review"),
                 cfg=self.cfg, gemini_fn=self.final_review_fn,
-                plantilla=plantilla,
+                plantilla=plantilla, avatar=avatar_decidido,
                 sfx_events=(sfx_info or {}).get("events"))
         except ConfigError:
             raise
@@ -1512,11 +1523,19 @@ class LiveCutterSession(LiveSession):
             final_review, final_clip, sub = self._rerender_after_gate(
                 final_review, final_clip, sub, work_dir,
                 video_for_cut, cut_start, burned_title, n, hype_s,
-                plantilla=plantilla)
+                plantilla=plantilla, avatar=avatar_decidido)
             record["clip"] = final_clip
             package["clip"] = final_clip
             record["rerendered"] = bool(
                 final_review.get("rerendered_from"))
+            # §4.4: la plantilla y el avatar del re-render son los
+            # que valen (la receta validada; el avatar usado en la
+            # re-validación). Sin re-render, manda la plantilla del
+            # primer render; el avatar queda en el local.
+            plantilla = final_review.get("plantilla", plantilla)
+            record["plantilla"] = plantilla
+            record["avatar"] = final_review.get(
+                "avatar", avatar_decidido)
         record["final_review"] = final_review
         package["final_review"] = {
             "decision": final_review.get("decision"),

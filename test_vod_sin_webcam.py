@@ -62,7 +62,7 @@ class TestRerenderVodLayout(unittest.TestCase):
             "plantilla: layout (layout duplicado: el juego aparece "
             "también en la zona de cámara)")
         (out, m_decide, m_cut, m_val) = self._run(
-            review, ("rubius_sin_webcam", None))
+            review, ("rubius_sin_webcam", None, "firme", False))
         self.assertEqual(m_cut.call_args.kwargs["layout_mode"], "game")
         self.assertEqual(out[0].get("plantilla"), "rubius_sin_webcam")
         self.assertEqual(
@@ -75,7 +75,7 @@ class TestRerenderVodLayout(unittest.TestCase):
             "plantilla: layout (layout: sin cara estable en la zona "
             "de cámara)")
         (out, m_decide, m_cut, m_val) = self._run(
-            review, ("rubius", None, "ambiguo"))
+            review, ("rubius", None, "ambiguo", False))
         self.assertTrue(out[0].get("needs_human_review"))
         m_cut.assert_not_called()
 
@@ -84,9 +84,22 @@ class TestRerenderVodLayout(unittest.TestCase):
             ["plantilla"],
             "plantilla: titulo (el título no está en el banner)")
         (out, m_decide, m_cut, m_val) = self._run(
-            review, ("rubius_sin_webcam", None))
+            review, ("rubius_sin_webcam", None, "firme", False))
         m_decide.assert_not_called()
         self.assertEqual(m_cut.call_args.kwargs["layout_mode"], "auto")
+
+    def test_cara_sin_layout_fallo_decide_y_avatar_revalida(self):
+        # §4.4 (espejo live): "cara" en hard sin fallo de layout
+        # corre la decisión; con avatar, re-corta en "auto" y la
+        # re-validación lleva avatar=True.
+        review = _review(["cara"], "cara: sin cara estable")
+        (out, m_decide, m_cut, m_val) = self._run(
+            review, ("rubius", None, "firme", True))
+        m_decide.assert_called_once()
+        self.assertEqual(m_cut.call_args.kwargs["layout_mode"], "auto")
+        self.assertTrue(m_val.call_args.kwargs["avatar"])
+        self.assertTrue(out[0].get("avatar"))
+        self.assertFalse(out[0].get("needs_human_review"))
 
 
 if __name__ == "__main__":

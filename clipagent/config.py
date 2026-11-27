@@ -636,15 +636,14 @@ def resolve_subtitle_task(detected_lang, subtitle_lang="auto",
     return "transcribe", lang
 
 
-TEMPLATE_NAMES = ("rdjavi", "willyrex", "rubius")
-# NOTA (spec §6.2, implementación por fases): "rubius_sin_webcam"
-# entra en TEMPLATE_NAMES EN EL MISMO CAMBIO que su receta en
-# config.yaml (§6.1) — load_validator_config exige una receta por
-# cada nombre de esta tupla, y la receta aún no está en el archivo
-# (el coordinador del fix de layout edita config.yaml ahora mismo).
-# resolve_template YA acepta el 4º nombre (lee vcfg["templates"]
-# directamente) y TEMPLATE_REQUIRED_KEYS YA trae sus claves; lo
-# que falta es solo el alta en el loader, que va con la receta.
+TEMPLATE_NAMES = ("rdjavi", "willyrex", "rubius", "rubius_sin_webcam")
+# NOTA (spec §6.1, inglés correcto v7.1): "rubius_sin_webcam" entra
+# en TEMPLATE_NAMES EN EL MISMO CAMBIO que su receta en config.yaml
+# — load_validator_config exige una receta por cada nombre de esta
+# tupla, y la receta ya está en el archivo (bloque `templates:`).
+# resolve_template acepta el 4º nombre (lee vcfg["templates"]
+# directamente) y TEMPLATE_REQUIRED_KEYS trae sus claves; el loader
+# ya salta el chequeo de `cam` cuando la receta no la lleva.
 
 # Recetas de plantilla (2026-11-19): claves obligatorias por
 # receta en config.yaml (sección `templates`). `cam` y `game`
@@ -707,7 +706,7 @@ def load_validator_config(cfg=None):
 
     Devuelve un dict plano con los valores resueltos (umbrales de
     cara, muestreo, observe_only, max_rerenders) + ``templates``
-    (las tres recetas) + ``default_template``. ``cfg`` puede ser
+    (las cuatro recetas) + ``default_template``. ``cfg`` puede ser
     el dict de load_config(), un dict mínimo en tests, o None/{}
     (en ese caso se carga config.yaml en disco, la única fuente:
     un dict vacío NO es "sin config", es "carga la de disco").
@@ -760,6 +759,14 @@ def load_validator_config(cfg=None):
         "rubius_banner_yellow_frac", "rubius_subs_edge_w",
         "rubius_subs_edge_cov", "rubius_subs_outline_frac",
         "sfx_min_ncc",
+        # Puerta de layout (2026-11-26, bug duplicación): sin
+        # estos umbrales el gate no puede cazar un render con la
+        # cámara duplicada o contaminada de gameplay.
+        "layout_dup_sift_cells", "layout_face_sift_cells_min",
+        "layout_face_cx_min",
+        "layout_face_cx_max", "layout_face_area_min",
+        "layout_face_area_closeup_min",
+        "layout_sift_max_frames",
     )
     missing = [k for k in required if k not in section]
     if missing:
@@ -788,7 +795,7 @@ def load_validator_config(cfg=None):
     if not isinstance(templates, dict):
         raise ConfigError(
             "templates: falta la sección 'templates' en config.yaml "
-            "(el validador final verifica TRES recetas; sin "
+            "(el validador final verifica CUATRO recetas; sin "
             "defaults silenciosos)")
     default = templates.get("default")
     if default not in TEMPLATE_NAMES:
@@ -848,6 +855,18 @@ def load_validator_config(cfg=None):
         "rubius_subs_outline_frac": float(
             section["rubius_subs_outline_frac"]),
         "sfx_min_ncc": float(section["sfx_min_ncc"]),
+        "layout_dup_sift_cells": int(
+            section["layout_dup_sift_cells"]),
+        "layout_face_sift_cells_min": int(
+            section["layout_face_sift_cells_min"]),
+        "layout_face_cx_min": float(section["layout_face_cx_min"]),
+        "layout_face_cx_max": float(section["layout_face_cx_max"]),
+        "layout_face_area_min": float(
+            section["layout_face_area_min"]),
+        "layout_face_area_closeup_min": float(
+            section["layout_face_area_closeup_min"]),
+        "layout_sift_max_frames": int(
+            section["layout_sift_max_frames"]),
         "enabled": bool(review["enabled"]),
         "observe_only": bool(review["observe_only"]),
         "templates": recipes,

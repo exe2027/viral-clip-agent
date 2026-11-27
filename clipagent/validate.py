@@ -459,7 +459,7 @@ def validate_config(cfg, source="config.yaml"):
             if _v not in ("facecrop", "edge", "yunet"):
                 c.err(f"validator.chain[{_i}]",
                       f"debe ser facecrop, edge o yunet, es {_v!r}")
-    # Plantillas del validador (2026-11-19, TRES recetas): solo se
+    # Plantillas del validador (2026-11-19, CUATRO recetas): solo se
     # validan si la sección está presente; si falta, es
     # load_validator_config quien falla en voz alta en el gate.
     c.check(cfg, "templates", "dict")

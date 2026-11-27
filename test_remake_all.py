@@ -256,6 +256,43 @@ class TestBoxStrategies(unittest.TestCase):
         self.assertEqual(len(strats), 1)
         self.assertEqual(strats[0][0], "default")
 
+    def test_p7775_solo_rubius_antes_del_default(self):
+        # §4.1.5: 4ª estrategia, solo Rubius, ANTES del default
+        # (para probarse dentro de max_intentos=3).
+        strats = ra.box_strategies(
+            "seg.mp4", 48.0, CFG,
+            detect_fn=lambda *a: None, influencer_name="Rubius")
+        self.assertEqual([s[0] for s in strats],
+                         ["p7775", "default"])
+        self.assertEqual(strats[0][1], "561:365:0:626")
+        self.assertEqual(strats[0][2], "365:365:90:626")
+
+    def test_p7775_no_dispara_para_otro_streamer(self):
+        strats = ra.box_strategies(
+            "seg.mp4", 48.0, CFG,
+            detect_fn=lambda *a: None, influencer_name="IlloJuan")
+        self.assertEqual([s[0] for s in strats], ["default"])
+        strats = ra.box_strategies("seg.mp4", 48.0, CFG,
+                                   detect_fn=lambda *a: None)
+        self.assertEqual([s[0] for s in strats], ["default"])
+
+    def test_p7775_insensible_a_mayusculas(self):
+        strats = ra.box_strategies(
+            "seg.mp4", 48.0, CFG,
+            detect_fn=lambda *a: None, influencer_name="RUBIUS")
+        self.assertEqual(strats[0][0], "p7775")
+
+    def test_p7775_se_dedupa_contra_detectada(self):
+        # Detectada == p7775: no se queman dos intentos en el
+        # mismo render.
+        strats = ra.box_strategies(
+            "seg.mp4", 48.0, CFG,
+            detect_fn=lambda *a: {"box": [0, 626, 561, 365],
+                                  "method": "yunet"},
+            influencer_name="rubius")
+        self.assertEqual([s[0] for s in strats],
+                         ["detectada", "default"])
+
 
 class TestRemakeOne(_PatchBannerAss):
     def test_sin_source_id_no_descarga_ni_sube(self):
@@ -669,7 +706,8 @@ class TestRemakePlantilla(_PatchBannerAss):
     def test_decision_rubius_valida_con_rubius(self):
         calls = []
         rec, _ = self._remake_con_decision(
-            _clip(7), ("rubius", [100, 50, 400, 300], "vote"), calls)
+            _clip(7), ("rubius", [100, 50, 400, 300], "firme", False),
+            calls)
         self.assertEqual(rec["outcome"], "rehecho")
         self.assertEqual(calls, ["rubius"])
         self.assertEqual(rec["plantilla"], "rubius")
@@ -678,18 +716,38 @@ class TestRemakePlantilla(_PatchBannerAss):
         calls = []
         rec, _ = self._remake_con_decision(
             _clip(7),
-            ("rubius_sin_webcam", None, "sin cara en las 5"),
+            ("rubius_sin_webcam", None, "firme", False),
             calls)
         self.assertEqual(rec["outcome"], "rehecho")
         self.assertEqual(calls, ["rubius_sin_webcam"])
         self.assertEqual(rec["plantilla"], "rubius_sin_webcam")
 
+    def test_remake_pasa_streamer_a_box_strategies(self):
+        # §4.1.5: el consumidor pasa clip.get("streamer") — el
+        # clip construido solo trae "streamer" (load_blocked_clips
+        # no copia "influencer_name"/"influencer", que son None).
+        seen = {}
+
+        def _fake_strategies(seg, dur, cfg, detect_fn=None,
+                             influencer_name=None):
+            seen["influencer_name"] = influencer_name
+            return [("default", "561:365:0:0", "365:365:90:0")]
+
+        calls = []
+        with mock.patch.object(ra, "box_strategies", _fake_strategies):
+            rec, _ = self._remake_con_decision(
+                _clip(7),
+                ("rubius", [100, 50, 400, 300], "firme", False),
+                calls)
+        self.assertEqual(seen["influencer_name"], "Rubius")
+        self.assertEqual(rec["outcome"], "rehecho")
+
     def test_batch_mixto_y_batch_acuerdo(self):
         for decisiones, esperada in (
-            ([("rubius", [1, 1, 2, 2], "vote"),
-              ("rubius_sin_webcam", None, "sin cara")], "mixto"),
-            ([("rubius", [1, 1, 2, 2], "vote"),
-              ("rubius", [1, 1, 2, 2], "vote")], "rubius"),
+            ([("rubius", [1, 1, 2, 2], "firme", False),
+              ("rubius_sin_webcam", None, "firme", False)], "mixto"),
+            ([("rubius", [1, 1, 2, 2], "firme", False),
+              ("rubius", [1, 1, 2, 2], "firme", False)], "rubius"),
         ):
             bridge = _FakeBridge()
             with mock.patch(

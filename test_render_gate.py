@@ -241,7 +241,7 @@ def test_h_corte_sin_webcam_corta_game(monkeypatch):
             "output": "x.mp4", "layout": {"mode": "game"}})
     monkeypatch.setattr(
         template_decision, "decide_template_for_segment",
-        lambda *a, **k: ("rubius_sin_webcam", None))
+        lambda *a, **k: ("rubius_sin_webcam", None, "firme", False))
     job = {"payload": {"video": "v.mp4", "start_sec": 0,
                        "duration": 40, "output": "o.mp4"}}
     assert workers._h_corte(None, job, cfg={}) == {
@@ -262,7 +262,7 @@ def test_h_corte_modo_explicito_respeta_sin_decidir(monkeypatch):
     monkeypatch.setattr(
         template_decision, "decide_template_for_segment",
         lambda *a, **k: decide_calls.append(1)
-        or ("rubius_sin_webcam", None))
+        or ("rubius_sin_webcam", None, "firme", False))
     job = {"payload": {"video": "v.mp4", "start_sec": 0,
                        "duration": 40, "output": "o.mp4",
                        "layout_mode": "stack"}}
@@ -317,3 +317,52 @@ def test_advance_picos_a_corte_lleva_scores(store, tmp_path):
     assert created[0]["payload"]["viral_total"] == 57.5
     assert created[0]["payload"]["seo_scores"] == SEO_BUENO
     assert created[0]["payload"]["pre_corte_title"] == "GTA 6: El chat"
+
+
+def test_do_cut_pasa_facecam_box_top_level(monkeypatch):
+    """§4.2 (B-N2): _do_cut fusiona el facecam_box top-level de
+    config.yaml en la config de layout (antes se perdía: solo se
+    pasaba la subsección `layout`)."""
+    from clipagent import workers
+    seen = {}
+    monkeypatch.setattr(
+        "clipagent.render.cut_clip_with_layout",
+        lambda *a, **k: seen.update(k) or {"layout": {}})
+    cfg = {"facecam_box": [100, 50, 400, 200],
+           "layout": {"mode": "auto"}}
+    workers._do_cut("v.mp4", 0, 40, "o.mp4", cfg=cfg)
+    assert seen["cfg"]["facecam_box"] == [100, 50, 400, 200]
+    # Copia por valor del fusionado: mutar lo pasado no toca cfg.
+    seen["cfg"]["facecam_box"][0] = 999
+    assert cfg["facecam_box"] == [100, 50, 400, 200]
+
+
+def test_do_cut_precedencia_layout_sobre_top_level(monkeypatch):
+    """El top-level solo manda si la subsección `layout` no trae
+    la caja (precedencia de get_layout_config)."""
+    from clipagent import workers
+    seen = {}
+    monkeypatch.setattr(
+        "clipagent.render.cut_clip_with_layout",
+        lambda *a, **k: seen.update(k) or {"layout": {}})
+    cfg = {"facecam_box": [100, 50, 400, 200],
+           "layout": {"facecam_box": [10, 20, 30, 40]}}
+    workers._do_cut("v.mp4", 0, 40, "o.mp4", cfg=cfg)
+    assert seen["cfg"]["facecam_box"] == [10, 20, 30, 40]
+
+
+def test_h_corte_fija_avatar_en_payload(monkeypatch):
+    """§4.3.2: _h_corte fija el flag avatar de la decisión en
+    payload["avatar"] (el merge de pasos copia todo el payload
+    hasta la validación del job)."""
+    from clipagent import template_decision, workers
+    monkeypatch.setattr(
+        workers, "cut_clip",
+        lambda *a, **k: {"output": "x.mp4", "layout": {}})
+    monkeypatch.setattr(
+        template_decision, "decide_template_for_segment",
+        lambda *a, **k: ("rubius", None, "firme", True))
+    job = {"payload": {"video": "v.mp4", "start_sec": 0,
+                       "duration": 40, "output": "o.mp4"}}
+    workers._h_corte(None, job, cfg={})
+    assert job["payload"]["avatar"] is True

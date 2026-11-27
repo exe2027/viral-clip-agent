@@ -541,14 +541,16 @@ def _default_render(seg_path, clip_path, duration, cfg,
 
 
 def _default_validate(clip_path, title, transcript_txt, cfg,
-                      plantilla=None):
+                      plantilla=None, avatar=False):
     """Validación por defecto: plantilla decidida (§2.1); sin ella
-    el validador usa el default de config.yaml (rubius)."""
+    el validador usa el default de config.yaml (rubius). ``avatar``
+    viaja a validate_final_clip (§4.3.2)."""
     from .final_review import validate_final_clip
 
     return validate_final_clip(
         clip_path, title, transcript_text=transcript_txt,
-        srt_path="", cfg=cfg or {}, plantilla=plantilla)
+        srt_path="", cfg=cfg or {}, plantilla=plantilla,
+        avatar=avatar)
 
 
 def _default_layout(seg_path, duration, cfg):
@@ -697,7 +699,12 @@ def run_facebook_clips(reel_url, out_dir, top_n=2, lang="es",
     render = render_fn or _default_render
     validate = validate_fn or _default_validate
     _render_kw = _acepta_kw(render, "layout_mode")
-    _validate_kw = _acepta_kw(validate, "plantilla")
+    # Guarda POR KWARG (§4.2, I-13): dos guardas independientes —
+    # un inyectable que acepta `plantilla` pero no `avatar` no
+    # debe perder también `plantilla` (la conjuntiva es una
+    # regresión silenciosa).
+    _validate_kw_plantilla = _acepta_kw(validate, "plantilla")
+    _validate_kw_avatar = _acepta_kw(validate, "avatar")
     titles = titles_fn or build_facebook_package
     layout_detect = layout_fn or _default_layout
 
@@ -962,12 +969,14 @@ def run_facebook_clips(reel_url, out_dir, top_n=2, lang="es",
         # y validación contra rubius_sin_webcam.
         layout_mode = "auto"
         plantilla = None
+        avatar = False
         try:
             from .template_decision import decide_template_for_segment
             _dec = decide_template_for_segment(seg_path, dur, cfg=cfg)
             if _dec[0] == "rubius_sin_webcam":
                 layout_mode = "game"
                 plantilla = "rubius_sin_webcam"
+            avatar = bool(_dec[3])
         except Exception:  # noqa: BLE001 - sin decisión, auto
             pass
         try:
@@ -1030,9 +1039,13 @@ def run_facebook_clips(reel_url, out_dir, top_n=2, lang="es",
         # veredicto «rechazado» no se guarda sin revisar los
         # fotogramas: el clip rechazado no entra en el manifiesto.
         try:
+            _vkw = {}
+            if _validate_kw_plantilla:
+                _vkw["plantilla"] = plantilla
+            if _validate_kw_avatar:
+                _vkw["avatar"] = avatar
             verdict = validate(clip_path, title, seg_text, cfg,
-                               **({"plantilla": plantilla}
-                                  if _validate_kw else {}))
+                               **_vkw)
         except Exception:  # noqa: BLE001 - sin veredicto, pendiente
             verdict = {"decision": "pendiente_revision"}
         if (verdict or {}).get("decision") == "rechazado":

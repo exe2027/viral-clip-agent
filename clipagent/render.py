@@ -184,7 +184,7 @@ OUT_W, OUT_H = 1080, 1920
 SAMPLE_W, SAMPLE_H = 160, 90
 
 DEFAULTS = {
-    "mode": "auto",            # auto | stack | pip | center
+    "mode": "auto",            # auto | stack | pip | center | game
     "sample_every_s": 5,       # muestrear un fotograma cada N segundos
     "min_segment_s": 3,        # un tramo más corto se fusiona con el vecino
     "pip_width": 480,          # ancho de la webcam en PiP (px, sobre 1080)
@@ -1650,6 +1650,63 @@ def _face_union_box(kept, src_w, src_h, margin_frac=0.6, min_factor=2.8):
     return [x0, y0, x1 - x0, y1 - y0]
 
 
+def median_face_box(video_path, duration, start_offset=0.0,
+                    src_w=None, src_h=None, cfg=None):
+    """Cara mediana estable en px del vídeo original, o None.
+
+    Misma selección que _face_cam_box (8 instantes + ventana de
+    punch-in, cara mayor por instante, centro mediano, caras cerca
+    de ese centro, >= 3 estables): es la cara alrededor de la cual
+    se centra la caja ajustada del re-make (cámaras oscuras como la
+    de Burn, donde el refinado de bordes se engancha a bordes del
+    juego y la caja sale demasiado ancha). Sin cara estable, None.
+    Nunca levanta.
+    """
+    cfg = {**DEFAULTS, **(cfg or {})}
+    try:
+        if src_w is None or src_h is None:
+            src_w, src_h = _probe_size(video_path)
+    except Exception:  # noqa: BLE001 - sin tamaño no hay cara
+        return None
+    try:
+        times = [t for t in (2, 7, 12, 17, 22, 27, 32, 37)
+                 if t < duration]
+        if len(times) < 3:
+            times = sorted({round(duration * f, 2)
+                            for f in (0.1, 0.3, 0.5, 0.7, 0.9)})
+        if not times:
+            times = [min(2, duration / 2)]
+        punch_win = _punch_window(cfg, duration)
+        if punch_win is not None:
+            p0, p1 = punch_win
+            extra = [t for t in (p0, p0 + 3, p1 - 1)
+                     if 0 <= t < duration and t not in times]
+            times = sorted(times + extra)
+        faces = []
+        for t in times:
+            found = _detect_faces_at(
+                video_path, start_offset + t, src_w, src_h, cfg)
+            if found:
+                faces.append((float(t), found))
+        if not faces:
+            return None
+        picks = []
+        for (t, fl) in faces:
+            picks.append((t, max(fl, key=lambda b: b[2] * b[3])))
+        cxs = sorted(x + w // 2 for (_t, (x, _y, w, _h)) in picks)
+        cys = sorted(y + h // 2 for (_t, (_x, y, _w, h)) in picks)
+        mcx, mcy = cxs[len(cxs) // 2], cys[len(cys) // 2]
+        kept = [(t, b) for (t, fl) in faces for b in fl
+                if abs(b[0] + b[2] // 2 - mcx) <= 0.25 * src_w
+                and abs(b[1] + b[3] // 2 - mcy) <= 0.25 * src_h]
+        if len(kept) < 3:
+            return None
+        _t, face = kept[len(kept) // 2]
+        return [int(v) for v in face]
+    except Exception:  # noqa: BLE001 - sin cara no hay estrategia
+        return None
+
+
 # Zoom por hype (2026-11-19, pedido del usuario: punch-in en los
 # momentos que sean necesarios, no un zoom fijo en 16-26 s).
 # Ventana por defecto: 4 s (1 s antes del grito + 3 s de reacción).
@@ -1863,6 +1920,61 @@ def _fill_punch_face_centers(video_path, start_offset, segments, cfg):
                            f"({int(center[0])},{int(center[1])})")
 
 
+def _cam_box_valida(box, w, h, cfg, avatar=False):
+    """True si una caja de cámara es plausible, o (False, motivo).
+
+    Una cámara NUNCA ocupa medio fotograma: si la caja es demasiado
+    ancha o demasiado grande, renderizar rubius con ella duplica el
+    juego (la cámara ES el fotograma completo) o lo contamina. La
+    salida de emergencia que usaba el fotograma completo como
+    "cámara" NO existe: una caja inválida no se renderiza como
+    rubius; el tramo cae a "game" (gameplay puro, sin webcam) y el
+    validador lo retiene. ``box`` en las mismas unidades que ``w``/``h``
+    (px del vídeo original o coords de muestra 160x90).
+
+    Regla reconciliada (§4.1, spec inglés correcto v7.1): ancho
+    ``bw/w ≤ split_cam_max_w_frac`` (0,45) Y área ≤
+    ``cam_max_area_frac`` (0,35) Y posición en esquina vía
+    ``_caja_en_esquina`` (la caja se convierte a fracciones antes
+    de llamarla). Con ``avatar=True`` se salta SOLO la posición
+    (ancho y área siguen aplicando): la caja de un candidato
+    avatar la da el detector (esquina obligatoria + área
+    0,03-0,35 + present_frac + racha + textura), y un avatar en
+    esquina inferior no lo tumba el tope ``y0 < 0,50`` (que es
+    para facecams humanas: minimapa/HUD). El flag llega solo por
+    la guarda pip→split, desde ``params["avatar"]`` (rama vtuber
+    del escaneo); la vía (a) ``facecam_box_avatar`` de config NO
+    existe (retirada en v7.1).
+    """
+    try:
+        x0, y0, bw, bh = (float(v) for v in box[:4])
+    except (TypeError, ValueError, IndexError):
+        return False, f"caja de cámara no numérica: {box!r}"
+    if bw <= 0 or bh <= 0:
+        return False, f"caja de cámara degenerada: {box!r}"
+    if x0 < -1 or y0 < -1 or x0 + bw > w + 1 or y0 + bh > h + 1:
+        return False, (f"caja de cámara fuera del fotograma: "
+                       f"{box!r} en {w}x{h}")
+    max_w_frac = float(cfg.get("split_cam_max_w_frac", 0.45))
+    if bw / w > max_w_frac:
+        return False, (f"caja de cámara demasiado ancha "
+                       f"({bw / w:.0%} del ancho, máximo "
+                       f"{max_w_frac:.0%}): {box!r}")
+    max_area_frac = float(cfg.get("cam_max_area_frac", 0.35))
+    if (bw * bh) / (w * h) > max_area_frac:
+        return False, (f"caja de cámara demasiado grande "
+                       f"({(bw * bh) / (w * h):.0%} del área, "
+                       f"máximo {max_area_frac:.0%}): {box!r}")
+    if not avatar:
+        from .yunet_facecam import _caja_en_esquina
+
+        if not _caja_en_esquina([x0 / w, y0 / h, bw / w, bh / h]):
+            return False, (f"caja de cámara fuera de esquina "
+                           f"(centro en el rectángulo central, "
+                           f"centro-y >= 0,70 o y0 >= 0,50): {box!r}")
+    return True, ""
+
+
 def _split_params(box_sample, cfg):
     """Params del layout split a partir de la caja de la webcam.
 
@@ -1889,7 +2001,35 @@ def _split_params(box_sample, cfg):
     va en el segundo 20 del clip por construcción). ``False`` los
     desactiva; un dict {"t0","t1","zoom"} (punch) o {"t0","t1"}
     (game zoom) los fija.
+
+    Una caja (casi) igual al fotograma completo levanta ValueError
+    en voz alta: ningún llamador renderiza rubius con ella; la
+    salida de emergencia que usaba el fotograma completo como
+    "cámara" NO existe. Una caja solo demasiado ancha NO levanta:
+    se achica a 480 px (juego 1440) como siempre y la contaminación
+    que quede la caza el validador en el render final. (Las cajas
+    inválidas — fuera de esquina, demasiado anchas o demasiado
+    grandes — las degrada a "game" la guarda de decide_layout con
+    _cam_box_valida ANTES de llegar aquí; esta función solo ve
+    cajas que ya pasaron esa guarda, salvo la explícita de config.)
     """
+    # Solo el (casi) fotograma completo levanta: una caja solo
+    # demasiado ancha se achica abajo (test_wide_cam_shrinks). Antes
+    # la guarda rechazaba cualquier caja > 45% y rompía el achicado.
+    try:
+        _x0, _y0, _bw, _bh = (float(v) for v in box_sample[:4])
+    except (TypeError, ValueError, IndexError):
+        raise ValueError(
+            f"_split_params: caja de cámara no numérica: "
+            f"{box_sample!r}")
+    if _bw <= 0 or _bh <= 0:
+        raise ValueError(
+            f"_split_params: caja de cámara degenerada: {box_sample!r}")
+    if (_bw / SAMPLE_W >= 0.9
+            or (_bw * _bh) / (SAMPLE_W * SAMPLE_H) >= 0.9):
+        raise ValueError(
+            f"_split_params: caja de cámara es (casi) el fotograma "
+            f"completo: {box_sample!r}")
     game_h = int(cfg.get("split_game_h", 1320))
     cam_h = int(cfg.get("split_cam_h", 600))
     bx0, _by0, bw, _bh = box_sample[:4]
@@ -1983,7 +2123,8 @@ def _scan_frames(video_path, duration, start_offset, cfg):
                             "vtuber": ({"box": vt["box"],
                                         "corner": vt["corner"],
                                         "present_frac": vt["present_frac"],
-                                        "detail": vt["detail"]}
+                                        "detail": vt["detail"],
+                                        "_cells": vt["_cells"]}
                                        if vt else None),
                             "_frame": b, "_stable": None})
             continue
@@ -2006,7 +2147,8 @@ def _scan_frames(video_path, duration, start_offset, cfg):
                         "vtuber": ({"box": vt["box"],
                                     "corner": vt["corner"],
                                     "present_frac": vt["present_frac"],
-                                    "detail": vt["detail"]}
+                                    "detail": vt["detail"],
+                                    "_cells": vt["_cells"]}
                                    if vt else None),
                         "_frame": b, "_stable": stable})
         # Esquinas persistentes: solo cuentan los diffs en los que NO
@@ -2238,13 +2380,28 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
     game_voice = (game_voice if game_voice is not None
                   else cfg.get("game_voice"))
     forced = cfg.get("mode", "auto")
-    if forced in ("stack", "pip", "center"):
-        segments = [{"start": 0.0, "end": float(duration),
-                     "layout": forced, "params": {},
-                     "reason": f"forzado por config/CLI (--layout {forced})"}]
+    if forced in ("stack", "pip", "center", "game"):
+        if forced == "game":
+            # Forzado sin_webcam (§6.2): gameplay a pantalla completa
+            # para toda la duración, sin escaneo de cara (una cara
+            # espuria del juego no puede voltear un tramo a split) y
+            # con la etiqueta "plantilla" que consumen los call sites
+            # (live_cutter, workers): el "game" de game_voice no la
+            # lleva. Sin discriminador por mode (I-24: nadie lee
+            # decision["mode"] para distinguirlos).
+            segments = [{"start": 0.0, "end": float(duration),
+                         "layout": "game", "params": {},
+                         "reason": "forzado sin_webcam"}]
+        else:
+            segments = [{"start": 0.0, "end": float(duration),
+                         "layout": forced, "params": {},
+                         "reason": f"forzado por config/CLI (--layout {forced})"}]
         if game_voice:
             segments = apply_game_voice(segments, game_voice, duration)
-        return {"mode": forced, "segments": segments, "samples": []}
+        decision = {"mode": forced, "segments": segments, "samples": []}
+        if forced == "game":
+            decision["plantilla"] = "rubius_sin_webcam"
+        return decision
     if cfg.get("facecam_box"):
         # Caja explícita en px del vídeo original (config.yaml):
         # manda sobre la detección y recibe el MISMO trato que un
@@ -2266,20 +2423,27 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                               for v in cfg["facecam_box"][:4]]
             box_s = [fx * SAMPLE_W / sw, fy * SAMPLE_H / sh,
                      fw * SAMPLE_W / sw, fh * SAMPLE_H / sh]
-            segments = [{"start": 0.0, "end": float(duration),
-                         "layout": "split",
-                         "params": _split_params(box_s, cfg),
-                         "reason": ("facecam_box explícito en config.yaml "
-                                    f"{[int(v) for v in cfg['facecam_box'][:4]]} "
-                                    "-> split vertical RDJavi: streamer "
-                                    "arriba, gameplay abajo (sin PiP en el centro)")}]
-            if game_voice:
-                segments = apply_game_voice(segments, game_voice, duration)
-            _fill_punch_face_centers(video_path, start_offset,
-                                     segments, cfg)
-            return {"mode": "split", "segments": segments, "samples": []}
-        # Sin tamaño del vídeo no se puede convertir la caja: caer al
-        # auto de abajo en vez de un PiP con coords imposibles.
+            # Guarda 2026-11-26: una caja explícita inválida (el
+            # fotograma completo como "cámara") NO se renderiza
+            # como split; se ignora y se sigue al auto de abajo.
+            _ok, _motivo = _cam_box_valida(
+                box_s, SAMPLE_W, SAMPLE_H, cfg)
+            if _ok:
+                segments = [{"start": 0.0, "end": float(duration),
+                             "layout": "split",
+                             "params": _split_params(box_s, cfg),
+                             "reason": ("facecam_box explícito en config.yaml "
+                                        f"{[int(v) for v in cfg['facecam_box'][:4]]} "
+                                        "-> split vertical RDJavi: streamer "
+                                        "arriba, gameplay abajo (sin PiP en el centro)")}]
+                if game_voice:
+                    segments = apply_game_voice(segments, game_voice, duration)
+                _fill_punch_face_centers(video_path, start_offset,
+                                         segments, cfg)
+                return {"mode": "split", "segments": segments, "samples": []}
+        # Sin tamaño del vídeo no se puede convertir la caja, o la
+        # caja explícita es inválida: caer al auto de abajo en vez
+        # de un PiP con coords imposibles o un split duplicado.
 
     # Escaneo por tramo (Bloque 4): muestrea cada 2 s y clasifica
     # 0/1/2 cams por regiones estables. Se reusan sus fotogramas para
@@ -2295,6 +2459,8 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
             scan_samples = None
 
     if scan_samples:
+        from .yunet_facecam import _caja_en_esquina
+
         samples = []
         for s in scan_samples:
             if s.get("_frame") is None or s["cams"] is None:
@@ -2323,10 +2489,26 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                 area = ((box[2] - box[0] + 1) * (box[3] - box[1] + 1)
                         / (SAMPLE_W * SAMPLE_H))
                 if area < 0.45:
-                    layout = "pip"
-                    params = {"box": [box[0], box[1], box[2] - box[0] + 1,
-                                      box[3] - box[1] + 1]}
-                    reason += " | corregido a pip por escaneo"
+                    # Regla de posición §4.1 ANTES de crear el pip:
+                    # una caja humana fuera de esquina no se
+                    # convierte en pip: el tramo cae a "game"
+                    # (gameplay puro, sin webcam), nunca al
+                    # fotograma completo como cámara ni duplicado
+                    # (§4.1.4).
+                    box_frac = [box[0] / SAMPLE_W, box[1] / SAMPLE_H,
+                                (box[2] - box[0] + 1) / SAMPLE_W,
+                                (box[3] - box[1] + 1) / SAMPLE_H]
+                    if _caja_en_esquina(box_frac):
+                        layout = "pip"
+                        params = {"box": [box[0], box[1],
+                                          box[2] - box[0] + 1,
+                                          box[3] - box[1] + 1]}
+                        reason += " | corregido a pip por escaneo"
+                    else:
+                        layout = "game"
+                        params = {}
+                        reason += (" | caja fuera de esquina "
+                                   "(posición §4.1): game, sin webcam")
             # Vtuber / PNG tuber: avatar reactivo en una esquina sin
             # cara humana (Haar no lo ve) y sin borde de caja
             # superior. Si está presente en esta muestra y el layout
@@ -2335,8 +2517,27 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
             # ni un pip ya detectado por el escaneo.
             if layout == "center" and s.get("vtuber"):
                 vt = s["vtuber"]
+                # Caja AJUSTADA del candidato (§4.1/§4.3.1):
+                # bounding box de _cells SIN el margen de 1 celda,
+                # en coords de MUESTRA 160x90 SIN escalado
+                # (params["box"] alimenta guardas en coords de
+                # muestra; escalarla a px de fuente haría que la
+                # guarda la rechazase por fuera del fotograma).
+                # Sin _cells (muestras viejas), vt["box"] (parche
+                # + margen). params["avatar"] porta el flag hasta
+                # la guarda pip->split, que salta solo la posición.
+                cells = vt.get("_cells")
+                if cells:
+                    rs = [r for (r, _c) in cells]
+                    cs = [c for (_r, c) in cells]
+                    adj = [min(cs) * CELL, min(rs) * CELL,
+                           (max(cs) - min(cs) + 1) * CELL,
+                           (max(rs) - min(rs) + 1) * CELL]
+                else:
+                    adj = [float(v) for v in vt["box"][:4]]
                 layout = "pip"
-                params = {"box": [float(v) for v in vt["box"][:4]]}
+                params = {"box": [float(v) for v in adj[:4]],
+                          "avatar": True}
                 reason += (f" | vtuber_detected: {vt['detail']} "
                            f"-> pip (luego split)")
             # Arreglo 6: anclar el divisor al borde entre las dos cajas
@@ -2446,10 +2647,26 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
     src_size = None
     for r in merged:
         if r["layout"] == "pip" and r["params"].get("box"):
-            r["params"] = _split_params(r["params"]["box"], cfg)
-            r["layout"] = "split"
-            r["reason"] += (" | split vertical: juego arriba, cámara "
-                            "abajo (sin PiP en el centro)")
+            # Guarda 2026-11-26 (actualizada §4.1, spec inglés
+            # correcto v7.1): una caja inválida (el fotograma
+            # completo como "cámara") NO se renderiza como split;
+            # el tramo cae a "game" (gameplay puro, sin webcam),
+            # nunca a "center" (que seguiría buscando cara) ni al
+            # fotograma completo como cámara. La guarda pasa el
+            # flag avatar: con él se salta solo la posición.
+            _ok, _motivo = _cam_box_valida(
+                r["params"]["box"], SAMPLE_W, SAMPLE_H, cfg,
+                avatar=r["params"].get("avatar", False))
+            if _ok:
+                r["params"] = _split_params(r["params"]["box"], cfg)
+                r["layout"] = "split"
+                r["reason"] += (" | split vertical: juego arriba, cámara "
+                                "abajo (sin PiP en el centro)")
+            else:
+                r["layout"] = "game"
+                r["params"] = {}
+                r["reason"] += (f" | caja de cámara inválida "
+                                f"({_motivo}): game, sin webcam")
         elif r["layout"] == "center":
             if src_size is None:
                 try:
@@ -2475,6 +2692,22 @@ def decide_layout(video_path, duration, start_offset=0.0, cfg=None,
                 if fbox is not None:
                     box_s = [fbox[0] * SAMPLE_W / sw, fbox[1] * SAMPLE_H / sh,
                              fbox[2] * SAMPLE_W / sw, fbox[3] * SAMPLE_H / sh]
+                    # Guarda 2026-11-26 (actualizada §4.1, spec
+                    # inglés correcto v7.1): una caja inválida (el
+                    # fotograma completo como "cámara", o una caja
+                    # de cara del juego) NO se renderiza como
+                    # split; el tramo cae a "game" (gameplay puro,
+                    # sin webcam), igual que la guarda pip->split
+                    # de arriba — nunca queda en "center".
+                    _ok, _motivo = _cam_box_valida(
+                        box_s, SAMPLE_W, SAMPLE_H, cfg)
+                    if not _ok:
+                        r["layout"] = "game"
+                        r["params"] = {}
+                        r["reason"] += (f" | caja de cámara "
+                                        f"inválida ({_motivo}): "
+                                        f"game, sin webcam")
+                        continue
                     r["params"] = _split_params(box_s, cfg)
                     # Punch-in automático (ver _face_cam_box): centro
                     # en el viaje de la cara en 16-26 s y zoom capado

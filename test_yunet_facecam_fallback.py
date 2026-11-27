@@ -64,14 +64,26 @@ class TestValidateCamBox(unittest.TestCase):
         self.assertFalse(validate_cam_box(box, face))
 
     def test_caja_centrada_rechazada(self):
-        box = [0.40, 0.10, 0.19, 0.34]
-        face = [0.47, 0.22, 0.05, 0.12]
+        # Centro en el rectángulo central (x 30-70% Y y 30-70% a
+        # la vez, regla reconciliada §4.1): la caja está centrada
+        # aunque su borde superior esté arriba.
+        box = [0.40, 0.30, 0.19, 0.34]
+        face = [0.47, 0.42, 0.05, 0.12]
         self.assertFalse(validate_cam_box(box, face))
 
-    def test_area_mayor_45_rechazada(self):
-        box = [0.05, 0.05, 0.80, 0.70]
-        face = [0.40, 0.20, 0.05, 0.12]
+    def test_area_mayor_35_rechazada(self):
+        # Área 0,3575: entre 0,35 y 0,45 — con la regla reconciliada
+        # (§4.1) ya no pasa; el 0,45 viejo la aceptaba. El resto
+        # (posición, tamaño, aspecto, contención) pasa, así que el
+        # rechazo es solo por área.
+        box = [0.0, 0.05, 0.55, 0.65]
+        face = [0.20, 0.20, 0.05, 0.12]
         self.assertFalse(validate_cam_box(box, face))
+
+    def test_area_justo_bajo_35_pasa(self):
+        box = [0.0, 0.05, 0.50, 0.65]  # área 0,325 < 0,35
+        face = [0.20, 0.20, 0.05, 0.12]
+        self.assertTrue(validate_cam_box(box, face))
 
     def test_aspecto_extremo_rechazado(self):
         box = [0.80, 0.10, 0.19, 0.06]  # aspecto 3,2: tira, no webcam
@@ -82,6 +94,60 @@ class TestValidateCamBox(unittest.TestCase):
         box = _frac([1539, 117, 357, 369])
         face = _frac([200, 200, 96, 133])  # cara en otra esquina
         self.assertFalse(validate_cam_box(box, face))
+
+    def test_sin_contencion_caja_valida_sin_cara_pasa(self):
+        # require_containment=False (§4.1, I-3): la cara se ignora
+        # por completo (ni se desempaqueta): caja explícita válida
+        # sin cara detectada pasa.
+        box = _frac([1539, 117, 357, 369])
+        self.assertTrue(validate_cam_box(box, [], require_containment=False))
+        self.assertTrue(validate_cam_box(box, None, require_containment=False))
+
+    def test_sin_contencion_cara_fuera_no_aplica(self):
+        # Con cara presente pero fuera, la contención no aplica.
+        box = _frac([1539, 117, 357, 369])
+        face = _frac([200, 200, 96, 133])
+        self.assertTrue(validate_cam_box(box, face,
+                                         require_containment=False))
+        self.assertFalse(validate_cam_box(box, face))
+
+
+class TestCajaEnEsquina(unittest.TestCase):
+    """_caja_en_esquina sola (§10.2): solo posición + borde superior."""
+
+    def test_p7775_y_p3220_pasan(self):
+        # §10.2, base 2560x1440: p7775 "561:365:0:626" centro
+        # (0,11, 0,56), y0 0,435; p3220 "561:365:0:0" centro
+        # (0,11, 0,13). El formato es w:h:x:y.
+        from clipagent.yunet_facecam import _caja_en_esquina
+
+        self.assertTrue(_caja_en_esquina(
+            [0, 626 / 1440, 561 / 2560, 365 / 1440]))
+        self.assertTrue(_caja_en_esquina(
+            [0, 0, 561 / 2560, 365 / 1440]))
+
+    def test_centrada_grande_no_pasa(self):
+        from clipagent.yunet_facecam import _caja_en_esquina
+
+        self.assertFalse(_caja_en_esquina([0.35, 0.30, 0.30, 0.40]))
+
+    def test_borde_superior_mayor_50_no_pasa(self):
+        from clipagent.yunet_facecam import _caja_en_esquina
+
+        self.assertFalse(_caja_en_esquina([0.05, 0.50, 0.20, 0.30]))
+
+    def test_centro_y_mayor_70_no_pasa(self):
+        # y0 < 0,50 pasa; el rechazo es solo por centro-y >= 0,70.
+        from clipagent.yunet_facecam import _caja_en_esquina
+
+        self.assertFalse(_caja_en_esquina([0.05, 0.40, 0.20, 0.60]))
+
+    def test_centro_x_fuera_rectangulo_central_pasa(self):
+        # Centro-x fuera (0,25) aunque centro-y esté dentro: el
+        # rectángulo central exige x E y a la vez.
+        from clipagent.yunet_facecam import _caja_en_esquina
+
+        self.assertTrue(_caja_en_esquina([0.15, 0.30, 0.20, 0.30]))
 
 
 @unittest.skipUnless(_HAS_CV2, "sin cv2 no hay fallback YuNet")

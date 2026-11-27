@@ -287,6 +287,13 @@ class TestVodHook(unittest.TestCase):
                 "face_min_share": 0.5, "face_min_width_frac": 0.08,
                 "min_score": 5, "max_rerenders": 1,
                 "gemini_hard": False,
+                "layout_dup_sift_cells": 8,
+                "layout_face_sift_cells_min": 5,
+                "layout_face_cx_min": 0.45,
+                "layout_face_cx_max": 0.65,
+                "layout_face_area_min": 0.15,
+                "layout_face_area_closeup_min": 0.12,
+                "layout_sift_max_frames": 8,
                 "chain": ["facecrop", "edge", "yunet"]},
                 "final_review": {
                     "enabled": decision != "desactivada",

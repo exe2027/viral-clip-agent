@@ -1565,6 +1565,7 @@ def main() -> int:
         # del manifiesto lleva la plantilla. Un layout forzado por
         # flag se respeta (la decisión ni se corre).
         plantilla_decidida = None
+        avatar_decidido = False
         if not args.layout or args.layout == "auto":
             try:
                 from clipagent.precise_cut import (
@@ -1577,6 +1578,7 @@ def main() -> int:
                 if _dec[0] == "rubius_sin_webcam":
                     args.layout = "game"
                     plantilla_decidida = "rubius_sin_webcam"
+                avatar_decidido = bool(_dec[3])
             except Exception as e:  # noqa: BLE001 - sin decisión,
                 # rubius normal (la puerta de cara decide después).
                 print(f"    Decisión de plantilla: no se pudo "
@@ -1870,6 +1872,12 @@ def main() -> int:
                             or (layout_decision or {}).get("plantilla"))
         if _plantilla_entry:
             clip_entry["plantilla"] = _plantilla_entry
+        # §4.3.2: el flag avatar del corte VOD viaja en el
+        # manifiesto; vod_fallback lo lee (clip.get("avatar")) y
+        # valida con él. Solo se fija cuando es True (igual que
+        # la plantilla: ausente = False).
+        if avatar_decidido:
+            clip_entry["avatar"] = True
         manifest["clips"].append(clip_entry)
         # 7.1: candidato para la selección con LLM (transcripción de
         # la ventana + chat). Los datos para recalcular el viral_score

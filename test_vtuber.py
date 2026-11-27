@@ -172,12 +172,26 @@ class TestVtuberRubius(unittest.TestCase):
                          f"layouts={layouts}: el clip debe ser split")
         self.assertEqual(len(d["segments"]), 2)
         first, second = d["segments"]
-        self.assertEqual(first["params"]["box"], [0.0, 50.0, 50.0, 40.0])
+        # §4.3.1: caja AJUSTADA del candidato (bounding box de
+        # _cells sin el margen de 1 celda), no vt["box"] (parche +
+        # margen): [0,50,50,40] y [0,0,60,40] eran las viejas.
+        self.assertEqual(first["params"]["box"], [0.0, 60.0, 40.0, 30.0])
         self.assertEqual(first["params"]["game_h"], 1320)
         self.assertEqual(first["params"]["cam_h"], 600)
         self.assertIn("vtuber_detected", first["reason"])
-        self.assertEqual(second["params"]["box"], [0.0, 0.0, 60.0, 40.0])
+        self.assertEqual(second["params"]["box"], [0.0, 0.0, 50.0, 30.0])
         self.assertIn("vtuber_detected", second["reason"])
+        # §4.1/§4.3.1: params["avatar"] porta el flag desde la rama
+        # vtuber hasta la guarda pip->split (que con avatar=True
+        # salta solo la posición). La guarda consume el flag al
+        # reconstruir los params del split, así que se afirma en
+        # las muestras, no en los segmentos finales.
+        vtuber_samples = [s for s in d["samples"]
+                          if "vtuber_detected" in s["reason"]]
+        self.assertTrue(vtuber_samples)
+        for s in vtuber_samples:
+            self.assertIs(s["params"].get("avatar"), True,
+                          f"muestra t={s['t']} sin flag avatar")
 
 
 @unittest.skipUnless(os.path.exists(ILLOJUAN_SEG), "falta el segmento IlloJuan")

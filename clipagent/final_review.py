@@ -55,9 +55,9 @@ PUERTA DURA (2026-11-19, ``validate_final_clip``): además del
 juez Gemini, el vídeo final pasa por dos capas deterministas que
 el modo observación NO anula nunca: la cara (cadena face-crop ->
 bordes fijos -> YuNet, muestreada en todo el clip, en la zona de
-cámara de LA PLANTILLA DEL CLIP) y la plantilla (una de TRES
+cámara de LA PLANTILLA DEL CLIP) y la plantilla (una de CUATRO
 recetas en píxeles, config.yaml `templates`: rdjavi v1, willyrex
-v2 o rubius; default rubius cuando el clip no declara plantilla).
+v2, rubius o rubius_sin_webcam; default rubius cuando el clip no declara plantilla).
 Si la cara o la plantilla fallan, el clip NO se encola ni se
 publica: se re-renderiza automáticamente (máx.
 ``validator.max_rerenders``) y, si tras re-hacerlo sigue sin
@@ -167,6 +167,24 @@ RECIPE_TEXT = {
         "palabra sobre la parte superior del gameplay, letra gruesa "
         "estilo Arial Black; SIN bandas negras, SIN subtítulos "
         "amarillos fijos, SIN karaoke.",
+    ),
+    "rubius_sin_webcam": (
+        "el GAMEPLAY A PANTALLA COMPLETA (0-1920 px), SIN cámara "
+        "del streamer (no hay webcam en el clip: es correcto que "
+        "no se vea ninguna); el TÍTULO va en un banner amarillo "
+        "redondeado con borde blanco (x 103-967, y 811-1099), dos "
+        "líneas centradas (línea 1 NEGRA, línea 2 ROJA, Arial Black "
+        "gruesa), transitorio (solo en el momento clave); los "
+        "SUBTÍTULOS van palabra por palabra, una palabra a la vez, "
+        "en BLANCO con borde negro grueso, centrados, sobre la "
+        "parte superior del gameplay (y 900-1020).",
+        "montaje, fuentes y subtítulos son los del estilo rubius "
+        "sin webcam: gameplay a pantalla completa sin cámara del "
+        "streamer, título en banner amarillo con borde blanco y "
+        "dos líneas (negra y roja), subtítulos blancos palabra por "
+        "palabra sobre la parte superior del gameplay, letra gruesa "
+        "estilo Arial Black; SIN cámara, SIN bandas negras, SIN "
+        "subtítulos amarillos fijos, SIN karaoke.",
     ),
 }
 
@@ -857,7 +875,7 @@ def _band_video(clip_path, out_path, recipe):
 
 
 def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
-              facecrop_fn=None, edge_fn=None, yunet_fn=None):
+              facecrop_fn=None, edge_fn=None, yunet_fn=None, avatar=False):
     """Cara visible en el VÍDEO FINAL, a lo largo de todo el clip.
 
     Cadena de detección en ESTE orden (fallbacks): face-crop
@@ -887,7 +905,24 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
     tests (por defecto, los detectores reales). Devuelven el dict
     de la puerta: pasa, método, muestras con cara, totales, anchos
     de cara y detalle por eslabón.
+
+    ``avatar`` (I-23, spec §5.2): True cuando la decisión §4.3
+    encontró un candidato avatar sin cara humana en este segmento.
+    Haar no ve avatares, así que la puerta se salta entera y
+    devuelve el centinela pasa=True/method="avatar" SIN leer
+    ``recipe["cam"]`` para la cara (sin él, un avatar re-renderizado
+    seguiría fallando la puerta dura "cara" aunque el layout fuese
+    correcto: clip 244, share 0,05). El ``motivo`` es "" (M-18: la
+    explicación vive en ``detail``, no en ``motivo``) y ``share``
+    es None (los consumidores deben usar ``(share or 0)``).
     """
+    if avatar:
+        return {"pasa": True, "method": "avatar", "motivo": "",
+                "share": None, "frames": 0, "frames_with_face": 0,
+                "frames_total": len(frames) if frames else 0,
+                "face_widths": [], "links": {}, "duda": False,
+                "detail": ("avatar reactivo por decisión §4.3: "
+                           "Haar no aplica")}
     min_share = float(vcfg["face_min_share"])
     min_frames = int(vcfg["face_min_frames"])
     cam = recipe["cam"]
@@ -1109,18 +1144,58 @@ def face_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
             "duda": False}
 
 
+def _check_sfx(check, clip_path, vcfg, sfx_events):
+    """SFX del pack en el audio. 2026-11-24: la puerta verifica lo
+    que SE DECIDIÓ poner, no lo que nunca se decidió. decide_sfx
+    devuelve [] por diseño en clips hablados sin dip de silencio
+    ni grito ni fail (sin boom, sin riser, sin fail); exigir SFX
+    entonces rechaza clips buenos (run 45299157326: 4/5 cortes con
+    sfx []). Si no se decidió nada (sfx_events == []), el chequeo
+    pasa. Si se decidió SFX y no aparece en el audio, sigue
+    fallando: el mezclador roto sigue detectándose (apply_sfx traga
+    errores y devuelve el vídeo sin tocar, y su early-return
+    `reused` devuelve events: [] sin mezclar). Sin sfx_events
+    (None: llamador sin la info), se exige presencia como antes.
+    El SFX se mezcla con apply_sfx con independencia de la
+    plantilla: se llama desde las ramas word_white y sin_webcam.
+    """
+    if sfx_events is not None and len(sfx_events) == 0:
+        check("sfx_presente", True,
+               "sin SFX decididos (decide_sfx vacío)", "")
+    else:
+        sfx = detect_sfx_in_clip(
+            clip_path, min_ncc=float(vcfg["sfx_min_ncc"]))
+        if sfx["found"]:
+            check("sfx_presente", True,
+                   f"{sfx['effect']} (NCC {sfx['corr']:.2f} en "
+                   f"t={sfx['lag_s']:.1f}s)", "")
+        else:
+            check("sfx_presente", False,
+                   f"mejor NCC {sfx['corr']:.2f}",
+                   sfx.get("motivo") or "sin SFX del pack en el audio")
+
+
 def template_gate(clip_path, vcfg, recipe, frames=None, srt_path=None,
-                  face_result=None, out_dir=None, sfx_events=None):
+                  face_result=None, out_dir=None, sfx_events=None,
+                  template_name=None):
     """La receta en el VÍDEO FINAL: montaje + fuentes + subtítulos.
 
     Comprueba en píxeles, sobre los mismos fotogramas muestreados
     en todo el clip, la receta de LA PLANTILLA DEL CLIP
     (config.yaml `templates`, `recipe`): rdjavi v1 (karaoke al pie
-    de la cámara), willyrex v2 (fijos amarillos en banda inferior)
-    o rubius (blancos palabra por palabra sobre el gameplay).
+    de la cámara), willyrex v2 (fijos amarillos en banda inferior),
+    rubius (blancos palabra por palabra sobre el gameplay) o
+    rubius_sin_webcam (gameplay a pantalla completa, sin cámara).
     La regla "subtítulos sobre el gameplay" es POR PLANTILLA: en
     rubius VAN sobre el gameplay y eso es correcto; en rdjavi y
     willyrex siguen prohibidos.
+
+    ``template_name`` (§6.5): la plantilla resuelta por
+    ``validate_final_clip``. La rama rubius_sin_webcam despacha POR
+    NOMBRE antes del despacho por ``subs_style`` (su subs_style es
+    word_white, el mismo que rubius — mentiría sobre los subtítulos
+    usar un valor distinto para distinguirlas). Sin él, el despacho
+    actual por subs_style.
 
     ``sfx_events`` es la lista de eventos SFX que apply_sfx
     decidió mezclar (None = el llamador no la conoce: se exige
@@ -1160,11 +1235,21 @@ def template_gate(clip_path, vcfg, recipe, frames=None, srt_path=None,
         return {"pasa": False, "checks": checks,
                 "fallos": ["sin_fotogramas"],
                 "motivo": "ningún fotograma legible para la plantilla"}
-    # 1. Dimensiones 1080x1920 (común a las tres).
+    # 1. Dimensiones 1080x1920 (común a las cuatro).
     h0, w0 = arrays[0][1].shape[:2]
     _check("dimensiones", (w0, h0) == (W, H),
            f"{w0}x{h0}", "el clip no es 1080x1920")
-    style = (recipe or {}).get("subs_style")
+    # Rama POR NOMBRE DE PLANTILLA (§6.5), antes del despacho por
+    # subs_style: rubius_sin_webcam comparte subs_style word_white
+    # con rubius pero no tiene `cam` (su _template_word_white
+    # levantaría KeyError) ni cámara que verificar.
+    if template_name == "rubius_sin_webcam":
+        _template_fullscreen_game(
+            _check, arrays, spans, recipe, face_result, vcfg=vcfg)
+        _check_sfx(_check, clip_path, vcfg, sfx_events)
+        style = None
+    else:
+        style = (recipe or {}).get("subs_style")
     if style == "fixed_yellow":
         _template_fixed_yellow(
             _check, arrays, spans, recipe, face_result)
@@ -1173,40 +1258,16 @@ def template_gate(clip_path, vcfg, recipe, frames=None, srt_path=None,
     elif style == "word_white":
         _template_word_white(
             _check, arrays, spans, recipe, face_result, vcfg=vcfg)
-        # SFX del pack en el audio (solo rubius). 2026-11-24: la
-        # puerta verifica lo que SE DECIDIÓ poner, no lo que nunca
-        # se decidió. decide_sfx devuelve [] por diseño en clips
-        # hablados sin dip de silencio ni grito ni fail (sin boom,
-        # sin riser, sin fail); exigir SFX entonces rechaza clips
-        # buenos (run 45299157326: 4/5 cortes con sfx []). Si no
-        # se decidió nada (sfx_events == []), el chequeo pasa. Si
-        # se decidió SFX y no aparece en el audio, sigue fallando:
-        # el mezclador roto sigue detectándose (apply_sfx traga
-        # errores y devuelve el vídeo sin tocar, y su early-return
-        # `reused` devuelve events: [] sin mezclar). Sin
-        # sfx_events (None: llamador sin la info), se exige
-        # presencia como antes.
-        if sfx_events is not None and len(sfx_events) == 0:
-            _check("sfx_presente", True,
-                   "sin SFX decididos (decide_sfx vacío)", "")
-        else:
-            sfx = detect_sfx_in_clip(
-                clip_path, min_ncc=float(vcfg["sfx_min_ncc"]))
-            if sfx["found"]:
-                _check("sfx_presente", True,
-                       f"{sfx['effect']} (NCC {sfx['corr']:.2f} en "
-                       f"t={sfx['lag_s']:.1f}s)", "")
-            else:
-                _check("sfx_presente", False,
-                       f"mejor NCC {sfx['corr']:.2f}",
-                       sfx.get("motivo") or "sin SFX del pack en el audio")
+        _check_sfx(_check, clip_path, vcfg, sfx_events)
+    elif style is None and template_name == "rubius_sin_webcam":
+        pass  # rama por nombre ya ejecutada arriba
     else:
         return {"pasa": False, "checks": checks,
                 "fallos": ["subs_style"],
                 "motivo": ("plantilla: subs_style desconocido "
                            f"{style!r}")}
     # Fuente del estilo disponible en el entorno (la letra Arial
-    # Black es la de las tres recetas; sin ella libass cae a otra
+    # Black es la de las cuatro recetas; sin ella libass cae a otra
     # fuente y el clip no sigue la receta aunque el montaje lo sea).
     font_ok, font_detail = _arial_black_available()
     if font_ok is None:
@@ -1431,6 +1492,130 @@ def _template_karaoke(check, arrays, spans, recipe, face_result):
     _check_cam_live(check, arrays, cam)
 
 
+def _check_banner(check, arrays, recipe, vcfg=None):
+    """Título en banner amarillo TRANSITORIO (t=0.5-3.5 s de la
+    receta): tiene que aparecer en esa ventana, con el amarillo
+    DOMINANDO su zona, O como texto amarillo sobre fondo casi
+    negro (caso 170: _banner_title_present, rama b). Un conteo
+    bajo de píxeles amarillos lo pasa cualquier escena de juego
+    con amarillo (caso scooter 2026-11-21: 890 px amarillos de
+    la calle en la zona del banner, sin banner).
+
+    Compartido por rubius y rubius_sin_webcam (misma geometría
+    de banner, §6.1): misma medida, mismos umbrales. ``vcfg``
+    opcional: sin él, las constantes calibradas del módulo.
+    """
+    banner = recipe["title_banner"]
+    bx0, bx1 = int(banner["x0"]), int(banner["x1"])
+    by0, by1 = int(banner["y0"]), int(banner["y1"])
+    t0 = float(vcfg["rubius_banner_t0"]) if vcfg else _RUBIUS_BANNER_T0
+    t1 = float(vcfg["rubius_banner_t1"]) if vcfg else _RUBIUS_BANNER_T1
+    yellow_frac = (float(vcfg["rubius_banner_yellow_frac"]) if vcfg
+                   else _RUBIUS_BANNER_YELLOW_FRAC)
+    window = [(ts, a) for ts, a in arrays
+              if t0 <= ts <= t1]
+    pool = window if window else arrays
+    banner_frames = 0
+    best_frac = 0.0
+    best_detail = ""
+    for _ts, a in pool:
+        zone = a[by0:by1, bx0:bx1]
+        frac = _banner_yellow_frac(zone)
+        best_frac = max(best_frac, frac)
+        ok, detail = _banner_title_present(zone, yellow_frac)
+        if ok:
+            banner_frames += 1
+            best_detail = detail
+    check("titulo_banner", banner_frames >= 1,
+          f"banner en {banner_frames}/{len(pool)} fotogramas de "
+          f"la ventana (amarillo máx. {best_frac:.0%}"
+          + (f", {best_detail}" if best_detail else "") + ")",
+          f"sin banner amarillo de título en t={t0}-{t1} s")
+
+
+def _check_subs_word_white(check, arrays, spans, recipe, vcfg=None):
+    """Subtítulos blancos palabra por palabra sobre el gameplay
+    (zona central de la franja 900-1020; solo con SRT) + una
+    palabra a la vez (el subtítulo centrado nunca toca los dos
+    bordes de su zona a la vez; una línea completa sí).
+
+    Compartido por rubius y rubius_sin_webcam (§6.1): misma
+    medida, mismos umbrales. Los instantes activos son los de
+    fuera de la ventana del banner (make_word_ass suprime las
+    palabras que caen ahí: contar esos instantes como activos era
+    el falso negativo del 174) y con pertenencia estricta al cue
+    (sin margen: un instante 0.5 s antes de la palabra no tiene
+    palabra en pantalla).
+    """
+    zy0, zy1 = (int(recipe["subs_zone"]["y0"]),
+                int(recipe["subs_zone"]["y1"]))
+    t0 = float(vcfg["rubius_banner_t0"]) if vcfg else _RUBIUS_BANNER_T0
+    t1 = float(vcfg["rubius_banner_t1"]) if vcfg else _RUBIUS_BANNER_T1
+    edge_w = int(vcfg["rubius_subs_edge_w"]) if vcfg else None
+    outline_frac = (float(vcfg["rubius_subs_outline_frac"]) if vcfg
+                    else _RUBIUS_SUBS_OUTLINE_FRAC)
+    active = [(ts, a) for ts, a in arrays
+              if not spans or (_is_active(ts, spans, margin=0)
+                              and not (t0 <= ts <= t1))]
+    # El umbral es el de UNA palabra corta (_GATE_SUB_WORD_PX): con
+    # habla escasa y palabras cortas, 300 px pedía más blanco
+    # del que cabe en una palabra (caso 174: palabra real de
+    # 1679 px, pero el instante con una sola palabra corta no
+    # llegaba a 300). V7: el suelo es el de texto presente (50
+    # px) para que tampoco se pierda un glifo fino de 1-2 letras
+    # degradado por contorno y JPEG.
+    if spans and active:
+        white_share = sum(
+            1 for _ts, a in active
+            if _count_color(a[zy0:zy1, 350:730], _WHITE)
+            > _GATE_SUB_WORD_PX) / len(active)
+        check("subtitulos_blancos", white_share >= 0.5,
+              f"blancos en {white_share:.0%} de los instantes con "
+              "subtítulo",
+              "sin subtítulos blancos sobre el gameplay")
+    else:
+        check("subtitulos_blancos", True,
+              "sin SRT: presencia no verificada (débil)", "")
+    # 2026-11-24 (Fix 3): el defecto era de ATRIBUCIÓN, no de
+    # conteo — el juego claro (cielo, mapa, suelo) cubre los
+    # bordes con blanco aunque el subtítulo sea una sola palabra
+    # centrada (119/179 del run 45310466231: 2 fotogramas cada
+    # uno). El check ya no mide blanco, mide TEXTO: blanco con
+    # contorno negro pegado (``_subs_edge_outlined_coverages``,
+    # por borde, umbral ``rubius_subs_outline_frac``). El scooter
+    # real da 0.034-0.092 por borde; los FP 119/179, <= 0.0148.
+    # Se conserva la regla de conteo Fix 2 (falla solo si hay
+    # >=2 fotogramas Y >10% de los activos: la línea completa
+    # real es sistemática) y NO hay vía de severidad: un solo
+    # fotograma, por alto que sea su outlined, nunca falla
+    # (decisión conservadora, spec §8.4).
+    if spans and active:
+        both = 0
+        both_ts = []
+        worst_l = 0.0
+        worst_r = 0.0
+        for _ts, a in active:
+            left, right = _subs_edge_outlined_coverages(
+                a, zy0, zy1, edge_w=edge_w)
+            worst_l = max(worst_l, left)
+            worst_r = max(worst_r, right)
+            if left > outline_frac and right > outline_frac:
+                both += 1
+                both_ts.append(_ts)
+        share = both / len(active) if active else 0.0
+        check("subtitulos_una_palabra",
+              not (both >= 2 and share > 0.10),
+              f"{both} fotogramas con texto con contorno en ambos "
+              f"bordes ({share:.0%} de {len(active)} activos; "
+              f"con contorno máx L={worst_l:.3f} R={worst_r:.3f}, "
+              f"umbral {outline_frac:.2f})"
+              + (f" en t={both_ts}" if both_ts else ""),
+              "subtítulos de línea completa (no palabra por palabra)")
+    else:
+        check("subtitulos_una_palabra", True,
+              "sin SRT: presencia no verificada (débil)", "")
+
+
 def _template_word_white(check, arrays, spans, recipe, face_result,
                          vcfg=None):
     """Receta rubius: cámara a ancho completo, gameplay
@@ -1444,21 +1629,6 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
     cam = recipe["cam"]
     gy0, gy1 = (int(recipe["game"]["y0"]),
                 int(recipe["game"]["y1"]))
-    banner = recipe["title_banner"]
-    bx0, bx1 = int(banner["x0"]), int(banner["x1"])
-    by0, by1 = int(banner["y0"]), int(banner["y1"])
-    zy0, zy1 = (int(recipe["subs_zone"]["y0"]),
-                int(recipe["subs_zone"]["y1"]))
-    t0 = float(vcfg["rubius_banner_t0"]) if vcfg else _RUBIUS_BANNER_T0
-    t1 = float(vcfg["rubius_banner_t1"]) if vcfg else _RUBIUS_BANNER_T1
-    # Instantes con subtítulo: fuera de la ventana del banner
-    # (make_word_ass suprime las palabras que caen ahí: contar
-    # esos instantes como activos era el falso negativo del 174)
-    # y con pertenencia estricta al cue (sin margen: un instante
-    # 0.5 s antes de la palabra no tiene palabra en pantalla).
-    active = [(ts, a) for ts, a in arrays
-              if not spans or (_is_active(ts, spans, margin=0)
-                              and not (t0 <= ts <= t1))]
     # Cámara a ancho completo (sin rectángulo interior).
     _check_full_width(check, face_result)
     # Gameplay presente (no vacío/negro).
@@ -1499,102 +1669,92 @@ def _template_word_white(check, arrays, spans, recipe, face_result,
           f"arriba {top_ok:.0%}, abajo {bottom_ok:.0%} sin banda "
           "negra",
           "hay banda negra (no es el corte limpio rubius)")
-    # Título en banner amarillo TRANSITORIO (t=0.5-3.5 s de la
-    # receta): tiene que aparecer en esa ventana, con el amarillo
-    # DOMINANDO su zona, O como texto amarillo sobre fondo casi
-    # negro (caso 170: _banner_title_present, rama b). Un conteo
-    # bajo de píxeles amarillos lo pasa cualquier escena de juego
-    # con amarillo (caso scooter 2026-11-21: 890 px amarillos de
-    # la calle en la zona del banner, sin banner).
-    yellow_frac = (float(vcfg["rubius_banner_yellow_frac"]) if vcfg
-                   else _RUBIUS_BANNER_YELLOW_FRAC)
-    edge_w = int(vcfg["rubius_subs_edge_w"]) if vcfg else None
-    outline_frac = (float(vcfg["rubius_subs_outline_frac"]) if vcfg
-                    else _RUBIUS_SUBS_OUTLINE_FRAC)
-    window = [(ts, a) for ts, a in arrays
-              if t0 <= ts <= t1]
-    pool = window if window else arrays
-    banner_frames = 0
-    best_frac = 0.0
-    best_detail = ""
-    for _ts, a in pool:
-        zone = a[by0:by1, bx0:bx1]
-        frac = _banner_yellow_frac(zone)
-        best_frac = max(best_frac, frac)
-        ok, detail = _banner_title_present(zone, yellow_frac)
-        if ok:
-            banner_frames += 1
-            best_detail = detail
-    check("titulo_banner", banner_frames >= 1,
-          f"banner en {banner_frames}/{len(pool)} fotogramas de "
-          f"la ventana (amarillo máx. {best_frac:.0%}"
-          + (f", {best_detail}" if best_detail else "") + ")",
-          f"sin banner amarillo de título en t={t0}-{t1} s")
-    # Subtítulos blancos palabra por palabra sobre el gameplay
-    # (zona central de la franja 900-1020; solo con SRT). El
-    # umbral es el de UNA palabra corta (_GATE_SUB_WORD_PX): con
-    # habla escasa y palabras cortas, 300 px pedía más blanco
-    # del que cabe en una palabra (caso 174: palabra real de
-    # 1679 px, pero el instante con una sola palabra corta no
-    # llegaba a 300). V7: el suelo es el de texto presente (50
-    # px) para que tampoco se pierda un glifo fino de 1-2 letras
-    # degradado por contorno y JPEG.
-    if spans and active:
-        white_share = sum(
-            1 for _ts, a in active
-            if _count_color(a[zy0:zy1, 350:730], _WHITE)
-            > _GATE_SUB_WORD_PX) / len(active)
-        check("subtitulos_blancos", white_share >= 0.5,
-              f"blancos en {white_share:.0%} de los instantes con "
-              "subtítulo",
-              "sin subtítulos blancos sobre el gameplay")
-    else:
-        check("subtitulos_blancos", True,
-              "sin SRT: presencia no verificada (débil)", "")
-    # Una palabra a la vez: el subtítulo centrado nunca toca los
-    # dos bordes de su zona a la vez; una línea completa sí (caso
-    # scooter 2026-11-21: 4/7 fotogramas con texto en ambos
-    # bordes; 52h: 0/5). Solo con SRT: sin SRT la presencia no se
-    # puede verificar y queda débil, como subtitulos_blancos.
-    # 2026-11-24 (Fix 3): el defecto era de ATRIBUCIÓN, no de
-    # conteo — el juego claro (cielo, mapa, suelo) cubre los
-    # bordes con blanco aunque el subtítulo sea una sola palabra
-    # centrada (119/179 del run 45310466231: 2 fotogramas cada
-    # uno). El check ya no mide blanco, mide TEXTO: blanco con
-    # contorno negro pegado (``_subs_edge_outlined_coverages``,
-    # por borde, umbral ``rubius_subs_outline_frac``). El scooter
-    # real da 0.034-0.092 por borde; los FP 119/179, <= 0.0148.
-    # Se conserva la regla de conteo Fix 2 (falla solo si hay
-    # >=2 fotogramas Y >10% de los activos: la línea completa
-    # real es sistemática) y NO hay vía de severidad: un solo
-    # fotograma, por alto que sea su outlined, nunca falla
-    # (decisión conservadora, spec §8.4).
-    if spans and active:
-        both = 0
-        both_ts = []
-        worst_l = 0.0
-        worst_r = 0.0
-        for _ts, a in active:
-            left, right = _subs_edge_outlined_coverages(
-                a, zy0, zy1, edge_w=edge_w)
-            worst_l = max(worst_l, left)
-            worst_r = max(worst_r, right)
-            if left > outline_frac and right > outline_frac:
-                both += 1
-                both_ts.append(_ts)
-        share = both / len(active) if active else 0.0
-        check("subtitulos_una_palabra",
-              not (both >= 2 and share > 0.10),
-              f"{both} fotogramas con texto con contorno en ambos "
-              f"bordes ({share:.0%} de {len(active)} activos; "
-              f"con contorno máx L={worst_l:.3f} R={worst_r:.3f}, "
-              f"umbral {outline_frac:.2f})"
-              + (f" en t={both_ts}" if both_ts else ""),
-              "subtítulos de línea completa (no palabra por palabra)")
-    else:
-        check("subtitulos_una_palabra", True,
-              "sin SRT: presencia no verificada (débil)", "")
+    # Título en banner amarillo transitorio + subtítulos blancos
+    # palabra por palabra (helpers compartidos con sin_webcam).
+    _check_banner(check, arrays, recipe, vcfg=vcfg)
+    _check_subs_word_white(check, arrays, spans, recipe, vcfg=vcfg)
     _check_cam_live(check, arrays, cam)
+
+
+def _template_fullscreen_game(check, arrays, spans, recipe, face_result,
+                              vcfg=None):
+    """Receta rubius_sin_webcam (§6.3): gameplay a pantalla completa,
+    sin cámara. Misma firma que ``_template_word_white``.
+
+    NO reutiliza ``_template_word_white`` tal cual: esa función lee
+    ``recipe["cam"]`` (la receta nueva no tiene ``cam``) y termina
+    con ``_check_full_width`` y ``_check_cam_live``, que no existen
+    sin cámara. La rama nueva NO ejecuta ninguno de los dos.
+
+    Checks: ``gameplay_puro`` (duro, la prueba positiva de layout
+    que condiciona la exención de cara), banner (mismo que rubius)
+    y subtítulos blancos palabra por palabra (mismos que rubius).
+    El SFX se verifica aparte, en ``template_gate`` (``_check_sfx``),
+    igual que en la rama word_white.
+    """
+    # gameplay_puro (duro): celdas SIFT distintas de destino entre
+    # la mitad superior (y 0-840) y la inferior (y 840-1920) del
+    # render a pantalla completa, máximo sobre ≤
+    # layout_sift_max_frames (8) fotogramas repartidos con la misma
+    # regla que §5.1. Un rubius duplicado mal etiquetado como
+    # sin_webcam falla aquí: arriba y abajo son la misma imagen →
+    # celdas altas → rechazado, no publicado. Umbral 8 por analogía
+    # con layout_gate, SIN calibrar todavía sobre un render
+    # sin_webcam real (§6.3: no se entrega como probado sin medirlo).
+    # Usa _sift_dup directamente (NO _sift_dup_inliers: entre
+    # mitades de un render a pantalla completa los inliers solos
+    # también pueden colapsar por texturas repetidas del mismo
+    # juego). Sin SIFT disponible: FALLO ruidoso, nunca pase por
+    # defecto. NO llama a layout_gate ni a _layout_check_arrays
+    # (este último lee recipe["cam"] → KeyError sin cámara).
+    max_frames = (int(vcfg["layout_sift_max_frames"]) if vcfg else 8)
+    threshold = (int(vcfg["layout_dup_sift_cells"]) if vcfg else 8)
+    if len(arrays) > max_frames:
+        idx = sorted({round(i * (len(arrays) - 1) / (max_frames - 1))
+                      for i in range(max_frames)})
+        sampled = [arrays[i] for i in idx]
+    else:
+        sampled = arrays
+    sift_none = False
+    max_cells = 0
+    max_inliers = 0
+    try:
+        import cv2
+    except ImportError:
+        cv2 = None
+    if cv2 is None or not hasattr(cv2, "SIFT_create"):
+        sift_none = True
+    else:
+        for _ts, arr in sampled:
+            top = arr[0:840, :]
+            bottom = arr[840:1920, :]
+            try:
+                top_gray = cv2.cvtColor(top, cv2.COLOR_RGB2GRAY)
+                bottom_gray = cv2.cvtColor(bottom, cv2.COLOR_RGB2GRAY)
+            except Exception:  # noqa: BLE001 - sin gris no hay SIFT
+                sift_none = True
+                break
+            inl, cells = _sift_dup(top_gray, bottom_gray)
+            if inl is None:
+                sift_none = True
+                break
+            max_inliers = max(max_inliers, int(inl))
+            max_cells = max(max_cells, int(cells))
+    if sift_none:
+        check("gameplay_puro", False,
+              "SIFT no se pudo calcular en este entorno",
+              "gameplay_puro: SIFT no disponible o no calculable: "
+              "no se puede verificar que las mitades sean distintas")
+    else:
+        check("gameplay_puro", max_cells < threshold,
+              f"máx. {max_cells} celdas SIFT distintas entre "
+              f"mitades en {len(sampled)} fotogramas "
+              f"({max_inliers} inliers; umbral {threshold} celdas)",
+              f"duplicado: las dos mitades del render son la misma "
+              f"imagen (SIFT {max_inliers} inliers en {max_cells} "
+              f"celdas distintas, umbral {threshold} celdas)")
+    _check_banner(check, arrays, recipe, vcfg=vcfg)
+    _check_subs_word_white(check, arrays, spans, recipe, vcfg=vcfg)
 
 
 def _check_full_width(check, face_result):
@@ -1840,13 +2000,409 @@ def maybe_review_final_clip(clip_path, title, transcript_text="",
     return result
 
 
+def _sift_dup(cam_gray, game_gray):
+    """(inliers RANSAC, celdas distintas de destino) entre la zona
+    de cámara y la de juego (SIFT).
+
+    SIFT (2000 puntos) + Lowe 0,75 + homografía RANSAC: si el juego
+    aparece también en la zona de cámara (duplicación), los mismos
+    puntos se encuentran en ambas zonas con una homografía
+    consistente. Devuelve el nº de inliers Y el nº de celdas
+    distintas de destino (rejilla de 20 px en la zona de juego):
+    las celdas importan porque los inliers solos engañan cuando
+    muchos matches colapsan en 1-2 puntos (170: 15 inliers en
+    solo 4 celdas, por el texto del encabezado de Twitch contra
+    la barandilla del juego). Una duplicación real reparte los
+    inliers por toda la escena (252: 62 inliers en 22 celdas;
+    199: 602 en 284). Devuelve (None, None) si SIFT no está
+    disponible en este entorno (cv2 sin SIFT) o no se pudo
+    calcular; (0, 0) si no hay descriptores.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return None, None
+    if not hasattr(cv2, "SIFT_create"):
+        return None, None
+    try:
+        # 2000 puntos (no 800): con 800 el 252 (cinemática del juego
+        # a otra escala arriba y abajo) daba solo 4-7 inliers y se
+        # escapaba; con 2000 da 33-71 y los limpios siguen <= 4.
+        sift = cv2.SIFT_create(nfeatures=2000)
+        k1, d1 = sift.detectAndCompute(cam_gray, None)
+        k2, d2 = sift.detectAndCompute(game_gray, None)
+    except Exception:  # noqa: BLE001 - SIFT nunca tumba el gate
+        return None, None
+    if d1 is None or d2 is None or len(d1) < 4 or len(d2) < 4:
+        return 0, 0
+    try:
+        bf = cv2.BFMatcher()
+        pairs = bf.knnMatch(d1, d2, k=2)
+    except Exception:  # noqa: BLE001
+        return 0, 0
+    good = [m for m, n in pairs if m.distance < 0.75 * n.distance]
+
+    def _celdas(matches):
+        return len({(int(k2[m.trainIdx].pt[0] // 20),
+                     int(k2[m.trainIdx].pt[1] // 20))
+                    for m in matches})
+
+    if len(good) < 8:
+        return len(good), _celdas(good)
+    try:
+        import numpy as np
+        src = np.float32([k1[m.queryIdx].pt for m in good]
+                         ).reshape(-1, 1, 2)
+        dst = np.float32([k2[m.trainIdx].pt for m in good]
+                         ).reshape(-1, 1, 2)
+        _h, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+    except Exception:  # noqa: BLE001
+        return len(good), _celdas(good)
+    if mask is None:
+        return 0, 0
+    inl = [good[i] for i in range(len(good)) if mask[i]]
+    return len(inl), _celdas(inl)
+
+
+def _sift_dup_inliers(cam_gray, game_gray):
+    """Nº de inliers RANSAC entre cámara y juego (compatibilidad:
+    los tests sintéticos lo usan directamente)."""
+    inl, _celdas = _sift_dup(cam_gray, game_gray)
+    return inl
+
+
+def layout_gate(clip_path, vcfg, recipe, frames=None, out_dir=None,
+                template_name="rubius", avatar=False):
+    """Puerta de LAYOUT sobre el vídeo final (2026-11-26, bug duplicación).
+
+    La zona de cámara del render final debe ser MAYORITARIAMENTE
+    cámara, no gameplay. Dos comprobaciones deterministas sobre los
+    fotogramas del gate (los mismos que la puerta de cara):
+
+    (i) DUPLICACIÓN (SIFT): el juego no puede aparecer también en
+    la zona de cámara. Inliers RANSAC entre cámara y juego por
+    fotograma, contados en CELDAS distintas de destino (rejilla
+    de 20 px): los inliers solos engañan cuando muchos matches
+    colapsan en 1-2 puntos (170: 15 inliers en 4 celdas). Falla si
+    el máximo de celdas supera ``layout_dup_sift_cells``.
+    (ii) CARA EN LA CÁMARA (Haar, misma cadena que face-crop):
+    la cara mayor de cada fotograma debe existir en >=
+    ``face_min_share`` de las muestras. Una cara desplazada con
+    cara de primer plano (área >=
+    ``layout_face_area_closeup_min``) frena sola: es una caja
+    demasiado ancha (186: cara 0.19 a cx 0.43). Una cara
+    desplazada o diminuta solo frena si hay juego en la zona de
+    cámara corroborado por SIFT (>=
+    ``layout_face_sift_cells_min`` celdas): una webcam ancha
+    legítima (170, AuronPlay lejos de la cámara: cara pequeña
+    cx 0.43) NO frena sin esa corroboración, pero una caja
+    demasiado ancha sí (189: cx 0.41 con 7-9 celdas; 197: cx
+    0.42 con 5).
+
+    Solo aplica a rubius (cámara a ancho completo arriba + juego
+    abajo); en otras plantillas devuelve pasa=True ("no aplica").
+
+    ``avatar`` (§5.2): con True se saltan las reglas de cara
+    (ii)/(iii)/(iv) — Haar no ve avatares — pero la regla (i) SIFT
+    sigue aplicando (ver ``_layout_check_arrays``).
+
+    Calibración (rejilla del gate, spec §1.2/§5.3: conjunto completo,
+    n=20 fotogramas por clip, máx. de celdas SIFT sobre ≤8 fotogramas
+    repartidos; umbrales: celdas 8, share 0,25, cx [0,45, 0,65],
+    área 0,15 — primer plano 0,12 —, corroboración 5 celdas).
+    Limpios que PASAN (5): 186 (6 celdas, share 0,85, cx 0,475,
+    área 0,167 — márgenes finos: 6 vs 8; 0,475 vs 0,45; 0,167 vs
+    0,15), 190 (2 celdas, 0,55, 0,619, 0,234), 246 (5, 1,00, 0,514,
+    0,184), 248 (5, 1,00, 0,503, 0,167 — pasa gracias a las celdas:
+    9 inliers en solo 5 celdas) y 170 (4 celdas, 1,00, 0,421, 0,080:
+    webcam ancha legítima, la (iv) no dispara con 4 < 5 celdas).
+    Duplicados/contaminados que FALLAN (11): 183 (35 celdas),
+    184 (51), 189 (20), 191 (231), 197 (6 celdas, por (iv): cara
+    anómala área 0,106 < 0,15 + corroboración 6 ≥ 5), 199 (318),
+    214 (96; la cara del juego está centrada y pasa, lo caza (i)),
+    244 (10; avatar sobre mapa), 12 (42; avatar, caja demasiado
+    ancha), 247 (151) y 252 (70; cinemática a otra escala). Las 3
+    capturas del usuario fallan por (i) (331/57/22 celdas).
+    Separación completa a nivel clip: limpios máx. 6 celdas (186),
+    duplicados mín. 10 (244); umbral 8 → margen 2 a cada lado.
+    OJO: a fotograma único t7 el 186 FALLA por (ii) (Haar no ve cara
+    en ese único fotograma, share 0/1) — son conjuntos distintos,
+    no una contradicción: el test de regresión usa t7 y el gate en
+    producción el conjunto completo (§5.3). SIFT con 2000 puntos:
+    con 800 el 252 daba 4-7 y se escapaba.
+
+    Devuelve el dict de la puerta: pasa, motivo, duda,
+    sift_max_inliers, sift_max_cells, face_share, face_cx_mediana,
+    face_area_mediana, frames_total, frames_con_cara. Nunca lanza:
+    sin fotogramas, sin cv2 o sin SIFT/Haar, NO pasa (falla en voz
+    alta, nunca con un valor inventado).
+    """
+    if str(template_name or "rubius").lower() != "rubius":
+        return {"pasa": True, "motivo": (
+            f"layout: no aplica a {template_name} "
+            "(solo rubius tiene cámara a ancho completo)"),
+            "duda": False, "sift_max_inliers": None,
+            "sift_max_cells": None,
+            "face_share": None, "face_cx_mediana": None,
+            "face_area_mediana": None, "frames_total": 0,
+            "frames_con_cara": 0}
+    out_dir = out_dir or os.path.join(
+        os.path.dirname(str(clip_path)), "final_gate")
+    os.makedirs(out_dir, exist_ok=True)
+    try:
+        frames = frames or extract_gate_frames(
+            clip_path, out_dir,
+            every_s=float(vcfg["face_sample_every_s"]),
+            max_frames=_GATE_MAX_FRAMES)
+    except (FileNotFoundError, RuntimeError, OSError) as exc:
+        return {"pasa": False, "motivo": (
+            f"layout: sin fotogramas para la puerta: {exc}"),
+            "duda": False, "sift_max_inliers": None,
+            "sift_max_cells": None,
+            "face_share": None, "face_cx_mediana": None,
+            "face_area_mediana": None, "frames_total": 0,
+            "frames_con_cara": 0}
+    arrays = []
+    for fr in frames:
+        try:
+            arrays.append((fr["ts"], _frame_array(fr["path"])))
+        except (OSError, ValueError):
+            continue
+    if not arrays:
+        return {"pasa": False, "motivo": (
+            "layout: ningún fotograma legible para la puerta"),
+            "duda": False, "sift_max_inliers": None,
+            "sift_max_cells": None,
+            "face_share": None, "face_cx_mediana": None,
+            "face_area_mediana": None, "frames_total": len(frames),
+            "frames_con_cara": 0}
+    return _layout_check_arrays(arrays, vcfg, recipe,
+                                  template_name=template_name,
+                                  avatar=avatar)
+
+
+def _layout_check_arrays(arrays, vcfg, recipe, template_name="rubius",
+                         avatar=False):
+    """Núcleo de layout_gate sobre fotogramas ya cargados.
+
+    ``arrays``: [(ts, array RGB 1080x1920), ...]. Es lo que prueban
+    los tests de regresión directamente sobre los fotogramas de los
+    clips (sin re-extraer del vídeo). Devuelve el mismo dict que
+    layout_gate.
+
+    ``avatar`` (§5.2): con True se saltan las reglas de cara
+    (ii)/(iii)/(iv) — no se mide cara Haar en absoluto — pero la
+    regla (i) SIFT sigue aplicando: un avatar re-renderizado con
+    la caja ajustada pasa solo si el juego ya no aparece en la
+    zona de cámara (12: 42 celdas y 244: 10 celdas fallan (i) con
+    avatar=True; el re-render con la caja del candidato es el que
+    debe pasar).
+    """
+    cam = recipe["cam"]
+    game = recipe["game"]
+    cam_x0, cam_y0 = int(cam["x"]), int(cam["y"])
+    cam_w, cam_h = int(cam["w"]), int(cam["h"])
+    game_y0, game_y1 = int(game["y0"]), int(game["y1"])
+    min_face_w = float(vcfg["face_min_width_frac"]) * cam_w
+    try:
+        import cv2
+    except ImportError:
+        return {"pasa": False, "motivo": (
+            "layout: sin OpenCV en este entorno: no se puede "
+            "verificar que la cámara no sea gameplay"),
+            "duda": False, "sift_max_inliers": None,
+            "sift_max_cells": None,
+            "face_share": None, "face_cx_mediana": None,
+            "face_area_mediana": None, "frames_total": len(arrays),
+            "frames_con_cara": 0}
+    if not hasattr(cv2, "SIFT_create"):
+        return {"pasa": False, "motivo": (
+            "layout: SIFT no disponible en este entorno: no se "
+            "puede verificar la duplicación"),
+            "duda": False, "sift_max_inliers": None,
+            "sift_max_cells": None,
+            "face_share": None, "face_cx_mediana": None,
+            "face_area_mediana": None, "frames_total": len(arrays),
+            "frames_con_cara": 0}
+    # SIFT: hasta N fotogramas repartidos por el clip (el máximo
+    # manda: un clip duplicado en parte del tiempo también es
+    # duplicado).
+    max_frames = int(vcfg["layout_sift_max_frames"])
+    if len(arrays) > max_frames:
+        idx = sorted({round(i * (len(arrays) - 1)
+                            / (max_frames - 1))
+                      for i in range(max_frames)})
+        sift_arrays = [arrays[i] for i in idx]
+    else:
+        sift_arrays = arrays
+    sift_max = 0
+    sift_cells_max = 0
+    sift_none = False
+    for _ts, arr in sift_arrays:
+        cam_zone = arr[cam_y0:cam_y0 + cam_h, cam_x0:cam_x0 + cam_w]
+        game_zone = arr[game_y0:game_y1, :]
+        try:
+            cam_gray = cv2.cvtColor(cam_zone, cv2.COLOR_RGB2GRAY)
+            game_gray = cv2.cvtColor(game_zone, cv2.COLOR_RGB2GRAY)
+        except Exception:  # noqa: BLE001 - sin gris no hay SIFT
+            sift_none = True
+            break
+        inl, cells = _sift_dup(cam_gray, game_gray)
+        if inl is None:
+            sift_none = True
+            break
+        sift_max = max(sift_max, int(inl))
+        sift_cells_max = max(sift_cells_max, int(cells))
+    # Cara: Haar en la zona de cámara, cara mayor por fotograma.
+    # Con avatar=True no se mide cara en absoluto (§5.2: las
+    # reglas (ii)/(iii)/(iv) no aplican; solo (i) SIFT, ya medida
+    # arriba). Sin medida, face_* quedan en None.
+    cxs, areas = [], []
+    frames_con_cara = 0
+    haar_none = False
+    if not avatar:
+        for _ts, arr in arrays:
+            cam_zone = arr[cam_y0:cam_y0 + cam_h, cam_x0:cam_x0 + cam_w]
+            faces = _haar_faces_on_band(cam_zone, min_face_w)
+            if faces is None:
+                haar_none = True
+                break
+            if not faces:
+                continue
+            frames_con_cara += 1
+            x, _y, w, h = max(faces, key=lambda b: b[2] * b[3])
+            cxs.append((x + w / 2) / cam_w)
+            areas.append((w * h) / (cam_w * cam_h))
+    total = len(arrays)
+    share = frames_con_cara / total if total else 0.0
+    import statistics
+    cx_med = statistics.median(cxs) if cxs else None
+    area_med = statistics.median(areas) if areas else None
+    base = {"duda": False, "sift_max_inliers": (
+        None if sift_none else sift_max),
+        "sift_max_cells": (None if sift_none else sift_cells_max),
+        "face_share": (None if avatar else share),
+        "face_cx_mediana": (None if avatar else cx_med),
+        "face_area_mediana": (None if avatar else area_med),
+        "frames_total": total,
+        "frames_con_cara": frames_con_cara}
+    if sift_none:
+        return {**base, "pasa": False, "motivo": (
+            "layout: SIFT no se pudo calcular en este entorno: "
+            "no se puede verificar la duplicación")}
+    if haar_none:
+        return {**base, "pasa": False, "motivo": (
+            "layout: Haar no disponible en este entorno: no se "
+            "puede verificar la cara en la zona de cámara")}
+    # (i) Duplicación: celdas distintas de destino, no inliers
+    # solos (los inliers colapsan en 1-2 puntos con texturas
+    # repetidas: 170 da 15 inliers en 4 celdas).
+    if sift_cells_max >= int(vcfg["layout_dup_sift_cells"]):
+        return {**base, "pasa": False, "motivo": (
+            f"layout duplicado: el juego aparece también en la "
+            f"zona de cámara (SIFT {sift_max} inliers en "
+            f"{sift_cells_max} celdas distintas, umbral "
+            f"{int(vcfg['layout_dup_sift_cells'])} celdas)")}
+    # Avatar (§5.2): las reglas de cara (ii)/(iii)/(iv) no aplican;
+    # superada (i), el layout pasa sin medir cara.
+    if avatar:
+        return {**base, "pasa": True, "motivo": (
+            f"layout: avatar reactivo (§4.3): reglas de cara no "
+            f"aplican; SIFT {sift_max} inliers en {sift_cells_max} "
+            f"celdas (< {int(vcfg['layout_dup_sift_cells'])})")}
+    # (ii) Sin cara estable: la zona es gameplay, no webcam
+    # (186 sin cara; 244, el cacahuete no es una cara).
+    if share < float(vcfg["face_min_share"]):
+        return {**base, "pasa": False, "motivo": (
+            f"layout: sin cara estable en la zona de cámara "
+            f"({frames_con_cara}/{total} muestras); la zona es "
+            f"gameplay, no webcam")}
+    # (iii) Cara desplazada con cara de primer plano: la caja es
+    # demasiado ancha (el primer plano llena la zona; la cara
+    # queda a un lado y el juego al otro). No exige corroboración
+    # SIFT: el 186 multi-fotograma tiene solo 3 celdas pero cara
+    # de área 0.19 a cx 0.43. Una webcam ancha legítima (170:
+    # cara pequeña 0.08 a cx 0.42) NO dispara esta regla.
+    cx_min = float(vcfg["layout_face_cx_min"])
+    cx_max = float(vcfg["layout_face_cx_max"])
+    area_min = float(vcfg["layout_face_area_min"])
+    closeup_min = float(vcfg["layout_face_area_closeup_min"])
+    if (cx_med is not None and not (cx_min <= cx_med <= cx_max)
+            and area_med is not None and area_med >= closeup_min):
+        return {**base, "pasa": False, "motivo": (
+            f"cámara contaminada: la cara de primer plano está "
+            f"desplazada en la zona de cámara (centro-x mediano "
+            f"{round(cx_med, 2)}, debe estar en [{cx_min}, "
+            f"{cx_max}], área mediana {round(area_med, 3)}); la "
+            f"caja es demasiado ancha e incluye gameplay")}
+    # (iv) Cara desplazada o diminuta: solo frena con juego
+    # corroborado en la zona de cámara (una webcam ancha
+    # legítima, 170: cara pequeña cx 0.43 con 4 celdas, NO frena).
+    cara_anomala = (cx_med is None or not (cx_min <= cx_med <= cx_max)
+                    or area_med is None or area_med < area_min)
+    if cara_anomala and sift_cells_max >= int(
+            vcfg["layout_face_sift_cells_min"]):
+        return {**base, "pasa": False, "motivo": (
+            f"cámara contaminada: la cara está desplazada o es "
+            f"demasiado pequeña en la zona de cámara (centro-x "
+            f"mediano "
+            f"{cx_med if cx_med is None else round(cx_med, 2)}, "
+            f"área mediana "
+            f"{area_med if area_med is None else round(area_med, 3)}) "
+            f"y hay juego en la zona (SIFT {sift_cells_max} "
+            f"celdas); la caja es demasiado ancha e incluye "
+            f"gameplay")}
+    return {**base, "pasa": True, "motivo": (
+        f"layout: cámara mayoritariamente cámara "
+        f"(SIFT {sift_max} inliers en {sift_cells_max} celdas, "
+        f"cara cx {cx_med:.2f}, área "
+        f"{area_med:.3f} en {frames_con_cara}/{total} muestras)")}
+
+
+def _acepta_kw(fn, nombre):
+    """True si fn acepta el kwarg `nombre` (o **kwargs).
+
+    Mismo patrón que ``_acepta_kw`` en youtube_cut/facebook_cut:
+    las puertas inyectables (tests, otros caminos) pueden tener
+    la firma vieja sin el kwarg; en ese caso el llamador no lo
+    pasa (compatibilidad), en vez de romper con TypeError.
+    """
+    try:
+        import inspect
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return (nombre in params
+            or any(p.kind == inspect.Parameter.VAR_KEYWORD
+                   for p in params.values()))
+
+
 def validate_final_clip(clip_path, title, transcript_text="",
                         srt_path=None, out_dir=None, cfg=None,
                         gemini_fn=None, model=None, plantilla=None,
                         facecrop_fn=None, edge_fn=None, yunet_fn=None,
-                        sfx_events=None):
+                        layout_fn=None,
+                        sfx_events=None, avatar=False):
     """Validador final DEFINITIVO (2026-11-19): puerta dura de cara
     + plantilla sobre el VÍDEO FINAL RENDERIZADO.
+
+    ``avatar`` (§4.3.2, spec inglés correcto v7.1): True cuando la
+    decisión §4.3 encontró un candidato avatar sin cara humana en
+    este segmento. Viaja a ``face_gate`` y a ``layout_fn`` /
+    ``layout_gate`` — pero SOLO si el callee lo acepta
+    (``_acepta_kw``): las puertas reales ya tienen el parámetro
+    (§5.2, I-23: con avatar=True ``face_gate`` devuelve el centinela
+    pasa=True/method="avatar" sin medir cara, y ``layout_gate`` salta
+    las reglas de cara (ii)/(iii)/(iv) pero mantiene la (i) SIFT).
+    Sin él, un clip avatar se valida como humano (Haar no ve
+    avatares) y ``face_gate`` lo tumbaría: por eso §10.4 exige el
+    re-render medido con el flag, no afirmar su pase.
+
+    ``plantilla == "rubius_sin_webcam"`` (§6.3): cara y layout van
+    por centinelas pasa=True (sin webcam por plantilla, no aplica)
+    y la puerta de layout es ``gameplay_puro`` dentro de
+    ``template_gate``; ``webcam_visible`` de Gemini se retira sin
+    condiciones antes de la rama de override.
 
     ``sfx_events``: eventos SFX decididos por apply_sfx en este
     clip (None = desconocido, se exige presencia como antes;
@@ -1859,11 +2415,14 @@ def validate_final_clip(clip_path, title, transcript_text="",
     (i) cara determinista a lo largo de todo el clip (cadena
     face-crop -> bordes fijos -> YuNet, en ese orden, en la zona
     de cámara de LA PLANTILLA DEL CLIP);
-    (ii) plantilla determinista (una de TRES recetas en píxeles:
-    rdjavi v1, willyrex v2 o rubius; `plantilla` es la declarada
-    por el clip y sin ella se usa el default de config.yaml,
-    rubius);
-    (iii) revisión visual Gemini (con el prompt de la receta).
+    (ii) LAYOUT determinista (2026-11-26, bug duplicación): la zona
+    de cámara debe ser mayoritariamente cámara, no gameplay (SIFT
+    cámara-vs-juego + geometría de la cara en la zona de cámara);
+    (iii) plantilla determinista (una de CUATRO recetas en píxeles:
+    rdjavi v1, willyrex v2, rubius o rubius_sin_webcam; `plantilla`
+    es la declarada por el clip y sin ella se usa el default de
+    config.yaml, rubius);
+    (iv) revisión visual Gemini (con el prompt de la receta).
 
     La puerta de cara y de plantilla es DURA y no la anula el modo
     observación: si fallan, ``pasa`` es False y ``needs_rerender``
@@ -1884,12 +2443,12 @@ def validate_final_clip(clip_path, title, transcript_text="",
     (final_review.enabled=False), no hay veredicto (desactivada).
 
     Devuelve el dict de la revisión con, además: ``plantilla``
-    (la receta validada), ``hard_pasa`` (cara y plantilla),
+    (la receta validada), ``hard_pasa`` (cara, layout y plantilla),
     ``needs_rerender``, ``rerender_reason``, ``hard_failures`` y
-    las tres capas (``face``, ``template``, ``gemini``). Nunca
-    lanza: sin clip o sin fotogramas, la puerta dura falla (no
-    pasa) y el motivo lo dice; sin Gemini, el veredicto queda
-    pendiente_revision.
+    las cuatro capas (``face``, ``layout``, ``template``,
+    ``gemini``). Nunca lanza: sin clip o sin fotogramas, la puerta
+    dura falla (no pasa) y el motivo lo dice; sin Gemini, el
+    veredicto queda pendiente_revision.
     """
     from .config import load_validator_config, resolve_template
 
@@ -1922,7 +2481,7 @@ def validate_final_clip(clip_path, title, transcript_text="",
             "model": model or MODEL_DEFAULT,
             "transcript_words": len((transcript_text or "").split()),
             "observe_only": bool(vcfg["observe_only"]),
-            "face": None, "template": None, "gemini": None,
+            "face": None, "layout": None, "template": None, "gemini": None,
         }
     template_name, recipe = resolve_template(vcfg, plantilla)
     out_dir = out_dir or os.path.join(
@@ -1946,7 +2505,7 @@ def validate_final_clip(clip_path, title, transcript_text="",
             "model": model or MODEL_DEFAULT,
             "transcript_words": len((transcript_text or "").split()),
             "observe_only": bool(vcfg["observe_only"]),
-            "face": None, "template": None, "gemini": None,
+            "face": None, "layout": None, "template": None, "gemini": None,
         }
     try:
         frames = extract_gate_frames(
@@ -1973,14 +2532,59 @@ def validate_final_clip(clip_path, title, transcript_text="",
             "model": model or MODEL_DEFAULT,
             "transcript_words": len((transcript_text or "").split()),
             "observe_only": bool(vcfg["observe_only"]),
-            "face": None, "template": None, "gemini": None,
+            "face": None, "layout": None, "template": None, "gemini": None,
         }
-    face = face_gate(clip_path, vcfg, recipe, frames=frames,
-                     out_dir=out_dir, facecrop_fn=facecrop_fn,
-                     edge_fn=edge_fn, yunet_fn=yunet_fn)
+    # §6.3: sin_webcam por plantilla — no hay cara que medir: el
+    # centinela pasa=True (NUNCA None: `if not face.get("pasa")`
+    # rechazaría el sin_webcam siempre) con motivo "" (M-18) y
+    # share None (el formato de la rama de override usa
+    # `(face.get("share") or 0)`).
+    if template_name == "rubius_sin_webcam":
+        face = {"pasa": True, "method": "sin_webcam", "motivo": "",
+                "share": None, "frames": 0,
+                "frames_total": len(frames), "face_widths": [],
+                "detail": ("sin_webcam: sin webcam por plantilla, "
+                           "no aplica")}
+    else:
+        face = face_gate(clip_path, vcfg, recipe, frames=frames,
+                         out_dir=out_dir, facecrop_fn=facecrop_fn,
+                         edge_fn=edge_fn, yunet_fn=yunet_fn,
+                         **({"avatar": avatar}
+                            if _acepta_kw(face_gate, "avatar") else {}))
+    # Puerta de layout (2026-11-26): la cara puede estar visible
+    # y la plantilla bien montada con la cámara duplicada; esta
+    # capa caza el render con gameplay en la zona de cámara.
+    # ``layout_fn``: inyectable en tests (mismo patrón que los
+    # detectores de cara y Gemini). Para sin_webcam NO se llama
+    # layout_gate (devuelve "no aplica" para otras plantillas):
+    # la prueba de layout es gameplay_puro, dentro de
+    # _template_fullscreen_game, y aquí va el centinela.
+    if template_name == "rubius_sin_webcam":
+        layout = {"pasa": True, "motivo": "", "duda": False,
+                  "sift_max_inliers": None, "sift_max_cells": None,
+                  "face_share": None, "face_cx_mediana": None,
+                  "face_area_mediana": None,
+                  "frames_total": len(frames), "frames_con_cara": 0,
+                  "detail": ("sin_webcam: layout verificado por "
+                             "gameplay_puro en la plantilla")}
+    elif layout_fn is not None:
+        layout = layout_fn(clip_path, vcfg, recipe, frames=frames,
+                           out_dir=out_dir,
+                           template_name=template_name,
+                           **({"avatar": avatar}
+                              if _acepta_kw(layout_fn, "avatar")
+                              else {}))
+    else:
+        layout = layout_gate(clip_path, vcfg, recipe, frames=frames,
+                             out_dir=out_dir,
+                             template_name=template_name,
+                             **({"avatar": avatar}
+                                if _acepta_kw(layout_gate, "avatar")
+                                else {}))
     template = template_gate(clip_path, vcfg, recipe, frames=frames,
                              srt_path=srt_path, face_result=face,
-                             out_dir=out_dir, sfx_events=sfx_events)
+                             out_dir=out_dir, sfx_events=sfx_events,
+                             template_name=template_name)
     # Gemini ANTES de la puerta dura: su lectura del título es la
     # única que distingue un título amarillo sobre negro (170, bueno
     # a mano) de un clip sin título — en píxeles son iguales (5
@@ -1996,6 +2600,8 @@ def validate_final_clip(clip_path, title, transcript_text="",
     hard_failures = []
     if not face.get("pasa"):
         hard_failures.append("cara")
+    if not layout.get("pasa"):
+        hard_failures.append("layout")
     if not template.get("pasa"):
         template_fallos = template.get("fallos") or []
         titulo_legible = (gemini.get("scores") or {}).get(
@@ -2009,19 +2615,35 @@ def validate_final_clip(clip_path, title, transcript_text="",
             hard_failures.append("plantilla")
     hard_pasa = not hard_failures
     gemini_fallos = list(gemini.get("fallos") or [])
+    # Gemini webcam_visible, ORDEN EXPLÍCITO (§6.3, I-23):
+    # (1) para sin_webcam se RETIRA webcam_visible de gemini_fallos
+    # sin condiciones ANTES de la rama de override (con entrada en
+    # overridden): el juez diciendo "no hay cámara" en un sin_webcam
+    # tiene razón, no es un error a anular.
+    if (template_name == "rubius_sin_webcam"
+            and "webcam_visible" in gemini_fallos):
+        gemini_fallos.remove("webcam_visible")
+        overridden.append(
+            "webcam_visible: sin webcam por plantilla "
+            "(correcto: no hay cámara)")
     if gemini.get("decision") == "rechazado":
         # La medida determinista manda sobre el juez en cara y
         # plantilla: si Gemini dice que no hay cara pero la cadena
         # la verificó en todo el clip, es el juez quien se equivoca
         # (la 01:08: webcam 0.0 en 3 clips buenos). La discrepancia
         # queda registrada, nunca en silencio.
-        if "webcam_visible" in gemini_fallos and face.get("pasa"):
+        # (2) la rama de override NO se ejecuta cuando el método de
+        # cara es sin_webcam (esa rama formatea `share` y el
+        # centinela lleva share: None); (3) el blindaje
+        # `(face.get("share") or 0)` es la última defensa.
+        if ("webcam_visible" in gemini_fallos and face.get("pasa")
+                and face.get("method") != "sin_webcam"):
             gemini_fallos.remove("webcam_visible")
             overridden.append(
                 f"webcam_visible: Gemini "
                 f"{gemini['scores'].get('webcam_visible'):.1f} pero "
                 f"cara verificada ({face.get('method')}, "
-                f"{face.get('share', 0):.0%} de muestras)")
+                f"{(face.get('share') or 0):.0%} de muestras)")
         if ("plantilla" in gemini_fallos
                 and template.get("pasa")
                 and (template.get("checks") or {}).get(
@@ -2046,6 +2668,7 @@ def validate_final_clip(clip_path, title, transcript_text="",
         needs_rerender = True
         rerender_reason = "; ".join(
             m for m in (face.get("motivo") or "",
+                        layout.get("motivo") or "",
                         template.get("motivo") or "") if m)
         if not rerender_reason:
             rerender_reason = "puerta dura: " + ", ".join(hard_failures)
@@ -2099,6 +2722,7 @@ def validate_final_clip(clip_path, title, transcript_text="",
         "observe_only": bool(vcfg["observe_only"]),
         "overridden": overridden,
         "face": face,
+        "layout": layout,
         "template": template,
         "gemini": gemini,
     }

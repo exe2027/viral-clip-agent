@@ -236,15 +236,61 @@ def _square_str(cam_box_list):
     return f"{side}:{side}:{sx}:{sy}"
 
 
-def box_strategies(segment, duration, cfg, detect_fn=None):
+def _layout_cfg(cfg):
+    """Sección layout de la config, plana (tests) o anidada (producción)."""
+    cfg = cfg or {}
+    lay = cfg.get("layout") if isinstance(cfg, dict) else None
+    if isinstance(lay, dict):
+        return lay
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _tight_box(face, src_w, src_h, layout_cfg):
+    """Caja ajustada centrada en la cara mediana (o None).
+
+    Ancho/alto = factores de config.yaml (layout.tight_box_*)
+    sobre la cara; recortada al fotograma. Es la que corrige la
+    caja demasiado ancha del refinado de bordes en cámaras oscuras
+    (Burn: la cámara real es ~1,8x la cara, no 2,8x).
+    """
+    fx, fy, fw, fh = (int(v) for v in face[:4])
+    w_factor = float(layout_cfg.get("tight_box_w_factor", 2.0))
+    h_factor = float(layout_cfg.get("tight_box_h_factor", 2.2))
+    bw = max(1, int(round(fw * w_factor)))
+    bh = max(1, int(round(fh * h_factor)))
+    cx, cy = fx + fw // 2, fy + fh // 2
+    x0 = max(0, cx - bw // 2)
+    y0 = max(0, cy - bh // 2)
+    x1 = min(src_w, x0 + bw)
+    y1 = min(src_h, y0 + bh)
+    if x1 - x0 <= 0 or y1 - y0 <= 0:
+        return None
+    return [x0, y0, x1 - x0, y1 - y0]
+
+
+def box_strategies(segment, duration, cfg, detect_fn=None,
+                   influencer_name=None):
     """Estrategias de caja de cámara para el render, en orden.
 
     Primera: la caja detectada en el segmento (face-crop ->
-    bordes -> YuNet). Segunda: el default de la receta. Si la
-    detección no encuentra nada o coincide con el default, solo
-    hay una estrategia: re-renderizar con la misma caja no
-    arregla nada y no se quema un intento en ello.
+    bordes -> YuNet). Segunda: la caja AJUSTADA, centrada en la
+    cara mediana (corrige la detectada cuando el refinado de
+    bordes se engancha a bordes del juego y la caja sale demasiado
+    ancha: cámaras oscuras como la de Burn). Tercera (solo Rubius):
+    p7775, la caja de su cámara baja (561:365:0:626). Cuarta: el
+    default de la receta. Si la detección no encuentra nada o
+    coincide con el default, solo hay una estrategia:
+    re-renderizar con la misma caja no arregla nada y no se quema
+    un intento en ello.
+
+    Guarda 2026-11-26: ninguna estrategia usa una caja inválida
+    (el fotograma completo como "cámara"): se filtra aquí, antes
+    de renderizar; el re-make nunca prueba una caja que duplique
+    el juego.
     """
+    from .render import _cam_box_valida, _probe_size, median_face_box
+
+    layout_cfg = _layout_cfg(cfg)
     detect_fn = detect_fn or find_facecam_box_in_source
     strategies = []
     try:
@@ -259,12 +305,61 @@ def box_strategies(segment, duration, cfg, detect_fn=None):
             detected = (_box_str(box), _square_str(box))
         except (TypeError, ValueError):
             detected = None
+        # Guarda 2026-11-26: si se conoce el tamaño del segmento,
+        # una caja detectada inválida (el fotograma completo como
+        # "cámara") se filtra aquí y no se renderiza; sin tamaño
+        # no se puede juzgar y se acepta (el gate arbitra el
+        # render después).
+        if detected:
+            try:
+                src_w, src_h = _probe_size(segment)
+                ok, _motivo = _cam_box_valida(
+                    [float(v) for v in box[:4]], src_w, src_h,
+                    layout_cfg)
+                if not ok:
+                    detected = None
+            except Exception:  # noqa: BLE001 - sin tamaño no se filtra
+                pass
     default = (DEFAULT_CAM_BOX, DEFAULT_CAM_SQUARE)
     # Deduplicar por la caja: el cuadrado solo mueve el centro
     # del punch-in (98 vs 90 px en el default) y re-renderizar
     # por eso no arregla un fallo de cara.
     if detected and detected[0] != default[0]:
         strategies.append(("detectada", detected[0], detected[1]))
+    # Caja ajustada: solo si hay cara mediana estable y la caja
+    # que sale de ella es válida y distinta de las anteriores.
+    try:
+        face = median_face_box(segment, duration, cfg=layout_cfg)
+        if face:
+            src_w, src_h = _probe_size(segment)
+            tight = _tight_box(face, src_w, src_h, layout_cfg)
+            if tight:
+                ok, _motivo = _cam_box_valida(
+                    tight, src_w, src_h, layout_cfg)
+                if ok:
+                    tight_str = (_box_str(tight), _square_str(tight))
+                    seen = {s[1] for s in strategies} | {default[0]}
+                    if tight_str[0] not in seen:
+                        strategies.append(
+                            ("ajustada", tight_str[0], tight_str[1]))
+    except Exception:  # noqa: BLE001 - sin cara no hay ajustada
+        pass
+    # p7775 (§4.1.5, spec inglés correcto v7.1): cuarta estrategia,
+    # SOLO Rubius — la caja de su cámara baja (561:365:0:626,
+    # cuadrado 365:365:90:626), ANTES del default para que se
+    # pruebe dentro de max_intentos=3 (el consumidor hace
+    # strategies[:max_intentos]). Se dedupa contra detectada /
+    # ajustada / default cuando coinciden (mismo patrón por caja
+    # que arriba): sin regla, un Rubius con caja detectada =
+    # p7775 quemaría dos intentos en el mismo render. El fallback
+    # "-> sin_webcam" NO es una estrategia: el default siempre
+    # pasa las guardas y la salida sin_webcam es la decisión §4.3,
+    # tomada ANTES del render.
+    if (influencer_name or "").strip().lower() == "rubius":
+        p7775 = ("561:365:0:626", "365:365:90:626")
+        seen = {s[1] for s in strategies} | {default[0]}
+        if p7775[0] not in seen:
+            strategies.append(("p7775", p7775[0], p7775[1]))
     strategies.append(("default", default[0], default[1]))
     return strategies
 
@@ -451,7 +546,15 @@ def remake_one(clip, bridge, work_dir, cfg, max_intentos=3,
         plantilla_decidida = _dec[0]
     except Exception:  # noqa: BLE001 - sin decisión, rubius
         plantilla_decidida = "rubius"
-    strategies = box_strategies(seg_path, duration, cfg, detect_fn)
+    # p7775 dispara con clip.get("streamer") (§4.1.5): el clip
+    # construido por load_blocked_clips solo trae "streamer" (de
+    # c.get("streamer") o c.get("influencer_name") o
+    # c.get("influencer")); clip.get("influencer_name") o
+    # clip.get("influencer") son siempre None y p7775 nunca
+    # dispararía con ese portador.
+    strategies = box_strategies(
+        seg_path, duration, cfg, detect_fn,
+        influencer_name=clip.get("streamer"))
     attempts = strategies[: max(1, int(max_intentos))]
     intentos = []
     last_review = None
