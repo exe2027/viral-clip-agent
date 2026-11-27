@@ -603,16 +603,36 @@ def test_mensaje_telegram_cita_lineas():
 # freno A4 es ADICIONAL. Los runs de hace 35/40/50 min están fuera
 # del cooldown (30) y dos de ellos dentro de la hora: el orden de
 # los frenos importa y se verifica en cada test.
+def _a4_base():
+    """Base de reloj para los tests A4: NOW, salvo en la primera
+    hora del día de Santiago, donde los runs 'hace 35/40/50 min'
+    caen en el día anterior y el tope diario (3/día) no se alcanza
+    — el horario frena antes y el test falla por la hora, no por el
+    código (flake de medianoche, visto 2026-11-27 00:20 -03 en CI y
+    en local). Se ancla a las 01:30 del mismo día: los offsets
+    quedan dentro del día y el cooldown (30 min) sigue fuera."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = NOW
+    dt = datetime.fromtimestamp(now / 1000,
+                                tz=ZoneInfo("America/Santiago"))
+    if dt.hour == 0:
+        base = dt.replace(hour=1, minute=30, second=0, microsecond=0)
+        return int(base.timestamp() * 1000)
+    return now
+
 
 def test_a4_tope_3_redispatches_dia(tmp_path):
     # 3 re-disparos hoy (35, 40 y 50 min atrás: fuera del cooldown
     # de 30 min): el tope del día frena el re-disparo aunque el
     # tope horario también lo frenaría; manda el mensaje A4.
-    gh = FakeGitHub(dispatch_runs=[NOW - 35 * MIN, NOW - 40 * MIN,
-                                   NOW - 50 * MIN])
+    base = _a4_base()
+    gh = FakeGitHub(dispatch_runs=[base - 35 * MIN, base - 40 * MIN,
+                                   base - 50 * MIN])
     res = repair(_stuck_diag(), _clients(tmp_path, github=gh), WCFG,
                  tenant="sebastian",
-                 state_path=str(tmp_path / "state.json"))
+                 state_path=str(tmp_path / "state.json"),
+                 now_ms=base)
     assert gh.dispatched == []
     step = next(s for s in res.steps if s["step"] == REDISPATCH)
     assert step["ok"] is False
@@ -626,10 +646,12 @@ def test_a4_backoff_entre_redispatches(tmp_path):
     # backoff (la escalera se saltaría entera); por eso el test usa
     # cooldown_min=1: verifica la puerta A4 en sí, no el cooldown.
     wcfg = dict(WCFG, cooldown_min=1)
-    gh = FakeGitHub(dispatch_runs=[NOW - 3 * MIN, NOW - 40 * MIN])
+    base = _a4_base()
+    gh = FakeGitHub(dispatch_runs=[base - 3 * MIN, base - 40 * MIN])
     res = repair(_stuck_diag(), _clients(tmp_path, github=gh), wcfg,
                  tenant="sebastian",
-                 state_path=str(tmp_path / "state.json"))
+                 state_path=str(tmp_path / "state.json"),
+                 now_ms=base)
     assert gh.dispatched == []
     step = next(s for s in res.steps if s["step"] == REDISPATCH)
     assert step["ok"] is False

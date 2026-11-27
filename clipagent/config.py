@@ -812,11 +812,16 @@ def load_validator_config(cfg=None):
                 + " (sin defaults silenciosos)")
         cam = recipe.get("cam") or {}
         game = recipe.get("game") or {}
-        for key in ("x", "y", "w", "h"):
-            if key not in cam:
-                raise ConfigError(
-                    f"templates.{name}.cam.{key}: falta en "
-                    "config.yaml")
+        # Sin cámara no hay geometría de cámara que exigir: la
+        # receta rubius_sin_webcam NO lleva `cam` por diseño
+        # (spec §6.2) y el check se salta solo para ella — la
+        # autoridad es TEMPLATE_REQUIRED_KEYS, no el nombre.
+        if "cam" in TEMPLATE_REQUIRED_KEYS[name]:
+            for key in ("x", "y", "w", "h"):
+                if key not in cam:
+                    raise ConfigError(
+                        f"templates.{name}.cam.{key}: falta en "
+                        "config.yaml")
         for key in ("y0", "y1"):
             if key not in game:
                 raise ConfigError(
