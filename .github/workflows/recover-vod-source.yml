@@ -105,7 +105,12 @@ jobs:
           # para bajar el segmento: --download-sections descarga
           # un rango distinto al pedido en Twitch). No está en
           # pyproject.toml: se instala aquí.
-          python -m pip install -q -e . yt-dlp
+          # numpy: recover_vod_source.py lo importa a nivel de
+          # módulo (match de audio por correlación) y vive en el
+          # extra `vision`, no en las dependencias base: sin él
+          # el módulo no importa (ModuleNotFoundError, run
+          # 45977557790). Mismo pin que pyproject [vision].
+          python -m pip install -q -e . yt-dlp "numpy>=1.26"
       # Bootstrap: credenciales del tenant desde el panel. Canjea
       # el token de un solo uso del dispatch por una sesión de 12 h
       # (PANEL_SESSION_TOKEN en $GITHUB_ENV, la usa el recuperador
