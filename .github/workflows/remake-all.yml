@@ -154,7 +154,13 @@ jobs:
           # bootstrap canjea con estas; ver panel_bridge.from_env).
           PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
           PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
-        run: python -m clipagent.panel_credentials
+        run: |
+          # El tenant también va a $GITHUB_ENV: el env del paso
+          # de bootstrap es solo de ese paso y el re-hecho lo
+          # exige (require_tenant falla sin PANEL_TENANT; mismo
+          # fallo que las dos primeras corridas de revalidate).
+          echo "PANEL_TENANT=${{ github.event.client_payload.tenant || inputs.tenant }}" >> "$GITHUB_ENV"
+          python -m clipagent.panel_credentials
       - name: Re-hacer a rubius los clips bloqueados
         env:
           # URL DIRECTA del Worker, NO el front de Pages: Pages
