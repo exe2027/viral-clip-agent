@@ -36,6 +36,14 @@ desactivada. ``pasa`` es True solo si el clip puede encolarse
 como publicable; False si no; None si no hay veredicto
 (desactivada). Un clip sin veredicto NUNCA se encola como
 publicable: va en borrador (draft) para revisión humana.
+
+Séptimo elemento INFORMATIVO (adopción 5/5, 2026-11-26,
+``clipagent.beats``): si el llamador pasa ``transcript`` (el
+dict de faster-whisper con timestamps palabra por palabra), la
+puerta adjunta ``gate["beats"]`` con el gancho hablado medido
+(¿cabe en 3 s? ¿tiene algo concreto? ¿rachas abstractas?).
+Nunca cambia ``decision`` / ``pasa`` / ``fallos``: un gancho
+hablado largo es señal de calidad, no un título falso.
 """
 
 import json
@@ -115,22 +123,47 @@ def _criterion(name, pasa, duro, motivo=""):
 
 
 def build_quality_gate(final_review, thumbnail_text=None,
-                       no_speech=False):
+                       no_speech=False, transcript=None):
     """Los 6 criterios B4 a partir del veredicto de final_review.
 
     ``final_review`` es el dict de ``validate_final_clip`` (o el
     de fallback "pendiente_revision" cuando no se pudo validar).
     ``thumbnail_text`` es el texto de miniatura del paquete;
     ``no_speech`` es el flag de "sin voz verificable" del corte.
-    Nunca levanta: sin veredicto usable devuelve
-    "pendiente_revision" (no pasa, a revisión humana).
+    ``transcript`` es la transcripción cruda de faster-whisper
+    (opcional): si se pasa, la puerta adjunta ``gate["beats"]``
+    con el gancho hablado medido (``clipagent.beats``), sin
+    tocar la decisión. Nunca levanta: sin veredicto usable
+    devuelve "pendiente_revision" (no pasa, a revisión humana).
     """
     try:
-        return _build(final_review, thumbnail_text, no_speech)
+        gate = _build(final_review, thumbnail_text, no_speech)
     except Exception as exc:  # noqa: BLE001 - la puerta no tumba
         return {"decision": "pendiente_revision", "pasa": False,
                 "criterios": {}, "fallos": [], "fallos_duros": [],
                 "motivo": f"puerta de calidad sin ejecutar: {exc}"}
+    if transcript is not None:
+        gate["beats"] = _beats_info(transcript)
+    return gate
+
+
+def _beats_info(transcript):
+    """Gancho hablado medido (adopción 5/5). Nunca levanta y
+    nunca cambia la decisión de la puerta: solo informa.
+
+    ``{"status": "ok", **analyse_spoken(...)}`` con tiempos
+    reales, ``{"status": "skipped", ...}`` sin palabras, o
+    ``{"status": "error", ...}`` si no se pudo medir.
+    """
+    try:
+        from .beats import analyse_spoken
+        result = analyse_spoken(transcript)
+    except Exception as exc:  # noqa: BLE001 - solo informa
+        return {"status": "error", "reason": f"beats sin medir: {exc}"}
+    if result is None:
+        return {"status": "skipped",
+                "reason": "sin palabras en la transcripción"}
+    return {"status": "ok", **result}
 
 
 def _build(final_review, thumbnail_text, no_speech):

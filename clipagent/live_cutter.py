@@ -410,6 +410,29 @@ def _transcript_text_from_sub(sub):
     return ""
 
 
+def _transcript_dict_from_sub(sub):
+    """Transcripción cruda de un resultado de subtitle_clip.
+
+    Lee el .transcript.json (faster-whisper, con timestamps
+    palabra por palabra) para la validación del gancho hablado
+    (``clipagent.beats``). None si no existe o no parsea: el
+    llamador sigue sin beats, nunca tumba el corte.
+    """
+    sub = sub or {}
+    tpath = sub.get("transcript")
+    if not tpath and sub.get("srt"):
+        tpath = os.path.splitext(sub["srt"])[0] + ".transcript.json"
+    if tpath and os.path.isfile(tpath):
+        try:
+            with open(tpath, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data.get("segments"):
+                return data
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def _timed_segments_from_sub(sub):
     """Segmentos {start, end, text} de la transcripción (para el
     tramo del payoff ±20 s en el prompt, R1.1). [] sin ellos."""
@@ -1454,7 +1477,8 @@ class LiveCutterSession(LiveSession):
             quality_gate = build_quality_gate(
                 final_review,
                 thumbnail_text=record.get("thumbnail_text"),
-                no_speech=bool(no_speech))
+                no_speech=bool(no_speech),
+                transcript=_transcript_dict_from_sub(sub))
         except Exception as exc:  # noqa: BLE001 - sin veredicto,
             # a revisión humana, nunca aprobado.
             quality_gate = {
@@ -1464,6 +1488,13 @@ class LiveCutterSession(LiveSession):
         record["quality_gate"] = quality_gate
         record["quality_blocked"] = quality_gate.get("pasa") is False
         package["quality_gate"] = quality_gate
+        _beats = quality_gate.get("beats") or {}
+        if _beats.get("status") == "ok":
+            _issues = _beats.get("issues") or []
+            print(f"BEATS gancho hablado {_beats.get('hook_end_s')}s "
+                  f"({'ok' if not _issues else ', '.join(_issues)}): "
+                  + "; ".join(_beats.get("notes") or []),
+                  flush=True)
         try:
             _q_alert = self._quality_tracker.record(quality_gate)
         except Exception:  # noqa: BLE001 - la alerta no tumba nada
