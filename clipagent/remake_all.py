@@ -426,6 +426,33 @@ def download_segment(vod_id, start_sec, end_sec, out_path,
     raise RemakeError(f"descarga fallida: {last_exc}")
 
 
+def _rubius_game_crop(segment):
+    """Recorte 1:1 del gameplay adaptado al segmento (remake).
+
+    rubius.GAME_CROP (1440:1440:560:0) vale para segmentos
+    2560x1440; los VOD de Twitch bajan a 1920x1080 (VOD de Burn
+    2938677411) y el crop fijo hace fallar el render (ffmpeg:
+    Invalid too big ... width '1440' or height '1440';
+    reproducido con el grafo default sobre un 1920x1080
+    sintético — mismo Parsed_crop_9). Mismas fracciones que
+    render.RUBIUS_GAME_CROP_FRACS (el camino en vivo v2 ya
+    adapta por fracciones; el remake usaba el render v1 con el
+    crop fijo). Sin tamaño (ffprobe falla) se devuelve None y
+    el render usa su default.
+    """
+    try:
+        from .render import RUBIUS_GAME_CROP_FRACS, _probe_size
+        sw, sh = _probe_size(segment)
+    except Exception:  # noqa: BLE001 - sin tamaño, default
+        return None
+    fw, fh, fx, fy = RUBIUS_GAME_CROP_FRACS
+    gw = max(2, int(sw * fw) // 2 * 2)
+    gh = max(2, int(sh * fh) // 2 * 2)
+    gx0 = max(0, min(int(sw * fx) // 2 * 2, sw - gw))
+    gy0 = max(0, min(int(sh * fy) // 2 * 2, sh - gh))
+    return f"{gw}:{gh}:{gx0}:{gy0}"
+
+
 def render_rubius_clip(segment, duration, title, out_path, cfg,
                        lang="es", cam_box=None, cam_square=None,
                        transcribe_fn=None, render_fn=None):
@@ -465,6 +492,10 @@ def render_rubius_clip(segment, duration, title, out_path, cfg,
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_text)
     watermark = (cfg or {}).get("watermark") or None
+    _gc = _rubius_game_crop(segment)
+    _render_kw = ({"game_crop": _gc}
+                  if _gc and _acepta_kw(render_fn, "game_crop")
+                  else {})
     _dt, final = render_fn(
         segment,
         0,
@@ -476,6 +507,7 @@ def render_rubius_clip(segment, duration, title, out_path, cfg,
         cam_square=cam_square or DEFAULT_CAM_SQUARE,
         cfg=cfg or {},
         watermark=watermark,
+        **_render_kw,
     )
     return {
         "final": final,

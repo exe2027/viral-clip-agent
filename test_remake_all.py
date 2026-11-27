@@ -783,5 +783,70 @@ class TestRemakePlantilla(_PatchBannerAss):
             self.assertNotIn("plantilla", payload)
 
 
+class TestRubiusGameCrop(_PatchBannerAss):
+    """El crop del gameplay se adapta al segmento (run 45981380031).
+
+    rubius.GAME_CROP (1440:1440:560:0) vale para 2560x1440; los
+    VOD de Twitch bajan a 1920x1080 (VOD de Burn 2938677411) y
+    el crop fijo tumbaba el render (ffmpeg: Invalid too big ...
+    width '1440' or height '1440', mismo Parsed_crop_9 que el
+    grafo default sobre un 1920x1080 sintético). 7 de los 12
+    clips de §10.4 murieron así (183, 184, 186, 189, 191, 197
+    y 12). El remake adapta el crop con las fracciones de
+    render.RUBIUS_GAME_CROP_FRACS, como el camino en vivo v2.
+    """
+
+    def test_1080p_adapta_el_crop(self):
+        with mock.patch(
+            "clipagent.render._probe_size",
+            return_value=(1920, 1080),
+        ):
+            self.assertEqual(
+                ra._rubius_game_crop("seg.mp4"), "1080:1080:420:0")
+
+    def test_1440p_mantiene_el_default(self):
+        with mock.patch(
+            "clipagent.render._probe_size",
+            return_value=(2560, 1440),
+        ):
+            self.assertEqual(
+                ra._rubius_game_crop("seg.mp4"), "1440:1440:560:0")
+
+    def test_sin_tamano_devuelve_none(self):
+        with mock.patch(
+            "clipagent.render._probe_size",
+            side_effect=RuntimeError("sin ffprobe"),
+        ):
+            self.assertIsNone(ra._rubius_game_crop("seg.mp4"))
+
+    def test_remake_pasa_el_crop_adaptado_al_render(self):
+        seen = {}
+
+        def _render_con_crop(segment, start, duration, ass_path,
+                             out_path, banner_png=None, cam_box=None,
+                             cam_square=None, cfg=None, watermark=None,
+                             game_crop=None):
+            seen["game_crop"] = game_crop
+            with open(out_path, "wb") as f:
+                f.write(b"fake-rubius")
+            return (1.0, out_path)
+
+        bridge = _FakeBridge()
+        with mock.patch(
+            "clipagent.render._probe_size",
+            return_value=(1920, 1080),
+        ):
+            rec = self._remake(
+                _clip(7), bridge,
+                download_fn=_fake_download(),
+                transcribe_fn=_fake_transcribe(),
+                render_fn=_render_con_crop,
+                validate_fn=lambda *a, **kw: _veredicto(True),
+                detect_fn=lambda *a: None,
+            )
+        self.assertEqual(rec["outcome"], "rehecho")
+        self.assertEqual(seen["game_crop"], "1080:1080:420:0")
+
+
 if __name__ == "__main__":
     unittest.main()
