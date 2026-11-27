@@ -26,6 +26,7 @@ import {
   QUALITY_ALERT_MIN_SAMPLE,
   QUALITY_DISCARD_ALERT_PCT,
   qualityGateForClip,
+  qualityGateUnmeasured,
 } from "../src/quality-gate";
 import { resetQuotaBreakerState } from "../src/retry";
 
@@ -425,6 +426,50 @@ describe("qualityGateForClip (puro)", () => {
     const q = qualityGateForClip(c);
     expect(q.reason).toMatch(/calidad: sin veredicto válido/);
     expect(q.hard).toBe(false);
+  });
+  test("P0: pendiente sin hard_pasa (veredicto viejo) → frena con el motivo del juez, no el genérico", () => {
+    const c = clip({
+      viral: JSON.stringify({
+        quality_gate: { decision: "pendiente_revision", pasa: false, fallos: [], motivo: "Gemini rechazó la API key" },
+      }),
+    });
+    const q = qualityGateForClip(c);
+    expect(q.reason).toMatch(/calidad: sin veredicto válido \(juez no disponible: Gemini rechazó la API key — veredicto no medido\)/);
+    expect(q.hard).toBe(false);
+    expect(q.unmeasured).toBeUndefined();
+    expect(qualityGateUnmeasured(c)).toBeNull();
+  });
+  test("P0: pendiente + hard_pasa true → PASA marcado como no medido (fallo abierto del juez)", () => {
+    const c = clip({
+      viral: JSON.stringify({
+        quality_gate: { decision: "pendiente_revision", pasa: true, hard_pasa: true, fallos: [], motivo: "Gemini no responde: 503" },
+      }),
+    });
+    const q = qualityGateForClip(c);
+    expect(q.reason).toBeNull();
+    expect(q.hard).toBe(false);
+    expect(q.unmeasured).toBe(true);
+    expect(q.unmeasuredReason).toBe("Gemini no responde: 503");
+    expect(qualityGateUnmeasured(c)).toBe("Gemini no responde: 503");
+  });
+  test("P0: pendiente + hard_pasa false → frena: la medida determinista tampoco pasó", () => {
+    const c = clip({
+      viral: JSON.stringify({
+        quality_gate: { decision: "pendiente_revision", pasa: false, hard_pasa: false, fallos: ["webcam"], motivo: "Gemini no responde: 503" },
+      }),
+    });
+    const q = qualityGateForClip(c);
+    expect(q.reason).toMatch(/calidad: sin veredicto válido \(juez no disponible: Gemini no responde: 503 — la medida determinista tampoco pasó\)/);
+    expect(q.hard).toBe(false);
+    expect(qualityGateUnmeasured(c)).toBeNull();
+  });
+  test("P0: parseViralInput conserva hard_pasa del veredicto", () => {
+    const r = parseViralInput({ viral: { quality_gate: { decision: "pendiente_revision", pasa: false, hard_pasa: true, motivo: "x" } } });
+    expect(typeof r).not.toBe("string");
+    expect((r as { quality_gate?: { hard_pasa?: boolean } }).quality_gate?.hard_pasa).toBe(true);
+    const bad = parseViralInput({ viral: { quality_gate: { decision: "pendiente_revision", pasa: false, hard_pasa: "sí" } } });
+    expect(typeof bad).toBe("string");
+    expect(bad as string).toMatch(/hard_pasa/);
   });
   test("veredicto ilegible → frena, blando (nunca aprobado)", () => {
     const c = clip({ viral: '{"quality_gate": {"decision": "invento", "pasa": true}}' });

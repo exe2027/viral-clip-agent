@@ -380,7 +380,13 @@ def final_review_observe_only(cfg=None):
 
 
 def _pending(motivo, frames_n=0, model=MODEL_DEFAULT):
-    """Resultado sin veredicto: a revisión humana, nunca aprobado."""
+    """Resultado sin veredicto: a revisión humana, nunca aprobado.
+
+    P0 (2026-11-27): ``juez_disponible`` False marca que el juez
+    (Gemini) no corrió; las capas deterministas tampoco se midieron
+    aquí (sin ``face``/``template``/``hard_pasa``), así que la
+    puerta de calidad NO abre este veredicto: sigue bloqueando
+    hasta que validate_final_clip mida cara/layout/plantilla."""
     return {
         "decision": "pendiente_revision",
         "pasa": False,
@@ -393,6 +399,7 @@ def _pending(motivo, frames_n=0, model=MODEL_DEFAULT):
         "frames_n": frames_n,
         "model": model,
         "transcript_words": 0,
+        "juez_disponible": False,
     }
 
 

@@ -290,39 +290,79 @@ def _build(final_review, thumbnail_text, no_speech):
                if criterios[c]["motivo"] else "")
             for c in fallos)
 
+    # P0 (2026-11-27, fallo abierto del juez): hard_pasa viaja en
+    # el dict de validate_final_clip (cara + layout + plantilla
+    # deterministas, medidas en píxeles). La miniatura y el audio
+    # se miden AQUÍ mismo (inputs directos, no dependen del juez)
+    # y NO los cubre hard_pasa: un clip sin texto de miniatura o
+    # sin voz tiene un defecto duro MEDIDO y no abre. El fallo
+    # abierto solo se da cuando las capas deterministas pasaron
+    # (hard_pasa True) Y miniatura y audio también pasaron: solo
+    # falta el juez. La decisión se MANTIENE como
+    # pendiente_revision (con pasa True): así el clip sigue
+    # contando como pendiente en el tracker de descartes y sigue
+    # siendo revalidable cuando Gemini vuelva (un "observado" lo
+    # escondería de ambos), y el Worker lo detecta como no medido
+    # (decision pendiente_revision + hard_pasa true). Sin hard_pasa
+    # (veredicto viejo o _pending sin validar) o con hard_pasa
+    # False, se sigue bloqueando, pero el motivo dice la causa
+    # real del cerebro. Los umbrales NO se tocan: un "rechazado"
+    # real sigue frenando siempre.
+    hard_pasa = review.get("hard_pasa")
+    if hard_pasa is not True and hard_pasa is not False:
+        hard_pasa = None
+    fail_open_ok = (
+        hard_pasa is True
+        and criterios["miniatura"]["pasa"]
+        and criterios["audio"]["pasa"]
+    )
+
     # El veredicto del validador manda: un "rechazado" no se
     # reescribe a "observado" ni a "aprobado" aquí.
     if decision_fr == "rechazado":
         return {"decision": "rechazado", "pasa": False,
                 "criterios": criterios, "fallos": fallos,
-                "fallos_duros": fallos_duros,
+                "fallos_duros": fallos_duros, "hard_pasa": hard_pasa,
                 "motivo": motivo or (review.get("motivo") or "")}
     if decision_fr == "pendiente_revision":
+        if fail_open_ok:
+            return {"decision": "pendiente_revision", "pasa": True,
+                    "criterios": criterios, "fallos": fallos,
+                    "fallos_duros": fallos_duros,
+                    "hard_pasa": True, "juez_disponible": False,
+                    "motivo": "juez no disponible: "
+                    + (review.get("motivo") or "")
+                    + " — sin defectos duros medidos; publica por "
+                    "fallo abierto del juez"}
         return {"decision": "pendiente_revision", "pasa": False,
                 "criterios": criterios, "fallos": fallos,
                 "fallos_duros": fallos_duros,
+                "hard_pasa": hard_pasa, "juez_disponible": False,
                 "motivo": motivo or (review.get("motivo") or "")}
     if decision_fr == "desactivada":
         return {"decision": "desactivada", "pasa": None,
                 "criterios": criterios, "fallos": fallos,
-                "fallos_duros": fallos_duros,
+                "fallos_duros": fallos_duros, "hard_pasa": hard_pasa,
                 "motivo": review.get("motivo") or ""}
     if fallos_duros:
         return {"decision": "rechazado", "pasa": False,
                 "criterios": criterios, "fallos": fallos,
-                "fallos_duros": fallos_duros, "motivo": motivo}
+                "fallos_duros": fallos_duros, "hard_pasa": hard_pasa,
+                "motivo": motivo}
     if fallos_suaves:
         if observe_only:
             return {"decision": "observado", "pasa": True,
                     "criterios": criterios, "fallos": fallos,
                     "fallos_duros": fallos_duros,
+                    "hard_pasa": hard_pasa,
                     "motivo": "observación (no bloquea): " + motivo}
         return {"decision": "rechazado", "pasa": False,
                 "criterios": criterios, "fallos": fallos,
-                "fallos_duros": fallos_duros, "motivo": motivo}
+                "fallos_duros": fallos_duros, "hard_pasa": hard_pasa,
+                "motivo": motivo}
     return {"decision": "aprobado", "pasa": True,
             "criterios": criterios, "fallos": [],
-            "fallos_duros": [], "motivo": ""}
+            "fallos_duros": [], "hard_pasa": hard_pasa, "motivo": ""}
 
 
 def publish_mode_for_quality(quality_gate, auto_publish):
