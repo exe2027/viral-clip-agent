@@ -48,9 +48,29 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------- constantes
-TITLE = "Los momentos más divertidos de GTA 6 | 26 nov"
+_MESES_ES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago",
+             "sep", "oct", "nov", "dic")
+SANTIAGO_TZ = ZoneInfo("America/Santiago")
+
+
+def compilation_title(fecha=None):
+    """Título de la recopilación del día (spec CircleCI §4.6, B4).
+
+    Se calcula en cada corrida desde la fecha del día en
+    America/Santiago: "Los momentos más divertidos de GTA 6 |
+    27 nov" (día + mes abreviado en español, minúscula).
+    `fecha` es un date (tests); sin él, hoy en Santiago.
+    """
+    if fecha is None:
+        fecha = datetime.now(SANTIAGO_TZ).date()
+    elif isinstance(fecha, datetime):
+        fecha = fecha.date()
+    return (f"Los momentos más divertidos de GTA 6 | "
+            f"{fecha.day} {_MESES_ES[fecha.month - 1]}")
 TAGS = ["GTA 6", "GTA VI", "momentos divertidos", "recopilación",
         "gameplay español", "clips GTA 6", "humor gaming",
         "Rockstar Games", "clips gaming", "stream clips"]
@@ -535,6 +555,75 @@ def token_path_for_tenant(tenant, base_dir=None):
 
 
 # ------------------------------------------------------------- publicación
+def _build_youtube_service(token_path):
+    """Un servicio YouTube v3 desde el token OAuth del tenant.
+
+    Se construye UNA sola vez por tenant y se comparte entre la
+    guarda anti-duplicado y la subida (M11): no se autentica dos
+    veces.
+    """
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    creds = Credentials.from_authorized_user_file(
+        token_path, [YOUTUBE_SCOPE])
+    return build("youtube", "v3", credentials=creds)
+
+
+def ya_subido_hoy(youtube_service, title):
+    """Guarda anti-duplicado (spec CircleCI §4.6, B3): YouTube
+    como fuente de verdad.
+
+    Lista los vídeos del canal de destino (uploads playlist del
+    canal, maxResults=50 por página) paginando hasta encontrar
+    un vídeo anterior a hoy. Si alguno tiene el MISMO título
+    (el efectivamente usado en esta corrida) y fue subido HOY
+    (America/Santiago, no UTC), devuelve {"video_id", "url"} con
+    el vídeo existente; si no, None. La playlist viene de más
+    reciente a más antiguo, así que al ver un vídeo anterior a
+    hoy ya no puede haber otro de hoy después.
+    """
+    today = datetime.now(SANTIAGO_TZ).date()
+    channels = youtube_service.channels().list(
+        part="contentDetails", mine=True).execute()
+    items = (channels or {}).get("items") or []
+    if not items:
+        return None
+    uploads = ((items[0].get("contentDetails") or {})
+               .get("relatedPlaylists") or {}).get("uploads")
+    if not uploads:
+        return None
+    page_token = None
+    while True:
+        resp = youtube_service.playlistItems().list(
+            part="snippet", playlistId=uploads, maxResults=50,
+            pageToken=page_token).execute()
+        for item in (resp or {}).get("items") or []:
+            snippet = item.get("snippet") or {}
+            published = snippet.get("publishedAt") or ""
+            try:
+                when = datetime.fromisoformat(
+                    published.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if when.tzinfo is None:
+                continue
+            pub_date = when.astimezone(SANTIAGO_TZ).date()
+            if pub_date < today:
+                return None
+            if pub_date == today and snippet.get("title") == title:
+                video_id = ((snippet.get("resourceId") or {})
+                            .get("videoId"))
+                if video_id:
+                    return {
+                        "video_id": video_id,
+                        "url": ("https://www.youtube.com/watch?v="
+                                f"{video_id}"),
+                    }
+        page_token = (resp or {}).get("nextPageToken")
+        if not page_token:
+            return None
+
+
 def publish_longform(video_path, title, description, tags,
                      privacy="public", token_path=None,
                      youtube_service=None):
@@ -648,18 +737,23 @@ def _run(cmd, what):
 
 
 def render_compilation(segments, clips_dir, out_path, work_dir,
-                       ffmpeg="ffmpeg"):
+                       ffmpeg="ffmpeg", on_progress=None):
     """Ensambla la recopilación (spec §3) con ffmpeg.
 
     Fase 1: normaliza cada segmento a un intermedio (H.264+AAC
     1080x1920, 30 fps, etiqueta #N, loudnorm). Fase 2: encadena
     los intermedios con xfade 0,3 s (vídeo) y acrossfade 0,3 s
-    (audio). Devuelve out_path.
+    (audio). Devuelve out_path. `on_progress` (opcional) recibe
+    una línea por segmento y por fase, para que el driver de
+    CircleCI no quede en silencio durante el render (B1).
     """
     os.makedirs(work_dir, exist_ok=True)
     fontfile = find_font()
     intermediates = []
     for idx, seg in enumerate(segments):
+        if on_progress is not None:
+            on_progress(f"render: segmento {idx + 1}/{len(segments)} "
+                        f"(clip {seg['clip']['id']})")
         clip = seg["clip"]
         src = seg["clip"].get("_local_path") or os.path.join(
             clips_dir, f"{clip['id']}.mp4")
@@ -694,7 +788,11 @@ def render_compilation(segments, clips_dir, out_path, work_dir,
         intermediates.append(inter)
     if len(intermediates) == 1:
         os.replace(intermediates[0], out_path)
+        if on_progress is not None:
+            on_progress("render: un solo segmento, sin xfade")
         return out_path
+    if on_progress is not None:
+        on_progress(f"render: xfade de {len(intermediates)} segmentos")
     # Fase 2: xfade en cadena. Offset del xfade i (une el segmento
     # i+1): Σ duraciones 0..i − 0,3×(i+1).
     durations = [seg["duration"] for seg in segments]
@@ -776,10 +874,14 @@ def load_pool(tenant, bridge=None, pool=None):
 
 
 # -------------------------------------------------------------- descarga
-def _download_with_substitution(selected, reserve, clips_dir, bridges):
+def _download_with_substitution(selected, reserve, clips_dir, bridges,
+                                on_progress=None):
     """Descarga los MP4 por el bridge (spec §3) con sustitución
     por fallo: si un clip falla, se descarta y se toma el
     siguiente por score de la reserva que quepa en 14:00.
+
+    `on_progress` (opcional) recibe una línea por descarga, para
+    que el driver de CircleCI no quede en silencio (B1).
 
     `bridges` es dict tenant -> PanelBridge: un vídeo combinado
     mezcla clips de ambos tenants y cada MP4 se baja del Worker
@@ -802,6 +904,9 @@ def _download_with_substitution(selected, reserve, clips_dir, bridges):
             bridge = next(iter(bridges.values()))
         key = (tenant, clip["id"])
         dest = os.path.join(clips_dir, clip_filename(clip))
+        if on_progress is not None:
+            on_progress(f"descargando clip {clip['id']} "
+                        f"({tenant or 'sin tenant'})")
         if bridge is None:
             raise CompilationError(
                 f"sin sesión del panel ({tenant or 'sin tenant'}): "
@@ -977,10 +1082,11 @@ def run_compilation(tenant, dry_run=False, force=False, base_dir=None,
             f"13:30-14:30 ({tenant})")
 
     description = build_description(segments)
+    title = compilation_title()
     report = {
         "tenant": tenant,
         "dry_run": dry_run,
-        "titulo": TITLE,
+        "titulo": title,
         "descripcion": description,
         "tags": TAGS,
         "clips": [{"id": c["id"], "titulo": c.get("title"),
@@ -1001,13 +1107,13 @@ def run_compilation(tenant, dry_run=False, force=False, base_dir=None,
         return report
 
     # 6. Subida (salvo --dry-run).
-    checks = validate_longform_inputs(out_path, TITLE, description,
+    checks = validate_longform_inputs(out_path, title, description,
                                       TAGS)
     failed = [d for ok, d in checks if not ok]
     if failed:
         raise CompilationError(
             "contrato publish_longform no pasa: " + "; ".join(failed))
-    result = publish_longform(out_path, TITLE, description, TAGS,
+    result = publish_longform(out_path, title, description, TAGS,
                               privacy=PRIVACY)
     report["video_id"] = result["video_id"]
     report["url"] = result["url"]
@@ -1017,14 +1123,14 @@ def run_compilation(tenant, dry_run=False, force=False, base_dir=None,
 
 
 def _combined_report(label, dest_tenant, dry_run, selected,
-                       real_durations=None):
+                       real_durations=None, title=None):
     """Esqueleto del informe de un vídeo combinado (§2b): lista de
     clips con tenant de origen, como exige la spec."""
     return {
         "video": label,
         "tenant": dest_tenant,
         "dry_run": dry_run,
-        "titulo": TITLE,
+        "titulo": title if title is not None else compilation_title(),
         "descripcion": "",
         "tags": TAGS,
         "clips": [{"id": c["id"],
@@ -1050,7 +1156,7 @@ def _combined_report(label, dest_tenant, dry_run, selected,
 
 def _build_combined_video(label, dest_tenant, selected, reserve,
                           runs_video_dir, bridges, dry_run, base_dir,
-                          force=False):
+                          force=False, on_progress=None):
     """Un vídeo del modo combinado (§2b). Siempre devuelve el
     informe: los fallos quedan registrados (estado + bloqueo) y
     NO levantan, para que el otro vídeo siga su curso. Solo el
@@ -1061,7 +1167,9 @@ def _build_combined_video(label, dest_tenant, selected, reserve,
     token el MP4 se construye igual y se marca bloqueado) ->
     descarga (con sustitución, solo de su reserva: la disjunción
     se mantiene) -> ffprobe real -> render -> verificación ->
-    subida solo si el token propio del tenant es válido.
+    guarda anti-duplicado en YouTube -> subida solo si el token
+    propio del tenant es válido y el vídeo no está ya subido hoy.
+    `on_progress` se reenvía a descarga y render (B1).
     """
     os.makedirs(runs_video_dir, exist_ok=True)
     report_path = os.path.join(runs_video_dir, "report.json")
@@ -1070,7 +1178,11 @@ def _build_combined_video(label, dest_tenant, selected, reserve,
     work = os.path.join(runs_video_dir, "work")
     clips_dir = os.path.join(work, "clips")
     os.makedirs(clips_dir, exist_ok=True)
-    report = _combined_report(label, dest_tenant, dry_run, selected)
+    # Título de ESTA corrida (B4): se calcula una sola vez y es
+    # el que comparan la guarda y la subida.
+    title = compilation_title()
+    report = _combined_report(label, dest_tenant, dry_run, selected,
+                              title=title)
     if os.path.isfile(report_path) and not force:
         try:
             with open(report_path, encoding="utf-8") as f:
@@ -1105,7 +1217,8 @@ def _build_combined_video(label, dest_tenant, selected, reserve,
     try:
         final_selected, downloaded, descartados_descarga = (
             _download_with_substitution(
-                list(selected), list(reserve), clips_dir, bridges))
+                list(selected), list(reserve), clips_dir, bridges,
+                on_progress=on_progress))
     except CompilationError as e:
         report["bloqueo"] = f"descarga: {e}"
         report["descartados_descarga"] = []
@@ -1114,7 +1227,8 @@ def _build_combined_video(label, dest_tenant, selected, reserve,
         return report
     report["descartados_descarga"] = descartados_descarga
     report["clips"] = _combined_report(
-        label, dest_tenant, dry_run, final_selected)["clips"]
+        label, dest_tenant, dry_run, final_selected,
+        title=title)["clips"]
 
     # 3. Duraciones reales por ffprobe.
     try:
@@ -1135,12 +1249,13 @@ def _build_combined_video(label, dest_tenant, selected, reserve,
         return report
     report["clips"] = _combined_report(
         label, dest_tenant, dry_run, final_selected,
-        real_durations)["clips"]
+        real_durations, title=title)["clips"]
 
     # 4. Render + verificación del archivo final.
     try:
         segments = build_segments(final_selected)
-        render_compilation(segments, clips_dir, out_path, work)
+        render_compilation(segments, clips_dir, out_path, work,
+                           on_progress=on_progress)
         final_duration = probe_duration(out_path)
         if not (MIN_TOTAL_S <= final_duration <= HARD_TOTAL_S):
             raise CompilationError(
@@ -1165,18 +1280,44 @@ def _build_combined_video(label, dest_tenant, selected, reserve,
             json.dump(report, f, indent=2, ensure_ascii=False)
         return report
 
-    # 5. Subida (solo con el token propio del tenant).
+    # 5. Guarda anti-duplicado (B3) + subida, con UN solo
+    # servicio de YouTube por tenant (M11). La guarda vive aquí,
+    # justo antes de publish_longform: si el vídeo con este
+    # título ya se subió hoy, no se sube y se marca ya_subido
+    # con la URL existente. Si la guarda no puede comprobar
+    # YouTube (red, credenciales), se sigue a la subida: la
+    # guarda es best-effort, no un bloqueo.
+    youtube_service = None
+    existing = None
+    try:
+        youtube_service = _build_youtube_service(token_path)
+        existing = ya_subido_hoy(youtube_service, title)
+    except Exception as e:  # noqa: BLE001 - motivo al log
+        print(f"[compilation] vídeo {label}: la guarda "
+              f"anti-duplicado no pudo comprobar YouTube ({e}); "
+              "se sigue a la subida", flush=True)
+        youtube_service = None
+        existing = None
+    if existing is not None:
+        report["video_id"] = existing["video_id"]
+        report["url"] = existing["url"]
+        report["estado"] = "ya_subido"
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        return report
     try:
         checks = validate_longform_inputs(
-            out_path, TITLE, report["descripcion"], TAGS, token_path)
+            out_path, title, report["descripcion"], TAGS, token_path)
         failed = [d for ok, d in checks if not ok]
         if failed:
             raise CompilationError(
                 "contrato publish_longform no pasa: "
                 + "; ".join(failed))
-        result = publish_longform(out_path, TITLE,
+        result = publish_longform(out_path, title,
                                   report["descripcion"], TAGS,
-                                  privacy=PRIVACY, token_path=token_path)
+                                  privacy=PRIVACY,
+                                  token_path=token_path,
+                                  youtube_service=youtube_service)
     except CompilationError as e:
         report["estado"] = "fallido"
         report["bloqueo"] = f"subida: {e}"
@@ -1192,16 +1333,17 @@ def _build_combined_video(label, dest_tenant, selected, reserve,
 
 
 def run_combined_compilation(dry_run=False, force=False, base_dir=None,
-                             pools=None, bridges=None):
+                             pools=None, bridges=None, on_progress=None):
     """Dos vídeos disjuntos con el pool combinado (spec §2b).
 
     `pools` inyecta {tenant: filas} (tests / --pool-json); si no,
     D1 solo lectura por tenant. `bridges` es dict tenant ->
-    PanelBridge para las descargas. Devuelve {"video_a": ...,
-    "video_b": ..., "pool_combinado": N, ...}. Si el pool no da
-    para dos vídeos ≥13:30, levanta PoolInsufficientError con los
-    segundos/clips que faltan para el segundo (no se construye un
-    solo vídeo en silencio).
+    PanelBridge para las descargas. `on_progress` (opcional) se
+    reenvía a cada vídeo (descarga y render, B1). Devuelve
+    {"video_a": ..., "video_b": ..., "pool_combinado": N, ...}. Si
+    el pool no da para dos vídeos ≥13:30, levanta
+    PoolInsufficientError con los segundos/clips que faltan para
+    el segundo (no se construye un solo vídeo en silencio).
     """
     base = base_dir or os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))
@@ -1261,7 +1403,8 @@ def run_combined_compilation(dry_run=False, force=False, base_dir=None,
         reserve = [c for c in sub if c not in selected]
         reports[label] = _build_combined_video(
             label, dest_tenant, selected, reserve, runs_video_dir,
-            bridges, dry_run, base, force=force)
+            bridges, dry_run, base, force=force,
+            on_progress=on_progress)
     return {
         "video_a": reports["A"],
         "video_b": reports["B"],

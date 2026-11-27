@@ -449,7 +449,7 @@ async function loadJobs() {
 async function workerAction(path, okText, btn, loadingText) {
   if (workerBusy) return;
   workerBusy = true;
-  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnRunYoutube"), $("btnRunFacebook"), $("btnStartCfg"), $("btnStopCfg"), $("btnStartHero"), $("btnStopHero")].filter(Boolean);
+  const btns = [$("btnStart"), $("btnStop"), $("btnRunOnce"), $("btnRefreshW"), $("btnRunYoutube"), $("btnRunFacebook"), $("btnRunCompilation"), $("btnStartCfg"), $("btnStopCfg"), $("btnStartHero"), $("btnStopHero")].filter(Boolean);
   const labels = btns.map((b) => b.innerHTML);
   btns.forEach((b) => { b.disabled = true; });
   if (btn) btn.innerHTML = esc(loadingText);
@@ -3631,6 +3631,25 @@ $("btnRunFacebook").addEventListener("click", async () => {
     const r = await api("/api/worker/run-facebook", { method: "POST", body: JSON.stringify({ facebook_url: url }) });
     if (r && r.ok === false) showMsg("No se pudo despachar: " + (r.reason || r.error || "motivo desconocido"), "err");
     else { showMsg("Reel despachado: el programa lo corta solo y lo deja en la Cola.", "info"); $("facebookUrl").value = ""; }
+    await loadWorker();
+  } catch (e) { showMsg(e.message, "err"); }
+  finally { workerBusy = false; setLoading(btn, false); }
+});
+// Crear la recopilación larga en CircleCI (spec 2026-11-26, §5.6):
+// espejo de btnRunFacebook; despacha POST /api/worker/run-compilation
+// (sin parámetros: un disparo construye y sube los dos vídeos de
+// 14 min, uno por canal). Error por catch, no por r.ok (I8): api()
+// lanza excepción con ok:false, así que la rama if (r.ok === false)
+// es inalcanzable — el éxito se muestra tras api().
+$("btnRunCompilation").addEventListener("click", async () => {
+  if (!window.confirm("Crea los dos vídeos largos de 14 minutos (uno por canal) y los sube a YouTube. Tarda alrededor de una hora y no cuesta nada. ¿Seguro?")) { $("btnRunCompilation").focus(); return; }
+  if (workerBusy) return;
+  workerBusy = true;
+  const btn = $("btnRunCompilation");
+  setLoading(btn, true, "Despachando…");
+  try {
+    const r = await api("/api/worker/run-compilation", { method: "POST", body: JSON.stringify({}) });
+    showMsg("Recopilación disparada a CircleCI (pipeline " + (r.pipeline_id || "?") + "): los dos vídeos se construyen y se suben solos a YouTube.", "info");
     await loadWorker();
   } catch (e) { showMsg(e.message, "err"); }
   finally { workerBusy = false; setLoading(btn, false); }

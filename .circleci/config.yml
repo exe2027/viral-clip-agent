@@ -73,6 +73,10 @@ parameters:
     type: string
     default: "tiny"
     description: "Modelo faster-whisper para transcribir (tiny = rápido y barato)"
+  compilation:
+    type: boolean
+    default: false
+    description: "Recopilación larga: dos vídeos de 14 min (A seba, B kaez)"
 
 # Starter config (CircleCI) para viral-clip-agent.
 # Un solo proyecto: Python en la raiz (pyproject.toml, requires-python >=3.10;
@@ -226,8 +230,45 @@ jobs:
           path: render-out
           destination: rubius-render
 
+  # Recopilación larga (2026-11-26, SPEC runs/compilacion-circleci-2026-11-26).
+  # Disparo por API/UI con el parámetro `compilation: true` (o por el
+  # Worker desde el botón del panel). Un solo disparo construye y sube
+  # LOS DOS vídeos de 14 min (A -> canal ES de seba, B -> canal ES de
+  # kaez) con el driver clipagent/circle_compilation.py. Sin cron, sin
+  # auto-disparo. NO publica Shorts, NO escribe en D1, NO toca la Cola.
+  # Coste estimado (pre-medición): 60-130 min x 5 créditos/min
+  # ≈ 300-650 créditos por corrida (executor small, 1 vCPU).
+  compilation:
+    docker:
+      - image: cimg/base:current-24.04
+    resource_class: small
+    steps:
+      - checkout
+      - setup-python:
+          with:
+            python-version: "3.12"
+      - run:
+          name: Instalar ffmpeg
+          command: sudo apt-get update -qq && sudo apt-get install -y ffmpeg fonts-dejavu-core fontconfig
+      - run:
+          name: Instalar dependencias
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -e .[dev,vision,youtube]
+      - run:
+          name: Recopilación larga (dos vídeos de 14 min)
+          no_output_timeout: 120m
+          command: PYTHONUNBUFFERED=1 python -m clipagent.circle_compilation --combinado
+      - store_artifacts:
+          path: compilation-out
+          destination: recopilacion-larga
+          when: always
+
 workflows:
   main:
+    when:
+      not:
+        equal: [true, << pipeline.parameters.compilation >>]
     jobs:
       - tests
   # Solo corre cuando se dispara a mano con source_url (API/UI).
@@ -238,3 +279,12 @@ workflows:
         equal: ["", << pipeline.parameters.source_url >>]
     jobs:
       - render
+  # Solo corre cuando se dispara con compilation=true (API/UI o el
+  # Worker desde el panel). En un push normal va en false y se salta.
+  # El gate `when` de `main` impide que el job `tests` corra también
+  # en este pipeline.
+  compilation:
+    when: << pipeline.parameters.compilation >>
+    jobs:
+      - compilation:
+          context: compilation-panel

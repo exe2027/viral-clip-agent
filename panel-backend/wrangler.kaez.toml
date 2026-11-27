@@ -60,6 +60,10 @@ ALLOWED_EMAIL = ""
 # workflow con repository_dispatch (panel-start). El token
 # va como secreto GITHUB_TOKEN (wrangler secret put), nunca aquí.
 GITHUB_REPO = "exe2027/viral-clip-agent"
+# Proyecto de CircleCI para la recopilación larga (spec 2026-11-26,
+# §5.3): slug {vcs}/{org}/{repo}. El token va como secreto
+# CIRCLECI_API_TOKEN (wrangler secret put), nunca aquí.
+CIRCLECI_PROJECT_SLUG = "gh/exe2027/viral-clip-agent"
 # URL pública de R2 para que el cerebro (y las plataformas) puedan
 # descargar los clips: valor PÚBLICO, no secreto (2026-11-19,
 # cerebro genérico: el cerebro la recibe en /api/bridge/credentials).

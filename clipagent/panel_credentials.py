@@ -65,7 +65,15 @@ def fetch_brain_credentials(bridge):
 
 
 def _mask(value):
-    """Registra el valor como secreto en los logs de Actions."""
+    """Registra el valor como secreto en los logs de Actions.
+
+    Solo en GitHub Actions: en CircleCI la directiva saldría
+    literal en el log CON EL VALOR dentro (los valores vienen de
+    la respuesta del panel, no son variables de contexto, así
+    que el enmascarado automático de CircleCI no los cubriría).
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
     if value and "\n" not in str(value):
         print(f"::add-mask::{value}", flush=True)
 

@@ -68,6 +68,7 @@ export interface Env {
   // de él se deriva una clave por tenant (HKDF, crypto.ts).
   BRIDGE_TOKEN: string; // token del publisher-bridge (header X-Bridge-Token)
   GITHUB_TOKEN: string; // secreto: dispara repository_dispatch al repo
+  CIRCLECI_API_TOKEN?: string; // secreto: dispara el pipeline de CircleCI (recopilación larga, spec 2026-11-26 §5.3)
   // Telegram: resumen diario de analíticas (2026-11-18). Secretos
   // (wrangler secret put, nunca en el repo ni en wrangler.toml).
   // Sin token, el envío diario se salta en silencio.
@@ -106,6 +107,7 @@ export interface Env {
   TENANT: string;
   ALLOWED_EMAIL: string; // vacío = login por contraseña; con valor = allowlist Google (futuro)
   GITHUB_REPO: string; // var: "exe2027/viral-clip-agent"
+  CIRCLECI_PROJECT_SLUG: string; // var: "gh/exe2027/viral-clip-agent" (recopilación larga, spec 2026-11-26 §5.3)
   CLIP_PUBLIC_BASE_URL?: string; // var pública: dominio r2.dev de clips-avc (2026-11-19, cerebro genérico)
   /** URL pública de ESTE Worker (var por despliegue): la usa
    *  signVideoUrl para firmar /api/public-video. DEBE ser la del

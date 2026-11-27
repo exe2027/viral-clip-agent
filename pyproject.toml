@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "viral-clip-agent"
-version = "5.6.0"
+version = "5.7.0"
 description = "Detector de clips virales de VODs de Twitch/Kick: chat -> picos -> corte 9:16 -> subtítulos -> paquete SEO -> publicación con red de seguridad"
 requires-python = ">=3.10"
 dependencies = [

@@ -7,6 +7,7 @@ real se verifica con vídeos sintéticos (ffmpeg testsrc) y la
 publicación con un servicio de YouTube simulado: nunca se toca la
 API real ni el publicador de Shorts.
 """
+import datetime
 import json
 import os
 import shutil
@@ -240,8 +241,10 @@ class TestSegmentosYCapitulos(unittest.TestCase):
         self.assertIn("0:00 El mejor momento", desc)
         self.assertIn("#21 ·", desc)
         self.assertLessEqual(len(desc), comp.MAX_DESC_CHARS)
-        self.assertEqual(len(comp.TITLE), 45)
-        self.assertLessEqual(len(comp.TITLE), comp.MAX_TITLE_CHARS)
+        self.assertEqual(len(comp.compilation_title(
+            datetime.date(2026, 11, 26))), 45)
+        self.assertLessEqual(len(comp.compilation_title()),
+                             comp.MAX_TITLE_CHARS)
         self.assertLessEqual(len(comp.TAGS), comp.MAX_TAGS)
 
 
@@ -259,7 +262,8 @@ class TestValidacion(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _checks(self, **over):
-        kw = {"video_path": self.video, "title": comp.TITLE,
+        kw = {"video_path": self.video,
+              "title": comp.compilation_title(),
               "description": "d", "tags": comp.TAGS,
               "token_path": self.token}
         kw.update(over)
@@ -340,7 +344,7 @@ class TestPublishLongform(unittest.TestCase):
         fake = _FakeYouTube()
         with mock.patch.object(comp, "probe_duration", return_value=845.0):
             result = comp.publish_longform(
-                self.video, comp.TITLE, "desc", comp.TAGS,
+                self.video, comp.compilation_title(), "desc", comp.TAGS,
                 token_path=self.token, youtube_service=fake)
         self.assertEqual(
             result["url"], "https://www.youtube.com/watch?v=abc123XYZ")
@@ -351,7 +355,8 @@ class TestPublishLongform(unittest.TestCase):
         snippet = call["body"]["snippet"]
         self.assertEqual(snippet["categoryId"], "20")
         self.assertEqual(snippet["defaultLanguage"], "es")
-        self.assertEqual(snippet["title"], comp.TITLE)
+        self.assertEqual(snippet["title"],
+                         comp.compilation_title())
         self.assertLessEqual(len(snippet["tags"]), 15)
         self.assertEqual(call["body"]["status"]["privacyStatus"],
                          "public")
@@ -654,7 +659,7 @@ class TestRunCombinado(unittest.TestCase):
         # Sin tokens propios: los MP4 se construyen igual y se
         # marcan bloqueados por credenciales; nada se sube.
         def _fake_render(segments, clips_dir, out_path, work_dir,
-                         ffmpeg="ffmpeg"):
+                         ffmpeg="ffmpeg", on_progress=None):
             shutil.copy(self.src, out_path)
             return out_path
 
@@ -702,7 +707,7 @@ class TestRunCombinado(unittest.TestCase):
                 json.dump({"refresh_token": "x"}, f)
 
         def _fake_render(segments, clips_dir, out_path, work_dir,
-                         ffmpeg="ffmpeg"):
+                         ffmpeg="ffmpeg", on_progress=None):
             shutil.copy(self.src, out_path)
             return out_path
 

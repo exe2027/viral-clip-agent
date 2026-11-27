@@ -618,6 +618,81 @@ async function dispatchCerebro(env: Env, eventType: string, tenant: Tenant, yout
   }
 }
 
+// Recopilación larga en CircleCI (spec 2026-11-26, §5.2): espejo
+// simplificado de dispatchCerebro, SIN token del cerebro, SIN
+// presupuesto y SIN throttle de 15 min: el disparo es una acción
+// explícita del usuario (como panel-start). Los únicos frenos son
+// el circuito 7500 y el throttle de 3 h de §5.4 (anti-doble-clic).
+// Devuelve {ok:true, pipeline_id} SOLO si CircleCI aceptó (2xx);
+// en cualquier otro caso {ok:false, error} (throttled:true si
+// frenó el throttle de 3 h, para que el endpoint responda 200 y
+// no 502). El token NUNCA sale en el log ni en la respuesta.
+// Exportada para tests, como dispatchCerebro (M8).
+export const CIRCLECI_COMPILATION_EVENT_KIND = "circleci_compilation_dispatch";
+export const CIRCLECI_COMPILATION_SUCCESS_PREFIX = "Recopilación disparada a CircleCI (pipeline ";
+export const CIRCLECI_COMPILATION_FAILURE_PREFIX = "Recopilación NO disparada a CircleCI (";
+const CIRCLECI_COMPILATION_THROTTLE_MS = 3 * 60 * 60 * 1000;
+const CIRCLECI_DEFAULT_PROJECT_SLUG = "gh/exe2027/viral-clip-agent";
+
+export type CircleCICompilationResult =
+  | { ok: true; pipeline_id: string }
+  | { ok: false; error: string; throttled?: boolean };
+
+export async function triggerCircleCI(env: Env): Promise<CircleCICompilationResult> {
+  const tenant = requireTenant(env);
+  const token = (env.CIRCLECI_API_TOKEN || "").trim();
+  const slug = (env.CIRCLECI_PROJECT_SLUG || CIRCLECI_DEFAULT_PROJECT_SLUG).trim() || CIRCLECI_DEFAULT_PROJECT_SLUG;
+  if (!token) {
+    const reason = "sin CIRCLECI_API_TOKEN";
+    await logWorkerEvent(env.DB, CIRCLECI_COMPILATION_EVENT_KIND,
+      `${CIRCLECI_COMPILATION_FAILURE_PREFIX}${reason})`, tenant).catch(() => {});
+    return { ok: false, error: "No hay token de CircleCI configurado (CIRCLECI_API_TOKEN): no se disparó la recopilación." };
+  }
+  // Circuito 7500: abierto → false SIN escribir (el registro
+  // también es una escritura), espejo de dispatchCerebro.
+  if (isQuotaBreakerOpen(Date.now())) {
+    return { ok: false, error: "Cuota D1 agotada (circuito 7500 abierto): no se disparó la recopilación." };
+  }
+  // Throttle de 3 h (§5.4): casa SOLO con el prefijo de ÉXITO —
+  // un disparo fallido NO envenena 3 h. Solo lectura, sin escribir.
+  const now = Date.now();
+  if (await hasRecentWorkerEvent(env.DB, tenant, CIRCLECI_COMPILATION_EVENT_KIND, CIRCLECI_COMPILATION_SUCCESS_PREFIX, CIRCLECI_COMPILATION_THROTTLE_MS, now)) {
+    return { ok: false, error: "Ya se disparó una recopilación hace menos de 3 h: espera a que termine la corrida en curso.", throttled: true };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`https://circleci.com/api/v2/project/${slug}/pipeline`, {
+      method: "POST",
+      headers: { "Circle-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({ branch: "main", parameters: { compilation: true } }),
+    });
+  } catch (e) {
+    const reason = `error de red: ${e instanceof Error ? e.message : String(e)}`;
+    await logWorkerEvent(env.DB, CIRCLECI_COMPILATION_EVENT_KIND,
+      `${CIRCLECI_COMPILATION_FAILURE_PREFIX}${reason})`, tenant).catch(() => {});
+    return { ok: false, error: `No se pudo contactar con CircleCI (${reason}): no se disparó la recopilación.` };
+  }
+  if (!res.ok) {
+    const reason = `CircleCI devolvió HTTP ${res.status}`;
+    await logWorkerEvent(env.DB, CIRCLECI_COMPILATION_EVENT_KIND,
+      `${CIRCLECI_COMPILATION_FAILURE_PREFIX}${reason})`, tenant).catch(() => {});
+    return { ok: false, error: `CircleCI rechazó el disparo (HTTP ${res.status}): no se creó la recopilación.` };
+  }
+  let pipelineId = "";
+  try {
+    const body = (await res.json()) as { id?: unknown };
+    if (typeof body?.id === "string") pipelineId = body.id;
+  } catch {
+    // Sin id en la respuesta: se registra igual (el pipeline existe).
+  }
+  // El mensaje de éxito DEBE incluir el pipeline_id: logWorkerEvent
+  // dedupa mensajes idénticos en 6 h, así que dos éxitos con mensaje
+  // idéntico dejarían una sola fila (I2).
+  await logWorkerEvent(env.DB, CIRCLECI_COMPILATION_EVENT_KIND,
+    `${CIRCLECI_COMPILATION_SUCCESS_PREFIX}${pipelineId})`, tenant).catch(() => {});
+  return { ok: true, pipeline_id: pipelineId };
+}
+
 // Throttle del monitoreo en vivo (2026-11-18, corregido 19:46): como
 // mucho 1 dispatch panel-live cada 15 min por tenant. Una
 // corrida de cerebro-live dura ~11-13 min (setup + sesión de 10 min)
@@ -2744,6 +2819,22 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       }
       return json({ ok: true, facebook_url: facebookUrl });
     }
+    // Recopilación larga en CircleCI (spec 2026-11-26, §5.1):
+    // espejo de run-youtube/run-facebook, misma sección y misma
+    // sesión del panel. Body {} (el combinado es el único modo).
+    // Responde {ok:true, pipeline_id} si CircleCI aceptó; si no,
+    // {ok:false, error} y NUNCA éxito falso. Códigos (M4):
+    // throttle de 3 h → 200 con {ok:false} (no es un error del
+    // servidor); fallo de disparo a CircleCI → 502 (espejo de
+    // run-youtube). Cualquiera de los dos Workers dispara EL MISMO
+    // pipeline (el combinado cubre ambos tenants).
+    if (path === "/api/worker/run-compilation" && method === "POST") {
+      const result = await triggerCircleCI(env);
+      if (!result.ok) {
+        return json({ ok: false, error: result.error }, result.throttled ? 200 : 502);
+      }
+      return json({ ok: true, pipeline_id: result.pipeline_id });
+    }
     if (path === "/api/worker/stop" && method === "POST") {
       await setWorkerRunning(env.DB, tenant, false, "Worker parado desde el panel: la cola queda en pausa (nada se pierde).");
       // Sin dispatch: el flag D1 es la fuente de verdad y el
@@ -2946,7 +3037,14 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
     // se subió, dónde falta y si espera re-subida.
     if (path === "/api/clips" && method === "GET") {
       if (url.searchParams.get("status") === "publicado") {
-        const clips = await listPublishedClips(env.DB, tenant);
+        // ?limit= (spec 2026-11-26, §5.5): el pool de la
+        // recopilación necesita TODOS los publicados (el driver
+        // pide limit=500). Entero, clamp 1..500, default 50 sin
+        // el parámetro. La vista "Subidos" no lo pasa y no cambia.
+        const rawLimit = url.searchParams.get("limit");
+        const parsedLimit = rawLimit === null ? 50 : Number.parseInt(rawLimit, 10);
+        const limit = Number.isFinite(parsedLimit) ? Math.min(500, Math.max(1, parsedLimit)) : 50;
+        const clips = await listPublishedClips(env.DB, tenant, limit);
         return json({ ok: true, clips: clips.map(clipOut) });
       }
       const clips = await listQueueClips(env.DB, tenant);

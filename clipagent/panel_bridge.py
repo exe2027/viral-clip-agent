@@ -363,6 +363,15 @@ class PanelBridge:
         return self._request_retry(
             "GET", "/api/clips").get("clips") or []
 
+    def list_published(self, limit=500):
+        """GET /api/clips?status=publicado&limit=<n> (publicados
+        del tenant, para el pool de la recopilación larga)."""
+        self._ensure_login()
+        return self._request_retry(
+            "GET",
+            f"/api/clips?status=publicado&limit={int(limit)}"
+            ).get("clips") or []
+
     def list_titles(self, days=30):
         """GET /api/bridge/titles?days=N: títulos del tenant para
         el anti-duplicado (spec títulos-verdad, R4.1) y la variedad
