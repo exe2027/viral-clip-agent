@@ -207,6 +207,14 @@ export interface QualityGateVerdict {
   fallos_duros?: string[];
   motivo?: string;
   criterios?: Record<string, { pasa: boolean; duro: boolean; motivo?: string }>;
+  /** P0 (2026-11-27, fallo abierto del juez): resultado de las
+   *  capas deterministas (cara + layout + plantilla) del cerebro.
+   *  true = medidas y pasadas; false = medidas y fallidas; null /
+   *  ausente = no medidas (veredicto viejo). Lo manda el cerebro
+   *  en quality_gate; quality-gate.ts lo usa para distinguir un
+   *  "juez no disponible" (pendiente_revision con hard_pasa true:
+   *  sin defectos duros medidos) de un clip sin validar. */
+  hard_pasa?: boolean | null;
 }
 
 export interface ViralData {
@@ -330,6 +338,14 @@ export function parseQualityGateInput(v: unknown): QualityGateVerdict | string {
   if (q.motivo !== undefined) {
     if (typeof q.motivo !== "string") return "quality_gate.motivo debe ser una cadena.";
     out.motivo = q.motivo;
+  }
+  // P0 (2026-11-27): hard_pasa viaja como el resto del veredicto
+  // (booleano o null); cualquier otro tipo es 400.
+  if (q.hard_pasa !== undefined) {
+    if (q.hard_pasa !== true && q.hard_pasa !== false && q.hard_pasa !== null) {
+      return "quality_gate.hard_pasa debe ser true, false o null.";
+    }
+    out.hard_pasa = q.hard_pasa;
   }
   if (q.criterios !== undefined) {
     if (typeof q.criterios !== "object" || q.criterios === null || Array.isArray(q.criterios)) {
@@ -2332,6 +2348,10 @@ export interface JobListRow {
   evidence_url: string | null;
   created_at: number;
   updated_at: number;
+  /** P0 (2026-11-27, visibilidad): próxima ejecución programada
+   *  (ms epoch) o null (para ahora / sin programar). El panel la
+   *  muestra junto a last_error para ver jobs vencidos. */
+  next_run_at: number | null;
 }
 
 export async function listJobs(
@@ -2341,7 +2361,7 @@ export async function listJobs(
   state?: JobStateFilter,
 ): Promise<JobListRow[]> {
   const sql =
-    "SELECT id, kind, clip_id, platform, state, title, attempts, last_error, platform_id, evidence_url, created_at, updated_at " +
+    "SELECT id, kind, clip_id, platform, state, title, attempts, last_error, platform_id, evidence_url, created_at, updated_at, next_run_at " +
     "FROM jobs WHERE tenant_id = ?" +
     (state ? " AND state = ?" : "") +
     ` ORDER BY created_at DESC LIMIT ${limit}`;

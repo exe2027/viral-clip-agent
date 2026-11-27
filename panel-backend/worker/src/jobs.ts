@@ -102,6 +102,7 @@ import {
 export { MAX_RETRIES_PER_DAY, RETRY_BACKOFF_MINUTES_SRC as RETRY_BACKOFF_MINUTES, RETRY_BACKOFF_MS_SRC as RETRY_BACKOFF_MS };
 export { MAX_TRANSIENT_RETRIES };
 import { cycleGate, idleCycleGate, markCycleReview, type CycleGateDecision } from "./cycle-gate";
+import { heavySlotForCycle } from "./subrequest-budget";
 // Gates (publishGate, seoForPlatform, santiagoDayKey): viven en
 // gate.ts desde 2026-11-18 (hallazgo M1) para que el dispatch
 // pueda re-chequear sin importación circular. Se re-exportan para
@@ -114,6 +115,7 @@ import {
   QUALITY_ALERT_MIN_SAMPLE,
   QUALITY_DISCARD_ALERT_PCT,
   qualityGateForClip,
+  qualityGateUnmeasured,
 } from "./quality-gate";
 
 export type JobKind = "vod_check" | "cut" | "subtitle" | "package" | "publish" | "metrics";
@@ -717,12 +719,36 @@ function rollingMaxFor(platform: PanelPlatform, eff: EffectiveSettings): number 
     : eff.rolling_24h_max;
 }
 
+/** Marca de espera por rolling en jobs.last_error: la escribe
+ *  applyPublishResult al reprogramar un job frenado por el tope
+ *  rolling ("gate de publicación: tope rolling 24 h alcanzado:
+ *  N/M en <platform> ..."). Es la prueba de que ese job YA esperó
+ *  una vez por rolling (las esperas no tocan `attempts`, ver
+ *  applyPublishResult, así que el contador no sirve aquí). */
+const ROLLING_WAIT_LAST_ERROR_LIKE = "%tope rolling 24 h%";
+
 /** Ventana rolling proyectada en un instante C: publicados con
  *  `updated_at` en (C-24 h, C] + programados/en curso con
  *  `next_run_at` en (C-24 h, C]. Un `next_run_at` NULL es "para
  *  ahora": cuenta (si `now` cae en la ventana) y su instante es
- *  `now`. Devuelve el conteo, su desglose y el instante más viejo
- *  de la ventana (V), para empujar a V+24 h. */
+ *  `now`. Devuelve el conteo, su desglose, el instante más viejo
+ *  de la ventana (V), para empujar a V+24 h, y cuántos programados
+ *  se EXCLUYERON del conteo.
+ *
+ *  P0 (2026-11-27, romper el autobloqueo rolling): un job
+ *  programado NO cuenta cuando ya esperó por rolling (su
+ *  last_error lleva el motivo de rolling: se reprogramó a V+24 h
+ *  y seguir contándolo bloquea para siempre la creación de jobs
+ *  nuevos mientras el viejo espera — el caso IG 8/3 del 27-11)
+ *  ni cuando está vencido tras haber rebotado (next_run_at <= now
+ *  con last_error: ya tuvo su oportunidad y el ciclo lo
+ *  re-ejecuta igual; contarlo además duplicaría el hueco). Un job
+ *  vencido SIN last_error (fresco, aún no ejecutado) SÍ cuenta:
+ *  va a publicar en el próximo ciclo (B3.5, sin regresión). El
+ *  gate de ejecución sigue siendo el guardia real (solo cuenta
+ *  posted), así que excluir de la PROYECCIÓN no viola ningún
+ *  tope de plataforma: solo deja de negarse a crear jobs nuevos
+ *  mientras los viejos esperan. */
 async function projectedRolling(
   db: D1Database,
   tenant: Tenant,
@@ -730,7 +756,7 @@ async function projectedRolling(
   language: string,
   candidate: number,
   now: number,
-): Promise<{ count: number; posted: number; scheduled: number; oldest: number | null }> {
+): Promise<{ count: number; posted: number; scheduled: number; oldest: number | null; excluded: number }> {
   const from = candidate - 24 * 3600 * 1000;
   const posted = await db.prepare(
     "SELECT COUNT(*) AS n, MIN(updated_at) AS oldest_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state = 'posted' AND updated_at > ? AND updated_at <= ?",
@@ -739,12 +765,28 @@ async function projectedRolling(
     .first<{ n: number; oldest_at: number | null }>()
     .catch(() => null);
   const sched = await db.prepare(
-    "SELECT COUNT(*) AS n, MIN(next_run_at) AS oldest_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at > ? AND next_run_at <= ?",
+    "SELECT COUNT(*) AS n, MIN(next_run_at) AS oldest_at FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at > ? AND next_run_at <= ? AND (last_error IS NULL OR last_error NOT LIKE ?) AND (next_run_at > ? OR last_error IS NULL)",
   )
-    .bind(tenant, platform, language, from, candidate)
+    .bind(tenant, platform, language, from, candidate, ROLLING_WAIT_LAST_ERROR_LIKE, now)
     .first<{ n: number; oldest_at: number | null }>()
     .catch(() => null);
   const nullSched = await db.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at IS NULL AND (last_error IS NULL OR last_error NOT LIKE ?)",
+  )
+    .bind(tenant, platform, language, ROLLING_WAIT_LAST_ERROR_LIKE)
+    .first<{ n: number }>()
+    .catch(() => null);
+  // Excluidos (para el motivo del panel: posted vs proyectado vs
+  // excluidos): el total de programados en la ventana sin los
+  // filtros de arriba, menos los que sí cuentan. Una lectura más
+  // por consulta; las lecturas no cuentan en la cuota D1.
+  const totalSched = await db.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at > ? AND next_run_at <= ?",
+  )
+    .bind(tenant, platform, language, from, candidate)
+    .first<{ n: number }>()
+    .catch(() => null);
+  const totalNullSched = await db.prepare(
     "SELECT COUNT(*) AS n FROM jobs WHERE tenant_id = ? AND platform = ? AND language = ? AND state IN ('scheduled','processing') AND next_run_at IS NULL",
   )
     .bind(tenant, platform, language)
@@ -753,11 +795,14 @@ async function projectedRolling(
   // Un NULL es "para ahora": solo cuenta si `now` cae en la
   // ventana (el job publicará en el próximo ciclo, ~now).
   const nullCounts = (nullSched?.n ?? 0) > 0 && candidate - now < 24 * 3600 * 1000;
+  const nullTotalCounts = (totalNullSched?.n ?? 0) > 0 && candidate - now < 24 * 3600 * 1000;
   const postedN = posted?.n ?? 0;
   const schedN = (sched?.n ?? 0) + (nullCounts ? (nullSched?.n ?? 0) : 0);
+  const totalSchedN = (totalSched?.n ?? 0) + (nullTotalCounts ? (totalNullSched?.n ?? 0) : 0);
+  const excluded = Math.max(0, totalSchedN - schedN);
   const instants = [posted?.oldest_at ?? null, sched?.oldest_at ?? null, nullCounts ? now : null]
     .filter((v): v is number => v !== null);
-  return { count: postedN + schedN, posted: postedN, scheduled: schedN, oldest: instants.length > 0 ? Math.min(...instants) : null };
+  return { count: postedN + schedN, posted: postedN, scheduled: schedN, oldest: instants.length > 0 ? Math.min(...instants) : null, excluded };
 }
 
 /** Proyección B3 (spec 2026-11-27): empuja el candidato a V+24 h
@@ -777,29 +822,29 @@ async function projectRollingCandidate(
   candidate: number,
   rollingMax: number,
   now: number,
-): Promise<{ candidate: number; blocked: string | null; projected: number; posted: number; scheduled: number }> {
+): Promise<{ candidate: number; blocked: string | null; projected: number; posted: number; scheduled: number; excluded: number }> {
   const todayKey = santiagoDayKeyMs(now);
   let c = candidate;
   for (let push = 0; push < 3; push++) {
     const w = await projectedRolling(db, tenant, platform, language, c, now);
-    if (w.count < rollingMax) return { candidate: c, blocked: null, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+    if (w.count < rollingMax) return { candidate: c, blocked: null, projected: w.count, posted: w.posted, scheduled: w.scheduled, excluded: w.excluded };
     // Ventana llena: empujar a V+24 h. Sin V el conteo no puede
     // bajar solo con el tiempo: no se crea.
     if (w.oldest === null) {
-      return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+      return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled, excluded: w.excluded };
     }
     const next = w.oldest + 24 * 3600 * 1000;
     if (santiagoDayKeyMs(next) !== todayKey) {
       // No-derrame: el empuje sacó el candidato del día actual;
       // el conteo que frena es el de ANTES del empuje.
-      return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+      return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled, excluded: w.excluded };
     }
     c = next;
   }
   // Tras 3 empujes, una última evaluación en C'.
   const w = await projectedRolling(db, tenant, platform, language, c, now);
-  if (w.count < rollingMax) return { candidate: c, blocked: null, projected: w.count, posted: w.posted, scheduled: w.scheduled };
-  return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled };
+  if (w.count < rollingMax) return { candidate: c, blocked: null, projected: w.count, posted: w.posted, scheduled: w.scheduled, excluded: w.excluded };
+  return { candidate: c, blocked: `tope rolling 24 h alcanzado: ${w.count}/${rollingMax} en ${platform} (últimas 24 h)`, projected: w.count, posted: w.posted, scheduled: w.scheduled, excluded: w.excluded };
 }
 
 /** Tope diario proyectado B3.6 (spec 2026-11-27): publicados de
@@ -1075,10 +1120,15 @@ export async function tryEnqueueClipPublish(
     // --- 2. Proyección rolling B3 ---
     const proj = await projectRollingCandidate(db, tenant, platform, clipLang, candidate, rollingMaxFor(platform, eff), now);
     if (proj.blocked) {
+      // P0 (2026-11-27): distinguir posted / proyectado /
+      // excluidos en el motivo: los excluidos son programados que
+      // ya esperaron por rolling o vencieron tras rebotar (ver
+      // projectedRolling) y ya NO bloquean la creación.
+      const excludedTxt = proj.excluded > 0 ? `; ${proj.excluded} excluidos: vencidos o reintentados por rolling` : "";
       blocked.push(`${platform}: ${proj.blocked}`);
-      await logClipEvent(db, clip.id, "publicado", actor, `Publicación frenada en ${platform}: ${proj.blocked}. (proyectado: ${proj.posted} posted + ${proj.scheduled} programados)`, true, tenant);
+      await logClipEvent(db, clip.id, "publicado", actor, `Publicación frenada en ${platform}: ${proj.blocked}. (proyectado: ${proj.posted} posted + ${proj.scheduled} programados${excludedTxt})`, true, tenant);
       if (opts.logToWorkerEvents) {
-        await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado en ${platform}: ${proj.blocked}. (proyectado: ${proj.posted} posted + ${proj.scheduled} programados)`, tenant);
+        await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado en ${platform}: ${proj.blocked}. (proyectado: ${proj.posted} posted + ${proj.scheduled} programados${excludedTxt})`, tenant);
       }
       continue;
     }
@@ -1184,6 +1234,20 @@ export async function tryEnqueueClipPublish(
         await logWorkerEvent(db, "auto_publish", `Clip #${clip.id} frenado en ${platform}: ${gate}.`, tenant);
       }
       continue;
+    }
+    // P0 (2026-11-27, fallo abierto del juez): el gate pasó pero
+    // la calidad NO se midió (pendiente_revision con hard_pasa
+    // true). No es un aprobado: queda registrado en warnings (el
+    // panel lo muestra) y en clip_events / worker_events, con el
+    // motivo del juez tal cual lo guardó el cerebro.
+    const unmeasuredReason = qualityGateUnmeasured(clip);
+    if (unmeasuredReason !== null) {
+      const warn = `calidad no medida en ${platform}: ${unmeasuredReason} — publica por fallo abierto del juez`;
+      warnings.push(warn);
+      await logClipEvent(db, clip.id, "publicado", actor, warn, true, tenant);
+      if (opts.logToWorkerEvents) {
+        await logWorkerEvent(db, "auto_publish", `Clip #${clip.id}: ${warn}`, tenant);
+      }
     }
     // --- 5. Crear el job ---
     const title = clip.seo_title || clip.title;
@@ -2367,7 +2431,17 @@ export async function runWorkerCycle(
   // presupuesto activo se salta el ciclo entero. A4: con el
   // circuito 7500 abierto, también se salta (sus escrituras
   // morirían con 7500 y no aportan a publicar).
-  if (guard.shouldWrite("analytics") && !isQuotaBreakerOpen(Date.now())) {
+  //
+  // P0 (2026-11-27, presupuesto de subrequests): en cada ciclo
+  // corre SOLO UNA de las dos tareas pesadas post-ciclo
+  // (analíticas 6 h o engagement 1 h), alternando por hora UTC
+  // par/impar (heavySlotForCycle). Las dos juntas + el ciclo
+  // publicador + los dispatches chocaban con el límite Free de
+  // subrequests ("Too many subrequests", 27-11 09:01). La diferida
+  // corre en el ciclo siguiente (retraso < 1 h); cada una conserva
+  // su propio throttle, así que el ritmo real no cambia.
+  const heavySlot = heavySlotForCycle(Date.now());
+  if (heavySlot === "analytics" && guard.shouldWrite("analytics") && !isQuotaBreakerOpen(Date.now())) {
     try {
       await collectAnalytics(env, tenant);
     } catch {
@@ -2382,7 +2456,7 @@ export async function runWorkerCycle(
   // fallo queda en worker_events / engagement_log. Escritura no
   // esencial: con el freno de presupuesto activo o el circuito
   // 7500 abierto se salta entero.
-  if (guard.shouldWrite("analytics") && !isQuotaBreakerOpen(Date.now())) {
+  if (heavySlot === "engagement" && guard.shouldWrite("analytics") && !isQuotaBreakerOpen(Date.now())) {
     try {
       await runEngagement(env, tenant);
     } catch {

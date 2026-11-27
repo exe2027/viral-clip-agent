@@ -30,7 +30,16 @@
 //   SIEMPRE, también a mano: un clip con defecto verificado no se
 //   publica por ningún camino. El desbloqueo humano es re-renderizar
 //   o re-validar, no un botón que lo ignore.
-// - sin veredicto (pendiente/desactivada, o clip anterior a B4 sin
+// - decision "pendiente_revision" (juez Gemini no disponible, P0
+//   2026-11-27): FALLO ABIERTO solo si las capas deterministas se
+//   midieron y pasaron (hard_pasa true): pasa marcado como no
+//   medido (unmeasured, con el motivo del juez). Si hard_pasa es
+//   false o no viene (veredicto viejo), bloquea, pero el motivo
+//   dice la causa real del cerebro, no el genérico. Un juez caído
+//   no es un rechazo: el 27-11 descartó el 100% de los clips del
+//   día con "sin veredicto válido" mientras la cara, la plantilla,
+//   la miniatura y el audio estaban medidos y bien.
+// - sin veredicto (desactivada, o clip anterior a B4 sin
 //   quality_gate) -> desde el refuerzo del validador (2026-11-21,
 //   lección scooter: un clip no-rubius publicó por el panel sin
 //   pasar por el gate de fotogramas) bloquea TAMBIÉN a mano: un
@@ -95,6 +104,11 @@ export interface QualityGateVerdict {
   fallos_duros?: string[];
   motivo?: string;
   criterios?: Record<string, { pasa: boolean; duro: boolean; motivo?: string }>;
+  /** P0 (2026-11-27, fallo abierto del juez): capas
+   *  deterministas del cerebro (cara + layout + plantilla).
+   *  true = medidas y pasadas; false = medidas y fallidas;
+   *  null/ausente = no medidas (veredicto viejo). */
+  hard_pasa?: boolean | null;
 }
 
 export interface QualityGateCheck {
@@ -102,6 +116,14 @@ export interface QualityGateCheck {
   reason: string | null;
   /** true = frena también la publicación manual (rechazado). */
   hard: boolean;
+  /** P0 (2026-11-27): true cuando el clip pasa SOLO por fallo
+   *  abierto del juez (veredicto pendiente_revision con las
+   *  capas deterministas medidas y pasadas). Nunca es un
+   *  aprobado: el motivo real va en `unmeasuredReason`. */
+  unmeasured?: boolean;
+  /** Motivo del juez no disponible (tal cual lo guardó el
+   *  cerebro en quality_gate.motivo). */
+  unmeasuredReason?: string;
 }
 
 /** Lee el veredicto de clips.viral.quality_gate. null = sin
@@ -128,6 +150,9 @@ export function parseQualityGate(clip: ClipRow): QualityGateVerdict | null {
     criterios: typeof v.criterios === "object" && v.criterios !== null
       ? (v.criterios as QualityGateVerdict["criterios"])
       : undefined,
+    hard_pasa: v.hard_pasa === true || v.hard_pasa === false || v.hard_pasa === null
+      ? (v.hard_pasa as boolean | null)
+      : undefined,
   };
 }
 
@@ -147,18 +172,60 @@ function failedLabels(v: QualityGateVerdict): string {
     .join(", ");
 }
 
+/** P0 (2026-11-27, fallo abierto del juez): motivo del juez no
+ *  disponible cuando el clip pasa SOLO por ese fallo abierto
+ *  (pendiente_revision con hard_pasa true). null en cualquier
+ *  otro caso. Puro: lo usan el enqueue (aviso visible) y el
+ *  re-chequeo sin tocar D1. */
+export function qualityGateUnmeasured(clip: ClipRow): string | null {
+  const v = parseQualityGate(clip);
+  if (!v || v.decision !== "pendiente_revision" || v.hard_pasa !== true) return null;
+  return v.motivo || "juez no disponible (sin motivo guardado)";
+}
+
 /** La puerta B4 sobre un clip. Pura: no toca D1, así se prueba
- *  sin mocks. Ver el comentario del módulo para las reglas. */
+ *  sin mocks. Ver el comentario del módulo para las reglas.
+ *
+ *  P0 (2026-11-27, fallo abierto del juez): un veredicto
+ *  pendiente_revision NO es un rechazo de calidad — es el juez
+ *  (Gemini) no disponible. Si las capas deterministas se midieron
+ *  y pasaron (hard_pasa true: cara, layout y plantilla OK en
+ *  píxeles), el clip PASA marcado como no medido (unmeasured),
+ *  con el motivo del juez para que quede registrado; si la medida
+ *  determinista falló (hard_pasa false) o no se midió (veredicto
+ *  viejo, sin hard_pasa), sigue frenando, pero el motivo dice la
+ *  causa real (el motivo guardado por el cerebro) en vez del
+ *  genérico "validación pendiente_revision". Los umbrales NO se
+ *  tocan: un "rechazado" real sigue frenando DURO siempre. */
 export function qualityGateForClip(clip: ClipRow): QualityGateCheck {
   const v = parseQualityGate(clip);
   if (v) {
+    // P0 (2026-11-27): la rama pendiente VA ANTES del pasa: el
+    // cerebro devuelve pendiente_revision con pasa True en el
+    // fallo abierto del juez (hard_pasa true: cara/layout/
+    // plantilla medidos y OK, solo falta el juez). La decisión se
+    // MANTIENE como pendiente_revision a propósito: así el clip
+    // sigue contando como pendiente en el tracker de descartes y
+    // sigue siendo revalidable cuando Gemini vuelva (un
+    // "observado" lo escondería de ambos). Pasa, pero marcado
+    // como no medido, con el motivo del juez.
+    if (v.decision === "pendiente_revision" && v.hard_pasa === true) {
+      return { reason: null, hard: false, unmeasured: true, unmeasuredReason: v.motivo || "juez no disponible" };
+    }
     if (v.pasa === true) return { reason: null, hard: false };
     if (v.decision === "rechazado") {
       const detalle = failedLabels(v);
       const motivo = v.motivo || (detalle ? `fallan: ${detalle}` : "validación final rechazada");
       return { reason: `calidad: ${motivo}`, hard: true };
     }
-    // pendiente_revision / desactivada: sin veredicto válido.
+    if (v.decision === "pendiente_revision") {
+      const motivo = v.motivo || "juez no disponible";
+      if (v.hard_pasa === false) {
+        return { reason: `calidad: sin veredicto válido (juez no disponible: ${motivo} — la medida determinista tampoco pasó)`, hard: false };
+      }
+      return { reason: `calidad: sin veredicto válido (juez no disponible: ${motivo} — veredicto no medido)`, hard: false };
+    }
+    // desactivada: sin veredicto válido.
     const motivo = v.motivo || `validación ${v.decision}`;
     return { reason: `calidad: sin veredicto válido (${motivo})`, hard: false };
   }

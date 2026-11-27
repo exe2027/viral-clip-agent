@@ -182,6 +182,7 @@ import {
   WATCHDOG_DISPATCH_MIN_INTERVAL_MS,
   WATCHDOG_DISPATCHED_PREFIX,
 } from "./cycle-gate";
+import { HeavyDispatchBudget } from "./subrequest-budget";
 import { buildDailyPlanForTenant } from "./daily-plan";
 import {
   r2KeyForClip,
@@ -3528,9 +3529,23 @@ async function handleFetch(req: Request, env: Env, _ctx: ExecutionContext): Prom
       // null y el ciclo lo toma de inmediato, con el resto de
       // puertas anti-baneo (tope, calentamiento, piso 90 min,
       // rolling, calidad, SEO) frenando igual.
-      const { jobs, blocked, warnings, scheduledForMs: effectiveScheduledForMs } = await tryEnqueueClipPublish(env, tenant, clip, { actor: session.sub, manual: true, platforms, scheduledForMs, republish });
+      const { jobs, blocked, warnings, scheduledForMs: effectiveScheduledForMs } = await tryEnqueueClipPublish(env, tenant, clip, { actor: session.sub, manual: true, platforms, scheduledForMs, republish, logToWorkerEvents: true });
+      // P0 (2026-11-27, MP4 visible): el MP4 solo se detectaba
+      // en ejecución (el job nacía sin r2_key y quedaba en draft
+      // sin que el botón dijera nada: el caso del #93). Aquí se
+      // comprueba el MP4 efectivo (el del clip o el de un job
+      // previo, mismo fallback que tryEnqueueClipPublish): sin
+      // MP4, el 400 dice que falta, y si se crearon jobs, el
+      // aviso va en warnings para que el panel lo muestre.
+      const mp4Key = clip.video_r2_key || (await env.DB.prepare(
+        "SELECT r2_key FROM jobs WHERE clip_id = ? AND tenant_id = ? AND r2_key IS NOT NULL LIMIT 1",
+      ).bind(clipId, tenant).first<{ r2_key: string }>())?.r2_key || null;
+      const mp4Note = " Sin MP4 todavía: sube el MP4 desde el Editor antes de publicar.";
       if (jobs.length === 0) {
-        return err(`Ninguna plataforma pudo encolarse: ${blocked.join(" · ")}`, 400);
+        return err(`Ninguna plataforma pudo encolarse: ${blocked.join(" · ")}${mp4Key ? "" : mp4Note}`, 400);
+      }
+      if (!mp4Key) {
+        warnings.push("Sin MP4 todavía: el job quedará en draft hasta que subas el MP4 desde el Editor.");
       }
       // El scheduled_for del clip es el registro visible de lo
       // programado (la ejecución la manda el next_run_at del job).
@@ -4685,8 +4700,18 @@ export default {
         await maybeRunBudgetMonitor(env, tenant, event.scheduledTime).catch(() => {});
         await maybeSendDailyBudgetReport(env, tenant, event.scheduledTime).catch(() => {});
         const r = await runWorkerCycle(env, tenant);
-        if (r.ran && (r.processed > 0 || r.stalled > 0)) {
-          await logWorkerEvent(env.DB, "ciclo", `Ciclo automático: ${r.processed} jobs procesados, ${r.stalled} atascados recuperados.`, tenant);
+        if (r.ran) {
+          // P0 (2026-11-27, visibilidad): registrar TAMBIÉN el
+          // ciclo en 0 (antes solo se logueaba si processed>0 o
+          // stalled>0, así que un Worker corriendo en vacío era
+          // indistinguible de un Worker muerto). El motivo de la
+          // puerta y el próximo hueco dicen POR QUÉ no publicó
+          // nada. logWorkerEvent deduplica mensajes idénticos, así
+          // que un ciclo en 0 repetido no inunda los eventos.
+          const nextDue = r.gate.nextDueAtMs !== null
+            ? `; próximo hueco: ${new Date(r.gate.nextDueAtMs).toLocaleString("es-CL", { timeZone: "America/Santiago" })}`
+            : "; sin hueco programado";
+          await logWorkerEvent(env.DB, "ciclo", `Ciclo automático: ${r.processed} jobs procesados, ${r.stalled} atascados recuperados. Puerta: ${r.gate.reason}${nextDue}.`, tenant);
         }
         // A3 (2026-11-20): el ciclo del publicador puede salir
         // temprano sin correr (r.ran false) y eso NO apaga los
@@ -4697,14 +4722,28 @@ export default {
         // Si el Worker está parado, runWorkerCycle devuelve la
         // puerta vacía (todo false) y aquí no se dispara nada,
         // como antes.
-        if (r.ran || r.gate.liveDue) await maybeDispatchLive(env, tenant);
+        // P0 (2026-11-27, presupuesto de subrequests): máx 2
+        // dispatches pesados por invocación, en orden de prioridad
+        // (live, watchdog, telegram diario, dispatch diario,
+        // revalidate). El 27-11 a las 09:01 el ciclo chocó con
+        // "Too many subrequests" porque coincidían engagement +
+        // telegram diario + dispatch diario + dispatches. Lo que
+        // no cabe queda debido y corre en la siguiente invocación
+        // de cron (5 min después): nada se pierde, solo se mueve.
+        // Cada dispatch lleva además su propio catch: un fallo de
+        // subrequests en uno no aborta el resto (antes,
+        // maybeDispatchLive/Watchdog/SendDailyTelegram/DispatchDaily
+        // no tenían catch y un "Too many subrequests" cortaba la
+        // cadena entera).
+        const dispatchBudget = new HeavyDispatchBudget();
+        if ((r.ran || r.gate.liveDue) && dispatchBudget.allow("live")) await maybeDispatchLive(env, tenant).catch(() => {});
         // Vigilante (2026-11-19): mismo sitio que panel-live —
         // dispara panel-watchdog con throttle de 10 min y sin
         // disparar si ya hay una corrida del vigilante en curso
         // para ese tenant (maybeDispatchWatchdog). Solo si el
         // Worker de ese tenant está en marcha (r.ran) o si la
         // puerta dice que el dispatch toca (r.gate.watchdogDue).
-        if (r.ran || r.gate.watchdogDue) await maybeDispatchWatchdog(env, tenant);
+        if ((r.ran || r.gate.watchdogDue) && dispatchBudget.allow("watchdog")) await maybeDispatchWatchdog(env, tenant).catch(() => {});
         // Validador de suministro: en marcha pero sin clips en
         // Cola durante horas = atascado (avisa 1 vez cada 6 h).
         await maybeAlertWorkerStuck(env, tenant, event.scheduledTime);
@@ -4714,12 +4753,12 @@ export default {
         // analíticas en SU chat vinculado). Solo corre si el
         // Worker de ese tenant está en marcha (r.ran) o si la
         // puerta dice que toca el dispatch diario (r.gate.dailyDue).
-        if (r.ran || r.gate.dailyDue) await maybeSendDailyTelegram(env, tenant, event.scheduledTime);
+        if ((r.ran || r.gate.dailyDue) && dispatchBudget.allow("telegram_daily")) await maybeSendDailyTelegram(env, tenant, event.scheduledTime).catch(() => {});
         // Pasada diaria del cerebro (09:00 Santiago, una vez al
         // día por tenant en marcha): dispara panel-daily al
         // workflow genérico. Solo si el Worker está en marcha
         // (r.ran) o si la puerta dice que toca (r.gate.dailyDue).
-        if (r.ran || r.gate.dailyDue) await maybeDispatchDaily(env, tenant, event.scheduledTime);
+        if ((r.ran || r.gate.dailyDue) && dispatchBudget.allow("dispatch_daily")) await maybeDispatchDaily(env, tenant, event.scheduledTime).catch(() => {});
         // Validación diaria de cuentas (spec 2026-11-23): primera
         // pasada >= 15:00 Chile, una vez al día, DESPUÉS del ciclo
         // publicador y con su propio catch: nunca bloquea el corte
@@ -4732,7 +4771,7 @@ export default {
         // Solo si el Worker está en marcha (r.ran) o la puerta
         // dice que toca (r.gate.revalidateDue); con su propio
         // catch: nunca bloquea el ciclo.
-        if (r.ran || r.gate.revalidateDue) await maybeDispatchRevalidate(env, tenant, event.scheduledTime).catch(() => {});
+        if ((r.ran || r.gate.revalidateDue) && dispatchBudget.allow("revalidate")) await maybeDispatchRevalidate(env, tenant, event.scheduledTime).catch(() => {});
         // Caducidad nocturna de eventos (A2, 03:00 Santiago):
         // borra eventos de más de 14 días en lotes pequeños, solo
         // si el día va frío (<70% del límite). Corre aunque el

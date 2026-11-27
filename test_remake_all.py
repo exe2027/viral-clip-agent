@@ -91,10 +91,13 @@ def _veredicto(pasa=True, decision="aprobado", motivo=""):
 
 def _gate_aprobado():
     """Veredicto B4 que build_quality_gate calcula del _veredicto
-    que pasa (los 6 criterios en True, sin fallos)."""
+    que pasa (los 6 criterios en True, sin fallos). P0 (2026-11-27):
+    el veredicto lleva hard_pasa (lo necesita el Worker para el
+    fallo abierto del juez)."""
     return {
         "decision": "aprobado",
         "pasa": True,
+        "hard_pasa": True,
         "criterios": {
             "formato_9_16": {"pasa": True, "duro": True, "motivo": ""},
             "webcam": {"pasa": True, "duro": True, "motivo": ""},
@@ -516,6 +519,7 @@ class TestRemakeOne(_PatchBannerAss):
                       },
                       "fallos": ["audio"],
                       "fallos_duros": ["audio"],
+                      "hard_pasa": True,
                       "motivo": "calidad: audio (sin voz verificable)",
                   }}}),
         ])

@@ -147,6 +147,54 @@ class TestBuildQualityGate(unittest.TestCase):
         self.assertEqual(qg["decision"], "pendiente_revision")
         self.assertFalse(qg["pasa"])
 
+    # P0 (2026-11-27, fallo abierto del juez): un pendiente_revision
+    # con las capas deterministas medidas y pasadas (hard_pasa True)
+    # NO es un rechazo — es el juez (Gemini) no disponible. Abre
+    # solo si miniatura y audio (medidos aquí, no por el juez)
+    # también pasaron; si no, sigue bloqueando. La decisión se
+    # MANTIENE como pendiente_revision (con pasa True): el clip
+    # sigue contando como pendiente y sigue siendo revalidable.
+    def test_pendiente_con_hard_pasa_abre(self):
+        review = _review(decision="pendiente_revision", pasa=False,
+                         hard_pasa=True, scores={},
+                         motivo="Gemini no responde: 503")
+        qg = build_quality_gate(review, thumbnail_text="EL GOL")
+        self.assertEqual(qg["decision"], "pendiente_revision")
+        self.assertTrue(qg["pasa"])
+        self.assertTrue(qg["hard_pasa"])
+        self.assertFalse(qg["juez_disponible"])
+        self.assertIn("juez no disponible", qg["motivo"])
+        self.assertIn("fallo abierto del juez", qg["motivo"])
+
+    def test_pendiente_con_hard_pasa_pero_sin_miniatura_no_abre(self):
+        review = _review(decision="pendiente_revision", pasa=False,
+                         hard_pasa=True, scores={},
+                         motivo="Gemini no responde: 503")
+        qg = build_quality_gate(review, thumbnail_text="")
+        self.assertEqual(qg["decision"], "pendiente_revision")
+        self.assertFalse(qg["pasa"])
+        self.assertTrue(qg["hard_pasa"])
+
+    def test_pendiente_con_hard_pasa_pero_sin_audio_no_abre(self):
+        review = _review(decision="pendiente_revision", pasa=False,
+                         hard_pasa=True, scores={}, transcript_words=0,
+                         motivo="Gemini no responde: 503")
+        qg = build_quality_gate(review, thumbnail_text="EL GOL")
+        self.assertEqual(qg["decision"], "pendiente_revision")
+        self.assertFalse(qg["pasa"])
+
+    def test_pendiente_con_hard_pasa_false_no_abre(self):
+        review = _review(decision="pendiente_revision", pasa=False,
+                         hard_pasa=False,
+                         face={"pasa": False, "method": "facecrop",
+                               "share": 0.0,
+                               "motivo": "sin cara verificada"},
+                         scores={}, motivo="Gemini no responde: 503")
+        qg = build_quality_gate(review, thumbnail_text="EL GOL")
+        self.assertEqual(qg["decision"], "pendiente_revision")
+        self.assertFalse(qg["pasa"])
+        self.assertFalse(qg["hard_pasa"])
+
     def test_desactivada_sin_veredicto(self):
         review = _review(decision="desactivada", pasa=None,
                          hard_pasa=None, face=None, template=None,
@@ -180,6 +228,16 @@ class TestPublishMode(unittest.TestCase):
         self.assertEqual(publish_mode_for_quality(
             {"decision": "pendiente_revision", "pasa": False},
             True), "draft")
+
+    def test_pendiente_abierto_por_fallo_con_auto_api(self):
+        # P0 (2026-11-27): el fail-open del juez llega al puente
+        # como "api" cuando auto_publish está encendido (pasa True
+        # manda); sin auto, sigue siendo draft.
+        gate = {"decision": "pendiente_revision", "pasa": True,
+                "hard_pasa": True, "juez_disponible": False,
+                "motivo": "juez no disponible: Gemini no responde"}
+        self.assertEqual(publish_mode_for_quality(gate, True), "api")
+        self.assertEqual(publish_mode_for_quality(gate, False), "draft")
 
     def test_sin_veredicto_no_cambia_lo_legacy(self):
         self.assertEqual(publish_mode_for_quality(None, True), "api")

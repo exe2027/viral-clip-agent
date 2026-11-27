@@ -66,6 +66,14 @@ function parseWhere(where: string, params: unknown[]): (r: Row) => boolean {
     const eqLit = /^(\w+)\s*=\s*'([^']*)'$/.exec(c);
     const isNotNull = /^(\w+)\s+IS\s+NOT\s+NULL$/i.exec(c);
     const nextRunOr = /^\(?(\w+)\s+IS\s+NULL\s+OR\s+\1\s*<=\s*\?\)?$/i.exec(c);
+    // P0 (2026-11-27, romper el autobloqueo rolling): los dos
+    // grupos OR de projectedRolling — (last_error IS NULL OR
+    // last_error NOT LIKE ?) excluye esperas por rolling, y
+    // (next_run_at > ? OR last_error IS NULL) excluye vencidos
+    // que ya rebotaron (un vencido fresco, sin last_error, sí
+    // cuenta: el ciclo lo toma en el próximo minuto).
+    const rollingOr = /^\(?(\w+)\s+IS\s+NULL\s+OR\s+\1\s+NOT\s+LIKE\s+\?\)?$/i.exec(c);
+    const dueOr = /^\(?(\w+)\s*>\s*\?\s+OR\s+(\w+)\s+IS\s+NULL\)?$/i.exec(c);
     const lt = /^(\w+)\s*(<=?)\s*\?$/.exec(c);
     const gt = /^(\w+)\s*(>=?)\s*\?$/.exec(c);
     const eqNum = /^(\w+)\s*=\s*(\d+)$/.exec(c);
@@ -103,6 +111,17 @@ function parseWhere(where: string, params: unknown[]): (r: Row) => boolean {
       const col = nextRunOr[1] as string;
       const val = params[pi++];
       tests.push((r) => r[col] === null || r[col] === undefined || (r[col] as number) <= (val as number));
+    } else if (rollingOr) {
+      const col = rollingOr[1] as string;
+      // LIKE %...%: el mock solo entiende el patrón con % en
+      // ambos extremos (contiene).
+      const pat = String(params[pi++]).replace(/^%|%$/g, "");
+      tests.push((r) => r[col] === null || r[col] === undefined || !String(r[col]).includes(pat));
+    } else if (dueOr) {
+      const col = dueOr[1] as string;
+      const col2 = dueOr[2] as string;
+      const val = params[pi++];
+      tests.push((r) => (r[col] as number) > (val as number) || r[col2] === null || r[col2] === undefined);
     } else if (eqNum) {
       const col = eqNum[1] as string;
       const num = Number(eqNum[2]);
@@ -1401,6 +1420,68 @@ describe("B3.5: el planificador proyecta la ventana rolling al crear", () => {
     expect(r.jobs).toHaveLength(1);
     expect(r.blocked).toEqual([]);
     expect(r.jobs[0]?.next_run_at).toBe(FROZEN_MS);
+  });
+
+  test("P0: un scheduled que ya esperó por rolling NO cuenta y el job se crea", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    // 2 posted hoy (11:00, 12:00) + 1 scheduled (12:30) con
+    // last_error de espera por rolling (reprogramado a V+24 h).
+    // Sin la exclusión la ventana da 3/3 y nada se crea (el
+    // autobloqueo IG 8/3 del 27-11); con ella, 2/3 y se crea.
+    seedPostedJob(db, { id: 901, clip_id: 901, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 2 * 3600_000, updated_at: FROZEN_MS - 2 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 1 * 3600_000, updated_at: FROZEN_MS - 1 * 3600_000 });
+    seedScheduledJob(db, { id: 903, clip_id: 903, next_run_at: FROZEN_MS - 30 * 60_000, created_at: FROZEN_MS - 30 * 60_000, updated_at: FROZEN_MS - 30 * 60_000, last_error: "gate de publicación: tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)" });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(1);
+    expect(r.blocked).toEqual([]);
+  });
+
+  test("P0: un scheduled vencido que ya rebotó por otro motivo NO cuenta", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    // Igual que el anterior, pero la espera fue por espaciamiento
+    // (no por rolling): también se excluye — ya tuvo su
+    // oportunidad y el ciclo lo re-ejecuta igual; contarlo
+    // duplicaría el hueco.
+    seedPostedJob(db, { id: 901, clip_id: 901, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 2 * 3600_000, updated_at: FROZEN_MS - 2 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 1 * 3600_000, updated_at: FROZEN_MS - 1 * 3600_000 });
+    seedScheduledJob(db, { id: 903, clip_id: 903, next_run_at: FROZEN_MS - 30 * 60_000, created_at: FROZEN_MS - 30 * 60_000, updated_at: FROZEN_MS - 30 * 60_000, last_error: "gate de publicación: menos de 90 min desde la última publicación en tiktok" });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(1);
+    expect(r.blocked).toEqual([]);
+  });
+
+  test("P0: el motivo de bloqueo distingue posted / proyectado / excluidos", async () => {
+    const db = new FakeD1();
+    await seedAccount(db, "tiktok", 10);
+    seedRunning(db);
+    seedSettings(db, {});
+    const clip = clipRow({ id: 1, platforms: JSON.stringify(["tiktok"]) });
+    db.seed("clips", clip);
+    // 3 posted hoy (ventana llena de verdad) + 1 scheduled con
+    // espera por rolling: el bloqueo sigue siendo 3/3, pero el
+    // evento del clip dice cuántos se excluyeron.
+    seedPostedJob(db, { id: 901, clip_id: 901, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 3 * 3600_000, updated_at: FROZEN_MS - 3 * 3600_000 });
+    seedPostedJob(db, { id: 902, clip_id: 902, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 2 * 3600_000, updated_at: FROZEN_MS - 2 * 3600_000 });
+    seedPostedJob(db, { id: 903, clip_id: 903, posted_day: FROZEN_DAY, created_at: FROZEN_MS - 1 * 3600_000, updated_at: FROZEN_MS - 1 * 3600_000 });
+    seedScheduledJob(db, { id: 904, clip_id: 904, next_run_at: FROZEN_MS - 30 * 60_000, created_at: FROZEN_MS - 30 * 60_000, updated_at: FROZEN_MS - 30 * 60_000, last_error: "gate de publicación: tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)" });
+    const env = makeEnv(db, new FakeR2());
+    const r = await withFrozenDate(FROZEN_ISO, () => tryEnqueueClipPublish(env, "sebastian", clip as unknown as ClipRow, { actor: "worker", rng: () => 0 }));
+    expect(r.jobs).toHaveLength(0);
+    expect(r.blocked).toEqual(["tiktok: tope rolling 24 h alcanzado: 3/3 en tiktok (últimas 24 h)"]);
+    const events = (db.tables["clip_events"] ?? []).map((e) => String(e.message ?? ""));
+    expect(events.some((m) => m.includes("(proyectado: 3 posted + 0 programados; 1 excluidos: vencidos o reintentados por rolling)"))).toBe(true);
   });
 });
 
