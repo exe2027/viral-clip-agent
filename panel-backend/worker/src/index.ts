@@ -4590,17 +4590,37 @@ export function clearJobsCache(): void {
   // Sin caché que limpiar.
 }
 
+/** Origen del front permitido para CORS/CSRF (2026-11-27, fallo
+ *  Twitch de kaez): producción https://avc-em9.pages.dev MÁS los
+ *  despliegues preview del MISMO proyecto Pages
+ *  (<rama>.avc-em9.pages.dev). Un preview sin esto devolvía el
+ *  preflight sin Access-Control-Allow-Origin y el navegador lo
+ *  mostraba como «Failed to fetch» al guardar Twitch. Solo el host
+ *  de producción y sus subdominios, nunca "*": con
+ *  credentials:include el origen permitido se refleja tal cual. */
+export const PANEL_ORIGIN = "https://avc-em9.pages.dev";
+export function isAllowedPanelOrigin(origin: string | null): boolean {
+  if (!origin) return false;
+  if (origin === PANEL_ORIGIN) return true;
+  try {
+    const u = new URL(origin);
+    return u.protocol === "https:" && u.hostname.endsWith(".avc-em9.pages.dev");
+  } catch {
+    return false;
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     // CORS: el front vive en Pages (avc-em9.pages.dev) y llama a este
     // Worker cross-origin con credentials:include. Sin estos headers
     // el navegador bloquea todas las llamadas. Solo se permite el
     // origen del front, nunca "*".
-    const FRONT_ORIGIN = "https://avc-em9.pages.dev";
+    const reqOrigin = req.headers.get("Origin");
     const corsHeaders = (): Record<string, string> =>
-      req.headers.get("Origin") === FRONT_ORIGIN
+      isAllowedPanelOrigin(reqOrigin)
         ? {
-            "Access-Control-Allow-Origin": FRONT_ORIGIN,
+            "Access-Control-Allow-Origin": reqOrigin as string,
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
             "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -4614,8 +4634,9 @@ export default {
     // SameSite=None porque el front vive cross-origin en Pages.
     // Una petición no-GET autenticada SOLO por la cookie (sin
     // Bearer ni X-Bridge-Token) debe venir del front: Origin
-    // (o Referer si no hay Origin) tiene que ser
-    // https://avc-em9.pages.dev, o se rechaza con 403 ANTES de
+    // (o Referer si no hay Origin) tiene que ser el origen de
+    // producción o un preview del mismo proyecto Pages
+    // (isAllowedPanelOrigin), o se rechaza con 403 ANTES de
     // que corra ningún handler (ni siquiera el logout, que
     // revoca el token). Los clientes Bearer (front en Brave iOS,
     // PanelBridge) y el puente (X-Bridge-Token) no pasan por
@@ -4636,7 +4657,7 @@ export default {
           }
         };
         const got = originOf(req.headers.get("Origin")) ?? originOf(req.headers.get("Referer"));
-        if (got !== FRONT_ORIGIN) {
+        if (!isAllowedPanelOrigin(got)) {
           const res = json({ ok: false, error: "Origen no permitido." }, 403);
           const headers = new Headers(res.headers);
           for (const [k, v] of Object.entries(corsHeaders())) headers.set(k, v);
