@@ -287,6 +287,51 @@ describe("bug kaez 2026-11-21: error D1 con CORS, no 'Failed to fetch'", () => {
   });
 });
 
+describe("CORS 2026-11-27: previews de Pages del mismo proyecto", () => {
+  const PREVIEW_ORIGIN = "https://085dcb3b.avc-em9.pages.dev";
+  const EVIL_ORIGIN = "https://evil.example";
+
+  test("OPTIONS preflight desde un preview devuelve ACAO con ese origen", async () => {
+    const db = new FakeD1();
+    seedKaezLiveState(db);
+    const env = makeEnv(db);
+    const r = await callRaw(env, "OPTIONS", "/api/onboarding/credentials", { origin: PREVIEW_ORIGIN });
+    expect(r.status).toBe(204);
+    expect(r.headers.get("Access-Control-Allow-Origin")).toBe(PREVIEW_ORIGIN);
+  });
+
+  test("POST guardar Twitch desde un preview: 200 con ACAO del preview, sin 'Failed to fetch'", async () => {
+    const db = new FakeD1();
+    seedKaezLiveState(db);
+    const env = makeEnv(db);
+    const token = await createSessionToken("kaez", "kaez", SECRET);
+    const r = await callRaw(env, "POST", "/api/onboarding/credentials", {
+      token,
+      origin: PREVIEW_ORIGIN,
+      body: { platform: "twitch", credential: "secret-twitch-kaez", extra: JSON.stringify({ client_id: "cid-kaez" }) },
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("Access-Control-Allow-Origin")).toBe(PREVIEW_ORIGIN);
+  });
+
+  test("origen ajeno: sin ACAO en el preflight", async () => {
+    const db = new FakeD1();
+    seedKaezLiveState(db);
+    const env = makeEnv(db);
+    const r = await callRaw(env, "OPTIONS", "/api/onboarding/credentials", { origin: EVIL_ORIGIN });
+    expect(r.status).toBe(204);
+    expect(r.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  test("origen parecido pero no del proyecto (avc-em9.pages.dev.evil.example): sin ACAO", async () => {
+    const db = new FakeD1();
+    seedKaezLiveState(db);
+    const env = makeEnv(db);
+    const r = await callRaw(env, "OPTIONS", "/api/onboarding/credentials", { origin: "https://avc-em9.pages.dev.evil.example" });
+    expect(r.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+});
+
 describe("bug kaez 2026-11-21: paridad front/back de providers", () => {
   const appJs = readFileSync(join(import.meta.dir, "../../frontend/dist/app.js"), "utf8");
   const indexHtml = readFileSync(join(import.meta.dir, "../../frontend/dist/index.html"), "utf8");
